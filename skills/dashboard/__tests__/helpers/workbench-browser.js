@@ -43,7 +43,7 @@ export async function startPage(sandbox) {
       }
       if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (url.pathname.startsWith('/api/')) {
-        if (offlineHold && url.pathname === '/api/groups/offline' && !url.searchParams.has('cursor')) { offlineHold.started(); await offlineHold.promise; }
+        if (offlineHold && url.pathname === '/api/groups' && url.searchParams.get('side') === 'offline' && !url.searchParams.has('cursor')) { offlineHold.started(); await offlineHold.promise; }
         if (req.method === 'GET') reads.set(url.pathname, (reads.get(url.pathname) ?? 0) + 1);
         const value = req.method === 'GET' ? workbenchAnswer(url, now) : undefined;
         if (value === undefined) unserved.add(`${req.method} ${url.pathname}`);
@@ -1163,13 +1163,13 @@ export async function runWorkbenchBrowser(t, sandbox) {
           problems: [{ sessionGroup: target, displayName: 'Locate target', reason: 'auth_failed' }] } },
         { name: 'spark', state: 'IDLE', access: 'admin' }], updated_at: new Date().toISOString(),
     } }));
-    await page.route(url => url.pathname === '/api/groups/offline', route => {
+    await page.route(url => url.pathname === '/api/groups' && url.searchParams.get('side') === 'offline', route => {
       const url = new URL(route.request().url());
       offlineReads.push(url.search);
       const index = url.searchParams.has('cursor') ? Number(url.searchParams.get('cursor')) : 0;
-      const original = workbenchAnswer(new URL('http://fixture/api/groups/offline'), Date.now());
+      const original = workbenchAnswer(new URL('http://fixture/api/groups?side=offline'), Date.now());
       return route.fulfill({ json: { ...original,
-        rows: original.rows.map(row => index === 0 ? row : { ...row, id: `archived-${index}`, displayName: `Archived ${index}` }),
+        items: original.items.map(row => index === 0 ? row : { ...row, id: `archived-${index}`, displayName: `Archived ${index}` }),
         nextCursor: index < 2 ? String(index + 1) : null,
       } });
     });
@@ -1197,7 +1197,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       await locate(GROUP);
       const before = offlineReads.length;
       await locate(offline);
-      assert.deepEqual(offlineReads.slice(before), [''], 'returning to offline reads only its first page, not the previous three');
+      assert.deepEqual(offlineReads.slice(before), ['?side=offline'], 'returning to offline reads only its first page, not the previous three');
       assert.deepEqual(errors, []);
     } finally { await context.close(); }
   });

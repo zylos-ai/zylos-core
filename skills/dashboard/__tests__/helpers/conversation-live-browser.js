@@ -125,7 +125,7 @@ async function startApi(sandbox) {
   const conversation = { id: ID, localId: 'live-browser', sessionGroup: GROUP, channel: 'dashboard', state: 'active', origin: false, displayName: '起名示例' };
   const answer = url => {
     const p = url.pathname;
-    if (['/api/groups/running', '/api/groups/offline', '/api/groups/counts'].includes(p) || /^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'counts', 'offline'].includes(p.split('/').at(-1)) || p === '/api/instance') return workbenchSnapshotAnswer(url, snapshot(url), scene().now);
+    if (['/api/groups', '/api/groups/counts'].includes(p) || /^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'counts', 'offline'].includes(p.split('/').at(-1)) || p === '/api/instance') return workbenchSnapshotAnswer(url, snapshot(url), scene().now);
     if (p === '/api/conversations') {
       if (url.searchParams.get('tab') === 'external') return { items: [], nextCursor: null, tz: 'UTC' };
       return { items: [{ ...conversation, session_group: GROUP, display_name: '起名示例' }], nextCursor: null, tz: 'UTC' };

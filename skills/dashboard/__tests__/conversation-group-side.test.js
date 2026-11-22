@@ -55,7 +55,7 @@ function memoryStorage(entries = {}) {
 async function fixture(testContext, { storage = memoryStorage(), open = true, groupRow = listedRow, translate = key => key } = {}) {
   const document = eventDocument(), root = document.createElement('div');
   const reads = [], links = { memory: [], observe: [] };
-  // Timers the panel started and has not cleared, by id: the panel's 5s re-read of the group list.
+  // Timers the panel started and has not cleared, by id: the panel's 5s refresh.
   const timers = new Map();
   let groupFailures = 0, groupHold = null, nextTimer = 0;
   const json = body => ({ ok: true, status: 200, json: async () => body });
@@ -63,6 +63,8 @@ async function fixture(testContext, { storage = memoryStorage(), open = true, gr
     reads.push(path);
     if (path === '/api/instance') return json({ session_mode: { sessionMode: 'multi' }, default_runtime: 'claude' });
     if (path === '/api/groups/counts') {
+      if (groupFailures > 0) { groupFailures--; return { ok: false, status: 500, json: async () => ({}) }; }
+      if (groupHold) await groupHold.promise;
       const offline = groupRow.state.kind === 'offline';
       return json({ readAt: 1000, listKnown: true, running: { total: offline ? 0 : 1,
         states: Object.fromEntries(['working', 'idle', 'starting', 'stopping', 'unknown'].map(kind => [kind, groupRow.state.kind === kind ? 1 : 0])),
@@ -70,15 +72,10 @@ async function fixture(testContext, { storage = memoryStorage(), open = true, gr
         offline: { total: offline ? 1 : 0, waitingSlot: offline && groupRow.flags.waitingSlot ? 1 : 0, startFailed: 0 }, pool: { used: 1, capacity: 12 } });
     }
     const url = new URL(path, 'http://fixture.invalid');
-    if (/^\/api\/groups\/[^/]+$/.test(url.pathname) && !['running','counts'].includes(url.pathname.split('/').at(-1))) {
+    if (/^\/api\/groups\/[^/]+$/.test(url.pathname) && !['counts'].includes(url.pathname.split('/').at(-1))) {
       const key = decodeURIComponent(url.pathname.split('/').at(-1));
       return json(groupRow?.id === key ? { ...groupRow, readAt: 1000, run: { runId: 'run-1', sessionId: 's-1' } }
         : { id: key, sessionGroup: key, displayName: null, channel: 'dashboard', flags: {}, state: { kind: 'offline' }, presence: 'not_running', live: null, run: null });
-    }
-    if (path === '/api/groups/running') {
-      if (groupFailures > 0) { groupFailures--; return { ok: false, status: 500, json: async () => ({}) }; }
-      if (groupHold) await groupHold.promise;
-      return json({ rows: groupRow.state.kind === 'offline' ? [] : [Object.fromEntries(['id', 'displayName', 'channel', 'runtime', 'model', 'state', 'duration', 'flags', 'mainAgent', 'contextPct', 'lastActivityAt'].map(key => [key, groupRow[key]]))], readAt: 1000, listKnown: true });
     }
     if (path.includes('/events')) return json({ events: [] });
     if (path.includes('/backlog')) return json({ pending: 0 });
@@ -109,9 +106,9 @@ async function fixture(testContext, { storage = memoryStorage(), open = true, gr
   const input = () => find(node => node.tagName === 'TEXTAREA');
   const title = () => side() && allNodes(side()).find(node => node.tagName === 'H2')?.textContent;
   const openSide = async () => { groupButton().dispatch('click'); await tick(); await tick(); await tick(); };
-  // The page reads the group list for its own header too; fail only the reads made after this call.
+  // The panel's instance summaries are independent from the selected group's detail.
   const failGroupReads = count => { groupFailures = count; };
-  // Holds the group-list reads made after this call until the returned release() is called.
+  // Hold the summary reads made after this call until the returned release() is called.
   const holdGroupReads = () => { const hold = groupHold = deferred(); return () => { groupHold = null; hold.resolve(); }; };
   const listToggle = () => find(node => node.dataset.action === 'listToggle');
   return { document, root, page, reads, links, storage, listToggle, side, groupButton, pageNode, stream, input, title, openSide, find, failGroupReads,
@@ -127,50 +124,51 @@ test('the group detail opens beside the conversation, showing that group, and th
   assert.equal(f.pageNode().hidden, false, 'the conversation page is still shown');
   assert.ok(f.pageNode().classList.contains('conversation-has-side'), 'the conversation makes room for it');
   assert.equal(f.title(), 'Release room', 'it shows the group of the conversation');
-  assert.ok(f.reads.includes('/api/groups/running'), 'the panel read the group list itself');
+  assert.ok(f.reads.includes('/api/groups/' + encodeURIComponent(sessionGroup) + '?include=raw'), 'the panel reads the selected group directly');
+  assert.equal(f.reads.some(path => path === '/api/groups' || path.startsWith('/api/groups?')), false, 'the panel needs no group list');
   assert.equal(f.groupButton().attributes['aria-expanded'], 'true');
   assert.ok(f.document.activeElement === f.side(), 'the focus moved into the side panel');
 });
 
-test('without the overview, a failed first group read still opens the group, and the listed row replaces it later', async testContext => {
+test('without the overview, a failed first summary read still opens the group', async testContext => {
   const f = await fixture(testContext);
   f.failGroupReads(1);
   await f.openSide();
   assert.equal(f.side().hidden, false);
   assert.ok(f.title(), 'the panel is not blank');
-  assert.equal(f.title(), 'Release room', 'the group detail names the group even when its list read fails');
+  assert.equal(f.title(), 'Release room', 'the group detail names the group even when its summary read fails');
   assert.equal(allNodes(f.side()).some(node => node.classList.contains('wb-detail-error')), false, 'no read error is shown');
   await f.poll();
-  assert.equal(f.title(), 'Release room', 'the next read shows the listed group');
+  assert.equal(f.title(), 'Release room', 'the next refresh keeps the group visible');
 });
 
-test('while the first group read is still on its way the panel already shows the group, then the listed row', async testContext => {
+test('the panel shows group detail while instance summaries are pending', async testContext => {
   const f = await fixture(testContext);
   const release = f.holdGroupReads();
   await f.openSide();
   assert.equal(f.side().hidden, false);
-  assert.ok(f.title(), 'the panel is not blank while the list is read');
-  assert.equal(f.title(), 'Release room', 'the independent group detail supplies the name before the list arrives');
+  assert.ok(f.title(), 'the panel is not blank while summaries are read');
+  assert.equal(f.title(), 'Release room', 'the independent group detail supplies the name before summaries arrive');
   release();
   await tick(); await tick(); await tick();
-  assert.equal(f.title(), 'Release room', 'the listed row replaces it once the read completes');
-  assert.equal(f.timers(), 1, 'the panel then re-reads the list on a timer');
+  assert.equal(f.title(), 'Release room', 'the group stays visible after the summaries arrive');
+  assert.equal(f.timers(), 1, 'the panel refreshes on a timer');
 });
 
-test('a group that is not on the known list shows as not running once the list arrives', async testContext => {
+test('a group detail can show offline status while summaries are pending', async testContext => {
   const f = await fixture(testContext);
   assert.equal(await f.page.openGroup(otherGroup), true);
   await tick();
   const release = f.holdGroupReads();
   await f.openSide();
   const standby = () => allNodes(f.side()).some(node => node.textContent === 'wb.detail.standby');
-  assert.equal(standby(), true, 'the group detail can establish offline status before the running list arrives');
+  assert.equal(standby(), true, 'the group detail can establish offline status before the summaries arrive');
   release();
   await tick(); await tick(); await tick();
-  assert.equal(standby(), true, 'the known list without this group means it is not running');
+  assert.equal(standby(), true, 'the summaries preserve the offline state');
 });
 
-test('a group that is not on the known list is not opened again by the later list reads', async testContext => {
+test('refreshing an offline group keeps the selected detail tab', async testContext => {
   const f = await fixture(testContext);
   assert.equal(await f.page.openGroup(otherGroup), true);
   await tick();
@@ -186,7 +184,7 @@ test('a group that is not on the known list is not opened again by the later lis
   assert.match(selected(), /^wb\.detail\.timeline/, 'the 5s re-reads leave the timeline tab open');
 });
 
-test('closing the side panel during the first group read starts no re-reading', async testContext => {
+test('closing the side panel during the first summary read starts no re-reading', async testContext => {
   const f = await fixture(testContext);
   const release = f.holdGroupReads();
   await f.openSide();

@@ -1,7 +1,8 @@
-import { readGroupSnapshot, groupSnapshot, displayGroupRow } from './group-data.js';
+import { readGroupSnapshot, readGroupPage, readGroupPages, groupSnapshot, displayGroupRow, groupDetailPath } from './group-data.js';
 import { withRequestTimeout } from '../request-timeout.js';
+import { countLabel } from '../count-label.js';
 import { createViewMode, groupObservable } from './view-mode.js';
-import { boardController, renderBoard, renderDistribution } from './board.js';
+import { boardController, keepGroupOrder, renderBoard, renderDistribution } from './board.js';
 import { createBoardSearch } from './board-search.js';
 import { instanceStrip, accountRuntimes } from './instance-strip.js';
 import { renderAttention } from './attention-bar.js';
@@ -15,7 +16,7 @@ import { watchRows } from './label-fit.js';
 const REQUEST_TIMEOUT_MS = 30000;
 
 export function mountWorkbench({ document = globalThis.document, window = globalThis.window, t = key => key,
-  endpoint = path => path, identity = () => endpoint('/api/groups/running'),
+  endpoint = path => path, identity = () => endpoint('/api/groups'),
   observerStatus = () => null, observerAvailable = () => true, onObserve = () => {},
   writable = () => true, onMemory = () => {}, onConversation, conversationAvailable = () => true, instanceInfo = () => ({}),
   storage = globalThis.localStorage, fetch = globalThis.fetch } = {}) {
@@ -25,10 +26,17 @@ export function mountWorkbench({ document = globalThis.document, window = global
   const searchInput = document.querySelector('#wb-search');
   const rangeInput = document.querySelector('#wb-range');
   const toggle = document.querySelector('#wb-detail-toggle');
-  let groupSide = 'running', offlineDepth = 1, pushedCounts = null, instanceRead = null;
+  let groupSide = 'running', groupDepth = 1, searchDepth = 1, pushedCounts = null, instanceRead = null;
+  let searchPage = null, locatedRow = null, moreRequest = null;
+  const groupPending = new Set(), searchPending = new Set();
+  const pendingButton = element(document, 'button', undefined, 'wb-btn wb-btn-sm wb-board-refresh');
+  pendingButton.type = 'button';
+  pendingButton.hidden = true;
+  pendingButton.addEventListener('click', () => refreshFirstPage());
   const sides = element(document, 'div', undefined, 'wb-seg wb-group-sides');
   sides.setAttribute('role', 'group'); sides.setAttribute('aria-label', t('wb.board.groupsLabel'));
   board.parentNode?.insertBefore(sides, board);
+  board.parentNode?.insertBefore(pendingButton, board);
   let groupDetail = null, hostPanel = null, nameRequest = null;
   // The automatic-naming run on screen, from the question until its answer is closed; the button stays off meanwhile.
   let nameFlow = null;
@@ -36,7 +44,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   const nameDialog = document.querySelector('#wb-auto-name-dialog');
   // State counts compact before wrapping; instance strip items wrap whole without measurement.
   const labels = watchRows([document.querySelector('#wb-dist')], { document, window });
-  let locateGeneration = 0, locatedGroup, snapshot = null, searchRows = null, error = null, lastSuccess = null, activity = null, activityAt = 0,
+  let locateGeneration = 0, locatedGroup, snapshot = null, error = null, lastSuccess = null, activity = null, activityAt = 0,
     range = '60m', activityGen = 0, cost = null, transition = null, owner = identity(), stopped = false;
   let activityRequest = null, activityQueued = false;
   let requestedActivityIds = new Set();
@@ -50,12 +58,12 @@ export function mountWorkbench({ document = globalThis.document, window = global
       if (!stopped) resetOwner();
       throw Error('view_changed');
     }
-    if (!response.ok) throw Error('read_failed');
-    const value = await response.json();
+    const value = await response.json().catch(error => { if (response.ok) throw error; });
     if (captured !== identity() || stopped) {
       if (!stopped) resetOwner();
       throw Error('view_changed');
     }
+    if (!response.ok) throw Object.assign(Error('read_failed'), { status: response.status, code: value?.error?.code });
     return value;
   };
   const read = (path, options = {}) => {
@@ -104,12 +112,19 @@ export function mountWorkbench({ document = globalThis.document, window = global
       const count = snapshot?.groupCounts?.[side]?.total;
       const button = element(document, 'button', t('wb.groups.' + side) + (count == null ? '' : ' · ' + count));
       button.type = 'button'; button.setAttribute('aria-pressed', String(groupSide === side));
-      button.addEventListener('click', () => { if (groupSide === side && searchRows === null) return; search.input(''); searchInput.value = ''; groupSide = side; offlineDepth = 1; snapshot = null; searchRows = null; controller.invalidate(); redraw(); void controller.refresh(); });
+      button.addEventListener('click', () => {
+        if (groupSide === side && !search.query() && !locatedRow) return;
+        search.input('');
+        searchInput.value = '';
+        groupSide = side;
+        refreshFirstPage();
+      });
       sides.append(button);
     }
     const dist = document.querySelector('#wb-dist');
     if (dist) renderDistribution(dist, snapshot, { document, t, level });
     searchInput.placeholder = t('wb.search');
+    searchInput.maxLength = 64;
     searchInput.setAttribute('aria-label', t('wb.search'));
     const attention = document.querySelector('#wb-attention');
     renderAttention(attention, snapshot, { document, t, error: snapshot && error, lastSuccess, level, onSelect: openFromAttention });
@@ -119,6 +134,9 @@ export function mountWorkbench({ document = globalThis.document, window = global
       attention.append(hint);
     }
     syncSide();
+    const pending = searchPage ? searchPending.size : groupPending.size;
+    pendingButton.hidden = pending === 0 || Boolean(locatedRow);
+    pendingButton.textContent = pendingButton.hidden ? '' : countLabel(t, 'wb.groups.newMessages', pending, { n: pending });
     if (!snapshot) {
       const message = error
         ? element(document, 'div', undefined, 'wb-attention-item wb-attention-problem')
@@ -131,13 +149,15 @@ export function mountWorkbench({ document = globalThis.document, window = global
     instanceStrip(document.querySelector('#wb-instance'), snapshot, { document, t, costSummary: cost, level,
       hostOpen: Boolean(hostPanel?.active), onHost: () => { if (hostPanel.active) hostPanel.close(); else { void hostPanel.open(); redraw(); } } });
     labels.fit();
-    const fresh = new Map(snapshot.rows.map(row => [row.sessionGroup, row]));
-    const rows = searchRows?.map(row => fresh.get(row.sessionGroup) ?? row) ?? snapshot.rows;
+    const rows = locatedRow ? [snapshot.rows.find(row => row.sessionGroup === locatedRow.sessionGroup) ?? locatedRow]
+      : searchPage?.rows ?? snapshot.rows;
+    const displayedPage = locatedRow ? { ...snapshot, hasOlder: false, nextCursor: null }
+      : searchPage ? { ...snapshot, hasOlder: false, nextCursor: searchPage.nextCursor } : snapshot;
     const focusedGroup = board.contains(document.activeElement) ? document.activeElement.dataset.group : undefined;
-    renderBoard(board, snapshot, {
+    renderBoard(board, displayedPage, {
       rows, query: search.query(), activity, document, t, level,
       selected: groupDetail?.state.row ? groupDetail.state.row.sessionGroup : locatedGroup,
-      onSearch: () => searchInput.focus(), onMore: loadMoreOffline,
+      onSearch: () => searchInput.focus(), onMore: loadMore, loadingMore: Boolean(moreRequest),
       onSelect: selectRow,
     });
     if (focusedGroup !== undefined) [...board.querySelectorAll('.wb-row')].find(node => node.dataset.group === focusedGroup)?.focus({ preventScroll: true });
@@ -160,14 +180,19 @@ export function mountWorkbench({ document = globalThis.document, window = global
     overview?.classList.toggle('wb-has-side', Boolean(side && !side.hidden));
   }
   const search = createBoardSearch({
-    fetchRows: async q => { const result = await read('/api/groups/search?q=' + encodeURIComponent(q)); return { ...result, rows: (result.rows ?? []).map(row => displayGroupRow(row)) }; },
-    onRows: rows => {
-      searchRows = rows;
+    fetchRows: q => readGroupPage(read, { q }),
+    onRows: (rows, nextCursor) => {
+      searchPage = { rows, nextCursor, q: search.query() };
+      searchDepth = 1;
+      searchPending.clear();
+      locatedRow = null;
       redraw();
       refreshActivity();
     },
     onClear: () => {
-      searchRows = null;
+      searchPage = null;
+      searchDepth = 1;
+      searchPending.clear();
       redraw();
     },
     onError: () => {
@@ -189,10 +214,12 @@ export function mountWorkbench({ document = globalThis.document, window = global
     search.input('');
     searchInput.value = '';
     snapshot = null;
-    searchRows = null;
+    locatedRow = null;
+    moreRequest = null;
+    groupPending.clear();
     resetActivity();
     cost = null;
-    groupSide = 'running'; offlineDepth = 1;
+    groupSide = 'running'; groupDepth = 1;
     transition = null;
     error = null;
     for (const selector of ['#wb-board', '#wb-instance', '#wb-attention', '#wb-side']) {
@@ -252,23 +279,72 @@ export function mountWorkbench({ document = globalThis.document, window = global
     renderNameResult(nameDialog, namePromptResult(value, failure, t, { single }), { document, t, onClose: () => endNameFlow(flow) });
   };
   nameButton?.addEventListener('click', autoName);
+  async function readMissingRows(previous, next, signal) {
+    const replacements = new Map();
+    if (!previous || next.listKnown === false) return replacements;
+    const current = new Set(next.rows.map(row => row.sessionGroup));
+    await Promise.all(previous.rows.filter(row => !current.has(row.sessionGroup)).map(async row => {
+      try {
+        const updated = await read(groupDetailPath(row.sessionGroup), { signal });
+        if ((updated.id ?? updated.sessionGroup) === row.sessionGroup) replacements.set(row.sessionGroup, displayGroupRow(updated));
+      } catch (error) {
+        if (error.status === 404) replacements.set(row.sessionGroup, null);
+      }
+    }));
+    return replacements;
+  }
   const controller = boardController({
     visible,
-    fetchSnapshot: () => withRequestTimeout(signal => readGroupSnapshot(read, { signal, side: groupSide, pages: offlineDepth, counts: pushedCounts, instance: pushedCounts ? snapshot?.instance : null }), REQUEST_TIMEOUT_MS),
-    onSnapshot: value => {
-      snapshot = value;
+    fetchSnapshot: () => withRequestTimeout(async signal => {
+      const previous = snapshot, previousSearch = searchPage;
+      const next = await readGroupSnapshot(read, { signal, side: groupSide, pages: groupDepth, counts: pushedCounts, instance: pushedCounts ? snapshot?.instance : null });
+      const missing = await readMissingRows(previous, next, signal);
+      let nextSearch, missingSearch;
+      if (previousSearch && previousSearch.q === search.query()) {
+        nextSearch = await readGroupPages(read, { signal, q: previousSearch.q, pages: searchDepth });
+        missingSearch = await readMissingRows(previousSearch, nextSearch, signal);
+      }
+      return { next, missing, previousSearch, nextSearch, missingSearch };
+    }, REQUEST_TIMEOUT_MS),
+    onSnapshot: ({ next, missing, previousSearch, nextSearch, missingSearch }) => {
+      if (snapshot) {
+        const rows = keepGroupOrder(snapshot.rows, next.rows, missing, groupPending);
+        next = groupSnapshot(next.instance, next.groupCounts, { ...next, rows, nextCursor: snapshot.nextCursor });
+      }
+      snapshot = next;
+      if (nextSearch && searchPage === previousSearch && searchPage.q === search.query()) {
+        searchPage = { ...searchPage, rows: keepGroupOrder(searchPage.rows, nextSearch.rows, missingSearch, searchPending) };
+      }
       groupDetail.updateSnapshot(snapshot);
       error = null;
       lastSuccess = Date.now();
       redraw();
       refreshActivity();
     },
-    onError: (_, at) => {
+    onError: (failure, at) => {
+      if (failure.code === 'invalid_cursor') { refreshFirstPage(); return; }
       error = true;
       lastSuccess = at;
       redraw();
     },
   });
+  function refreshFirstPage() {
+    locateGeneration++;
+    groupDepth = 1;
+    groupPending.clear();
+    locatedGroup = undefined;
+    locatedRow = null;
+    snapshot = null;
+    searchPage = null;
+    searchDepth = 1;
+    searchPending.clear();
+    moreRequest = null;
+    error = null;
+    controller.invalidate();
+    if (search.query()) search.input(searchInput.value);
+    redraw();
+    void controller.refresh();
+  }
   // Optional cost has its own pending request and generation, so neither read holds up the other.
   const costController = boardController({
     visible,
@@ -276,20 +352,39 @@ export function mountWorkbench({ document = globalThis.document, window = global
     onSnapshot: value => { cost = value; redraw(); },
     onError: () => { cost = null; redraw(); },
   });
-  async function loadMoreOffline() {
-    if (groupSide !== 'offline' || !snapshot?.nextCursor) return;
-    const cursor = snapshot.nextCursor, captured = identity();
+  async function loadMore() {
+    const target = searchPage ?? snapshot;
+    if (locatedRow || moreRequest || !target?.nextCursor || searchPage?.q !== (search.query() || undefined)) return;
+    const request = moreRequest = {}, captured = identity(), side = groupSide, q = searchPage?.q;
+    const current = () => moreRequest === request && !stopped && captured === identity() && side === groupSide &&
+      (q === undefined ? !searchPage && !search.query() : q === searchPage?.q && q === search.query());
+    redraw();
     try {
-      const value = await read('/api/groups/offline?cursor=' + encodeURIComponent(cursor));
-      value.rows = (value.rows ?? []).map(row => displayGroupRow(row, 'offline'));
-      if (stopped || captured !== identity() || groupSide !== 'offline' || snapshot?.nextCursor !== cursor) return;
-      const known = new Set(snapshot.rows.map(row => row.sessionGroup));
+      const value = await withRequestTimeout(signal => readGroupPage(read, { signal, side: q ? undefined : side, q, cursor: target.nextCursor }), REQUEST_TIMEOUT_MS);
+      if (!current()) return;
+      const page = searchPage ?? snapshot;
+      const known = new Set(page.rows.map(row => row.sessionGroup));
+      const pending = q ? searchPending : groupPending;
+      const rows = [...page.rows, ...value.rows.filter(row => !known.has(row.sessionGroup) && !pending.has(row.sessionGroup))];
       controller.invalidate();
-      offlineDepth++;
-      snapshot = { ...snapshot, rows: [...snapshot.rows, ...value.rows.filter(row => !known.has(row.sessionGroup))], nextCursor: value.nextCursor ?? null, hasOlder: value.nextCursor != null };
-      redraw();
+      if (q) {
+        searchDepth++;
+        searchPage = { ...searchPage, rows, nextCursor: value.nextCursor ?? null };
+      } else {
+        groupDepth++;
+        snapshot = groupSnapshot(snapshot.instance, snapshot.groupCounts, { ...snapshot, rows, nextCursor: value.nextCursor });
+      }
       refreshActivity();
-    } catch { error = true; redraw(); }
+    } catch (failure) {
+      if (!current()) return;
+      if (failure.code === 'invalid_cursor') refreshFirstPage();
+      else error = true;
+    } finally {
+      if (moreRequest === request) {
+        moreRequest = null;
+        redraw();
+      }
+    }
   }
   async function refreshMode() {
     if (!visible()) return;
@@ -311,7 +406,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   }
   async function refreshActivity() {
     if (!snapshot || stopped) return;
-    const ids = new Set([...snapshot.rows, ...(searchRows ?? [])].map(row => row.sessionGroup).filter(Boolean));
+    const ids = new Set([...snapshot.rows, ...(searchPage?.rows ?? []), ...(locatedRow ? [locatedRow] : [])].map(row => row.sessionGroup).filter(Boolean));
     const due = Date.now() - activityAt >= (range === '60m' ? 60000 : 300000);
     const needed = [...ids].filter(id => due || !requestedActivityIds.has(id));
     if (!needed.length) return;
@@ -351,7 +446,10 @@ export function mountWorkbench({ document = globalThis.document, window = global
     }
   }
   const changeDetail = () => mode.setDetailLevel(toggle.checked ? 'technical' : 'plain');
-  const input = () => search.input(searchInput.value);
+  const input = () => {
+    moreRequest = null;
+    search.input(searchInput.value);
+  };
   function changeRange(value) {
     range = value === '6h' ? '6h' : '60m';
     resetActivity();
@@ -390,12 +488,19 @@ export function mountWorkbench({ document = globalThis.document, window = global
   document.addEventListener('visibilitychange', visibility);
   const localeChange = () => redraw();
   document.addEventListener('dashboard-locale-change', localeChange);
-  let previousVisible = visible();
+  let previousVisible = visible(), previousPageActive = pageActive();
+  function syncPageOpen() {
+    const opened = pageActive();
+    if (opened && !previousPageActive) refreshFirstPage();
+    previousPageActive = opened;
+    return opened;
+  }
   const observer = window.MutationObserver ? new window.MutationObserver(() => {
     const changed = resetOwner();
     const active = visible();
-    if (active && (changed || !previousVisible)) { instanceRead = null; controller.refresh(); costController.refresh(); }
-    if (!pageActive()) hostPanel.close();
+    if (active && (changed || !previousVisible)) instanceRead = null;
+    if (!syncPageOpen()) hostPanel.close();
+    if (active && (changed || !previousVisible)) { controller.refresh(); costController.refresh(); }
     previousVisible = active;
   }) : null;
   observer?.observe(document.querySelector('#tab-overview'), { attributes: true, attributeFilter: ['class'] });
@@ -410,6 +515,9 @@ export function mountWorkbench({ document = globalThis.document, window = global
   const modeTimer = setInterval(() => { if (visible()) instanceRead = null; return refreshMode(); }, 60000);
   function destroy() {
     stopped = true;
+    moreRequest = null;
+    pendingButton.remove();
+    sides.remove();
     controller.stop();
     costController.stop();
     groupDetail.destroy();
@@ -445,27 +553,28 @@ export function mountWorkbench({ document = globalThis.document, window = global
     async locateGroup(key) {
       if (stopped) return;
       resetOwner();
+      syncPageOpen();
       groupDetail.close();
       hostPanel.close();
       search.input('');
       searchInput.value = '';
-      searchRows = null;
+      locatedRow = null;
       const captured = identity(), generation = ++locateGeneration;
-      let groups;
+      let groups, selected;
       try {
         if (key) {
-          const selected = displayGroupRow(await read('/api/groups/' + encodeURIComponent(key) + '?include='));
+          selected = displayGroupRow(await read(groupDetailPath(key)));
           if (stopped || captured !== identity() || generation !== locateGeneration || !pageActive()) return;
           const side = selected.state?.kind === 'offline' ? 'offline' : 'running';
-          if (side !== groupSide) offlineDepth = 1;
+          if (side !== groupSide) { groupDepth = 1; groupPending.clear(); }
           controller.invalidate();
           groupSide = side;
-          if (groupSide === 'offline') { searchRows = [selected]; }
         }
-        groups = await readGroupSnapshot(read, { side: groupSide, pages: offlineDepth });
+        groups = await readGroupSnapshot(read, { side: groupSide, pages: groupDepth });
       } catch { return; }
       if (stopped || captured !== identity() || generation !== locateGeneration || !pageActive()) return;
       snapshot = groups;
+      locatedRow = selected && (groupSide === 'offline' || !snapshot.rows.some(row => row.sessionGroup === key)) ? selected : null;
       groupDetail.updateSnapshot(snapshot);
       locatedGroup = key || snapshot?.rows.find(row => row.flags?.startFailed || row.flags?.blocked?.reason === 'auth_failed')?.sessionGroup;
       redraw();
@@ -477,13 +586,14 @@ export function mountWorkbench({ document = globalThis.document, window = global
     async openGroup(key) {
       if (stopped) return;
       resetOwner();
+      syncPageOpen();
       const captured = identity(), generation = ++locateGeneration;
       hostPanel.close();
       // A newly selected machine has no snapshot yet. Resolve its live names before
       // opening detail, rather than permanently treating this selection as historical.
       if (!snapshot) {
         let groups;
-        try { groups = await readGroupSnapshot(read, { side: groupSide, pages: offlineDepth }); } catch { return; }
+        try { groups = await readGroupSnapshot(read, { side: groupSide, pages: groupDepth }); } catch { return; }
         if (stopped || captured !== identity() || generation !== locateGeneration || !pageActive()) return;
         snapshot = groups;
       }

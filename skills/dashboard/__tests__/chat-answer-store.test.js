@@ -78,16 +78,14 @@ for (const invalid of ['duplicate-choice', 'free-text-disabled', 'required-empty
   });
 }
 
-for (const name of ['single', 'multiple', 'confirmation', 'form']) {
+for (const [name, payload, readable] of [
+  ['single', { selected: ['a'] }, '方案甲'],
+  ['multiple', { selected: ['a', 'b'] }, '第一项、第二项'],
+  ['confirmation', { outcome: 'cancel' }, '取消'],
+  ['form', { values: { name: 'Saved value', count: 1, tags: ['a'] } }, '名字：Saved value；数量：1；标签：甲'],
+]) {
   test(`accepting a ${name} answer saves the host summary and unfinished delivery atomically`, t => {
-    const f = fixture(t), q = f.question(name), block = q.envelope.blocks.find(item => item.id === q.envelope.interrupt.blockId);
-    const payload = name === 'single' ? { selected: [block.data.options[0].id] }
-      : name === 'multiple' ? { selected: block.data.options.slice(0, 2).map(option => option.id) }
-        : name === 'confirmation' ? { outcome: 'cancel' }
-          : { values: Object.fromEntries(block.data.fields.map(field => [field.key, field.defaultValue ??
-            (field.type === 'integer' || field.type === 'number' ? field.min ?? 1 : field.type === 'boolean' ? true
-              : field.type === 'single_select' ? field.options[0].id : field.type === 'multi_select' ? [field.options[0].id]
-                : field.type === 'date' ? '2026-01-01' : field.type === 'datetime' ? '2026-01-01T00:00:00Z' : 'Saved value')])) };
+    const f = fixture(t), q = f.question(name);
     const action = f.action(q, payload), accepted = f.accept(q, action);
     assert.equal(accepted.created, true);
     assert.equal(f.answers.question(q.group, q.envelope.interruptId).status, 'answered');
@@ -95,14 +93,37 @@ for (const name of ['single', 'multiple', 'confirmation', 'form']) {
     assert.equal(content.kind, 'envelope');
     assert.equal(content.envelope.questionSummary, q.envelope.questionSummary);
     assert.equal(content.envelope.metadata.zylos.answerId, action.id);
-    assert.ok(content.envelope.fallbackText.startsWith(`回答了 interruptId=${q.envelope.interruptId}（问题：${q.envelope.questionSummary}）：`));
-    if (name === 'confirmation') assert.match(content.envelope.fallbackText, /取消/);
+    assert.equal(content.envelope.fallbackText,
+      `Re interruptId=${q.envelope.interruptId} (Q:${q.envelope.questionSummary}): ${readable}`);
     const delivery = f.store.db.prepare('SELECT * FROM chat_answer_deliveries WHERE answer_id=?').get(action.id);
     assert.equal(delivery.state, 'pending'); assert.equal(delivery.c4_id, null);
     assert.equal(accepted.answer.sessionGroup, q.group); assert.equal(accepted.answer.endpointId, q.endpoint);
     assert.equal(f.count('chat_answers'), 1); assert.equal(f.count('chat_answer_deliveries'), 1);
   });
 }
+
+test('a form answer still fits at the historical readable fallback limit', t => {
+  const f = fixture(t), q = f.question('form');
+  const constraints = JSON.parse(f.answers.question(q.group, q.envelope.interruptId).constraints);
+  const fields = Array.from({ length: 8 }, (_, index) => ({
+    key: `field_${index}`, label: `Field ${index}`, type: 'multiline_text',
+  }));
+  constraints.block.data.fields = fields;
+  f.store.db.prepare('UPDATE chat_questions SET constraints=? WHERE c4_id=?').run(JSON.stringify(constraints), q.id);
+
+  const { interruptId, questionSummary } = q.envelope;
+  const historicalPrefix = `回答了 interruptId=${interruptId}（问题：${questionSummary}）：`;
+  const values = Object.fromEntries(fields.map(field => [field.key, 'x'.repeat(2000)]));
+  const render = () => fields.map(field => `${field.label}：${values[field.key]}`).join('；');
+  const excess = (historicalPrefix + render()).length - 16000;
+  const lastField = fields.at(-1).key;
+  values[lastField] = values[lastField].slice(0, -excess);
+  assert.equal((historicalPrefix + render()).length, 16000);
+
+  const accepted = f.accept(q, f.action(q, { values }));
+  assert.equal(parseC4Content(accepted.answer.content).envelope.fallbackText,
+    `Re interruptId=${interruptId} (Q:${questionSummary}): ${render()}`);
+});
 
 test('free text is an explicit validated answer and is never guessed from ordinary messages', t => {
   const f = fixture(t), q = f.question(), action = f.action(q, { freeText: 'Neither option; keep the saved question context' });

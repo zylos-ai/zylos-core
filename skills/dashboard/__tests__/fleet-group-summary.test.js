@@ -145,15 +145,28 @@ test('fleet remote mode is explicit and legacy/malformed summaries degrade to nu
 test('HTTP and SSE object reads carry the same running summary and clear it after a failed read', async () => {
   const agent = { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'fixture' };
   let working = 1;
-  const poller = new FleetPoller({ fleet: { agents: [agent] } }, { fetch: async url =>
-    url.endsWith('/api/auth/token') ? new Response(JSON.stringify({ token: 'fixture' }))
-      : objectResponse(url, { working, idle: 1, unknown: 1, instance: { session_mode: { sessionMode: 'multi' } } }), now: () => 0 });
+  let cursorExpired = false;
+  const poller = new FleetPoller({ fleet: { agents: [agent] } }, { fetch: async url => {
+    if (url.endsWith('/api/auth/token')) return Response.json({ token: 'fixture' });
+    if (url.endsWith('/api/groups?side=running&cursor=later')) {
+      if (cursorExpired) {
+        cursorExpired = false;
+        return Response.json({ error: { code: 'invalid_cursor' } }, { status: 400 });
+      }
+      return Response.json({ items: [{ id: 'unknown-0', state: { kind: 'unknown' } }], nextCursor: null });
+    }
+    const response = objectResponse(url, { working, idle: 1, unknown: 1, instance: { session_mode: { sessionMode: 'multi' } } });
+    if (!url.endsWith('/api/groups?side=running')) return response;
+    const page = await response.json();
+    return Response.json({ ...page, items: page.items.slice(0, -1), nextCursor: 'later' });
+  }, now: () => 0 });
   const expected = busy => ({ running: busy + 2, counts: { busy, idle: 1, waiting: 0, unknown: 1, error: 0, no_response: 0 },
     problems: [], problemCount: 0, listKnown: true, pool: { used: busy + 1, capacity: 12 },
     noResponse: { count: 0 }, autoRestarts: { count: 0 } });
   await poller.pollOnce();
   assert.deepEqual(poller.getFleet().agents[0].group_summary, expected(1));
   working = 2;
+  cursorExpired = true;
   poller._handleSseEvent(agent, { event: 'groups', data: '{}' });
   await flushObjectReads();
   assert.deepEqual(poller.getFleet().agents[0].group_summary, expected(2));

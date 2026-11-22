@@ -92,20 +92,22 @@ test('Fleet diagnostic reasons use text nodes and preserve group navigation', ()
 });
 
 test('Fleet fetch includes offline start failures and preserves a failed diagnostic read', async () => {
+  const agent = { name: 'Fixture', base_url: 'http://fixture.invalid', read_api_key: 'fixture' };
   for (const readable of [true, false]) {
     const requests = [];
-    const poller = new FleetPoller({}, { fetch: async url => {
+    const poller = new FleetPoller({ fleet: { agents: [agent] } }, { fetch: async url => {
       requests.push(url);
-      if (url.includes('/api/groups/offline')) return new Response(JSON.stringify({ rows: [
-        { id: 'failed-offline', flags: { startFailed: { count: 2 } } }
-      ] }), { status: readable ? 200 : 503 });
+      if (url.endsWith('/api/auth/token')) return Response.json({ token: 'fixture-session' });
+      if (url.endsWith('/api/groups?side=offline&flag=startFailed')) return Response.json({ items: [], nextCursor: 'page+/=' }, { status: readable ? 200 : 503 });
+      if (url.endsWith('/api/groups?side=offline&flag=startFailed&cursor=page%2B%2F%3D')) {
+        return Response.json({ items: [{ id: 'failed-offline', flags: { startFailed: { count: 2 } } }], nextCursor: null });
+      }
       return objectResponse(url, { instance: { session_mode: { sessionMode: 'multi' } },
         counts: { offline: { total: 1, startFailed: 1 } } });
     } });
-    const response = await poller._fetchState({ base_url: 'http://fixture.invalid' }, 'fixture');
-    const state = await response.json();
-    assert.ok(requests.some(url => url.endsWith('/api/groups/offline?flag=startFailed')));
-    const attention = state.group_summary.attention;
+    const fleet = await poller.pollOnce();
+    assert.ok(requests.some(url => url.endsWith('/api/groups?side=offline&flag=startFailed')));
+    const attention = fleet.agents[0].group_summary.attention;
     assert.ok(attention.some(item => readable ? item.kind === 'start_failed' && item.group === 'failed-offline'
       : item.kind === 'data_unreadable' && item.source === 'offline_start_failed'));
   }

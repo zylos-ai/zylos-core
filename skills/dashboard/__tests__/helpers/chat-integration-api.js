@@ -161,19 +161,18 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
       if (await handleChatConversations(req, res, url, common)) return;
       if (await handleChatAnswers(req, res, url, common)) return;
       if (await handleChatHistory(req, res, url, common)) return;
-      if (req.method === 'GET' && ['/api/groups/counts', '/api/groups/running', '/api/groups/offline', '/api/groups/search', '/api/groups/activity'].includes(url.pathname)) {
+      if (req.method === 'GET' && url.pathname === '/api/groups') {
+        sendJson(res, 200, await groupsApi.list(url.searchParams)); return;
+      }
+      if (req.method === 'GET' && ['/api/groups/counts', '/api/groups/activity'].includes(url.pathname)) {
         sendJson(res, 200, await groupsApi[url.pathname.split('/').at(-1)](url.searchParams)); return;
       }
       if (req.method === 'GET' && url.pathname === '/api/groups/naming-prompt') {
         // As in the Dashboard: this resource only takes the POST that sends the prompt to Origin.
         sendJson(res, 404, { error: 'not_found' }); return;
       }
-      if (req.method === 'GET' && url.pathname === '/api/groups/runtime-overrides') {
-        // This HTTP-only fixture has no runtime overrides or runtime CLI.
-        sendJson(res, 200, { ...(url.searchParams.has('q') ? {} : { runtimeTotal: 0 }), runtime: [], nextAfter: null }); return;
-      }
       if (req.method === 'GET' && /^\/api\/groups\/[^/]+$/.test(url.pathname)) {
-        sendJson(res, 200, await groupsApi.detail(workbenchGroupDetailKey(url.pathname.split('/').at(-1)), { include: url.searchParams })); return;
+        sendJson(res, 200, await groupsApi.detail(workbenchGroupDetailKey(url.pathname.split('/').at(-1)), url.searchParams)); return;
       }
       if (req.method === 'GET' && url.pathname === '/api/instance') {
         const snapshot = await workbench.getSnapshot();

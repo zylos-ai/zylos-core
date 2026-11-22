@@ -319,7 +319,7 @@ describe('cli done', () => {
       try {
         const task = db.prepare('SELECT id FROM tasks LIMIT 1').get();
         const output = cli(['done', task.id], env);
-        assert.match(output, /任务送达时已自动结束，无需 done/);
+        assert.equal(output.trimEnd(), `Task ${task.id} completes automatically on delivery and does not require done.`);
         const updated = db.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id);
         assert.equal(updated.status, 'pending');
       } finally {

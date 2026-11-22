@@ -16,7 +16,7 @@ test('history rejects unknown safe keys while retaining offline and historical g
   }) } });
   const scope = createHistoryScope({
     load: async name => name === 'config.js' ? { readSessionMode: () => ({ mode: 'multi' }) } : { assertSessionGroup },
-    readGroupKey: key => groups.detail(key, { include: [] }),
+    readGroupKey: key => groups.detail(key, new URLSearchParams(key === 'origin' ? 'include=' : '')),
   });
   for (const group of catalog) {
     const result = await scope(new URLSearchParams({ session_group: group }));

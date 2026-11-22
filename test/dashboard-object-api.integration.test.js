@@ -34,8 +34,8 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ auth: { enabled: true, password: hashPassword('fixture-password') }, fleet: { agents: [{ name: 'remote-fixture', base_url: 'http://127.0.0.1:1', read_api_key: 'fixture' }] }, chat: { allowRemote: true } }));
   const configFile = path.join(root, '.zylos/config.json');
   let usageVersion = '1.0.0', usageModel = 'fixture-model', usageEffort = 'high', modeStatusReadable = true, originRun = 'fixture-run';
-  let mode = 'single', clock = Date.now(), server, seedStore, catalogReadable = true;
-  let originRuntime = 'claude', originReady = true, pinWorking = false;
+  let mode = 'single', clock = Date.now(), server, seedStore, catalogReadable = true, groupListReadable = true;
+  let originRuntime = 'claude', originReady = true, pinWorking = false, overrideFixture = [];
   const isOrigin = key => key === null || key === 'origin';
   const actionCalls = [], cliCalls = [], runtimeCalls = [], records = [];
   let checker, installedCore = '1.4.0', tags = ['v1.5.2', 'v2.0.0', 'v1.6.0-beta.1'];
@@ -45,6 +45,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   writeMode('single');
   const c4 = new Database(path.join(root, 'comm-bridge/c4.db'));
   c4.exec(`CREATE TABLE conversations(id INTEGER PRIMARY KEY,timestamp TEXT,direction TEXT,channel TEXT,endpoint_id TEXT,content TEXT,session_group TEXT,status TEXT);
+    CREATE INDEX idx_conv_group_id ON conversations(session_group, id);
     CREATE TABLE slot_occupancy(session_group TEXT,run_id TEXT,state TEXT,held_until INTEGER,created_at INTEGER);`);
   c4.prepare('INSERT INTO conversations VALUES(1,?,?,?,?,?,?,?)').run(new Date().toISOString(), 'in', 'telegram', 'fixture', 'Fixture message', 'telegram:working', 'delivered');
   c4.close();
@@ -84,7 +85,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     return { ok: true, data: args[0] === 'groups' ? args.includes('--raw') ? catalog().filter(row => row.sessionGroup === args[2]) : args.includes('--active-since') ? { groups: catalog(), hasOlder: false } : catalog()
       : args[0] === 'unsummarized' ? { count: 0, firstAt: null } : { groups: [{ sessionGroup: 'telegram:working', pending: { count: 3, oldestAt: clock - 1000, head: { id: 1, priority: 0 } }, running: { count: 0 } }], globalFence: null } };
   }, readOverrides: async () => ({ ok: true, data: { baseline: { runtime: JSON.parse(fs.readFileSync(configFile)).runtime },
-    runtime: pinWorking ? [{ sessionGroup: 'telegram:working', runtime: 'claude' }] : [], model: [] } }) };
+    runtime: pinWorking ? [{ sessionGroup: 'telegram:working', runtime: 'claude' }] : overrideFixture, model: [] } }) };
   const fakeExecute = (file, args, options, callback) => {
     if (typeof options === 'function') callback = options;
     cliCalls.push([String(file), ...args]);
@@ -200,7 +201,10 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => clock, cli,
       loadCoreModule: async name => name === 'status-view.js' ? { collectStatus: options => collectStatus({ ...options,
         mode: () => ({ mode }), resolveRoot: () => root, configIssue: () => null, requests: () => [], now: () => clock,
-        list: () => [{ sessionGroup: 'telegram:working' }, { sessionGroup: 'telegram:child' }],
+        list: () => {
+          if (!groupListReadable) throw new Error('fixture group list unavailable');
+          return [{ sessionGroup: 'telegram:working' }, { sessionGroup: 'telegram:child' }];
+        },
         facts: () => ({ originNeed: null }), health: () => ({ health: 'rate_limited', cooldownUntil: clock / 1000 + 60, updatedAt: clock }),
       }) } : name === 'config.js' ? { readSessionMode: () => ({ mode }) }
         : name === 'session-pool-config.js' ? { readPoolCapacity: () => ({ k: 3, valid: true, fresh: true }) } : core(name),
@@ -328,7 +332,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       { identity: 'cookie', expected: 400 });
     assert.equal(rejected.error.code, 'invalid_parameter');
     assert.equal(rejected.error.param, 'session_group');
-    const offline = await request('/api/groups/telegram%3Aoffline-0?include=', { identity: 'cookie' });
+    const offline = await request('/api/groups/telegram%3Aoffline-0', { identity: 'cookie' });
     assert.equal(offline.state.kind, 'offline');
     const history = await request('/api/observer/history/sessions?session_group=telegram%3Aoffline-0', { identity: 'cookie' });
     assert.equal(history.current, null);
@@ -345,6 +349,10 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     '/api/workbench/usage', '/api/workbench/host', '/api/workbench/pricing', '/api/workbench/name-prompt', '/api/workbench/runtime-overrides', '/api/agent/name', '/api/settings', '/api/settings?all=1', '/api/workbench/schedule', '/api/workbench/schedule/preview', '/api/workbench/schedule/once', '/api/workbench/schedule/once/history', '/api/workbench/memory/backlog', '/api/chat/settings', '/api/chat/conversations'];
   await t.test('retired reads and actions return 404', async () => {
     for (const route of retired) await request(route, { identity: 'cookie', expected: 404 });
+    for (const path of ['running', 'offline', 'search', 'runtime-overrides']) {
+      const retiredList = await request('/api/groups/' + path, { identity: 'cookie', expected: 404 });
+      assert.equal(retiredList.error.code, 'not_found');
+    }
     for (const route of ['/api/actions/interrupt', '/api/actions/chop-chop', '/api/workbench/schedule', '/api/workbench/schedule/once/pause', '/api/workbench/schedule/once/resume', '/api/chat/settings', '/api/chat/drafts', '/api/settings']) for (const identity of ['cookie', 'read']) await request(route, { method: 'POST', body: {}, identity, expected: 404 });
   });
   const writes = [
@@ -408,14 +416,14 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     await request('/api/instance/resources?range=6h');
     const options = await request('/api/instance/runtime-options?runtime=claude');
     for (const field of ['running_model', 'running_effort']) assert.equal(Object.hasOwn(options, field), false);
-    const counts = await request('/api/groups/counts'), running = await request('/api/groups/running');
-    assert.equal(running.rows.some(row => row.state.kind === 'offline'), false);
+    const counts = await request('/api/groups/counts'), running = await request('/api/groups?side=running');
+    assert.equal(running.items.some(row => row.state.kind === 'offline'), false);
     assert.equal(JSON.stringify(counts).includes('offline-'), false);
     assert.equal(Object.hasOwn(counts, 'mode'), false);
-    const runningKeys = ['id', 'displayName', 'channel', 'runtime', 'model', 'state', 'duration', 'flags', 'mainAgent', 'contextPct', 'lastActivityAt', 'currentAction'].sort();
-    for (const row of running.rows) assert.deepEqual(Object.keys(row).sort(), runningKeys);
+    const runningKeys = ['id', 'displayName', 'channel', 'runtime', 'model', 'state', 'duration', 'flags', 'mainAgent', 'contextPct', 'lastActivityAt', 'currentAction', 'runtimeOverridden', 'modelOverridden'].sort();
+    for (const row of running.items) assert.deepEqual(Object.keys(row).sort(), runningKeys);
     if (next === 'single') {
-      const originRow = running.rows.find(row => row.id === 'origin');
+      const originRow = running.items.find(row => row.id === 'origin');
       assert.equal(originRow.state.kind, 'working'); assert.equal(originRow.mainAgent, 'idle');
       assert.equal(originRow.flags.queued.count, 3, 'single Origin owns pending input from every channel');
       assert.equal(originRow.flags.queued.oldestAt, new Date(clock - 1000).toISOString());
@@ -443,22 +451,22 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     }
     if (next === 'multi') {
       assert.equal(counts.offline.total, 57);
-      const child = running.rows.find(row => row.id === 'telegram:child'); assert.equal(child.state.kind, 'working'); assert.equal(child.mainAgent, 'idle');
-      const work = running.rows.find(row => row.id === 'telegram:working'); assert.equal(work.state.kind, 'working'); assert.equal(work.flags.queued.count, 3); assert.equal(work.flags.blocked.reason, 'rate_limited'); assert.equal(work.flags.blocked.recoveryAt, new Date(clock + 60000).toISOString());
-      const offline = await request('/api/groups/offline?flag=startFailed&limit=1');
-      assert.equal(offline.rows.length, 1); assert.equal(offline.rows[0].id, 'telegram:offline-0');
-      assert.deepEqual(Object.keys(offline.rows[0]).sort(), ['id', 'displayName', 'channel', 'lastActivityAt', 'flags'].sort());
-      assert.equal(offline.rows[0].flags.startFailed.count, 1);
-      assert.equal((await request('/api/groups/offline?flag=startFailed&q=not-found')).rows.length, 0);
-      await request('/api/groups/offline?flag=invalid', { expected: 400 });
+      const child = running.items.find(row => row.id === 'telegram:child'); assert.equal(child.state.kind, 'working'); assert.equal(child.mainAgent, 'idle');
+      const work = running.items.find(row => row.id === 'telegram:working'); assert.equal(work.state.kind, 'working'); assert.equal(work.flags.queued.count, 3); assert.equal(work.flags.blocked.reason, 'rate_limited'); assert.equal(work.flags.blocked.recoveryAt, new Date(clock + 60000).toISOString());
+      const offline = await request('/api/groups?side=offline&flag=startFailed&limit=1');
+      assert.equal(offline.items.length, 1); assert.equal(offline.items[0].id, 'telegram:offline-0');
+      assert.deepEqual(Object.keys(offline.items[0]).sort(), ['id', 'displayName', 'channel', 'lastActivityAt', 'flags', 'runtimeOverridden', 'modelOverridden'].sort());
+      assert.equal(offline.items[0].flags.startFailed.count, 1);
+      assert.equal((await request('/api/groups?side=offline&flag=startFailed&q=not-found')).items.length, 0);
+      await request('/api/groups?side=offline&flag=invalid', { expected: 400 });
       const lean = await request('/api/groups/origin?include=');
       assert.equal(Object.hasOwn(lean, 'raw'), false); assert.equal(Object.hasOwn(lean, 'config'), false);
       assert.equal(lean.runtimeInfo.runningVersion, '1.0.0'); assert.equal(lean.runtimeInfo.model, 'fixture-model'); assert.equal(lean.runtimeInfo.effort, 'high');
       await request('/api/groups/origin?include=invalid', { expected: 400 });
     }
-    for (const route of ['/api/groups/offline?limit=10', '/api/groups/search?q=telegram', '/api/groups/activity?range=60m&ids=origin', `/api/groups/${encoded}`, `/api/groups/${encoded}/usage`,
+    for (const route of ['/api/groups?side=offline&limit=10', '/api/groups?q=telegram', '/api/groups/activity?range=60m&ids=origin', `/api/groups/${encoded}`, `/api/groups/${encoded}/usage`,
       `/api/groups/${encoded}/runs`, `/api/groups/${encoded}/messages`, `/api/groups/${encoded}/events`, `/api/groups/${encoded}/backlog`,
-      '/api/groups/runtime-overrides', '/api/usage/summary', '/api/usage/pricing']) await request(route);
+      '/api/groups?runtimeOverridden=true', '/api/usage/summary', '/api/usage/pricing']) await request(route);
     const restart = await request(`/api/groups/${encoded}/restarts/11111111-1111-4111-8111-111111111111`);
     assert.equal(restart.group.ready, true, 'a present ready replacement run is visible to restart callers');
     assert.equal(restart.completion, 'done');
@@ -475,6 +483,109 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     const groups = await Promise.all(['origin', 'telegram:working', 'telegram:child'].map(group => request(`/api/groups/${encodeURIComponent(group)}/usage`)));
     assert.equal(groups.reduce((sum, group) => sum + group.today.tokens, 0), summary.today.tokens);
     assert.ok(summary.today.tokens > 0);
+  });
+  // Real group routes, indexed C4 reads and HTTP error serialization in the isolated
+  // parent fixture. Run for list filters, cursor, ordering or detail-query changes.
+  await t.test('groups use signed keyset pages, strict parameters and received-message order', async () => {
+    writeMode('multi');
+    const db = new Database(path.join(root, 'comm-bridge/c4.db'));
+    const text = n => new Date(clock - 2000 + n).toISOString();
+    const receivedSecond = Math.floor((clock - 5000) / 1000) * 1000;
+    const originAt = new Date(receivedSecond - 1000).toISOString();
+    const workingAt = new Date(receivedSecond).toISOString();
+    const childAt = new Date(receivedSecond + 1000).toISOString();
+    const groups = '/api/groups';
+    const list = filter => request(groups + '?' + filter);
+    const seed = db.prepare("INSERT INTO conversations(timestamp,direction,channel,endpoint_id,content,session_group,status) VALUES(?,?,?,'fixture','fixture message',?,'delivered')");
+    try {
+      seed.run(originAt, 'in', 'telegram', 'origin');
+      seed.run(workingAt.slice(0, 19).replace('T', ' '), 'in', 'telegram', 'telegram:working');
+      seed.run(childAt, 'in', 'telegram', 'telegram:child');
+      seed.run(text(3), 'out', 'telegram', 'telegram:working');
+      seed.run(text(4), 'in', 'control', 'telegram:working');
+      const before = await list('side=running&limit=3&include=total');
+      assert.deepEqual(before.items.slice(0, 3).map(row => row.id), ['origin', 'telegram:child', 'telegram:working']);
+      assert.equal(before.items[0].lastActivityAt, originAt);
+      assert.equal(before.items[1].lastActivityAt, childAt);
+      assert.equal(before.items[2].lastActivityAt, workingAt);
+      const firstPage = await list('side=running&limit=2');
+      const secondPage = await list('side=running&limit=2&cursor=' + encodeURIComponent(firstPage.nextCursor));
+      assert.deepEqual(secondPage.items.map(row => row.id), ['telegram:working']);
+      const scheduledAt = text(5);
+      seed.run(scheduledAt, 'in', 'system', 'telegram:working'); clock += 3000;
+      const after = await list('side=running&limit=3');
+      assert.deepEqual(after.items.slice(0, 3).map(row => row.id), ['origin', 'telegram:working', 'telegram:child']);
+      assert.equal(after.items[1].lastActivityAt, scheduledAt);
+      assert.equal(after.items[1].currentAction.message, before.items[2].currentAction.message);
+
+      overrideFixture = [...Array.from({ length: 24 }, (_, index) => ({ sessionGroup: 'telegram:offline-' + index, runtime: 'claude' })),
+        { sessionGroup: 'telegram:zzz-override-only', runtime: 'codex' }];
+      for (const [index, override] of overrideFixture.slice(0, -1).entries()) {
+        seed.run(text(index), 'out', 'telegram', override.sessionGroup);
+        seed.run(text(index + 100), 'out', 'telegram', override.sessionGroup);
+      }
+      const firstVisibleAt = text(23);
+      clock += 3000;
+      const filter = 'runtimeOverridden=true&limit=8&include=total';
+      let continuation = '';
+      const seen = new Set();
+      for (const count of [8, 8, 8, 1]) {
+        const page = await list(filter + continuation);
+        assert.equal(page.total, 25);
+        assert.equal(page.items.length, count);
+        for (const item of page.items) {
+          assert.equal(seen.has(item.id), false);
+          seen.add(item.id);
+        }
+        continuation = page.nextCursor ? '&cursor=' + encodeURIComponent(page.nextCursor) : '';
+        if (seen.size === 8) {
+          assert.equal(page.items[0].id, 'telegram:offline-23');
+          assert.equal(page.items[0].lastActivityAt, firstVisibleAt);
+        }
+        if (count === 1) {
+          assert.equal(page.nextCursor, null);
+          assert.equal(page.items[0].id, 'telegram:zzz-override-only');
+          assert.equal(page.items[0].lastActivityAt, null);
+        }
+      }
+      assert.equal((await list('runtimeOverridden=true&q=zzz-override-only&include=total')).total, 1);
+
+      writeMode('single');
+      assert.equal((await list('side=offline&include=total')).total, 0);
+      assert.equal((await request('/api/groups/counts')).offline.total, 0);
+      writeMode('multi');
+
+      for (const [query, param] of [['offset=1', 'offset'], ['side=running&side=offline', 'side'],
+        ['limit=101', 'limit'], ['flag=x', 'flag'], ['include=raw', 'include']]) {
+        const bad = await request(groups + '?' + query, { expected: 400 });
+        assert.equal(bad.error.code, 'invalid_parameter');
+        assert.equal(bad.error.param, param);
+      }
+      const { nextCursor } = await list('side=offline&limit=1');
+      const wrongFilter = await request(groups + '?side=running&cursor=' + encodeURIComponent(nextCursor), { expected: 400 });
+      assert.equal(wrongFilter.error.code, 'invalid_cursor');
+      const [body, signature] = nextCursor.split('.');
+      const tampered = await request(groups + '?side=offline&cursor=' + body + 'x.' + signature, { expected: 400 });
+      assert.equal(tampered.error.code, 'invalid_cursor');
+      const invalidInclude = await request(groups + '/telegram%3Aworking?include=config,config', { expected: 400 });
+      assert.equal(invalidInclude.error.code, 'invalid_parameter');
+      assert.equal(invalidInclude.error.param, 'include');
+
+      groupListReadable = false;
+      clock += 3000;
+      const query = 'runtimeOverridden=true&q=zzz-override-only';
+      const unknown = await list('side=running&' + query);
+      assert.equal(unknown.listKnown, false);
+      assert.equal(unknown.items.length, 1);
+      assert.equal(unknown.items[0].id, 'telegram:zzz-override-only');
+      assert.equal(unknown.items[0].state.kind, 'unknown');
+      assert.equal((await list('side=offline&' + query)).items.length, 0);
+    } finally {
+      db.close();
+      overrideFixture = [];
+      groupListReadable = true;
+      writeMode('multi');
+    }
   });
   await t.test('ordinary stream publishes instance and counts payloads matching GET in both modes', async () => {
     for (const next of ['single', 'multi']) {
@@ -527,7 +638,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     const action = '/api/instance/actions/switch-runtime';
     const save = (runtime, expected = 200) => request(action, { method: 'POST',
       body: { runtime, confirmed: true }, identity: 'admin', expected });
-    const detail = key => request('/api/groups/' + encodeURIComponent(key) + '?include=');
+    const detail = key => request('/api/groups/' + encodeURIComponent(key) + (key === 'origin' ? '?include=' : ''));
     const observer = () => request('/api/observer/status?session_group=origin', { identity: 'cookie' });
     try {
       await nextDefault('claude');
@@ -576,8 +687,8 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     catalogReadable = false; clock += 3000;
     try {
       await request('/api/groups/counts', { expected: 502 });
-      await request('/api/groups/offline', { expected: 502 });
-      await request('/api/groups/search?q=fixture', { expected: 502 });
+      await request('/api/groups?side=offline', { expected: 503 });
+      await request('/api/groups?q=fixture', { expected: 503 });
       const fleet = await request('/api/fleet');
       assert.ok(fleet.agents.some(agent => agent.name === 'remote-fixture'), 'other Fleet records survive local catalog failure');
       assert.equal(fleet.agents.find(agent => agent.self).group_summary.listKnown, false);
@@ -617,7 +728,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     value = await request('/api/groups/origin?include='); assert.equal(value.runtimeInfo.pendingRestart, true);
     usageModel = 'fixture-model'; usageEffort = 'low'; clock += 3000;
     value = await request('/api/groups/origin?include='); assert.equal(value.runtimeInfo.pendingRestart, true);
-    value = await request('/api/groups/telegram%3Aoffline-0?include='); assert.equal(value.runtimeInfo.pendingRestart, false);
+    value = await request('/api/groups/telegram%3Aoffline-0'); assert.equal(value.runtimeInfo.pendingRestart, false);
     usageVersion = null; usageModel = null; usageEffort = null; clock += 3000;
     value = await request('/api/groups/origin?include='); assert.equal(value.runtimeInfo.runningVersion, null); assert.equal(value.runtimeInfo.pendingRestart, false);
     const instance = await request('/api/instance'); assert.equal(Object.hasOwn(instance, 'runtime_info'), false);
@@ -628,8 +739,8 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     const insert = (event_type, metadata = {}) => seedStore.insertEvent({ id: 'response-proof-' + (++seq), ingest_id: 'response-proof-' + seq,
       timestamp: new Date(clock - 500).toISOString(), session_group: 'origin', run_id: originRun, event_type, category: 'agent', metadata });
     insert('no_response_nudge'); clock += 3000;
-    let running = await request('/api/groups/running'), counts = await request('/api/groups/counts');
-    let row = running.rows.find(row => row.id === 'origin');
+    let running = await request('/api/groups?side=running'), counts = await request('/api/groups/counts');
+    let row = running.items.find(row => row.id === 'origin');
     assert.ok(row.flags.noResponse.since); assert.equal(counts.running.flags.noResponse, 1);
     const fleet = await request('/api/fleet');
     const summary = fleet.agents.find(agent => agent.self).group_summary;
@@ -642,7 +753,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     insert('no_response_nudge'); clock += 3000;
     assert.equal((await request('/api/groups/counts')).running.flags.noResponse, 1);
     originRun = 'replacement-run'; clock += 3000;
-    running = await request('/api/groups/running'); row = running.rows.find(row => row.id === 'origin');
+    running = await request('/api/groups?side=running'); row = running.items.find(row => row.id === 'origin');
     assert.equal(Object.hasOwn(row.flags, 'noResponse'), false, 'a prior run reminder cannot enter its replacement');
     assert.equal((await request('/api/groups/counts')).running.flags.noResponse, 0);
   });

@@ -1,5 +1,5 @@
 import { formatZoned, instanceZone, instanceZoneReady } from './wb/instance-zone.js';
-import { readGroupSnapshot, displayGroupRow, instanceActionRequest } from './wb/group-data.js';
+import { readGroupSnapshot, readGroupPage, displayGroupRow, groupDetailPath, instanceActionRequest } from './wb/group-data.js';
 import { waitUntilDeadline } from './request-timeout.js';
 import { createConversationPush } from './wb/conversation-push.js';
 import { consumeDraftReset, createDraftRestoreStore, createComposeRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js';
@@ -1083,6 +1083,11 @@ function renderObserverPage() {
   const picker = $('#observer-group-picker'), select = $('#observer-group-select');
   if (picker && select) {
     picker.hidden = !multi || Boolean(focus);
+    const more = $('#observer-group-more'), groups = state.observer.groups;
+    if (more) {
+      more.hidden = !groups?.nextCursor;
+      more.disabled = Boolean(groups?.loading);
+    }
     const options = [{ value: '', label: t('wb.observer.chooseGroup') }];
     const rows = runningObserverGroups(state.observer.groups);
     if (group !== undefined && !rows.some(item => (item.sessionGroup ?? 'origin') === group)) {
@@ -1840,6 +1845,7 @@ function initObserverControls() {
       });
     });
   }
+  $('#observer-group-more')?.addEventListener('click', () => loadMoreObserverGroups());
   $('#observer-group-select')?.addEventListener('change', event => {
     openObserverFor(event.target.value || undefined, 'live', { focus: Boolean(state.observer.focus) }).catch(() => {});
   });
@@ -2614,18 +2620,18 @@ async function refreshObserverStatus({ quiet = false, signal } = {}) {
     try {
       const [resp, groups] = await Promise.all([
         fetch(endpoint, { cache: 'no-store', signal }),
-        fetch(observerEndpoint('/api/groups/running'), { cache: 'no-store', signal }).then(response => { if (!response.ok) throw Error('read_failed'); return response.json(); }).catch(() => null)
+        fetch(observerEndpoint('/api/groups?side=running'), { cache: 'no-store', signal }).then(response => { if (!response.ok) throw Error('read_failed'); return response.json(); }).catch(() => null)
       ]);
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw observerRequestError(data, resp.status);
       if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
       state.observer.status = data;
-      if (state.observer.group !== undefined && groups && !groups.rows?.some(row => (row.id ?? row.sessionGroup) === state.observer.group)) {
-        const selected = await fetch(observerEndpoint('/api/groups/' + encodeURIComponent(state.observer.group) + '?include='), { cache: 'no-store', signal }).then(response => response.ok ? response.json() : null).catch(() => null);
+      if (state.observer.group !== undefined && groups && !groups.items?.some(row => (row.id ?? row.sessionGroup) === state.observer.group)) {
+        const selected = await fetch(observerEndpoint(groupDetailPath(state.observer.group ?? 'origin')), { cache: 'no-store', signal }).then(response => response.ok ? response.json() : null).catch(() => null);
         if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
-        if (selected) groups.rows = [...(groups.rows ?? []), selected];
+        if (selected) groups.items = [...(groups.items ?? []), selected];
       }
-      if (groups) groups.rows = (groups.rows ?? []).map(row => displayGroupRow(row));
+      if (groups) groups.rows = (groups.items ?? []).map(row => displayGroupRow(row));
       state.observer.groups = groups;
       renderObserverStatus(data);
       if (data && state.observer.intent && (data.desired?.enabled !== true || observerRecoveryReason(data))) {
@@ -2642,6 +2648,33 @@ async function refreshObserverStatus({ quiet = false, signal } = {}) {
   })();
   try { return await request.promise; }
   catch (error) { if (!quiet) throw error; return null; }
+}
+
+async function loadMoreObserverGroups() {
+  const groups = state.observer.groups, targetKey = observerTargetKey();
+  if (!groups?.nextCursor || groups.loading) return;
+  const current = () => state.observer.groups === groups && observerTargetKey() === targetKey;
+  groups.loading = true;
+  renderObserverPage();
+  try {
+    const next = await readGroupPage(async path => {
+      const response = await fetch(observerEndpoint(path), { cache: 'no-store', signal: AbortSignal.timeout(30000) });
+      const value = await response.json();
+      if (!response.ok) throw observerRequestError(value, response.status);
+      return value;
+    }, { side: 'running', cursor: groups.nextCursor });
+    if (!current()) return;
+    const loaded = new Map(groups.rows.map(row => [row.sessionGroup, row]));
+    for (const row of next.rows) loaded.set(row.sessionGroup, row);
+    groups.rows = [...loaded.values()];
+    groups.nextCursor = next.nextCursor;
+  } catch (error) {
+    if (!current()) return;
+    if (error.code === 'invalid_cursor') await refreshObserverStatus({ quiet: true });
+  } finally {
+    groups.loading = false;
+    if (current()) renderObserverPage();
+  }
 }
 
 // Disabling and uninstalling close the open terminal view, so both ask first; only uninstalling is destructive.
@@ -2763,13 +2796,13 @@ function initSettingsPage() {
     confirm: confirmSetting, writable: () => !remoteIsReadOnly(),
     identity: observerTargetKey, target: viewedRemoteTarget, onSaved: () => refreshState().catch(() => {}),
   });
-  const read = async path => { const target = observerTargetKey(); const value = await fetchJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
+  const read = async path => { const target = observerTargetKey(); const value = await requestAgentJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
   settingsLoader = createSettingsLoader({ read, onLoad(value) {
     settingsDefaults?.destroy();
     settingsDefaults = settingsWiring().renderDefaults(defaults, value, read, settingsPage.slots.idleReclaim);
     settingsPricing?.destroy(); settingsPricing = null;
     if (value.prices) {
-      settingsPricing = createPricingPanel({ root: settingsPage.sections.pricing, host: root, snapshot: value.snapshot,
+      settingsPricing = createPricingPanel({ root: settingsPage.sections.pricing, host: root, groupCounts: value.groupCounts.pricing,
         data: value.prices, usage: value.usage, t, formatTokens: tok, writable: () => !remoteIsReadOnly(), onDirty: count => settingsPage.badge('pricing', count),
         write: body => requestAgentJson('/api/settings/pricing', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
     } else { const status = root.querySelector('#settings-status'); status.hidden = false; status.textContent = t('wb.readFailed'); }

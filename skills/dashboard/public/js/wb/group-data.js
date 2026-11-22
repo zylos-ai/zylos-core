@@ -49,34 +49,57 @@ export function groupSnapshot(instance, counts, page) {
     groupCounts: counts, nextCursor: page.nextCursor ?? null, hasOlder: page.nextCursor != null, overrides: null,
     instance: { ...instance, pool: counts.pool },
     failedRows, attentionFailures: page.attentionFailures ?? [],
-    sources: { status: { ok: counts.listKnown !== false && page.listKnown !== false, readAt: page.readAt ?? counts.readAt } },
+    sources: { status: { ok: counts.listKnown !== false && page.listKnown !== false, readAt: page.sources?.status?.readAt ?? page.readAt ?? counts.readAt } },
     attention: groupAttention(instance, counts, rows, failedRows, [...(page.attentionFailures ?? []), ...(page.listKnown === false ? ['groups'] : [])]) };
 }
 
-export async function readGroupSnapshot(read, { signal, side = 'running', cursor = null, pages = 1, instance, counts } = {}) {
+export function groupDetailPath(id, include) {
+  const path = '/api/groups/' + encodeURIComponent(id);
+  // The Origin Operations Interface retains its legacy includes.
+  return include || id === 'origin' ? path + '?include=' + (include ?? '') : path;
+}
+
+export async function readGroupPage(read, { signal, side, cursor, q, flag } = {}) {
   const params = new URLSearchParams();
-  if (cursor != null) params.set('cursor', cursor);
-  const path = side === 'offline' ? '/api/groups/offline' + (params.size ? '?' + params : '') : '/api/groups/running';
-  const [instanceData, countsData, page] = await Promise.all([
-    instance ?? read('/api/instance', { signal }), counts ?? read('/api/groups/counts', { signal }), read(path, { signal }),
-  ]);
-  const combined = { ...page, side, rows: [...(page.rows ?? [])] };
-  const visited = new Set();
-  for (let index = 1; side === 'offline' && index < pages && combined.nextCursor != null; index++) {
-    if (visited.has(combined.nextCursor)) throw Error('offline_cursor_repeated');
-    visited.add(combined.nextCursor);
-    const next = await read('/api/groups/offline?cursor=' + encodeURIComponent(combined.nextCursor), { signal });
-    const known = new Set(combined.rows.map(row => row.id ?? row.sessionGroup));
-    combined.rows.push(...(next.rows ?? []).filter(row => !known.has(row.id ?? row.sessionGroup)));
-    combined.nextCursor = next.nextCursor ?? null;
+  for (const [key, value] of Object.entries({ side, flag, q, cursor })) {
+    if (value != null) params.set(key, value);
   }
+  const result = await read('/api/groups' + (params.size ? '?' + params : ''), { signal });
+  return { ...result, rows: (result.items ?? []).map(row => displayGroupRow(row, side)) };
+}
+
+export async function readGroupPages(read, { pages = 1, ...options } = {}) {
+  const page = await readGroupPage(read, options);
+  const rows = [...page.rows], known = new Set(rows.map(row => row.sessionGroup)), visited = new Set();
+  let { nextCursor, listKnown } = page;
+  for (let index = 1; index < pages && nextCursor != null; index++) {
+    if (visited.has(nextCursor)) throw Error('group_cursor_repeated');
+    visited.add(nextCursor);
+    const next = await readGroupPage(read, { ...options, cursor: nextCursor });
+    for (const row of next.rows) {
+      if (known.has(row.sessionGroup)) continue;
+      rows.push(row);
+      known.add(row.sessionGroup);
+    }
+    nextCursor = next.nextCursor;
+    if (next.listKnown === false) listKnown = false;
+  }
+  return { ...page, rows, listKnown, nextCursor: nextCursor ?? null };
+}
+
+export async function readGroupSnapshot(read, { signal, side = 'running', cursor, pages = 1, instance, counts } = {}) {
+  const [instanceData, countsData, page] = await Promise.all([
+    instance ?? read('/api/instance', { signal }), counts ?? read('/api/groups/counts', { signal }),
+    readGroupPages(read, { signal, side, pages, cursor }),
+  ]);
+  const combined = { ...page, side };
   if ((countsData.offline?.startFailed ?? 0) > 0) {
     try {
       const failedRows = [], visited = new Set(); let cursor = null;
       do {
-        const result = await read('/api/groups/offline?flag=startFailed' + (cursor == null ? '' : '&cursor=' + encodeURIComponent(cursor)), { signal });
-        failedRows.push(...(result.rows ?? [])); cursor = result.nextCursor ?? null;
-        if (cursor != null && visited.has(cursor)) throw Error('offline_cursor_repeated');
+        const result = await readGroupPage(read, { signal, side: 'offline', flag: 'startFailed', cursor });
+        failedRows.push(...result.rows); cursor = result.nextCursor ?? null;
+        if (cursor != null && visited.has(cursor)) throw Error('group_cursor_repeated');
         if (cursor != null) visited.add(cursor);
       } while (cursor != null);
       combined.failedRows = failedRows;

@@ -39,13 +39,15 @@ test('a subagent or command keeps the group working while its main agent is idle
 });
 test('expired status remains unknown while retaining its last observation for the list hint', async () => {
   const row = base(); row.live.status = { valid: false, reason: 'stale', sampledAt: now - 61000, lastState: 'busy' };
-  const value = snapshot([row]), service = createGroupsApi({ workbench: { getSnapshot: async () => value } });
-  const actual = (await service.running()).rows[0];
+  let value = snapshot([row]);
+  const service = createGroupsApi({ workbench: { getSnapshot: async () => ({ ...value, groupEvidence: value.groupEvidence }) } });
+  const actual = (await service.list(new URLSearchParams('side=running'))).items[0];
   assert.equal(actual.state.kind, 'unknown'); assert.equal(actual.mainAgent, 'unknown');
   assert.equal(actual.state.sampledAt, now - 61000); assert.equal(actual.state.lastState, 'busy');
-  assert.equal(Object.hasOwn(actual, 'live'), false); assert.equal(Object.keys(actual).length, 12);
+  assert.equal(Object.hasOwn(actual, 'live'), false); assert.equal(Object.keys(actual).length, 14);
   row.live.status.reason = 'identity_mismatch';
-  assert.equal(Object.hasOwn((await service.running()).rows[0].state, 'lastState'), false);
+  value = snapshot([row]);
+  assert.equal(Object.hasOwn((await service.list(new URLSearchParams('side=running'))).items[0].state, 'lastState'), false);
 });
 
 test('lifecycle primary states never turn queue or start failures into primary states', () => {
@@ -83,16 +85,17 @@ test('counts contain numbers and no offline rows; unknown remains on the running
   assert.equal(JSON.stringify(result).includes('old-'), false); assert.equal(Object.hasOwn(result.offline, 'rows'), false);
 });
 
-test('an unreadable catalog fails counts and offline search instead of reporting an empty catalog', async () => {
+test('an unreadable catalog makes collection reads unavailable', async () => {
   const value = snapshot([base()]); value.sources.c4 = { ok: false };
-  const service = createGroupsApi({ workbench: { getSnapshot: async () => value } });
+  const service = createGroupsApi({ workbench: { getSnapshot: async () => ({ ...value, groupEvidence: value.groupEvidence }) } });
   await assert.rejects(service.counts(), { code: 'GROUP_CATALOG_UNREADABLE', statusCode: 502 });
-  await assert.rejects(service.offline(), { code: 'GROUP_CATALOG_UNREADABLE' });
-  await assert.rejects(service.search('missing'), { code: 'GROUP_CATALOG_UNREADABLE' });
-  assert.equal((await service.running()).rows[0].state.kind, 'idle');
+  for (const filter of ['side=offline', 'side=running', 'q=missing']) {
+    await assert.rejects(service.list(new URLSearchParams(filter)), { code: 'unavailable', statusCode: 503 });
+  }
+  value.sources.c4 = { ok: true };
   value.sources.status = { ok: false, reason: 'status_unreadable' }; value.listKnown = false;
-  const running = await service.running();
-  assert.equal(running.listKnown, false); assert.equal(running.rows[0].state.kind, 'unknown');
+  const running = await service.list(new URLSearchParams('side=running'));
+  assert.equal(running.listKnown, false); assert.equal(running.items[0].state.kind, 'unknown');
 });
 
 test('offline pagination and search select names and keys across both sides', async () => {
@@ -102,17 +105,17 @@ test('offline pagination and search select names and keys across both sides', as
   const service = createGroupsApi({ workbench: { getSnapshot: async () => snapshot(rows) } });
   const seen = new Set(); let cursor = null;
   do {
-    const params = new URLSearchParams({ limit: '13', ...(cursor ? { cursor } : {}) });
-    const page = await service.offline(params);
-    assert.ok(page.rows.length <= 13);
-    for (const row of page.rows) { assert.equal(Object.hasOwn(row, 'state'), false); assert.equal(seen.has(row.id), false); seen.add(row.id); }
+    const params = new URLSearchParams({ side: 'offline', limit: '13', ...(cursor ? { cursor } : {}) });
+    const page = await service.list(params);
+    assert.ok(page.items.length <= 13);
+    for (const row of page.items) { assert.equal(Object.hasOwn(row, 'state'), false); assert.equal(seen.has(row.id), false); seen.add(row.id); }
     cursor = page.nextCursor;
   } while (cursor);
-  assert.equal(seen.size, 57); assert.equal((await service.running()).rows.length, 1);
-  assert.equal((await service.search(new URLSearchParams({ q: 'Named project' }))).rows[0].id, 'telegram:old-01');
-  assert.equal((await service.search('work')).rows[0].state.kind, 'idle');
-  await assert.rejects(service.offline(new URLSearchParams({ cursor: 'broken' })), { code: 'INVALID_CURSOR' });
-  await assert.rejects(service.offline(new URLSearchParams({ limit: '0' })), { code: 'INVALID_LIMIT' });
+  assert.equal(seen.size, 57); assert.equal((await service.list(new URLSearchParams('side=running'))).items.length, 1);
+  assert.equal((await service.list(new URLSearchParams({ q: 'Named project' }))).items[0].id, 'telegram:old-01');
+  assert.equal((await service.list(new URLSearchParams('q=work'))).items[0].state.kind, 'idle');
+  await assert.rejects(service.list(new URLSearchParams({ side: 'offline', cursor: 'broken' })), { code: 'invalid_cursor' });
+  await assert.rejects(service.list(new URLSearchParams({ side: 'offline', limit: '0' })), { code: 'invalid_parameter' });
 });
 
 test('detail shares its list row and adds one configuration and raw-message read', async () => {
@@ -124,8 +127,8 @@ test('detail shares its list row and adds one configuration and raw-message read
   const selectedSnapshot = snapshot([row]);
   const api = createGroupsApi({ workbench: { getSnapshot: async () => selectedSnapshot, raw: async (key, selected) => { rawReads++; assert.equal(selected, selectedSnapshot); assert.equal(key, row.sessionGroup); return { raw: 'First message' }; } },
     groupConfig: { get: async () => { configReads++; return { runtime: { ok: true }, model: { ok: true } }; } } });
-  const detail = await api.detail(row.sessionGroup);
-  const list = (await api.running()).rows[0];
+  const detail = await api.detail(row.sessionGroup, new URLSearchParams('include=raw,config'));
+  const list = (await api.list(new URLSearchParams('side=running'))).items[0];
   assert.deepEqual(detail.currentAction, list.currentAction);
   assert.deepEqual(detail.currentAction, { tool: 'Read', message: 'Current received message', receivedAt: new Date(now - 1000).toISOString() });
   assert.equal(detail.raw, 'First message'); assert.equal(detail.state.kind, 'idle'); assert.equal(detail.effective.effort, 'high');
@@ -173,16 +176,16 @@ test('real snapshot projects child-only work and an old offline catalog in both 
         throw new Error(`Unexpected module ${name}`);
       } });
     const api = createGroupsApi({ workbench: service });
-    const running = await api.running(), child = running.rows.find(row => row.id === (key ?? 'origin'));
+    const running = await api.list(new URLSearchParams('side=running')), child = running.items.find(row => row.id === (key ?? 'origin'));
     assert.equal(child.state.kind, 'working'); assert.equal(child.mainAgent, 'idle');
-    assert.equal((await api.detail(child.id, { include: [] })).working.subagents.count, 1);
+    assert.equal((await api.detail(child.id, new URLSearchParams())).working.subagents.count, 1);
     assert.equal(Object.hasOwn(child, 'working'), false);
     assert.equal(await api.readKey(historical), historical);
-    if (mode === 'multi') assert.equal((await api.detail(historical, { include: [] })).side, 'offline');
-    else await assert.rejects(api.detail(historical, { include: [] }), { code: 'GROUP_NOT_FOUND', statusCode: 404 });
+    if (mode === 'multi') assert.equal((await api.detail(historical, new URLSearchParams())).side, 'offline');
+    else await assert.rejects(api.detail(historical, new URLSearchParams()), { code: 'not_found', statusCode: 404 });
     const counts = await api.counts(); assert.equal(Object.hasOwn(counts, 'mode'), false); assert.equal(counts.offline.total, mode === 'multi' ? 59 : 0);
-    if (mode !== 'multi') assert.equal(running.rows.length, 1);
-    assert.equal(running.rows.some(row => row.state.kind === 'offline'), false);
+    if (mode !== 'multi') assert.equal(running.items.length, 1);
+    assert.equal(running.items.some(row => row.state.kind === 'offline'), false);
   }
 });
 
@@ -204,12 +207,12 @@ test('detail can omit expensive extras and reports each optional read failure wi
   let reads = 0; const row = base();
   const api = createGroupsApi({ workbench: { getSnapshot: async () => snapshot([row]), raw: async () => { reads++; throw new Error('Raw unavailable'); } },
     groupConfig: { get: async () => { reads++; throw new Error('Config unavailable'); } } });
-  const fast = await api.detail(row.sessionGroup, { include: new URLSearchParams({ include: '' }) });
+  const fast = await api.detail(row.sessionGroup);
   assert.equal(fast.state.kind, 'idle'); assert.equal(reads, 0); assert.equal(Object.hasOwn(fast, 'raw'), false); assert.equal(Object.hasOwn(fast, 'config'), false);
-  const full = await api.detail(row.sessionGroup);
+  const full = await api.detail(row.sessionGroup, new URLSearchParams('include=raw,config'));
   assert.equal(full.state.kind, 'idle'); assert.equal(reads, 2); assert.equal(full.raw, null); assert.equal(full.config, null);
   assert.equal(full.rawError.code, 'READ_FAILED'); assert.equal(full.configError.code, 'READ_FAILED');
-  await assert.rejects(api.detail(row.sessionGroup, { include: new URLSearchParams({ include: 'bad' }) }), { code: 'INVALID_INCLUDE' });
+  await assert.rejects(api.detail(row.sessionGroup, new URLSearchParams({ include: 'bad' })), { code: 'invalid_parameter' });
 });
 
 test('stream and self-fleet counts can retain known rows when only the catalog is unreadable', () => {
@@ -219,23 +222,23 @@ test('stream and self-fleet counts can retain known rows when only the catalog i
   assert.equal(counts.listKnown, false); assert.equal(counts.running.total, 1); assert.deepEqual(counts.pool, { used: 1, capacity: 1 });
 });
 
-const RUNNING_FIELDS = ['id', 'displayName', 'channel', 'runtime', 'model', 'state', 'duration', 'flags', 'mainAgent', 'contextPct', 'lastActivityAt', 'currentAction'].sort();
-const OFFLINE_FIELDS = ['id', 'displayName', 'channel', 'lastActivityAt', 'flags'].sort();
+const RUNNING_FIELDS = ['id', 'displayName', 'channel', 'runtime', 'model', 'state', 'duration', 'flags', 'mainAgent', 'contextPct', 'lastActivityAt', 'currentAction', 'runtimeOverridden', 'modelOverridden'].sort();
+const OFFLINE_FIELDS = ['id', 'displayName', 'channel', 'lastActivityAt', 'flags', 'runtimeOverridden', 'modelOverridden'].sort();
 
 test('list resources expose only their compact fields while detail retains source observations', async () => {
   const active = { ...base(), contextPct: 35, tools: [{ name: 'Bash' }], launchConfig: { runtime: 'claude', mode: 'default' },
     secretObservation: { source: 'not a list field' } };
   const sleeping = { ...base('not_running'), sessionGroup: 'telegram:offline', working: null, live: null };
   const api = createGroupsApi({ workbench: { getSnapshot: async () => snapshot([active, sleeping]) } });
-  const running = (await api.running()).rows[0];
+  const running = (await api.list(new URLSearchParams('side=running'))).items[0];
   assert.deepEqual(Object.keys(running).sort(), RUNNING_FIELDS);
   assert.equal(running.contextPct, 35);
-  const offline = (await api.offline()).rows[0];
+  const offline = (await api.list(new URLSearchParams('side=offline'))).items[0];
   assert.deepEqual(Object.keys(offline).sort(), OFFLINE_FIELDS);
-  const search = await api.search('telegram:');
-  assert.equal(search.rows.length, 2);
-  for (const row of search.rows) assert.deepEqual(Object.keys(row).sort(), [...(row.id === active.sessionGroup ? RUNNING_FIELDS : OFFLINE_FIELDS), 'side'].sort());
-  const detail = await api.detail(active.sessionGroup, { include: [] });
+  const search = await api.list(new URLSearchParams('q=telegram:'));
+  assert.equal(search.items.length, 2);
+  for (const row of search.items) assert.deepEqual(Object.keys(row).sort(), row.id === active.sessionGroup ? RUNNING_FIELDS : OFFLINE_FIELDS);
+  const detail = await api.detail(active.sessionGroup, new URLSearchParams());
   for (const field of ['presence', 'live', 'working', 'queue', 'target', 'launchConfig', 'c4', 'tools', 'secretObservation']) assert.deepEqual(detail[field], active[field]);
   const counts = await api.counts();
   assert.equal(Object.hasOwn(counts, 'mode'), false);
@@ -248,31 +251,56 @@ test('offline flag filtering combines with text search before stable pagination'
     wait: index === 0 ? null : { kind: 'start_failed', count30m: index, lastAt: now - 100, reasonCode: 'launch_failed' },
     c4: { lastActivityAt: now - index * 1000 } }));
   const api = createGroupsApi({ workbench: { getSnapshot: async () => snapshot(rows) } });
-  const query = { flag: 'startFailed', q: 'target', limit: '2' };
-  const first = await api.offline(new URLSearchParams(query));
-  assert.deepEqual(first.rows.map(row => row.id), ['telegram:failed-1', 'telegram:failed-2']);
+  const query = { side: 'offline', flag: 'startFailed', q: 'target', limit: '2' };
+  const first = await api.list(new URLSearchParams(query));
+  assert.deepEqual(first.items.map(row => row.id), ['telegram:failed-1', 'telegram:failed-2']);
   assert.ok(first.nextCursor);
-  const second = await api.offline(new URLSearchParams({ ...query, cursor: first.nextCursor }));
-  assert.deepEqual(second.rows.map(row => row.id), ['telegram:failed-3', 'telegram:failed-4']);
+  const second = await api.list(new URLSearchParams({ side: 'offline', ...query, cursor: first.nextCursor }));
+  assert.deepEqual(second.items.map(row => row.id), ['telegram:failed-3', 'telegram:failed-4']);
   assert.equal(second.nextCursor, null);
-  assert.equal((await api.offline(new URLSearchParams({ flag: 'queued' }))).rows.length, 0);
-  for (const flag of ['', 'start_failed', 'startFailed,queued']) await assert.rejects(api.offline(new URLSearchParams({ flag })), { code: 'INVALID_FLAG', statusCode: 400 });
-  assert.equal((await api.offline(new URLSearchParams({ flag: 'startFailed' }))).rows.length, 5);
+  assert.equal((await api.list(new URLSearchParams({ side: 'offline', flag: 'queued' }))).items.length, 0);
+  for (const flag of ['', 'start_failed', 'startFailed,queued']) await assert.rejects(api.list(new URLSearchParams({ side: 'offline', flag })), { code: 'invalid_parameter', statusCode: 400 });
+  assert.equal((await api.list(new URLSearchParams({ side: 'offline', flag: 'startFailed' }))).items.length, 5);
 });
 
+
+test('the model follower filter requires launch, desired and saved override evidence for the requested runtime', async () => {
+  const rows = [
+    { ...base(), sessionGroup: 'telegram:follower', launchConfig: { mode: 'default' } },
+    { ...base(), sessionGroup: 'telegram:launched', launchConfig: { mode: 'override' } },
+    { ...base(), sessionGroup: 'telegram:desired', launchConfig: { mode: 'default' },
+      desired: { runtime: 'claude', mode: 'override' } },
+    { ...base(), sessionGroup: 'telegram:saved', launchConfig: { mode: 'default' } },
+    { ...base(), sessionGroup: 'telegram:unreadable' },
+    { ...base('starting'), sessionGroup: 'telegram:starting' },
+  ];
+  const value = { ...snapshot(rows), overrides: { runtime: [], model: [
+    { sessionGroup: 'telegram:saved', runtime: 'claude' },
+    { sessionGroup: 'telegram:follower', runtime: 'codex' },
+  ] } };
+  const api = createGroupsApi({ workbench: { getSnapshot: async () => value } });
+  const filter = new URLSearchParams('side=running&runtime=claude&modelOverridden=false&include=total');
+  const followers = await api.list(filter);
+  assert.equal(followers.total, 1);
+  assert.equal(followers.items[0].id, 'telegram:follower');
+  assert.equal(followers.listKnown, false);
+  const pricing = await api.list(new URLSearchParams('side=running&runtime=claude&limit=1&include=total'));
+  assert.equal(pricing.total, 5);
+  assert.equal(pricing.listKnown, true);
+});
 
 test('compact current action bounds and redacts names and message excerpts without exposing raw observations', async () => {
   const row = { ...base(), tools: [{ name: 'Bash', input: 'private-command', detail: 'private-detail' }],
     preview: { text: 'https://example.test/?token=private-secret ' + 'x'.repeat(200), timestamp: now - 1000, messageRaw: 'private-raw' } };
   const api = createGroupsApi({ workbench: { getSnapshot: async () => snapshot([row]) } });
-  const active = (await api.running()).rows[0];
+  const active = (await api.list(new URLSearchParams('side=running'))).items[0];
   assert.deepEqual(Object.keys(active.currentAction).sort(), ['message', 'receivedAt', 'tool']);
   assert.equal(active.currentAction.tool, 'Bash');
   assert.equal(active.currentAction.receivedAt, new Date(now - 1000).toISOString());
   assert.equal(active.currentAction.message.length, 120);
   assert.ok(active.currentAction.message.includes('[REDACTED]'));
   assert.doesNotMatch(JSON.stringify(active), /private-secret|private-command|private-detail|private-raw/);
-  const empty = (await createGroupsApi({ workbench: { getSnapshot: async () => snapshot([base()]) } }).running()).rows[0];
+  const empty = (await createGroupsApi({ workbench: { getSnapshot: async () => snapshot([base()]) } }).list(new URLSearchParams('side=running'))).items[0];
   assert.deepEqual(empty.currentAction, { tool: null, message: null, receivedAt: null });
 });
 
@@ -280,13 +308,13 @@ test('existing no-response observation is an independent ISO flag counted on the
   const active = { ...base(), noResponse: { since: now - 125000 } };
   const offline = { ...base('not_running'), sessionGroup: 'telegram:offline', noResponse: { since: now - 1000 } };
   const value = snapshot([active, offline]);
-  const api = createGroupsApi({ workbench: { getSnapshot: async () => value } });
-  assert.deepEqual((await api.running()).rows[0].flags.noResponse, { since: new Date(now - 125000).toISOString() });
+  const api = createGroupsApi({ workbench: { getSnapshot: async () => ({ ...value, groupEvidence: value.groupEvidence }) } });
+  assert.deepEqual((await api.list(new URLSearchParams('side=running'))).items[0].flags.noResponse, { since: new Date(now - 125000).toISOString() });
   assert.equal((await api.counts()).running.flags.noResponse, 1);
-  assert.equal((await api.offline(new URLSearchParams({ flag: 'noResponse' }))).rows[0].id, offline.sessionGroup);
+  assert.equal((await api.list(new URLSearchParams({ side: 'offline', flag: 'noResponse' }))).items[0].id, offline.sessionGroup);
   active.noResponse = null;
   assert.equal((await api.counts()).running.flags.noResponse, 0);
-  assert.equal((await api.running()).rows[0].flags.noResponse, undefined);
+  assert.equal((await api.list(new URLSearchParams('side=running'))).items[0].flags.noResponse, undefined);
 });
 
 
@@ -294,24 +322,24 @@ test('canonical detail reads only bounded historic keys proven by the healthy ca
   const key = 'telegram:运维群-测试', row = { ...base('not_running'), sessionGroup: key, live: null };
   const value = snapshot([row]); value.sources.c4 = { ok: true };
   Object.defineProperty(value, 'groupEvidence', { get: () => ({ catalog: new Set(row.c4 ? [row.sessionGroup] : []) }) });
-  const api = createGroupsApi({ workbench: { getSnapshot: async () => value } });
-  assert.equal((await api.detail(key, { include: [] })).id, key);
-  assert.equal((await api.offline()).rows[0].id, key);
+  const api = createGroupsApi({ workbench: { getSnapshot: async () => ({ ...value, groupEvidence: value.groupEvidence }) } });
+  assert.equal((await api.detail(key, new URLSearchParams())).id, key);
+  assert.equal((await api.list(new URLSearchParams('side=offline'))).items[0].id, key);
   row.sessionGroup = 'telegram:遗留 群🧪有%号';
-  assert.equal((await api.detail(row.sessionGroup, { include: [] })).id, row.sessionGroup);
+  assert.equal((await api.detail(row.sessionGroup, new URLSearchParams())).id, row.sessionGroup);
   row.sessionGroup = key;
-  await assert.rejects(api.detail('telegram:另一群', { include: [] }), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
+  await assert.rejects(api.detail('telegram:另一群', new URLSearchParams()), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
   row.c4 = null;
-  await assert.rejects(api.detail(key, { include: [] }), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
+  await assert.rejects(api.detail(key, new URLSearchParams()), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
   row.c4 = { lastActivityAt: now };
   value.sources.c4 = { ok: false };
-  await assert.rejects(api.detail(key, { include: [] }), { code: 'GROUP_CATALOG_UNREADABLE', statusCode: 502 });
+  await assert.rejects(api.detail(key, new URLSearchParams()), { code: 'GROUP_CATALOG_UNREADABLE', statusCode: 502 });
   value.sources.c4 = { ok: true };
   for (const bad of ['../bad', 'telegram:', 'void:运维', 'origin:运维', 'internal:运维', 'Telegram:运维', 'telegram:群/组', 'telegram:群\\组', 'telegram:群\n组', 'telegram:群\u0000组', 'telegram:' + '群'.repeat(96), 'a'.repeat(33) + ':群']) {
     row.sessionGroup = bad;
-    await assert.rejects(api.detail(bad, { include: [] }), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
+    await assert.rejects(api.detail(bad, new URLSearchParams()), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
   }
-  await assert.rejects(api.detail('telegram:absent', { include: [] }), { code: 'GROUP_NOT_FOUND', statusCode: 404 });
+  await assert.rejects(api.detail('telegram:absent', new URLSearchParams()), { code: 'not_found', statusCode: 404 });
 });
 
 
@@ -340,7 +368,7 @@ test('all group readers accept only exact historical C4 membership and leave cur
     row.sessionGroup = bad;
     const before = snapshots;
     await assert.rejects(api.readKey(bad), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
-    await assert.rejects(api.detail(bad, { include: [] }), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
+    await assert.rejects(api.detail(bad, new URLSearchParams()), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
     assert.equal(snapshots, before, 'unsafe shapes fail before reading catalog or optional fields');
   }
 });

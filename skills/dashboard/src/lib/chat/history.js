@@ -8,16 +8,9 @@ import { ORIGIN, ORIGIN_CONVERSATION_ID, ORIGIN_DISPLAY_NAME } from './origin.js
 import { groupId } from './conversations.js';
 import { listFailure, parseListQuery } from '../list-query.js';
 import { prepareLatestReceived, receivedMessage } from '../c4-reader.js';
+import { messageVisible, originMessageVisible, originVisible, visible } from './visibility.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
-const shown = (groups, channels) => `c.direction IN ('in','out') AND c.session_group NOT IN (${groups})
-  AND c.channel <> '' AND c.channel NOT IN (${channels})`;
-// Relays can affect receive time and appear in history; list previews use ordinary messages.
-// The `origin` group is shown only through the Origin conversation's range.
-const visible = shown("'origin','*'", "'void','internal','system','scheduler','control'");
-const messageVisible = shown("'origin','*'", "'void','system','scheduler','control'");
-const originVisible = shown("'*'", "'void','internal','system','scheduler','control'");
-const originMessageVisible = shown("'*'", "'void','system','scheduler','control'");
 const visibleIn = (range, messages = false) => range?.origin
   ? messages ? originMessageVisible : originVisible
   : messages ? messageVisible : visible;

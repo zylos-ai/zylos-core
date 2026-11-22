@@ -64,10 +64,10 @@ function quotedText(row) {
     ]) if (content.startsWith(prefix)) { content = content.slice(prefix.length); break; }
   }
   const split = splitContentAndAttachments(content);
-  const text = [split.content, ...split.attachments.map(file => `（附件：${file.name}）`),
-    ...files.map(name => `（附件：${name}）`)].filter(Boolean).join('\n');
+  const text = [split.content, ...split.attachments.map(file => `(Attachment: ${file.name})`),
+    ...files.map(name => `(Attachment: ${name})`)].filter(Boolean).join('\n');
   const chars = Array.from(text);
-  return chars.length > 4000 ? chars.slice(0, 4000).join('') + `……（已截断，全文见 c4_id=${row.id}）` : text;
+  return chars.length > 4000 ? chars.slice(0, 4000).join('') + `… (Truncated. See c4_id=${row.id} for the full text.)` : text;
 }
 
 export function dashboardSource(content, ownerName = readOwnerName(), { row, lookupQuote } = {}) {
