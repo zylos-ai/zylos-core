@@ -8,17 +8,18 @@ import { parseSessionGroup } from '../../../../comm-bridge/scripts/c4-session-gr
 /** The shared per-group backlog cache; memory pages use this same reader. */
 export function createGroupBacklog({ zylosDir, runC4Db, c4Reader,
   getSnapshot = async () => ({}), execute = promisify(execFile), env = process.env, now = Date.now } = {}) {
-  const cache = new Map();
+  const cache = new Map(), scopes = new Map();
   const childEnv = { ...env, ZYLOS_DIR: zylosDir };
   delete childEnv.ZYLOS_SESSION_GROUP;
   delete childEnv.ZYLOS_RUN_ID;
   const readBacklog = runC4Db ?? createCoreCli({ zylosDir, execute, env: childEnv, now }).runC4Db;
-  return async function groupBacklog(key) {
+  async function groupBacklog(key) {
     let scope = key;
     if (key === 'origin') {
       try { if ((await getSnapshot())?.view === 'single') scope = null; }
       catch { /* An unreadable view retains the explicitly requested group. */ }
     }
+    scopes.set(key, scope);
     for (const [cachedScope, entry] of cache) {
       if (now() - entry.at >= 30000) cache.delete(cachedScope);
     }
@@ -54,5 +55,11 @@ export function createGroupBacklog({ zylosDir, runC4Db, c4Reader,
     } catch { value.reason ??= 'backlog_failed'; }
     cache.set(scope, { at: now(), value });
     return value;
+  }
+  /** The group's backlog if it was read in the last 30 seconds, else null; it never reads one itself. */
+  groupBacklog.cached = key => {
+    const entry = cache.get(scopes.has(key) ? scopes.get(key) : key);
+    return entry && now() - entry.at < 30000 ? entry.value : null;
   };
+  return groupBacklog;
 }

@@ -5,6 +5,13 @@ import { projectApiTimestamps } from '../../src/lib/wire-time.js';
 
 import { projectGroup, projectListRow } from '../../src/lib/workbench/groups-api.js';
 import { runRestartEffect } from '../../public/js/wb/timeline-rows.js';
+import { keyPage } from './key-pages.js';
+import { memoryBacklogPage, parseBacklogQuery } from '../../src/lib/workbench/memory-backlog.js';
+
+/** Answers GET /api/memory/backlog from every group of a case, through the server's own order, search and paging. */
+export function backlogAnswer({ groups = [], originSync, budgets = null }, url) {
+  return memoryBacklogPage({ groups, ...(originSync ? { originSync } : {}), budgets }, parseBacklogQuery(url.searchParams));
+}
 
 const iso = ms => new Date(ms).toISOString();
 const queue = (pending = 0, running = 0) => ({ pending: { count: pending, oldestAt: null, head: null }, running: { count: running }, fence: null });
@@ -98,7 +105,8 @@ function memoryTree(now) {
   return { root: dir('', [file('identity.md', 9000), file(LONG_FILE, 12100), file('references.md', 7800), dir('reference', reference),
     dir('session-groups', [dir(`session-groups/${GROUP}`, [file(GROUP_FILE, 2150), file(`session-groups/${GROUP}/handoff.md`, 820)]),
       dir('session-groups/lark:oc_product', [file('session-groups/lark:oc_product/state.md', 1430)])])]),
-  sessionGroups: [{ sessionGroup: GROUP, displayName: 'Telegram direct chat' }, { sessionGroup: 'lark:oc_product', displayName: 'Product weekly' }] };
+  sessionGroups: [{ sessionGroup: GROUP, displayName: 'Telegram direct chat', backlog: { count: 12, syncing: false } },
+    { sessionGroup: 'lark:oc_product', displayName: 'Product weekly', backlog: null }] };
 }
 
 // Longer than a phone screen, so the share of the first screen the open file takes is measured on real text.
@@ -193,8 +201,8 @@ function workbenchAnswerData(url, now) {
       text: path === LONG_FILE ? longText : `# ${path}\n\nShort file.\n` };
   }
   if (p === '/api/memory/git') return { commit: null };
-  if (p === '/api/memory/backlog') return { groups: [{ sessionGroup: GROUP, displayName: 'Telegram direct chat', c4: { componentName: 'telegram' },
-    count: 12, firstAt: null, aged: false, syncing: false, threshold: 15 }], hasOlder: false, budgets: { limits: {}, warnings: {} } };
+  if (p === '/api/memory/backlog') return backlogAnswer({ groups: [{ sessionGroup: GROUP, displayName: 'Telegram direct chat', c4: { componentName: 'telegram' },
+    count: 12, firstAt: null, aged: false, syncing: false, threshold: 15 }], budgets: { limits: {}, warnings: {} } }, url);
   if (p.endsWith('/backlog')) return { count: 12, firstAt: null, syncing: false };
   if (p.endsWith('/runs')) return runs(url, now);
   if (p.endsWith('/messages')) return { messages: [] };
@@ -215,7 +223,7 @@ function workbenchAnswerData(url, now) {
   if (p === '/api/groups/runtime-overrides') return { runtime: [], runtimeTotal: 0, nextAfter: null };
   if (p === '/api/fleet') return { agents: [{ name: 'browser-case', self: true, access: 'admin' }], updated_at: iso(now) };
   if (p === '/api/fleet/agents') return { self: { name: 'browser-case' }, agents: [] };
-  if (p === '/api/keys') return { keys: [] };
+  if (p === '/api/keys') return keyPage([], url);
   if (p === '/api/conversations') return { items: [], nextCursor: null };
   if (p === '/api/settings/timezone') return { tz: 'UTC' };
   if (p === '/api/settings/chat') return { chat_allow_remote: false };

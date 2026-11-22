@@ -80,7 +80,7 @@ import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js
 import { createRuns } from './lib/workbench/runs.js';
 import { createGroupConfig } from './lib/workbench/group-config.js';
 import { createGroupBacklog } from './lib/workbench/group-backlog.js';
-import { createMemoryBacklog } from './lib/workbench/memory-backlog.js';
+import { createMemoryBacklog, readBacklogPage, treeBacklog } from './lib/workbench/memory-backlog.js';
 import { createOriginBacklog } from './lib/workbench/origin-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
 import { createSessionHostRoutes } from './lib/session-host-routes.js';
@@ -93,6 +93,8 @@ import { hostSeries } from './lib/workbench/host-series.js';
 import { createNamingRequest } from './lib/workbench/naming-request.js';
 import { createGroupSnapshot } from './lib/workbench/group-snapshot.js';
 import { createScheduleRead, scheduleReadResponse } from './lib/workbench/schedule-read.js';
+import { listErrorBody } from './lib/list-query.js';
+import { apiKeyPayload, apiKeysPage } from './lib/api-key-list.js';
 import { createScheduleWrite } from './lib/workbench/schedule-write.js';
 import { createScheduleTz } from './lib/workbench/schedule-tz.js';
 import { createInstanceTimezone, handleInstanceTimezone, handleInstanceTimezoneRestart } from './lib/instance-timezone.js';
@@ -509,30 +511,6 @@ function normalizeApiKeyName(value) {
   return String(value || '').trim();
 }
 
-function apiKeysPayload() {
-  return {
-    keys: store.listApiKeys().map(key => ({
-      name: key.name,
-      scope: key.scope,
-      created_at: key.created_at,
-      last_used_at: key.last_used_at,
-      revoked_at: key.revoked_at,
-      status: key.revoked_at ? 'revoked' : 'active'
-    }))
-  };
-}
-
-function apiKeyPayload(key) {
-  return {
-    name: key.name,
-    scope: key.scope,
-    created_at: key.created_at,
-    last_used_at: key.last_used_at,
-    revoked_at: key.revoked_at,
-    status: key.revoked_at ? 'revoked' : 'active'
-  };
-}
-
 function validateApiKeyName(name) {
   if (!/^[\w.-]{1,64}$/.test(name)) return 'invalid_name';
   if (store.getApiKeyByName(name)) return 'duplicate_name';
@@ -797,9 +775,13 @@ async function handleAgentRename(req, res) {
   }
 }
 
-async function handleApiKeys(req, res) {
+async function handleApiKeys(req, res, url) {
   if (req.method === 'GET') {
-    sendJson(res, 200, apiKeysPayload());
+    try {
+      sendJson(res, 200, apiKeysPage(store, url.searchParams));
+    } catch (error) {
+      sendJson(res, error.statusCode ?? 500, error.statusCode ? listErrorBody(error) : { error: 'internal_error' });
+    }
     return;
   }
   if (req.method !== 'POST') {
@@ -832,7 +814,6 @@ async function handleApiKeys(req, res) {
       ok: true,
       key: apiKeyPayload(created),
       plaintext_key: key,
-      ...apiKeysPayload()
     });
   } catch (err) {
     if (isUniqueConstraintError(err)) {
@@ -871,7 +852,6 @@ async function handleApiKeyRotate(req, res, pathname) {
     ok: true,
     key: apiKeyPayload(rotated),
     plaintext_key: key,
-    ...apiKeysPayload()
   });
 }
 
@@ -881,7 +861,7 @@ async function handleApiKeysPurge(req, res) {
     return;
   }
   const purged = store.purgeRevokedApiKeys();
-  sendJson(res, 200, { ok: true, purged, ...apiKeysPayload() });
+  sendJson(res, 200, { ok: true, purged });
 }
 
 async function handleApiKeyDelete(req, res, pathname, url) {
@@ -900,7 +880,7 @@ async function handleApiKeyDelete(req, res, pathname, url) {
   if (url.searchParams.get('permanent') === '1') {
     const result = store.hardDeleteApiKey(name);
     if (result.deleted > 0) {
-      sendJson(res, 200, { ok: true, deleted: result.deleted, ...apiKeysPayload() });
+      sendJson(res, 200, { ok: true, deleted: result.deleted });
       return;
     }
     if (result.active) {
@@ -915,7 +895,7 @@ async function handleApiKeyDelete(req, res, pathname, url) {
     sendJson(res, 404, { error: 'unknown_key' });
     return;
   }
-  sendJson(res, 200, { ok: true, ...apiKeysPayload() });
+  sendJson(res, 200, { ok: true });
 }
 
 async function runInitialCollectors() {
@@ -1056,8 +1036,11 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/memory/backlog') {
-    try { sendJson(res, 200, await memoryBacklog()); }
-    catch { sendJson(res, 503, { error: 'backlog_failed' }); }
+    try {
+      sendJson(res, 200, await readBacklogPage(memoryBacklog, url.searchParams));
+    } catch (error) {
+      sendJson(res, error.statusCode ?? 500, error.statusCode ? listErrorBody(error) : { error: 'internal_error' });
+    }
     return true;
   }
 
@@ -1355,7 +1338,9 @@ async function handleMemoryApi(req, res, pathname, url) {
       const sessionGroups = (groupRoot?.children ?? [])
         .filter(node => node.type === 'directory' && parseSessionGroup(node.name) !== null)
         .map(node => ({ sessionGroup: node.name, displayName: names.get(node.name)?.displayName ?? null }));
-      sendJson(res, 200, { ...tree, sessionGroups });
+      // Each group's pending count and syncing state for the badge beside its name, if the backlog was read lately.
+      const backlogs = treeBacklog(sessionGroups.map(group => group.sessionGroup), groupBacklog.cached);
+      sendJson(res, 200, { ...tree, sessionGroups: sessionGroups.map((group, index) => ({ ...group, backlog: backlogs[index] })) });
       return true;
     }
     if (pathname === '/api/memory/file') {
@@ -1610,7 +1595,7 @@ export function createServer() {
     }
 
     if (pathname === '/api/keys') {
-      await handleApiKeys(req, res);
+      await handleApiKeys(req, res, url);
       return;
     }
 
