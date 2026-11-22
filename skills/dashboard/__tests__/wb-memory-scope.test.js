@@ -800,7 +800,10 @@ test('opening a folder or group reads its first page, folding all closes them, a
   search.value = 'handoff'; search.dispatch('input'); await typed(); await settled();
   assert.ok(f.entries.reads.includes('/api/memory/entries?q=handoff'));
   assert.deepEqual(f.paths(), ['session-groups/telegram:dm-1001/handoff.md']);
-  assert.match(nodesOfClass(f.listRoot, 'memory-file-dir')[0].textContent, /session-groups\/telegram:dm-1001\//);
+  // A match shows its file name whole first and its folder on the second line, so a long group ID cannot hide it.
+  const match = nodesOfClass(f.listRoot, 'memory-file-match')[0];
+  assert.deepEqual(nodesOfClass(match, 'memory-file-name')[0].children.map(node => [node.className, node.textContent]),
+    [['', 'handoff.md'], ['memory-file-dir', 'session-groups/telegram:dm-1001/']]);
   allNodes(f.root).find(node => node.textContent === 'wb.memory.shared').dispatch('click'); await settled();
   assert.ok(f.entries.reads.includes('/api/memory/entries?view=shared&q=handoff'));
   assert.match(f.listRoot.textContent, /wb\.memory\.noMatch/);
