@@ -232,6 +232,9 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     pickerOpen = false; pickerQuery = ''; renderPicker();
   });
   pickerWrap.append(picker, pickerList);
+  // Pressing a choice keeps focus in the field (Safari does not focus a pressed button), so the list is still
+  // there when the click arrives.
+  pickerList.addEventListener('mousedown', event => event.preventDefault?.());
   // Kept across redraws so typing in the group filter keeps focus while only the rows refresh.
   const backlogSearch = element(document, 'input');
   backlogSearch.type = 'search';
@@ -334,6 +337,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       if (detail() === 'technical') item.append(element(document, 'span', row.sessionGroup, 'wb-mono'));
     }
     if (list.loading) pickerList.append(element(document, 'p', t('memory.loading'), 'wb-memory-source'));
+    else if (list.error) pickerList.append(element(document, 'p', t('memory.error_generic'), 'wb-memory-diagnostic'));
     else if (!list.items.some(item => item.type === 'group')) pickerList.append(element(document, 'p', t('wb.memory.noMatch'), 'wb-memory-source'));
   }
   function fileButton(parent, node, prefix, sizeClass = '') {

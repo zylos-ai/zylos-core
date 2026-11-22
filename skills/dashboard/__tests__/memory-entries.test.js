@@ -124,10 +124,10 @@ test('session groups are ordered by their latest received message, badges are re
     [['telegram:quiet', 'group', null], ['Bad Name', 'directory', 'invalid_session_group'], ['notes.md', 'file', null]],
     'groups without a received message after, then invalid group directories, then files');
   assert.deepEqual(asked[1], ['telegram:quiet']);
-  // Without C4 the groups keep a stable order by ID; a failed badge read leaves the badges empty.
-  const unread = await page(f, 'dir=session-groups', { sortMessage: () => { throw new Error('no c4'); }, badges: async () => { throw new Error('down'); } });
-  assert.deepEqual(unread.items.filter(row => row.type === 'group').map(row => [row.name, row.backlog]),
-    [['lark:middle', null], ['telegram:new', null], ['telegram:old', null], ['telegram:quiet', null]]);
+  // Without C4 the groups have no order and the level is unavailable; a failed badge read leaves the badges empty.
+  await assert.rejects(page(f, 'dir=session-groups', { sortMessage: () => { throw new Error('no c4'); } }), { statusCode: 503, code: 'unavailable' });
+  const unread = await page(f, 'dir=session-groups&limit=1', { ...deps, badges: async () => { throw new Error('down'); } });
+  assert.deepEqual(unread.items.map(row => [row.name, row.backlog]), [['telegram:new', null]]);
 });
 
 test('a search returns the shallowest matches page by page and stops reading once a page is full', async t => {

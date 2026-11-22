@@ -111,6 +111,15 @@ test('the group picker searches the server for groups and a group jump opens onl
   assert.match(f.root.textContent, /wb.memory.noGroupFiles/);
   assert.ok(f.entries.reads.includes('/api/memory/entries?view=groups&q=openmax%3Amissing&limit=100'));
   f.controller.destroy();
+  // Without C4 the groups list is unavailable (503): the picker says so instead of reporting no match.
+  const down = fixture({ entries: Object.assign(async path => {
+    if (path.includes('view=groups')) throw Object.assign(new Error('unavailable'), { code: 'unavailable' });
+    return f.entries(path);
+  }, { reads: [] }) });
+  await settled();
+  allNodes(down.root).find(node => node.tagName === 'INPUT' && node.className.includes('wb-input')).dispatch('click'); await settled();
+  assert.deepEqual(nodesOfClass(down.root, 'wb-memory-picker-list')[0].children.slice(1).map(node => node.textContent), ['memory.error_generic']);
+  down.controller.destroy();
 });
 
 test('budget rows use Core supplied thresholds and give state size without a budget', () => {

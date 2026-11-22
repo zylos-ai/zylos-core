@@ -294,7 +294,7 @@ test('memory backlog reads accept read scope while file writes require admin', a
 // HTTP integration covers route/auth dispatch, private SQLite display names and
 // the shared backlog reader. Run for route/metadata changes; skip UI-only work.
 // setupMemoryHttp owns isolated resources and registers bounded teardown.
-test('the backlog list, group details and the memory tree read one backlog, and the tree answers when it cannot be read', { timeout: 15000 }, async t => {
+test('the backlog list, group details and the memory tree read one backlog, and without C4 only the groups level is unavailable', { timeout: 15000 }, async t => {
   const { root, engine, request, calls, versionCalls, snapshotReads, advance } = await setupMemoryHttp(t);
   const lockCalls = () => calls.filter(call => call.args[0].endsWith('/sync-lock.js')).map(call => call.args.slice(1));
   const snapshotBefore = snapshotReads();
@@ -335,14 +335,17 @@ test('the backlog list, group details and the memory tree read one backlog, and 
     assert.equal(body.ok, false); assert.equal(body.error.code, code); assert.equal(body.error.param, param);
   }
   assert.deepEqual(scoped.items.filter(row => row.name === 'bad name').map(row => [row.type, row.diagnostic]), [['directory', 'invalid_session_group']]);
-  // The database goes away: the page still answers, with no count beside any group.
+  // The database goes away: the groups level has no order and is unavailable; a search, which reads no order,
+  // still answers, with no count beside any group.
   fsSync.renameSync(path.join(root, 'comm-bridge/c4.db'), path.join(root, 'comm-bridge/c4.db.away'));
   advance(30000);
   const unreadable = await request('/api/memory/entries?dir=session-groups', 'admin');
-  assert.equal(unreadable.status, 200);
-  const blind = await unreadable.json();
-  assert.deepEqual(blind.items.map(row => row.path).sort(), scoped.items.map(row => row.path).sort());
-  assert.deepEqual(blind.items.filter(row => row.type === 'group').map(group => group.backlog?.count ?? null), [null, null]);
+  assert.deepEqual([unreadable.status, (await unreadable.json()).error?.code], [503, 'unavailable']);
+  const searched = await request('/api/memory/entries?view=groups&q=r', 'admin');
+  assert.equal(searched.status, 200);
+  const blind = await searched.json();
+  assert.deepEqual(blind.items.filter(row => row.type === 'group').map(group => [group.sessionGroup, group.backlog?.count ?? null]),
+    [['origin', null], ['telegram:dm-1001', null]]);
 });
 
 // Real memory and group readers; in-memory catalog/backlog adapters only.

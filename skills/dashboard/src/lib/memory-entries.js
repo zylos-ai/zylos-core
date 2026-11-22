@@ -130,13 +130,19 @@ export async function readEntriesPage(query, { browser, displayName = () => null
 
   // One level: directories first (session groups by their latest received message, newest first, then groups
   // without one, then other directories by name), then files by modification time, newest first; the path breaks ties.
+  // Only the session-groups level reads C4; a search, the root and other directories do not.
   const entries = await children(query.dir);
   const keyed = [];
   for (const entry of entries) {
     if (entry.directory) {
       const key = groupKey(entry.rel);
       let at = NaN;
-      if (key !== null) { try { at = timestampMillis(sortMessage(key)?.timestamp); } catch { /* No order without C4. */ } }
+      if (key !== null) {
+        // Without C4 the groups have no standard order, so the listing fails rather than falling back to another one.
+        let message;
+        try { message = sortMessage(key); } catch { throw listFailure(503, 'unavailable', 'The group message order cannot be read'); }
+        at = timestampMillis(message?.timestamp);
+      }
       keyed.push({ entry, key: key === null ? [2, 0, entry.rel] : Number.isFinite(at) ? [0, -at, entry.rel] : [1, 0, entry.rel] });
     } else {
       let stat;
