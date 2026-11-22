@@ -56,3 +56,16 @@ console.log('No token_count event found');
 Report:
 - **Context usage**: pct% used (used / ceiling tokens)
 - Report the pct value clearly so the user knows if rotation is needed (threshold: 75%)
+
+### If Antigravity (`agy`) runtime
+
+Read the statusLine data file of the current session group (updated when the agent's status changes):
+
+```bash
+cat ~/zylos/activity-monitor/session-groups/"${ZYLOS_SESSION_GROUP:-origin}"/statusline.json
+```
+
+Report from the JSON:
+- **Context usage**: `context_window.used_percentage`% used
+- **Window size**: `context_window.context_window_size` tokens
+- **Model**: `model.id`
