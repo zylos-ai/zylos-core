@@ -784,6 +784,14 @@ export async function runWorkbenchBrowser(t, sandbox) {
       // The phone detail covers the header, so the technical detail switch is pressed from the page.
       await page.locator('#wb-tech-btn').evaluate(node => node.click());
       await page.locator('.wb-timeline-event.wb-ev-merged').waitFor();
+      const older = page.locator('.wb-timeline-run .wb-more-events');
+      assert.match(await page.locator('.wb-timeline-event.wb-ev-merged .wb-ev-rep').textContent(), /^49 次 · /);
+      for (let loaded = 50; loaded < 605; loaded += 50) {
+        const result = page.waitForResponse(response => response.url().includes('/events?') && response.url().includes('cursor='));
+        await older.click();
+        assert.equal((await result).status(), 200);
+      }
+      await older.waitFor({ state: 'detached' });
       // Technical rows keep the readable label and add the recorded event code after it.
       const rows = await labels('.wb-timeline-event .wb-ev-t');
       assert.deepEqual(rows, ['完成一轮', '后台记录', '工具使用完成', '开始使用工具', '收到任务', '会话开始'],

@@ -241,17 +241,28 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   await t.test('single message HTTP reads NULL attribution without exposing bodies or Origin rows', async () => {
     const before = snapshotReads;
     view = 'single'; cachedSnapshot = snapshot();
-    const range = '?since=2026-10-01T00%3A00%3A00Z&until=2026-10-02T00%3A00%3A00Z';
-    const response = await request('/api/groups/origin/messages' + range);
+    const response = await request('/api/groups/origin/messages');
     assert.equal(response.status, 200);
     const value = await response.json();
-    assert.deepEqual(value.messages.map(row => row.id), [1]);
-    assert.deepEqual(Object.keys(value.messages[0]), ['id', 'direction', 'channel', 'timestamp']);
+    assert.deepEqual(value.items.map(row => row.id), [1]);
+    assert.deepEqual(Object.keys(value.items[0]), ['id', 'direction', 'channel', 'timestamp']);
     assert.doesNotMatch(JSON.stringify(value), /private|content/);
     assert.equal(snapshotReads, before, 'message reads reuse the cached single view without rebuilding');
     view = 'multi'; cachedSnapshot = snapshot();
-    const originResponse = await request('/api/groups/origin/messages' + range);
-    assert.deepEqual((await originResponse.json()).messages.map(row => row.id), [2]);
+    const originResponse = await request('/api/groups/origin/messages');
+    assert.deepEqual((await originResponse.json()).items.map(row => row.id), [2]);
+  });
+
+  await t.test('an unreadable C4 source only makes message pages unavailable', async t => {
+    t.mock.method(reader, '_open', () => null);
+    const messages = await request('/api/groups/origin/messages');
+    assert.equal(messages.status, 503);
+    assert.equal((await messages.json()).error.code, 'unavailable');
+    for (const resource of ['runs', 'events']) {
+      const page = await request(`/api/groups/origin/${resource}`);
+      assert.equal(page.status, 200);
+      assert.ok(Array.isArray((await page.json()).items));
+    }
   });
 
   await t.test('run HTTP reads use the cached view and never rebuild a snapshot', async () => {
@@ -270,15 +281,15 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
       const response = await request('/api/groups/origin/runs?limit=3');
       assert.equal(response.status, 200);
       const value = await response.json();
-      assert.deepEqual(value.runs.map(run => [run.runId, run.endReason]), [[expectedRun, 'running']]);
+      assert.deepEqual(value.items.map(run => [run.runId, run.endReason]), [[expectedRun, 'running']]);
       assert.equal(value.totalRuns, 1);
       assert.equal(value.totalEvents, 1);
       assert.equal(value.unattributed, 0);
       assert.equal(snapshotReads, before, 'run reads must not invoke the rebuilding snapshot getter');
-      const counted = await (await request('/api/groups/origin/runs?limit=3&types=stop,idle')).json();
-      assert.deepEqual(counted.runs.map(run => [run.runId, run.n]), [[expectedRun, 0]], 'types narrow the counts, not the runs listed');
+      const counted = await (await request('/api/groups/origin/runs?limit=3&level=technical')).json();
+      assert.deepEqual(counted.items.map(run => [run.runId, run.n]), [[expectedRun, 1]]);
       assert.equal(counted.totalRuns, 1);
-      assert.equal(counted.totalEvents, 0);
+      assert.equal(counted.totalEvents, 1);
     }
     assert.equal(calls.length, childBefore);
   });
@@ -303,23 +314,22 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   });
 
   await t.test('cold detail scopes build one snapshot and subsequent reads reuse it while unreadable views keep Origin', async () => {
-    const range = '?since=2026-10-01T00%3A00%3A00Z&until=2026-10-02T00%3A00%3A00Z';
     const assertSingle = async route => {
       const response = await request('/api/groups/origin/' + route);
       assert.equal(response.status, 200, route);
       const value = await response.json();
       if (route === 'runs') {
-        assert.deepEqual(value.runs.map(run => run.runId), ['single-run']);
-        assert.equal(value.runs[0].endReason, 'running');
+        assert.deepEqual(value.items.map(run => run.runId), ['single-run']);
+        assert.equal(value.items[0].endReason, 'running');
       } else if (route === 'backlog') assert.deepEqual(value, { count: 4, firstAt: '2026-10-01T12:00:00.000Z', syncing: true });
-      else assert.deepEqual(value.messages.map(row => row.id), [1]);
+      else assert.deepEqual(value.items.map(row => row.id), [1]);
     };
-    for (const first of ['runs', 'backlog', 'messages' + range]) {
+    for (const first of ['runs', 'backlog', 'messages']) {
       view = 'single'; cachedSnapshot = null;
       const before = snapshotReads;
       await assertSingle(first);
       assert.equal(snapshotReads, before + 1, first + ' must resolve a cold cache once');
-      for (const route of ['runs', 'backlog', 'messages' + range]) await assertSingle(route);
+      for (const route of ['runs', 'backlog', 'messages']) await assertSingle(route);
       assert.equal(snapshotReads, before + 1, 'hot detail routes must share the newly populated snapshot');
     }
     // A cached snapshot with no usable view is an observed failure, not a cold
@@ -338,7 +348,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     const before = calls.length, restartBefore = restarts.length;
     for (const key of ['--json', 'a%2Fb']) {
       const base = '/api/groups/' + key;
-      for (const suffix of ['/runs', '/messages', '/backlog', '']) {
+      for (const suffix of ['/runs', '/events', '/messages', '/backlog', '']) {
         const response = await request(base + suffix, 'admin');
         assert.equal(response.status, 400, key + suffix);
         assert.equal((await response.json()).error.code, 'SESSION_GROUP_INVALID');

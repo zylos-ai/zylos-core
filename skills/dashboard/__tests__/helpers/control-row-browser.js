@@ -161,7 +161,7 @@ export async function runControlRows(t, sandbox) {
         if (!survey) {
           if (route === '/') await checkRow(page, name, '#wb-range, .wb-bh-now .wb-search', { expectedHeight: width === 390 ? 36 : 26 });
           if (route === '/usage') await checkRow(page, name, '#wb-usage-range, .wb-usage-custom > .wb-date, #wb-usage-apply', { separateRows: width === 390, expectedGroups: width === 390 ? [1, 3] : [4], expectedHeight: width === 390 ? 36 : 30 });
-          if (route === '/schedule') await checkRow(page, name, '.wb-sched-filters > .wb-seg, .wb-sched-filters .wb-select, .wb-sched-filters > .wb-search, .wb-sched-new', { separateRows: width === 390, expectedGroups: width === 390 ? [1, 2, 1] : [4], expectedHeight: width === 390 ? 36 : 30 });
+          if (route === '/schedule') await checkRow(page, name, '.wb-sched-filters > .wb-seg, .wb-sched-filters > .wb-sched-picker > .wb-input, .wb-sched-filters > .wb-search, .wb-sched-new', { separateRows: width === 390, expectedGroups: width === 390 ? [1, 2, 1] : [4], expectedHeight: width === 390 ? 36 : 30 });
           if (route === '/chat') {
             assert.equal(await page.locator('.conversation-tabs').evaluate(node => node.getBoundingClientRect().height), width === 390 ? 36 : 30, 'chat: approved outer track');
             await checkRow(page, name, width === 390 ? '.conversation-tabs > button' : '.conversation-tabs, .conversation-reload', { expectedHeight: width === 390 ? 32 : 30 });
