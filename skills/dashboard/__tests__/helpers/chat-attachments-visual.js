@@ -115,10 +115,10 @@ export async function runAttachmentVisual(t, sandbox) {
     // A newly sent draft may not have reached the group snapshot yet. Only
     // this exact optional read and its typed not-found response are expected.
     if (response.status() === 404 && response.request().method() === 'GET'
-        && url.pathname === expectedMissingGroupPath && url.search === '?include=') {
+        && url.pathname === expectedMissingGroupPath && url.search === '') {
       assert.ok(missingGroupChecks.length < 16, 'new-group status checks stay bounded');
       missingGroupChecks.push(response.json().then(body => {
-        if (body?.error?.code !== 'GROUP_NOT_FOUND' && !errors.length) errors.push('unexpected new-group status error');
+        if (body?.error?.code !== 'not_found' && !errors.length) errors.push('unexpected new-group status error');
       }).catch(error => { if (!errors.length) errors.push(error.message); }));
       return;
     }

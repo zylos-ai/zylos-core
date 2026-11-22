@@ -348,7 +348,7 @@ Unknown historical IDs return 400 `SESSION_GROUP_INVALID`; an unreadable catalog
 
 Example historical observation: `GET /api/groups/telegram%3A%E8%BF%90%E7%BB%B4%E7%BE%A4-%E6%B5%8B%E8%AF%95/runs?limit=3`.
 
-Conversation status is an optional consumer of this detail. A newly created chat group can be absent from the snapshot: `GROUP_NOT_FOUND` means no reading yet, with a retry on the existing status cadence. Chat remains usable without a status reading; other HTTP errors retain their existing failure semantics.
+Conversation status is an optional consumer of this detail. A newly created chat group absent from the snapshot returns `not_found`. The Origin Operations Interface retains `GROUP_NOT_FOUND`. Chat remains usable without a status reading and retries on the existing status cadence.
 
 Example: `GET /api/groups/telegram%3Aexample?include=`.
 

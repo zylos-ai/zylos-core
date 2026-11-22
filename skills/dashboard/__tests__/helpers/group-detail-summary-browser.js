@@ -28,7 +28,7 @@ async function startSummaryPage(sandbox) {
     return value;
   };
   const answer = url => {
-    if (url.pathname.startsWith('/api/groups/') || url.pathname === '/api/instance') {
+    if (url.pathname === '/api/groups' || url.pathname.startsWith('/api/groups/') || url.pathname === '/api/instance') {
       const value = workbenchSnapshot(now), group = row();
       value.rows = value.rows.map(item => item.sessionGroup === GROUP ? group : item);
       value.instance.runtimeHealth = { claude: { health: 'rate_limited', updatedAt: now - 360000, cooldownUntil: Math.floor(now / 1000) + 3600 }, codex: { health: 'ok', updatedAt: now - 360000 } };
