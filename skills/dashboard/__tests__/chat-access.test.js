@@ -86,7 +86,7 @@ test('chat requires credentials even when the config still sets auth.enabled to 
 // permission; run for proxy write changes, skip presentation-only changes.
 test('proxy cookie writes require exact origin before upstream while API admin may write', async t => {
   const f = await chatHttpFixture(t, { chat: { allowRemote: true } });
-  const writes = chatRoutes.filter(route => route.method === 'POST');
+  const writes = chatRoutes.filter(route => route.method !== 'GET');
   for (const origin of [null, false, 'http://127.0.0.1:1']) for (const route of writes) {
     const result = await f.request(route, { fleet: true, origin, contentType: 'text/plain' });
     assert.equal(result.status, 403);

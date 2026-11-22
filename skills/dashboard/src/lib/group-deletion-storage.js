@@ -8,6 +8,7 @@ import { loadConfig } from './config.js';
 import { ConversationCollector } from './collectors/conversation-collector.js';
 import { CodexRolloutCollector } from './collectors/codex-rollout-collector.js';
 import { ChatAttachments } from './chat/attachments.js';
+import { groupId } from './chat/conversations.js';
 import { parseSessionGroup, validateGroupName } from '../../../comm-bridge/scripts/c4-session-group.js';
 import { ownedPath as resolveOwnedPath } from '../../../comm-bridge/scripts/owned-path.js';
 import { removeOwnedTree } from '../../../comm-bridge/scripts/remove-owned-tree.js';
@@ -279,6 +280,7 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
         records += db.prepare('DELETE FROM codex_rollout_paths WHERE transcript_path=?').run(row.transcript_path).changes;
       }
       if (sessionGroup) {
+        records += db.prepare('DELETE FROM chat_pins WHERE conversation_id=?').run(groupId(sessionGroup)).changes;
         const keepQuestions = new Set();
         for (const answer of db.prepare(`SELECT a.*,d.c4_id FROM chat_answers a LEFT JOIN chat_answer_deliveries d ON d.answer_id=a.answer_id WHERE a.session_group=?`).all(sessionGroup)) {
           const question = core().prepare('SELECT session_group,id,direction,status FROM conversations WHERE id=?').get(answer.question_c4_id);

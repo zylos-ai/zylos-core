@@ -83,7 +83,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_latest ON state_snapshots(runtime, sess
 `;
 
 // Shared by the service and the side-effect-free schema owner.
-export const TARGET_SCHEMA_VERSION = 28;
+export const TARGET_SCHEMA_VERSION = 29;
 
 export function inspectDatabase(db) {
   const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
@@ -91,6 +91,7 @@ export function inspectDatabase(db) {
   if (!Number.isInteger(currentVersion) || currentVersion < 0) throw new Error('Unsupported Dashboard schema version');
   if (currentVersion === TARGET_SCHEMA_VERSION) {
     const required = {
+      chat_pins: 'conversation_id position',
       chat_attachments: 'id local_id namespace storage_name name size mime kind source principal created_at c4_watermark scanned_c4_id scan_upper_id next_check_at',
       chat_attachment_messages: 'attachment_id c4_id',
       chat_answers: 'answer_id question_c4_id session_group endpoint_id content action created_at',
@@ -579,6 +580,17 @@ export function migrateDatabase(db) {
           db.exec("ALTER TABLE usage_transcripts ADD COLUMN kind TEXT NOT NULL DEFAULT 'session' CHECK(kind IN ('session','child'))");
         }
         db.exec('INSERT OR IGNORE INTO schema_migrations(version) VALUES(28)');
+      })();
+    }
+    if (currentVersion < 29) {
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS chat_pins (
+            conversation_id TEXT NOT NULL PRIMARY KEY,
+            position INTEGER NOT NULL UNIQUE CHECK(position >= 0)
+          );
+          INSERT OR IGNORE INTO schema_migrations(version) VALUES(29);
+        `);
       })();
     }
 

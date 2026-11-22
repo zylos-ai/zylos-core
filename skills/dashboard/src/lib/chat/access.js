@@ -12,7 +12,8 @@ export function isChatDataRoute(method, pathname) {
   ) || method === 'POST' && (
     pathname === '/api/chat/drafts' ||
     /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers|uploads)$/.test(pathname)
-  ) || method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(pathname);
+  ) || method === 'PUT' && pathname === '/api/chat/pins'
+    || method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(pathname);
 }
 
 /** Call on the data instance before querying conversation data. */

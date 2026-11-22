@@ -494,3 +494,22 @@ test('a group display name change sends a dirty hint to external list and conver
   f.timers.tick();
   assert.deepEqual(counts(), before.map(count => count + 1), 'an unchanged name sends no further hint');
 });
+
+test('pin order changes use the existing list hint for mine subscribers only', gate, t => {
+  const f = fixture(t);
+  f.write({ id: 1 });
+  f.write({ id: 2, endpoint: 'two', group: 'dash:two' });
+  const store = new Store(f.sandbox.paths.dashboardDb);
+  t.after(() => store.close());
+  f.history.conversations = new ChatConversations({ store });
+  const mine = f.subscribe(), list = f.subscribe({ tab: 'mine' }), external = f.subscribe({ tab: 'external' });
+  const ids = [idFor('dash:two'), idFor('dash:one')];
+  const expected = ['chat_ready'];
+  for (const [order, changed] of [[ids, true], [ids, false], [[...ids].reverse(), true], [[], true]]) {
+    f.history.replacePins(order);
+    f.timers.tick();
+    if (changed) expected.push('chat_messages_changed');
+    for (const stream of [mine, list]) assert.deepEqual(stream.events.map(row => row.event), expected);
+    assert.deepEqual(external.events.map(row => row.event), ['chat_ready']);
+  }
+});
