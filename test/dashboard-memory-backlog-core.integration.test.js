@@ -17,6 +17,8 @@ import { createGroupBacklog } from '../skills/dashboard/src/lib/workbench/group-
 // (`c4-db.js unsummarized` and `sync-lock.js status`, run as real child processes with ZYLOS_DIR set to a
 // temporary directory). Run under the official runner (private HOME, ZYLOS_DIR, PM2_HOME, TMPDIR and
 // TMUX_TMPDIR, so no tmux server is reachable). Teardown removes the directory.
+// Run when the Dashboard backlog reader, Core's unsummarized calculation or `sync-lock.js status` changes;
+// skip for presentation-only Dashboard changes.
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const run = promisify(execFile);
 

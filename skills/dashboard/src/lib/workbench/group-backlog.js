@@ -5,8 +5,9 @@ import path from 'node:path';
 import { loadCoreModule } from '../core-modules.js';
 import { requireGroupReadShape } from './groups-api.js';
 import { parseSessionGroup } from '../../../../comm-bridge/scripts/c4-session-group.js';
-import { markerPath } from '../../../../zylos-memory/scripts/sync-lock.js';
 
+// Loaded when a status is read, so the Dashboard starts in a package without zylos-memory.
+const syncLockModule = () => import('../../../../zylos-memory/scripts/sync-lock.js');
 const unreadable = () => ({ count: null, firstAt: null, syncing: null, reason: 'backlog_failed' });
 
 /**
@@ -16,7 +17,7 @@ const unreadable = () => ({ count: null, firstAt: null, syncing: null, reason: '
  * exists asks `sync-lock.js status` whether its Sync is still held.
  */
 export function createGroupBacklog({ zylosDir, c4Reader, readConfig, getSnapshot = async () => ({}),
-  execute = promisify(execFile), loadPaths = () => loadCoreModule('session-group-paths.js'),
+  execute = promisify(execFile), loadPaths = () => loadCoreModule('session-group-paths.js'), loadSyncLock = syncLockModule,
   env = process.env, now = Date.now } = {}) {
   const cache = new Map();
   const childEnv = { ...env, ZYLOS_DIR: zylosDir };
@@ -29,7 +30,9 @@ export function createGroupBacklog({ zylosDir, c4Reader, readConfig, getSnapshot
     catch { return 'origin'; /* An unreadable view retains the explicitly requested group. */ }
   }
   // Without a marker file no Sync can be held; with one, the existing status check decides (stale or old-run markers).
+  // A sync-lock module that cannot be loaded leaves the status unknown (the caller marks the group failed).
   async function syncing(scope, runDir) {
+    const { markerPath } = await loadSyncLock();
     try {
       fs.accessSync(markerPath(runDir, scope === null ? 'global' : 'group'));
     } catch (error) {

@@ -83,6 +83,11 @@ test('one group that cannot be read is listed as failed and the other groups rea
     { count: 0, firstAt: null, syncing: false },
   ], 'a failed count and a failed status each mark only their own group');
   assert.deepEqual(scopes, [group(1), group(2), group(3), group(4)]);
+  // A package without zylos-memory: counts are read, each Sync status is unknown and the group is marked failed.
+  const noLock = createGroupBacklog({ zylosDir: f.root, c4Reader: f.reader, readConfig: () => ({ state: 'missing' }), now: () => at,
+    loadSyncLock: async () => { throw Object.assign(new Error('missing'), { code: 'ERR_MODULE_NOT_FOUND' }); },
+    execute: async () => assert.fail('no status without the sync-lock module') });
+  assert.deepEqual(await noLock.many([group(1)]), [{ count: 1, firstAt: new Date(at - 30 * 60000).toISOString().slice(0, 19).replace('T', ' '), syncing: null, reason: 'backlog_failed' }]);
   // Without the database every count is unknown, and the tree's reader still answers.
   fs.renameSync(path.join(f.root, 'comm-bridge/c4.db'), path.join(f.root, 'comm-bridge/c4.db.away'));
   const blind = createGroupBacklog({ zylosDir: f.root, c4Reader: f.reader, readConfig: () => ({ state: 'missing' }), now: () => at,
