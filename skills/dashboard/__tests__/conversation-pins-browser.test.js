@@ -196,9 +196,26 @@ test('the mounted list moves local sends forward and holds other activity behind
             assert.notEqual(await dRow.locator('time').getAttribute('datetime'), originalTime);
             assert.deepEqual(await ids(), [origin, bId, aId, cId, dId]);
             await hint.waitFor();
-            await hint.click();
+            // Hold the user's request while a scheduled poll sees a real reply.
+            let releaseList;
+            const listGate = new Promise(resolve => { releaseList = resolve; });
+            const listStarted = new Promise(resolve => {
+              holdNextList = () => { resolve(); return listGate; };
+            });
+            try {
+              await hint.click();
+              await listStarted;
+              const readsAtClick = listReads;
+              const duringClick = fixture.addOutbound(d.draft.localId, 'Reply during the requested list refresh');
+              await page.clock.fastForward(31_000);
+              await page.locator(`#wb-chat [data-message-id="${duringClick.id}"]`).waitFor({ state: 'attached' });
+              assert.equal(listReads, readsAtClick, 'background polling does not supersede the pending user list request');
+            } finally {
+              releaseList();
+            }
             await page.waitForFunction(expected => [...document.querySelectorAll('#wb-chat [data-conversation-id]')]
               .map(node => node.dataset.conversationId).join() === expected.join(), [origin, bId, aId, dId, cId]);
+            await hint.waitFor({ state: 'hidden' });
 
             await receive(a, localId => fixture.c4.insertConversation('in', 'dashboard', localId,
               'New received message in a pinned conversation', { groupName: localId }));
@@ -246,22 +263,7 @@ test('the mounted list moves local sends forward and holds other activity behind
             const second = await fixture.createConversation('Second incoming message in a new conversation');
             const plural = locale === 'en' ? '2 conversations have new messages' : '有 2 个对话有新消息';
             await page.waitForFunction(expected => document.querySelector('#wb-chat [data-action="page.newConversations"]').innerText === expected, plural);
-            // Keep the click's list request in flight until a real chat message has been processed.
-            let releaseList;
-            const listGate = new Promise(resolve => { releaseList = resolve; });
-            const listStarted = new Promise(resolve => {
-              holdNextList = () => { resolve(); return listGate; };
-            });
-            try {
-              await hint.click();
-              await listStarted;
-              const readsAtClick = listReads;
-              const duringClick = fixture.addOutbound(c.draft.localId, 'Reply during the requested list refresh');
-              await page.locator(`#wb-chat [data-message-id="${duringClick.id}"]`).waitFor({ state: 'attached' });
-              assert.equal(listReads, readsAtClick, 'chat push does not supersede the pending user list request');
-            } finally {
-              releaseList();
-            }
+            await hint.click();
             await page.locator(`#wb-chat [data-conversation-id="${idOf(added)}"]`).waitFor();
             await page.locator(`#wb-chat [data-conversation-id="${idOf(second)}"]`).waitFor();
             await hint.waitFor({ state: 'hidden' });
