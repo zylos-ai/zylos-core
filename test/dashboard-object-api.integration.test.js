@@ -508,6 +508,9 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       assert.equal(before.items[0].lastActivityAt, originAt);
       assert.equal(before.items[1].lastActivityAt, childAt);
       assert.equal(before.items[2].lastActivityAt, workingAt);
+      const firstPage = await list('side=running&limit=2');
+      const secondPage = await list('side=running&limit=2&cursor=' + encodeURIComponent(firstPage.nextCursor));
+      assert.deepEqual(secondPage.items.map(row => row.id), ['telegram:working']);
       const scheduledAt = text(5);
       seed.run(scheduledAt, 'in', 'system', 'telegram:working'); clock += 3000;
       const after = await list('side=running&limit=3');
