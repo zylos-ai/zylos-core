@@ -852,7 +852,6 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
   .wb-sched-filters .wb-seg { display: flex; flex: 1 1 100%; max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
   .wb-sched-filters .wb-seg button { flex: 1 0 auto; justify-content: center; padding: 0 6px; font-size: 12px; }
   .wb-sched-picker, .wb-sched-filters .wb-search { flex: 1 1 140px; width: auto; }
-  .wb-sched-picker-item { min-height: 40px; }
   .wb-sched-filters .wb-search input { width: 100%; }
   .wb-sched-new { margin-left: 0; flex: 1 1 100%; justify-content: center; }
   .wb-sched-th { display: none; }
