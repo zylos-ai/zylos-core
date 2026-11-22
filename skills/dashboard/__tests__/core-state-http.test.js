@@ -138,8 +138,13 @@ test('state APIs await a fresh observation before answering idle requests', { ti
         await reader.cancel();
       } else {
         const body = await response.json();
-        if (route === '/api/fleet') for (const field of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(body.agents[0], field), false, 'Fleet omits Origin session metadata');
-        else {
+        if (route === '/api/fleet') {
+          const self = body.items.find(item => item.self);
+          assert.ok(self, 'Fleet includes the local machine');
+          for (const field of ['model', 'effort', 'context_pct', 'new_session_threshold']) {
+            assert.equal(Object.hasOwn(self, field), false, 'Fleet omits Origin session metadata');
+          }
+        } else {
           assert.equal(body.session_mode.sessionMode, 'single');
           assert.equal(Object.hasOwn(body, 'runtime_info'), false);
           assert.equal(Object.hasOwn(body, 'poolCapacityRecord'), false);
