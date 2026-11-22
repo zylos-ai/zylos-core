@@ -377,7 +377,7 @@ export function syncHooks(installedSettings, _templateSettings, {
   return { added, updated, removed };
 }
 
-function sync({
+async function sync({
   zylosDir = ZYLOS_DIR,
   dryRun = false,
   stopFailureSupported = detectStopFailureSupport(),
@@ -487,7 +487,7 @@ export async function repairProjectSettings(zylosDir, settingsPath) {
   const backupPath = `${settingsPath}.corrupt.${Date.now()}`;
   fs.renameSync(settingsPath, backupPath);
   writePrivateFile(settingsPath, fs.readFileSync(TEMPLATE_SETTINGS));
-  const report = sync({ zylosDir, log: () => {} });
+  const report = await sync({ zylosDir, log: () => {} });
   if (report.abort) throw new Error('Cannot synchronize Claude hooks after rebuilding settings');
   await report.commit();
   console.log(`Claude settings were not valid JSON; moved to ${backupPath} and rebuilt from the template`);
@@ -523,7 +523,7 @@ function stage(settings, { zylosDir, existsSync, stopFailureSupported, subagentH
 
 export const hooks = Object.freeze({
   sessionIdEnv: 'CLAUDE_SESSION_ID',
-  sync: async options => sync(options),
+  sync,
   syncPolicy: 'always',
   optedIn: UNSUPPORTED,
   ready,
