@@ -102,11 +102,14 @@ test('the mounted conversation list keeps its pins in order as messages arrive a
     const sandbox = createChatSandbox(t);
     await sandbox.runCase(async () => {
       const hub = new SseHub(1000);
-      let observer;
+      let observer, chatHints = false;
       const fixture = await createChatApiFixture(t, sandbox, { extraHandler(req, res, url, f) {
         if (url.pathname !== '/api/stream') return false;
-        observer ??= new ChatChangeObserver({ c4Reader: f.reader, history: f.history, intervalMs: 100 });
-        if (!handleChatStream(req, res, url, { auth: f.auth, config: f.config, hub, observer })) hub.addClient(res);
+        if (chatHints && url.searchParams.has('chat')) {
+          observer ??= new ChatChangeObserver({ c4Reader: f.reader, history: f.history, intervalMs: 100 });
+          return handleChatStream(req, res, url, { auth: f.auth, config: f.config, hub, observer });
+        }
+        hub.addClient(res);
         return true;
       } });
       sandbox.addCleanup(() => { observer?.close(); hub.closeAll(); });
@@ -119,18 +122,20 @@ test('the mounted conversation list keeps its pins in order as messages arrive a
 
       for (const width of [1280, 390]) {
         await t.test(`${width}px`, async () => {
-          // Hold the list response at its original stamps so only a message read
-          // can reorder a row in the browser.
+          // Exercise message polling before the periodic list read is due.
+          // The server always returns the real list if the browser requests it.
+          chatHints = false;
           fixture.db.prepare("DELETE FROM conversations WHERE direction='out'").run();
           assert.equal((await putPins(fixture, [bId, aId])).status, 200);
-          let snapshot = (await fixture.request(listPath)).body;
-          assert.deepEqual(ordered(snapshot.items), [origin, bId, aId, cId, dId]);
+          const initial = await fixture.request(listPath);
+          assert.deepEqual(ordered(initial.body.items), [origin, bId, aId, cId, dId]);
           const context = await browser.newContext({ viewport: { width, height: 900 } });
           try {
+            let listReads = 0;
             await context.route('**/*', route => {
               const url = new URL(route.request().url());
               if (url.origin !== fixture.base) return route.abort();
-              if (url.pathname === listPath && snapshot) return route.fulfill({ json: snapshot });
+              if (url.pathname === listPath) listReads++;
               return route.continue();
             });
             await context.addCookies([{ name: '__Secure-zylos_dashboard_session', value: fixture.cookie,
@@ -147,19 +152,23 @@ test('the mounted conversation list keeps its pins in order as messages arrive a
             async function receive(conversation, body, expected) {
               await page.locator(`#wb-chat [data-conversation-id="${idOf(conversation)}"]`).click();
               await page.locator('#wb-chat [data-message-id]').first().waitFor();
+              const priorListReads = listReads;
               const reply = fixture.addOutbound(conversation.draft.localId, body);
-              await page.clock.fastForward(10000);
+              await page.clock.fastForward(6000);
               await page.locator(`#wb-chat [data-message-id="${reply.id}"]`).waitFor();
               if (width === 390) await page.locator('#wb-chat .conversation-back').click();
               assert.deepEqual(await ids(), expected);
+              assert.equal(listReads, priorListReads, 'the message read alone updated the browser list');
             }
             await receive(d, 'New message in an ordinary conversation', [origin, bId, aId, dId, cId]);
-            snapshot = (await fixture.request(listPath)).body;
             await receive(a, 'New message in the second pinned conversation', [origin, bId, aId, dId, cId]);
 
-            // A second client writes the order. This already-open browser
-            // receives a list hint without refreshing or navigating.
-            snapshot = null;
+            // Selecting a different conversation opens a real chat stream.
+            // The subsequent write from a second client updates this open page.
+            chatHints = true;
+            await page.locator(`#wb-chat [data-conversation-id="${dId}"]`).click();
+            await page.locator('#wb-chat .conversation-push-status[data-stream-state="live"]').waitFor({ state: 'attached' });
+            if (width === 390) await page.locator('#wb-chat .conversation-back').click();
             assert.equal((await putPins(fixture, [aId, bId])).status, 200);
             await page.waitForFunction(expected => {
               const ids = [...document.querySelectorAll('#wb-chat [data-conversation-id]')]
