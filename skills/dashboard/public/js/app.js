@@ -1743,10 +1743,10 @@ function refreshUsage() {
   usagePage?.close();
 }
 function initTabs() {
-  activateTab = (name, push = false) => {
+  activateTab = (name, push = false, settingsSection) => {
     if (name === 'usage') name = 'trends';
-    // Leaving settings closes its phone drawer; the drawer's history entry becomes the new page's entry.
-    const reuseEntry = name !== 'settings' && Boolean(settingsPage?.drawer.leave());
+    // A phone section opened from the list lends its entry to the next page.
+    const reuseEntry = name !== 'settings' && Boolean(settingsPage?.navigation.leave());
     if (name !== 'settings') { settingsLoader?.invalidate(); settingsHosts?.invalidate(); settingsTimezone?.invalidate(); }
     if (push) state.navigationGeneration += 1;
     if (name !== 'observer') state.observer.selectionGeneration += 1;
@@ -1762,7 +1762,6 @@ function initTabs() {
       p.hidden = !active;
     });
     syncMemoryPinned();
-    if (name === 'settings') refreshSettingsPage();
     refreshUsage();
     refreshChat();
     mobileNavigation?.sync();
@@ -1778,6 +1777,10 @@ function initTabs() {
       const path = name === 'overview' ? `${prefix}/` : `${prefix}/${name === 'trends' ? 'usage' : name}`;
       window.history[reuseEntry ? 'replaceState' : 'pushState']({ tab: name }, '', api(path));
     }
+    if (name === 'settings') {
+      refreshSettingsPage();
+      settingsPage?.navigation.open(settingsSection);
+    }
   };
   document.querySelectorAll('.tab').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -1787,8 +1790,8 @@ function initTabs() {
     });
   });
   window.addEventListener('popstate', async () => {
-    // Same-page overlay history is handled before routing between tabs and instances.
-    if (chatPage?.popstate() || settingsPage?.drawer.popstate()) return;
+    // Handle conversation overlays and settings history before routing between tabs and instances.
+    if (chatPage?.popstate() || settingsPage?.navigation.popstate()) return;
     const generation = ++state.navigationGeneration;
     const path = window.location.pathname;
     // In-page remote viewing only exists on the parent document; the
@@ -2063,7 +2066,6 @@ function initFleetMode() {
       onGroup: target => openFleetGroup(target), onProblems: target => openFleetGroup(target, { list: true }),
     });
   });
-  $('#fleet-manage-open')?.addEventListener('click', () => openSettingsModal('fleet'));
 }
 
 // The header's machines icon (fleetIconAction decides): back to the machines page from any machine's page, or
@@ -2831,19 +2833,12 @@ function refreshSettingsPage() {
   }
   // Another machine opened through this one: its keys and its own list of machines stay on that machine.
   const remote = Boolean(REMOTE_AGENT), fleetButton = document.querySelector('[data-settings-section="fleet"]');
-  if (fleetButton) fleetButton.hidden = remote; if (remote) settingsPage.sections.fleet.hidden = true;
+  if (fleetButton) fleetButton.hidden = remote;
   const keysPanel = settingsPage.sections.account.querySelector('.manage-panel[data-panel="keys"]'); if (keysPanel) keysPanel.hidden = remote;
 }
-function openSettingsModal(section = 'account') {
+function openSettingsModal(section = null) {
   showAgentDetail({ navigation: false });
-  document.querySelectorAll('.tab').forEach(node => node.classList.remove('active'));
-  markCurrentTab(document.querySelectorAll('.tab'), 'settings');
-  document.querySelectorAll('.tab-panel').forEach(node => { const active = node.id === 'tab-settings'; node.hidden = !active; node.classList.toggle('active', active); });
-  refreshChat();
-  window.history.pushState({ tab: 'settings' }, '', api(`${remotePrefix()}/settings`));
-  settingsPage?.select(section);
-  refreshSettingsPage();
-  mobileNavigation?.sync();
+  activateTab('settings', true, section);
 }
 function closeSettingsModal() {
   settingsLoader?.invalidate();

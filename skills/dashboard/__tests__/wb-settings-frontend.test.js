@@ -472,7 +472,7 @@ test('settings composition moves actual control nodes into cards grouped by who 
   assert.deepEqual(settingsSections, ['account', 'general', 'machine', 'fleet', 'defaults', 'pricing']);
   assert.equal(root.querySelector('#action-mode'), mode); await mode.dispatch('change'); assert.equal(calls, 1);
   // Each section starts with its own heading and lead; content follows them (no prepend ahead of the title).
-  for (const name of settingsSections) { assert.equal(page.sections[name].children[0].tagName, 'H2'); assert.equal(page.sections[name].children[1].className, 'wb-set-lead'); }
+  for (const name of settingsSections) { assert.equal(page.sections[name].children[0].querySelector('h2').tagName, 'H2'); assert.equal(page.sections[name].children[1].className, 'wb-set-lead'); }
   // The page opens on the account section: sign out, then the conversation access slot, then the keys.
   assert.equal(page.sections.account.hidden, false);
   assert.equal(page.sections.account.querySelector('#logout-btn'), logout);
@@ -530,21 +530,18 @@ test('settings relabel updates navigation without replacing controls or changing
   const page = composeSettings(root, { settings, fleet, actions, controls: [logout], document, t: key => locale + ':' + key });
   page.select('general');
   const nav = root.querySelector('nav'), buttons = nav.querySelectorAll('[data-settings-section]');
-  const drawerButton = root.querySelector('.wb-set-drawer-btn'), drawerClose = nav.querySelector('.wb-set-drawer-x');
   const headings = settingsSections.map(name => page.sections[name].querySelector('h2'));
   for (const nextLocale of ['zh', 'en']) {
     locale = nextLocale;
     page.relabel();
     assert.equal(root.querySelector('nav'), nav);
     assert.equal(nav.getAttribute('aria-label'), locale + ':wb.settings');
-    // The phone drawer's title, close button and the button naming the current section follow the language too.
-    assert.equal(nav.querySelector('.wb-set-drawer-h').querySelector('b').textContent, locale + ':wb.settings.sections');
-    assert.equal(drawerClose.getAttribute('aria-label'), locale + ':wb.settings.sectionsClose');
-    assert.equal(drawerButton.textContent, locale + ':wb.settings.section.general');
     for (const [index, name] of settingsSections.entries()) {
       const button = nav.querySelectorAll('[data-settings-section]')[index];
       assert.equal(button, buttons[index]);
-      assert.equal(button.textContent, locale + ':wb.settings.section.' + name);
+      assert.equal(button.querySelector('.wb-set-nav-copy').children[0].textContent, locale + ':wb.settings.section.' + name);
+      assert.equal(button.querySelector('.wb-set-nav-summary').textContent, locale + ':wb.settings.summary.' + name);
+      assert.equal(page.sections[name].querySelector('.wb-set-back').getAttribute('aria-label'), locale + ':wb.settings.backToSections');
       assert.equal(button.getAttribute('aria-current'), String(name === 'general'));
       assert.equal(page.sections[name].querySelector('h2'), headings[index]);
       assert.equal(headings[index].textContent, locale + ':wb.settings.section.' + name);
@@ -557,9 +554,6 @@ test('settings relabel updates navigation without replacing controls or changing
   await buttons[settingsSections.indexOf('pricing')].dispatch('click');
   assert.equal(page.sections.pricing.hidden, false);
   assert.equal(page.sections.general.hidden, true);
-  assert.equal(drawerButton.textContent, 'en:wb.settings.section.pricing', 'the drawer button names the section just chosen');
-  assert.equal(drawerButton.getAttribute('aria-controls'), nav.id);
-  assert.equal(drawerButton.getAttribute('aria-expanded'), 'false');
 });
 
 test('the engine version shows the chosen engine CLI and reuses the upgrade control, with the read-only reason', async () => {

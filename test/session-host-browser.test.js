@@ -89,8 +89,7 @@ test('the owner can manage session hosting at desktop and phone widths', {
         const page = await context.newPage();
         page.setDefaultTimeout(8000);
         await page.goto(base + '/settings');
-        // Session hosting is about the whole machine: it sits in the machine section, reached through the drawer on a phone.
-        if (width === 390) await page.locator('.wb-set-drawer-btn').click();
+        // Session hosting is about the whole machine: it sits in the machine section, available in the section list on a phone.
         await page.locator('[data-settings-section="machine"]').click();
         const panel = page.locator('#settings-session-hosts');
         await panel.getByText(locale === 'en' ? 'Session hosting' : '会话托管', { exact: true }).waitFor();

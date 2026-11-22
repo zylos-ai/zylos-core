@@ -24,7 +24,7 @@ export function measureControlRows(controlSelector = null) {
     if (el.closest('.conversation-compose-box')) return { heightException: 'composer retains its dedicated input/attachment/send dimensions' };
     if (el.closest('.chat-question')) return { heightException: 'question family has dedicated fields, chips and multiline options; question browser gate covers it' };
     if (el.matches('textarea')) return { heightException: 'multiline field grows with content' };
-    if (mobile && el.matches('.wb-mobile-icon-button,.header-icon-btn,.wb-set-nav-btn,.wb-set-drawer-btn,.conversation-back,.conversation-menu-toggle,.wb-group-side-back')) return { expectedHeight: 44 };
+    if (mobile && el.matches('.wb-mobile-icon-button,.header-icon-btn,.wb-set-nav-btn,.wb-set-back,.conversation-back,.conversation-menu-toggle,.wb-group-side-back')) return { expectedHeight: 44 };
     if (el.matches('.wb-sched-field .wb-input')) return { expectedHeight: 36 };
     if (el.matches('.wb-name-editor :is(input,select,button),.wb-cfg-controls :is(input,select,button)')) return { expectedHeight: mobile ? 36 : 26 };
     if (el.matches('.wb-group-head .wb-d-acts > *')) return { expectedHeight: mobile ? 36 : 30 };
@@ -34,7 +34,7 @@ export function measureControlRows(controlSelector = null) {
     if (el.matches('.wb-row,.wb-sched-dot,.wb-sched-select,.wb-sched-target,.conversation-list-item,.conversation-delete,.memory-file,.wb-memory-group-h,.wb-memory-section-h,.wb-attention-item')) return { heightException: 'named content selection target retains its content or graphic geometry' };
     if (el.matches('.wb-btn,.wb-icon-btn,.wb-input,.wb-select,.wb-date,.wb-seg,.wb-seg2,.conversation-tabs,.conversation-reload,.header-icon-btn,.wb-tech-btn,.wb-sched-filters .wb-search,.memory-refresh')) return { expectedHeight: mobile ? 36 : 30 };
     if (el.matches('.wb-switch-btn,input[type=range]')) return { heightException: 'switch or range retains its dedicated graphic and touch frame' };
-    if (el.matches('.wb-mobile-tab,.wb-mobile-sheet-item,.wb-mobile-scrim,.wb-set-scrim,.conversation-menu-item,.conversation-menu-scrim,.wb-rt-tab,.wb-set-nav-btn,.wb-detail-tabs button,.app-header .tab')) return { heightException: 'dedicated navigation row or backdrop retains its own dimensions' };
+    if (el.matches('.wb-mobile-tab,.wb-mobile-sheet-item,.wb-mobile-scrim,.conversation-menu-item,.conversation-menu-scrim,.wb-rt-tab,.wb-set-nav-btn,.wb-detail-tabs button,.app-header .tab')) return { heightException: 'dedicated navigation row or backdrop retains its own dimensions' };
     if (el.matches('.conversation-quote-button')) return { expectedHeight: 22, heightException: 'inline message quotation action retains its dedicated metadata height' };
     if (el.matches('.wb-run-h')) return mobile ? { expectedHeight: 36 } : { heightException: 'run-history disclosure uses its text height plus vertical padding' };
     if (el.matches('.wb-inst-more')) return mobile ? { expectedHeight: 36 } : { heightException: 'inline host disclosure uses content height plus padding' };
@@ -199,7 +199,6 @@ export async function runControlRows(t, sandbox) {
       if (!survey) {
         await page.goto(fixture.base + '/settings');
         // The default engine card is in the AI settings section; settings opens on the account section.
-        if (width === 390) await page.locator('.wb-set-drawer-btn').click();
         await page.locator('[data-settings-section="defaults"]').click();
         await page.locator('#settings-use-codex').click(); await settle();
         await checkRow(page, 'default engine', width === 390 ? '#settings-save-runtime, #settings-undo-runtime' : '.wb-seg-engine, #settings-save-runtime, #settings-undo-runtime', width === 390 ? { expectedHeight: 36 } : {});
@@ -224,7 +223,10 @@ export async function runControlRows(t, sandbox) {
           if (route === '/memory') { await capture('memory'); await page.locator('#memory-tree .memory-file').first().click(); await capture('memory-file'); continue; }
           const sections = await page.locator('[data-settings-section]').evaluateAll(nodes => nodes.filter(n => !n.hidden).map(n => n.dataset.settingsSection));
           for (const section of sections) {
-            if (width === 390) { await page.locator('.wb-set-drawer-btn').click(); await page.locator('.wb-set-nav').waitFor({ state: 'visible' }); if (section === sections[0]) await capture('settings-drawer'); }
+            if (width === 390) {
+              if (section === sections[0]) await capture('settings-list');
+              else await page.locator('.wb-set-back:visible').click();
+            }
             await page.locator(`[data-settings-section="${section}"]`).click(); await capture(`settings-${section}`);
             if (section === 'pricing') {
               await page.locator('#settings-add-model').click();

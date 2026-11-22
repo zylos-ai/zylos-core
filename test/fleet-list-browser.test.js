@@ -167,13 +167,11 @@ test('Fleet list persists, pages and links the same machines as cards across des
                 return { x, y, width, height, center: y + height / 2 };
               };
               return { width: document.documentElement.scrollWidth, toggle: box('#fleet-layout'),
-                manage: box('#fleet-manage-open'), prev: box('[data-fleet-page="-1"]'),
+                prev: box('[data-fleet-page="-1"]'),
                 name: box('.wb-f-list-name'), state: box('.wb-f-list-state'), details: box('.wb-f-list-mobile') };
             });
             assert.ok(geometry.width <= width, 'no horizontal page overflow');
             assert.equal(geometry.toggle.height, mobile ? 36 : 30);
-            assert.equal(geometry.manage.height, geometry.toggle.height);
-            assert.ok(Math.abs(geometry.manage.center - geometry.toggle.center) <= 1);
             assert.equal(geometry.prev.width, mobile ? 36 : 26);
             assert.equal(geometry.prev.height, geometry.prev.width);
             if (mobile) {
