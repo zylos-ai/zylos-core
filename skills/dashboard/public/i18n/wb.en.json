@@ -1328,6 +1328,7 @@
   "wb.usage.cacheRate": "Cache hit rate",
   "wb.groups.more": "Load more groups",
   "wb.groups.newMessages": "{n} groups have new messages",
+  "wb.groups.newMessagesOne": "{n} group has new messages",
   "wb.inst.resourceSource.host": "Host measurement",
   "wb.inst.resourceSource.container": "Container measurement",
   "wb.detail.runningCli": "Running CLI {version}",

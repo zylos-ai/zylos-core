@@ -54,7 +54,7 @@ test('separate group and instance resources render across desktop and phone page
           };
           await page.route(isRunningPage, answerArrival);
           await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-          const notice = page.getByRole('button', { name: '1 groups have new messages', exact: true });
+          const notice = page.getByRole('button', { name: '1 group has new messages', exact: true });
           await notice.waitFor();
           assert.equal(await page.locator(`#wb-board .wb-row[data-group="${arriving}"]`).count(), 0);
           await shot('overview-new-messages');

@@ -2167,6 +2167,7 @@ test('an inbound message updates the group in place until the new-message notice
   const h = workbenchHarness(context, (path, fallback) =>
     path === '/api/groups?side=running' ? { items, nextCursor: null, listKnown: true } : fallback(path), {
     t: (key, vars) => key === 'wb.groups.newMessages' ? `${vars.n} groups have new messages`
+      : key === 'wb.groups.newMessagesOne' ? `${vars.n} group has new messages`
       : key === 'wb.board.lastReceived' ? vars.text : key,
   });
   await wbTick(); await wbTick();
@@ -2182,7 +2183,7 @@ test('an inbound message updates the group in place until the new-message notice
   assert.ok(board.children[1].textContent.includes('New group message'));
   assert.ok(board.children[1].textContent.includes('wb.state.working'));
   assert.equal(notice.hidden, false);
-  assert.equal(notice.textContent, '1 groups have new messages');
+  assert.equal(notice.textContent, '1 group has new messages');
 
   notice.dispatch('click'); await wbTick(); await wbTick();
   assert.deepEqual(order(), ['c', 'a']);

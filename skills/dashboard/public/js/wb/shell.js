@@ -1,5 +1,6 @@
 import { readGroupSnapshot, readGroupPage, readGroupPages, groupSnapshot, displayGroupRow, groupDetailPath } from './group-data.js';
 import { withRequestTimeout } from '../request-timeout.js';
+import { countLabel } from '../count-label.js';
 import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js';
 import { boardController, keepGroupOrder, renderBoard, renderDistribution } from './board.js';
 import { createBoardSearch } from './board-search.js';
@@ -153,7 +154,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     syncSide();
     const pending = searchPage ? searchPending.size : groupPending.size;
     pendingButton.hidden = pending === 0 || Boolean(locatedRow);
-    pendingButton.textContent = pendingButton.hidden ? '' : t('wb.groups.newMessages', { n: pending });
+    pendingButton.textContent = pendingButton.hidden ? '' : countLabel(t, 'wb.groups.newMessages', pending, { n: pending });
     if (!snapshot) {
       const message = error
         ? element(document, 'div', undefined, 'wb-attention-item wb-attention-problem')
