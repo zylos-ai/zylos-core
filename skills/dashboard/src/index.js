@@ -118,7 +118,7 @@ async function refreshInstalledVersions() {
   }
 }
 
-const usageRuntimes = await Promise.all(runtimesWith('usage').map(getDashboardRuntime));
+const usageRuntimes = await Promise.all(runtimesWith('usage').map(id => getDashboardRuntime(id)));
 const pricing = Object.fromEntries(usageRuntimes.map(runtime => [runtime.id, runtime.pricing]));
 const config = loadConfig({ pricing });
 ensureDataDirs(config);

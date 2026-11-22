@@ -14,7 +14,7 @@ class EmptyHistory {
   paths = new Map();
   async listSessions() { return { current: null, sessions: [] }; }
 }
-const parsers = new Map((await Promise.all(SUPPORTED_RUNTIMES.map(getDashboardRuntime)))
+const parsers = new Map((await Promise.all(SUPPORTED_RUNTIMES.map(id => getDashboardRuntime(id))))
   .filter(runtime => runtime.history !== UNSUPPORTED)
   .map(runtime => [runtime.id, runtime.history]));
 const parserForRuntime = runtime => parsers.get(runtime) ?? EmptyHistory;

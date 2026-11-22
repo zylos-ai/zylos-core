@@ -4,7 +4,7 @@ import { UNSUPPORTED } from '../runtime/contract.js';
 import { costRows, summarizeCosts, usageIntervals, usageBounds, usageBucketSql, usageTokenRows } from './cost-query.js';
 
 const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
-const usageRuntimes = await Promise.all(runtimesWith('usage').map(getDashboardRuntime));
+const usageRuntimes = await Promise.all(runtimesWith('usage').map(id => getDashboardRuntime(id)));
 
 export { usageBounds } from './cost-query.js';
 

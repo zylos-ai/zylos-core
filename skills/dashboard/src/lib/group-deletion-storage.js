@@ -14,7 +14,7 @@ import { ownedPath as resolveOwnedPath } from '../../../comm-bridge/scripts/owne
 import { removeOwnedTree } from '../../../comm-bridge/scripts/remove-owned-tree.js';
 
 const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
-const usageRuntimes = await Promise.all(runtimesWith('usage').map(getDashboardRuntime));
+const usageRuntimes = await Promise.all(runtimesWith('usage').map(id => getDashboardRuntime(id)));
 const pricing = Object.fromEntries(usageRuntimes.map(runtime => [runtime.id, runtime.pricing]));
 const collectors = new Map(usageRuntimes.map(runtime => [runtime.id, runtime.collector]));
 
