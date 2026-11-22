@@ -34,9 +34,9 @@ function isReply(content) {
 export function namingInstruction(group, zylosDir) {
   const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
   const command = `node ${quote(path.join(zylosDir, '.claude/skills/dashboard/scripts/conversation-name.js'))} ${quote(group)} '<name>' --json`;
-  return AUTO_NAME_PREFIX + ' 根据这个对话的当前上下文起一个恰当的短名字（20 字以内，语言与对话一致）。'
-    + `用以下命令写回名称，将 <name> 替换为名称并正确转义 shell 参数： ${command} `
-    + '如果无法起名，用同一命令写入 unknown。名称已存在时保持现有名称。完成写回并确认结果后结束；不要在对话里回复用户。';
+  return AUTO_NAME_PREFIX + ' Name this conversation from its current context in 20 characters or fewer, using its language. '
+    + `Run ${command} with '<name>' replaced by a shell-quoted name. `
+    + 'If you cannot name it, run the same command with unknown. Keep any existing name. Confirm the write, then stop without replying to the user.';
 }
 
 export function enqueueNamingControl({ group, content, zylosDir, env = process.env }) {

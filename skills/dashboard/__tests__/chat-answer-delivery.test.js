@@ -5,6 +5,7 @@ import { dataError } from '../../comm-bridge/scripts/c4-session-group.js';
 import { createStore } from '../../comm-bridge/scripts/c4-v2-store.js';
 import { receive } from '../../comm-bridge/scripts/c4-receive.js';
 import { CONTENT_PREFIX, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
+import { formatConversation } from '../../comm-bridge/scripts/router/format.js';
 
 // Real Dashboard acceptance/conditional transaction, real temporary C4 store,
 // readonly reconciliation and real in-process receive; only route/status notice
@@ -38,13 +39,30 @@ test('accepted answer and pending delivery commit before receive, then saved row
   assert.equal(sent.deliveryState, 'pending');
   assert.equal(sent.messageId, f.answerRows(answer.answerId)[0].id);
   assert.equal(deliveryRow(f, answer.answerId).c4_id, sent.messageId);
-  const envelope = parseC4Content(f.answerRows(answer.answerId)[0].content).envelope;
+  const row = f.answerRows(answer.answerId)[0];
+  const envelope = parseC4Content(row.content).envelope;
   assert.equal(envelope.questionSummary, '选一个方案');
+  const expected = `Re interruptId=${envelope.interruptId} (Q:选一个方案): 方案甲`;
+  assert.equal(envelope.fallbackText, expected);
+  assert.ok(formatConversation(row, { ownerName: () => 'Owner' }).includes(`\nOwner said: ${expected}\n`));
   assert.equal(envelope.metadata.zylos.answerId, answer.answerId);
   assert.equal(f.counts.receive, 1);
   await f.delivery.deliver(answer.answerId);
   await f.delivery.deliver(answer.answerId, { retry: true });
   assert.equal(f.counts.receive, 1, 'ordinary duplicate and explicit retry both reuse a committed answer');
+});
+
+for (const [name, payload, summary, readable] of [
+  ['confirmation', { outcome: 'confirm' }, '确认执行？', '确认'],
+  ['form', { values: { name: '  王小明  ', count: 2, tags: ['a', 'b'] } }, '登记信息', '名字：  王小明  ；数量：2；标签：甲、乙'],
+]) test(`${name} answer reaches the agent-facing projection with its original readable text`, async t => {
+  const f = answerDeliveryFixture(t), question = f.createQuestion({ name });
+  const { answer } = f.accept({ question, payload });
+  assertCommitted(await f.delivery.deliver(answer.answerId, { initial: true }));
+  const row = f.answerRows(answer.answerId)[0];
+  const expected = `Re interruptId=${question.envelope.interruptId} (Q:${summary}): ${readable}`;
+  assert.equal(parseC4Content(row.content).envelope.fallbackText, expected);
+  assert.ok(formatConversation(row, { ownerName: () => 'Owner' }).includes(`\nOwner said: ${expected}\n`));
 });
 
 test('after startup a blocked receive remains single-call during duplicate submissions and refresh', { timeout: 3000 }, async t => {

@@ -64,9 +64,11 @@ test('first committed Agent reply queues one control for its own group and later
   const control = f.core.prepare('SELECT * FROM control_queue').get();
   assert.equal(control.session_group, group);
   assert.ok(control.ack_deadline_at > Math.floor(Date.now() / 1000));
-  assert.match(control.raw_content, /20 字以内/);
-  assert.match(control.raw_content, /conversation-name\.js/);
-  assert.match(control.raw_content, /不要在对话里回复用户/);
+  assert.doesNotMatch(control.raw_content, /\p{Script=Han}/u);
+  assert.match(control.raw_content, /20 characters or fewer, using its language/);
+  assert.ok(control.raw_content.includes(`node '${path.join(f.sandbox.paths.zylos, '.claude/skills/dashboard/scripts/conversation-name.js')}' '${group}' '<name>' --json`));
+  assert.match(control.raw_content, /run the same command with unknown/);
+  assert.match(control.raw_content, /stop without replying to the user/);
   assert.equal(control.raw_content.includes('\n'), false, 'one line, so the runtime does not fold it as pasted text');
   f.send(first); assert.equal(f.count(), 1, 'repeated channel delivery cannot duplicate work');
   f.send(f.out()); assert.equal(f.count(), 1, 'second reply never rechecks eligibility');

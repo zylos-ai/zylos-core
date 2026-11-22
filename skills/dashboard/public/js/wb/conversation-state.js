@@ -1396,7 +1396,7 @@ export function createConversationState({
     // A quote alone is not a message; text, an annotation or an attachment is.
     if (!current.pending && !current.input.trim() && !current.annotations.length && !attachments.length) return;
     // An open outcome is retried with the same content and quote; otherwise the annotations follow the user's words.
-    const payload = current.pending ?? { content: composeContent({ text: current.input, annotations: current.annotations, timeZone: instanceTz, now: new Date(now()) }),
+    const payload = current.pending ?? { content: composeContent({ text: current.input, annotations: current.annotations, timeZone: instanceTz, now: new Date(now()), t }),
       quote: current.quote?.id ?? null };
     if (contentBytes(storedContent(payload.content, payload.quote)) > MAX_CONTENT_BYTES) return;
     const e = epoch,
