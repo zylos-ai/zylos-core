@@ -9,7 +9,7 @@ import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb
 import { createPricingPanel } from './wb/settings-pricing.js';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js';
 import { renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js';
+import { keyStillListed, wireSettingsConfirmations } from './wb/settings-wiring.js';
 import { coreVersion, renderBrandVersion, renderCoreUpdate, renderEngineVersion } from './wb/settings-version.js';
 import { mountConversationPage } from './wb/conversation-page.js';
 import { mountMobileNavigation } from './wb/mobile-navigation.js';
@@ -2428,6 +2428,9 @@ async function purgeRevokedApiKeys() {
     const data = await resp.json();
     if (!resp.ok) throw new Error(fleetManageError(data.error?.code, t('fleet_manage.purge_revoked_failed')));
     keyList?.refresh();
+    // A new key still shown once may have been revoked elsewhere and cleared just now: stop showing it.
+    const shown = fleetManageModal?._createdKey?.name;
+    if (shown && data.purged > 0 && !(await keyStillListed(readApiKeys, shown).catch(() => true))) renderCreatedApiKey(null);
     fleetManageStatus(countLabel(t, 'fleet_manage.purge_revoked_status', data.purged ?? 0), 'success', '#api-key-list');
   } catch (err) {
     fleetManageStatus(err.message, 'error', '#api-key-list');

@@ -50,7 +50,7 @@ test('memory budget display shows both startup dimensions at phone and desktop w
           const errors = [];
           page.on('pageerror', error => { if (errors.length < 3) errors.push(error.message); });
           await page.route('**/api/memory/backlog*', route => route.fulfill({ json: backlogAnswer({
-            groups: [], hasOlder: false, budgets: { limits: BUDGETS, warnings: WARN_THRESHOLDS,
+            groups: [], budgets: { limits: BUDGETS, warnings: WARN_THRESHOLDS,
               checks: { 'identity.md': measureMemoryText('identity.md', '中'.repeat(3000)),
                 'references.md': measureMemoryText('references.md', 'a'.repeat(8000)) } },
           }, new URL(route.request().url())) }));

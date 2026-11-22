@@ -222,7 +222,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
   identity = () => 'local', selectedPath = () => getFile()?.path ?? null, isCollapsed = () => false,
   toggleCollapsed = () => {}, fileTitle = () => '', sizeText = byteSize } = {}) {
   let selected = 'all', selectedGroup = '', backlog = null, loaded = false, owner = identity(), generation = 0, stopped = false,
-    query = '', backlogQuery = '', restOpen = false, backlogTimer = null, loadingMore = false;
+    query = '', backlogQuery = '', restOpen = false, backlogTimer = null, loadingMore = false, badges = null, fold = null;
   const search = element(document, 'input');
   search.type = 'search';
   search.addEventListener('input', () => {
@@ -249,7 +249,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
   function currentScope() { return memoryScope(getTree()); }
   function syncIdentity() {
     if (owner !== identity()) {
-      owner = identity(); selected = 'all'; selectedGroup = ''; backlog = null; loaded = false; generation++;
+      owner = identity(); selected = 'all'; selectedGroup = ''; backlog = null; badges = null; loaded = false; generation++;
     }
   }
   function selectGroup(key) {
@@ -391,8 +391,8 @@ export function createMemoryScope({ document = globalThis.document, root, charts
         name.append(element(document, 'b', label));
         if (detail() === 'technical') name.append(element(document, 'span', group.sessionGroup, 'wb-mono'));
         head.append(icon(document, memoryGroupIcon(group), 'xs'), name);
-        // The tree carries each group's pending count and syncing state itself.
-        const row = group.backlog ?? null;
+        // Each group's pending count and syncing state, as read again after the backlog card's last read.
+        const row = (badges?.has(group.sessionGroup) ? badges.get(group.sessionGroup) : group.backlog) ?? null;
         if (row?.syncing === true) {
           const badge = element(document, 'span', undefined, 'wb-memory-badge');
           badge.append(icon(document, 'loader', 'xs'), element(document, 'span', t('wb.memory.syncing')));
@@ -522,9 +522,14 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     const quietTotal = backlog?.summary?.quiet ?? quiet.length;
     if (quietTotal > 0) {
       const rest = element(document, 'details', undefined, 'wb-memory-rest');
-      rest.open = restOpen;
-      // Opening the fold goes on reading until its groups arrive.
-      rest.addEventListener('toggle', () => { restOpen = rest.open; if (restOpen && !reachedQuiet) loadMore(); });
+      rest.open = restOpen; fold = rest;
+      // Opening the fold goes on reading until its groups arrive. A fold drawn again since then still reports its
+      // own toggle later; only the one on the page counts, judged by what is loaded now.
+      rest.addEventListener('toggle', () => {
+        if (rest !== fold) return;
+        restOpen = rest.open;
+        if (restOpen && !backlogQuery && backlog?.nextCursor && !memoryBacklogView(backlog.groups).quiet.length) loadMore();
+      });
       const summary = element(document, 'summary', undefined, 'wb-memory-rest-h');
       const others = (backlog?.summary?.groups ?? 0) - quietTotal;
       summary.append(icon(document, 'chev', 'xs'), element(document, 'span', countLabel(t, others > 0 ? 'wb.memory.restQuiet' : 'wb.memory.allQuiet', quietTotal)));
@@ -554,7 +559,6 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       progress.append(backlogRows);
       renderBacklogRows();
     }
-    if (backlog?.hasOlder === true) progress.append(element(document, 'p', t('wb.older'), 'wb-memory-source'));
     progress.append(element(document, 'p', t('wb.memory.backlogSource'), 'wb-memory-source'));
     chartsRoot.append(progress);
     const budgets = chartCard('wb-memory-budgets', 'book', t('wb.memory.budgets'), t('wb.memory.budgetHint'));
@@ -598,9 +602,21 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       const value = await request(backlogPath(null));
       if (stopped || operation !== generation || captured !== identity()) return;
       backlog = pageValue(value, value.items ?? []); loaded = true; owner = captured; render();
+      await readBadges(operation, captured);
     } catch {
       if (!stopped && operation === generation && captured === identity()) { backlog = null; loaded = true; render(); }
     }
+  }
+  /**
+   * Reads the tree's group badges again: the tree answers at once with the backlogs read lately, so after the
+   * backlog card has read every group the badges are current.
+   */
+  async function readBadges(operation, captured) {
+    let value;
+    try { value = await request('/api/memory/tree'); } catch { return; }
+    if (stopped || operation !== generation || captured !== identity()) return;
+    badges = new Map((value?.sessionGroups ?? []).map(group => [group.sessionGroup, group.backlog ?? null]));
+    render();
   }
   /** Reads the next page; a cursor the server no longer accepts (after a restart) reads the first page again. */
   async function loadMore() {

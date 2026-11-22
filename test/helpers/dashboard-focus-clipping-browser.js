@@ -90,7 +90,7 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, memoryRef
         if (p === '/api/memory/backlog') {
           const row = value.items[0];
           Object.assign(value, backlogAnswer({ groups: [row, { ...row, sessionGroup: 'lark:oc_product', displayName: 'Product weekly', count: 18 },
-            { ...row, sessionGroup: 'origin', displayName: 'Origin', count: 21 }], originSync: { ...row, count: 25, threshold: 30 }, hasOlder: true,
+            { ...row, sessionGroup: 'origin', displayName: 'Origin', count: 21 }], originSync: { ...row, count: 25, threshold: 30 },
           budgets: { limits: { 'identity.md': 8000, 'references.md': 8000 }, warnings: { 'identity.md': 7000, 'references.md': 7000 } } }, url));
         }
         if (p === '/api/settings/pricing') {

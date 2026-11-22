@@ -26,7 +26,7 @@ function backlog() {
   const groups = Array.from({ length: 14 }, (_, index) => ({ sessionGroup: `telegram:${9000 + index}`,
     displayName: `Group ${index + 1}`, c4: { componentName: 'telegram' }, count: 20 - index, firstAt: null,
     aged: false, syncing: false, threshold: 15 }));
-  return { groups, hasOlder: false, budgets: { limits: {}, warnings: {} } };
+  return { groups, budgets: { limits: {}, warnings: {} } };
 }
 
 test('a search box shows one focus ring, drawn by the box, while typing',

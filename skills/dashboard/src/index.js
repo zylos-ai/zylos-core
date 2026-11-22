@@ -1337,8 +1337,8 @@ async function handleMemoryApi(req, res, pathname, url) {
       const sessionGroups = (groupRoot?.children ?? [])
         .filter(node => node.type === 'directory' && parseSessionGroup(node.name) !== null)
         .map(node => ({ sessionGroup: node.name, displayName: names.get(node.name)?.displayName ?? null }));
-      // Each group's pending count and syncing state, for the badge beside its name (null when unreadable).
-      const backlogs = await treeBacklog(sessionGroups.map(group => group.sessionGroup), groupBacklog);
+      // Each group's pending count and syncing state for the badge beside its name, if the backlog was read lately.
+      const backlogs = treeBacklog(sessionGroups.map(group => group.sessionGroup), groupBacklog.cached);
       sendJson(res, 200, { ...tree, sessionGroups: sessionGroups.map((group, index) => ({ ...group, backlog: backlogs[index] })) });
       return true;
     }

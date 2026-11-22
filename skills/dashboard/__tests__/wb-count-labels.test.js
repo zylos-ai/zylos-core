@@ -56,7 +56,7 @@ for (const count of [1, 2]) {
     const active = groups(count).map(row => ({ sessionGroup: row.sessionGroup, count, threshold: 15, pendingSummaries: count, syncing: true }));
     const quiet = groups(count).map(row => ({ sessionGroup: row.sessionGroup + 'quiet', count: 0, threshold: 15, syncing: false }));
     let rows = [...active, ...quiet], level = 'plain';
-    const controller = createMemoryScope({ document, root, chartsRoot, summaryRoot, t, getTree: () => ({ root: { children: [] }, sessionGroups: [] }), detail: () => level, request: async path => memoryBacklogPage({ groups: rows, originSync: { count, threshold: 15, pendingSummaries: count, syncing: false }, hasOlder: false, budgets: null },
+    const controller = createMemoryScope({ document, root, chartsRoot, summaryRoot, t, getTree: () => ({ root: { children: [] }, sessionGroups: [] }), detail: () => level, request: async path => memoryBacklogPage({ groups: rows, originSync: { count, threshold: 15, pendingSummaries: count, syncing: false }, budgets: null },
       parseBacklogQuery(new URL(path, 'http://dashboard').searchParams)) });
     await controller.load();
     assert.ok(summaryRoot.textContent.includes(`${count} group${noun} being saved`));

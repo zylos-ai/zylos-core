@@ -23,6 +23,20 @@ export function keyActionRequest(action, name) {
 }
 
 /**
+ * Whether a key with exactly this name is still on the server, read through the key list's `readPage`. A name search
+ * also matches longer names, so the pages are read until the name turns up or none are left.
+ */
+export async function keyStillListed(readPage, name) {
+  let cursor = null;
+  do {
+    const page = await readPage({ q: name, cursor, limit: 100 });
+    if ((page.items ?? []).some(key => key.name === name)) return true;
+    cursor = page.nextCursor ?? null;
+  } while (cursor);
+  return false;
+}
+
+/**
  * Connects the settings page and the key table to the dashboard's own confirmation dialog, and renders them.
  * Every change these components make goes through one of the confirmations built here; the components
  * themselves refuse to act when no confirmation is given, and the page code never passes one in itself.

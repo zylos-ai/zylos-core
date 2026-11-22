@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { confirmedRunner, keyActionRequest, wireSettingsConfirmations } from '../public/js/wb/settings-wiring.js';
+import { confirmedRunner, keyActionRequest, keyStillListed, wireSettingsConfirmations } from '../public/js/wb/settings-wiring.js';
 import { createSettingsLoader } from '../public/js/wb/settings.js';
 import { createActionRunner } from '../public/js/wb/action-runner.js';
 import { fleetPageOptions, renderFleetPage } from '../public/js/agent-fleet.js';
@@ -163,6 +163,15 @@ test('revoking a different key keeps the new key that is shown once', async () =
   assert.deepEqual(sent, [['DELETE', '/api/keys/ops']], 'the other key is revoked');
   assert.deepEqual(keyPage.shown.created, [], 'the shown key is not hidden');
   assert.deepEqual(keyPage.createdKey(), { name: 'ci', plaintext_key: 'zdk_ci' });
+});
+
+test('after clearing revoked keys, the key shown once counts as gone only when its exact name is no longer listed', async () => {
+  const pages = { null: { items: [{ name: 'ci-old' }, { name: 'ci-older' }], nextCursor: 'next' }, next: { items: [{ name: 'ci' }], nextCursor: null } };
+  const asked = [];
+  const readPage = async query => { asked.push(query); return pages[query.cursor]; };
+  assert.equal(await keyStillListed(readPage, 'ci'), true, 'found on the second page of the name search');
+  assert.deepEqual(asked, [{ q: 'ci', cursor: null, limit: 100 }, { q: 'ci', cursor: 'next', limit: 100 }]);
+  assert.equal(await keyStillListed(async () => ({ items: [{ name: 'ci-old' }], nextCursor: null }), 'ci'), false, 'a longer name is not the key');
 });
 
 test('key requests: revoking keeps the key, deleting removes it for good, rotating shows the new key once', () => {

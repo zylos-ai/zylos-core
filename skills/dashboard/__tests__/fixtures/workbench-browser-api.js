@@ -9,8 +9,8 @@ import { keyPage } from './key-pages.js';
 import { memoryBacklogPage, parseBacklogQuery } from '../../src/lib/workbench/memory-backlog.js';
 
 /** Answers GET /api/memory/backlog from every group of a case, through the server's own order, search and paging. */
-export function backlogAnswer({ groups = [], originSync, hasOlder = false, budgets = null }, url) {
-  return memoryBacklogPage({ groups, ...(originSync ? { originSync } : {}), hasOlder, budgets }, parseBacklogQuery(url.searchParams));
+export function backlogAnswer({ groups = [], originSync, budgets = null }, url) {
+  return memoryBacklogPage({ groups, ...(originSync ? { originSync } : {}), budgets }, parseBacklogQuery(url.searchParams));
 }
 
 const iso = ms => new Date(ms).toISOString();
@@ -202,7 +202,7 @@ function workbenchAnswerData(url, now) {
   }
   if (p === '/api/memory/git') return { commit: null };
   if (p === '/api/memory/backlog') return backlogAnswer({ groups: [{ sessionGroup: GROUP, displayName: 'Telegram direct chat', c4: { componentName: 'telegram' },
-    count: 12, firstAt: null, aged: false, syncing: false, threshold: 15 }], hasOlder: false, budgets: { limits: {}, warnings: {} } }, url);
+    count: 12, firstAt: null, aged: false, syncing: false, threshold: 15 }], budgets: { limits: {}, warnings: {} } }, url);
   if (p.endsWith('/backlog')) return { count: 12, firstAt: null, syncing: false };
   if (p.endsWith('/runs')) return runs(url, now);
   if (p.endsWith('/messages')) return { messages: [] };

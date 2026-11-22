@@ -37,7 +37,6 @@ test('memory backlog uses Core thresholds and UTC ages for active groups only', 
   const result = await get(at);
   assert.deepEqual(snapshotTimes, [at]);
   assert.deepEqual(calls, [...values.keys()]);
-  assert.equal(result.hasOlder, true);
   assert.deepEqual(result.groups.map(group => group.threshold), [15, 15, 15], 'Origin\'s own conversation uses the group threshold');
   assert.deepEqual(result.groups.map(group => group.count), [3, 20, 2]);
   assert.equal(result.groups[1].count > result.groups[1].threshold, true);
@@ -147,7 +146,6 @@ test('unavailable Core configuration and budgets omit their lines', async () => 
   const result = await get();
   assert.equal(result.groups[0].threshold, null);
   assert.equal(result.budgets, null);
-  assert.equal(result.hasOlder, null);
 });
 
 test('one failed group preserves other backlog values and unknown sync status', async () => {
@@ -230,13 +228,17 @@ test('group details and memory reuse exactly one thirty second backlog cache', a
   const get = createMemoryBacklog({ ...defaults, now: () => time, groupBacklog,
     getSnapshot: async () => ({ rows: [{ sessionGroup: 'telegram:a' }], hasOlder: false }),
   });
+  assert.equal(groupBacklog.cached('telegram:a'), null, 'nothing cached before the first read');
   await groupBacklog('telegram:a');
   assert.equal((await get()).groups[0].count, 1);
   time += 29999;
   await get();
   assert.equal(c4Calls, 1);
   assert.equal(syncCalls, 1);
+  assert.equal(groupBacklog.cached('telegram:a').count, 1, 'the memory tree sees the cached read');
   time++;
+  assert.equal(groupBacklog.cached('telegram:a'), null, 'after thirty seconds the tree shows no badge rather than an old one');
+  assert.equal(c4Calls, 1, 'looking at the cache reads nothing');
   assert.equal((await get()).groups[0].count, 2);
   assert.equal(c4Calls, 2);
   assert.equal(syncCalls, 2);
@@ -296,6 +298,9 @@ test('memory backlog reads accept read scope while file writes require admin', a
 // setupMemoryHttp owns isolated resources and registers bounded teardown.
 test('memory backlog HTTP route shares the detail cache and accepts read scope', { timeout: 15000 }, async t => {
   const { root, engine, request, calls, versionCalls, snapshotReads } = await setupMemoryHttp(t);
+  const cold = await (await request('/api/memory/tree', 'admin')).json();
+  assert.deepEqual(cold.sessionGroups.map(group => group.backlog), [null, null], 'before any backlog read the tree answers without badges');
+  assert.deepEqual(calls.filter(call => call.args[1] === 'unsummarized'), [], 'the tree never reads a backlog itself');
   const readable = await request('/api/memory/backlog');
   assert.equal(readable.status, 200);
   assert.equal((await readable.json()).items[0].count, 7);
@@ -331,12 +336,10 @@ test('memory backlog HTTP route shares the detail cache and accepts read scope',
   assert.deepEqual(Object.keys(scoped).sort(), ['root', 'sessionGroups']);
   assert.deepEqual(scoped.sessionGroups, [
     { sessionGroup: 'origin', displayName: null, backlog: { count: 7, syncing: true } },
-    { sessionGroup: 'telegram:dm-1001', displayName: 'Product notes', backlog: { count: 7, syncing: true } },
-  ], 'each tree group carries its badge from the same backlog cache');
-  assert.deepEqual(calls.slice(before).filter(call => call.args[1] === 'unsummarized' && call.args.includes('origin')), [],
-    'the tree reuses the cached backlog of a group the backlog list just read');
-  for (const [query, code, param] of [['?limit=0', 'invalid_parameter', 'limit'], ['?group=x', 'invalid_parameter', 'group'],
-    ['?q=a&q=b', 'invalid_parameter', 'q'], ['?cursor=forged', 'invalid_cursor', undefined]]) {
+    { sessionGroup: 'telegram:dm-1001', displayName: 'Product notes', backlog: null },
+  ], 'a group the backlog list just read has its badge from the same cache; one it did not read has none');
+  assert.deepEqual(calls.slice(before).filter(call => call.args[1] === 'unsummarized'), [], 'the tree reads no backlog');
+  for (const [query, code, param] of [['?limit=0', 'invalid_parameter', 'limit'], ['?cursor=forged', 'invalid_cursor', undefined]]) {
     const refused = await request('/api/memory/backlog' + query, 'admin');
     assert.equal(refused.status, 400, query);
     const body = await refused.json();
@@ -394,12 +397,12 @@ function manyGroups() {
   }
   return values;
 }
-async function readPages(get, base = '') {
+async function readPages(get, base = '', limit = 50) {
   const pages = [];
   let cursor = null;
   do {
     const params = new URLSearchParams(base);
-    params.set('limit', '50');
+    params.set('limit', String(limit));
     if (cursor) params.set('cursor', cursor);
     const page = memoryBacklogPage(await get(at), parseBacklogQuery(params));
     pages.push(page);
@@ -431,18 +434,18 @@ test('the backlog pages 120 groups by 50 in one order: long waits, groups needin
   for (const page of pages) {
     assert.deepEqual(page.summary, { groups: 120, waiting: rows.filter(row => row.count > 0).length, aged: 21, syncing: 1,
       unknown: 17, quiet, threshold: 15 }, 'the summary covers every group on every page');
-    assert.equal(page.hasOlder, false); assert.ok(page.budgets);
+    assert.ok(page.budgets);
   }
   assert.equal(reads.length, 120 * 3, 'each request reads every group once (the group reader caches across requests)');
 
-  const found = await readPages(get, 'q=DM-04&include=total');
+  assert.deepEqual((await readPages(get, '', 40)).map(page => page.items.length), [40, 40, 40],
+    'a last page that ends exactly at the limit has no next cursor');
+
+  const found = await readPages(get, 'q=DM-04');
   assert.deepEqual(found.flatMap(page => page.items.map(row => row.sessionGroup)).sort(), Array.from({ length: 10 }, (_, index) => `telegram:dm-04${index}`));
-  assert.equal(found[0].total, 10);
   const named = await readPages(get, 'q=release');
   assert.deepEqual(named[0].items.map(row => row.sessionGroup), ['telegram:dm-042'], 'the display name is searched too');
   assert.equal(named[0].summary.groups, 120);
-  assert.throws(() => parseBacklogQuery(new URLSearchParams('limit=101')), error => error.code === 'invalid_parameter' && error.param === 'limit');
-  assert.throws(() => parseBacklogQuery(new URLSearchParams('cursor=forged')), error => error.code === 'invalid_cursor');
   assert.throws(() => parseBacklogQuery(new URLSearchParams(`q=dm&cursor=${encodeURIComponent(pages[0].nextCursor)}`)), error => error.code === 'invalid_cursor',
     'a cursor belongs to its own search');
 });

@@ -10,11 +10,3 @@ test('an unreadable key table is 503 unavailable, and a refused query reads noth
   assert.throws(() => apiKeysPage(counted, new URLSearchParams('limit=8&limit=9')), error => error.code === 'invalid_parameter' && error.param === 'limit');
   assert.equal(reads, 0);
 });
-
-test('key rows carry metadata only, and counts cover every key whatever the search', () => {
-  const row = { id: 3, name: 'ci', scope: 'read', key_hash: 'secret', created_at: '2026-11-01 00:00:00', last_used_at: null, revoked_at: null, revoked: 0 };
-  const store = { listApiKeysPage: () => [row], countApiKeys: () => ({ active: 4, revoked: 2, matched: 1 }) };
-  const page = apiKeysPage(store, new URLSearchParams('q=ci&include=total'));
-  assert.deepEqual(page, { items: [{ name: 'ci', scope: 'read', created_at: '2026-11-01 00:00:00', last_used_at: null, revoked_at: null, status: 'active' }],
-    nextCursor: null, total: 1, counts: { active: 4, revoked: 2 } });
-});

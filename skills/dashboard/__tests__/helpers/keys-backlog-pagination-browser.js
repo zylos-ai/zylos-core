@@ -44,7 +44,7 @@ export async function runKeysBacklogPaginationBrowser(t, sandbox) {
   const expectedKeys = populateKeys(store);
   const groups = backlogGroups(Date.now());
   const readBacklog = createMemoryBacklog({ zylosDir: sandbox.paths.zylos, readConfig: async () => ({}), env: {},
-    getSnapshot: async () => ({ view: 'single', rows: [...groups.keys()].map(sessionGroup => ({ sessionGroup, name: { displayName: null } })), hasOlder: false }),
+    getSnapshot: async () => ({ view: 'single', rows: [...groups.keys()].map(sessionGroup => ({ sessionGroup, name: { displayName: null } })) }),
     groupBacklog: async group => groups.get(group) });
   const reads = [];
   // A Dashboard restart changes the cursor key. Each cursor sent out carries the fixture's epoch; after restart()
@@ -125,7 +125,7 @@ export async function runKeysBacklogPaginationBrowser(t, sandbox) {
         page.setDefaultTimeout(12_000);
         page.on('pageerror', error => { if (errors.length < 5) errors.push(error.message); });
 
-        // S1: 70 keys, eight a page, forward to the end and back to the start, none repeated or missed.
+        // The key list: 70 keys, eight a page, forward to the end and back to the start, none repeated or missed.
         await page.goto(base + '/settings');
         if (!(await page.locator('#settings-section-account').isVisible())) {
           const back = page.locator('.wb-set-back:visible');
@@ -155,7 +155,7 @@ export async function runKeysBacklogPaginationBrowser(t, sandbox) {
           await pager.locator('.wb-plist-prev').click();
           assert.deepEqual(await until(keyRows, rows => rows[0] === forward[number - 1][0], `back to page ${number}`), forward[number - 1]);
         }
-        // S3: a restart between pages reads the first page again without an error.
+        // A restart between key pages reads the first page again without an error.
         await pager.locator('.wb-plist-next').click();
         await until(keyRows, rows => rows[0] === forward[1][0], 'page 2');
         restart();
@@ -176,7 +176,7 @@ export async function runKeysBacklogPaginationBrowser(t, sandbox) {
         await search.fill('');
         await until(keyRows, rows => rows[0] === forward[0][0], 'the full list again');
 
-        // S2: 120 groups, 50 a request; the quiet ones fold under one line with the server's count.
+        // The memory backlog: 120 groups, 50 a request; the quiet ones fold under one line with the server's count.
         await openDashboardTab(page, 'memory');
         const card = page.locator('.wb-memory-progress');
         const backlogRows = () => card.locator('.wb-memory-bl').evaluateAll(rows => rows.map(row => row.querySelector('.wb-memory-chart-label')?.textContent ?? ''));
@@ -185,7 +185,7 @@ export async function runKeysBacklogPaginationBrowser(t, sandbox) {
         assert.match(await fold.locator('summary').textContent(), /50/, 'the fold counts every quiet group');
         assert.equal(await fold.evaluate(node => node.open), false);
         await shot('backlog-first', card);
-        // S3 for the backlog: a refused cursor reads the first page again, silently.
+        // A refused backlog cursor reads the first page again, silently.
         restart();
         await card.locator('.wb-memory-more').first().click();
         await until(() => reads.filter(url => url.startsWith('/api/memory/backlog') && !url.includes('cursor')).length, count => count >= 2, 'the first page is read again');
@@ -218,7 +218,7 @@ export async function runKeysBacklogPaginationBrowser(t, sandbox) {
     if (failed) return;
   }
   assert.equal(writeCount, 0, 'no writes');
-  // S4 in the browser's terms: the pages never send an unknown or repeated parameter.
+  // The pages never send an unknown or repeated parameter.
   for (const url of reads) {
     const params = new URL(url, 'http://x').searchParams, keys = [...params.keys()];
     assert.equal(new Set(keys).size, keys.length, url);

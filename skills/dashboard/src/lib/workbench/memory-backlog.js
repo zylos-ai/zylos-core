@@ -95,7 +95,7 @@ export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, origi
       };
     }
     const [originSync, groups] = await Promise.all([readOrigin(), readGroups()]);
-    return { groups, ...(originSync ? { originSync } : {}), hasOlder: snapshot.hasOlder, budgets: limits };
+    return { groups, ...(originSync ? { originSync } : {}), budgets: limits };
   };
 }
 
@@ -137,9 +137,9 @@ function backlogSummary(groups) {
   };
 }
 
-/** The backlog list's query (`q`, `limit`, `cursor`, `include=total`), checked before any group is read. */
+/** The backlog list's query (`q`, `limit`, `cursor`), checked before any group is read. */
 export function parseBacklogQuery(searchParams) {
-  const query = parseListQuery('memory-backlog', searchParams, { q: true, include: ['total'] });
+  const query = parseListQuery('memory-backlog', searchParams, { q: true });
   if (query.after !== null && !orderPosition(query.after)) throw listFailure(400, 'invalid_cursor', 'The cursor is no longer valid; reload the first page');
   return query;
 }
@@ -147,7 +147,7 @@ export function parseBacklogQuery(searchParams) {
 /**
  * One page of the backlog under the list API standard. Every group is read and ordered in memory (the group
  * reader's 30-second cache is shared with group details and the memory tree), then `q` (session-group ID or
- * display name) selects and the cursor pages. Origin Sync, budgets, `hasOlder` and the summary are page fields.
+ * display name) selects and the cursor pages. Origin Sync, budgets and the summary are page fields.
  */
 export function memoryBacklogPage(value, query) {
   const needle = query.q?.toLowerCase() ?? null;
@@ -160,10 +160,9 @@ export function memoryBacklogPage(value, query) {
   return {
     items: page.map(({ row }) => row),
     nextCursor: rest.length > query.limit ? query.nextCursor(page.at(-1).key) : null,
-    ...(query.include.has('total') ? { total: matched.length } : {}),
     summary: backlogSummary(value.groups),
     ...(value.originSync ? { originSync: value.originSync } : {}),
-    hasOlder: value.hasOlder, budgets: value.budgets,
+    budgets: value.budgets,
   };
 }
 
@@ -178,7 +177,10 @@ export async function readBacklogPage(read, searchParams) {
   return memoryBacklogPage(value, query);
 }
 
-/** Pending count and syncing state for each session group of the memory tree, from the same group reader. */
-export async function treeBacklog(keys, groupBacklog) {
-  return (await readEach(keys, groupBacklog)).map(read => read ? { count: known(read.count) ? read.count : null, syncing: read.syncing ?? null } : null);
+/**
+ * Pending count and syncing state for each session group of the memory tree, from what the group reader read in the
+ * last 30 seconds (null when it has not): the tree never waits for a backlog read.
+ */
+export function treeBacklog(keys, cached) {
+  return keys.map(key => cached(key)).map(read => read ? { count: known(read.count) ? read.count : null, syncing: read.syncing ?? null } : null);
 }
