@@ -57,7 +57,39 @@ export function mountSessionHostSettings(root, { t, locale, local, read, readCha
 
   const hosts = settingsCard(document, { icon: 'layers', id: 'settings-host-relationships' });
   const rows = element(document, 'div', undefined, 'wb-host-rows');
-  const list = mountPagedList({ document, t, list: rows, rows: () => [...rows.querySelectorAll('.wb-host-row')] });
+  const list = mountPagedList({ document, t, list: rows, server: {
+    async readPage(page) {
+      const current = generation;
+      try {
+        const value = await read(page);
+        if (current !== generation || !local()) throw pageClosed;
+        return value;
+      } catch (error) {
+        throw current !== generation || !local() ? pageClosed : error;
+      }
+    },
+    render(items, page) {
+      data = page;
+      if (Number.isSafeInteger(page.total)) relationshipCount = page.total;
+      renderAllowlist();
+      hosts.sub.textContent = label('count', { count: relationshipCount });
+      hosts.sub.hidden = !relationshipCount;
+      const searching = list.search.querySelector('input').value.trim();
+      const content = !items.length && !searching ? [element(document, 'p', label('emptyRelationships'), 'wb-host-meta')]
+        : items.map(relationshipRow);
+      rows.replaceChildren(...content);
+      allow.card.hidden = hosts.card.hidden = false;
+      failure.hidden = true;
+      panel.hidden = false;
+    },
+    onError(error) {
+      if (error === pageClosed || error.status === 403) return;
+      failure.textContent = label('readFailed');
+      failure.hidden = false;
+      allow.card.hidden = hosts.card.hidden = !data;
+      panel.hidden = false;
+    },
+  } });
   hosts.card.append(list.search, rows, list.empty, list.pager);
 
   const status = element(document, 'p', '', 'wb-note');
@@ -66,6 +98,8 @@ export function mountSessionHostSettings(root, { t, locale, local, read, readCha
   panel.append(failure, allow.card, hosts.card);
   root.append(panel);
 
+  const pageClosed = new Error('Settings closed');
+  let relationshipCount = 0;
   let generation = 0;
   let busy = false;
   let data = null;
@@ -102,7 +136,6 @@ export function mountSessionHostSettings(root, { t, locale, local, read, readCha
 
   function relationshipRow(record) {
     const item = element(document, 'div', undefined, 'wb-host-row');
-    item.dataset.search = `${record.source_group} ${record.target_group}`;
     const text = element(document, 'div', undefined, 'wb-host-text');
     const when = record.attached_at ? formatZoned(record.attached_at, locale()) : '—';
     text.append(element(document, 'div', `${record.source_group} → ${record.target_group}`), element(document, 'div', label('attached', { actor: record.attached_by, when }), 'wb-host-meta'));
@@ -129,7 +162,7 @@ export function mountSessionHostSettings(root, { t, locale, local, read, readCha
     return tag;
   }
 
-  function render() {
+  function renderAllowlist() {
     allow.label.textContent = label('allowlist');
     hosts.label.textContent = label('relationships');
     input.placeholder = label('pickChannel');
@@ -140,9 +173,6 @@ export function mountSessionHostSettings(root, { t, locale, local, read, readCha
     add.textContent = label('add');
     list.setPlaceholder(label('search'));
     channels.replaceChildren(...(data.allowlist.length ? data.allowlist.map(channelTag) : [element(document, 'p', label('emptyAllowlist'), 'wb-host-meta')]));
-    hosts.sub.textContent = label('count', { count: data.relationships.length });
-    hosts.sub.hidden = !data.relationships.length;
-    rows.replaceChildren(...(data.relationships.length ? data.relationships.map(relationshipRow) : [element(document, 'p', label('emptyRelationships'), 'wb-host-meta')]));
     list.relabel();
     if (!options.hidden) renderOptions();
     syncAdd();
@@ -164,22 +194,12 @@ export function mountSessionHostSettings(root, { t, locale, local, read, readCha
     invalidate();
     if (!local()) return;
     const current = generation;
-    try {
-      // The channel list only feeds adding: if it fails, the tags and hosted groups still show and work.
-      const [value, registry] = await Promise.all([read(), readChannels().catch(() => null)]);
+    const registry = readChannels().catch(() => null).then(value => {
       if (current !== generation || !local()) return;
-      data = value;
-      registered = registry?.channels ?? null;
-      render();
-      allow.card.hidden = hosts.card.hidden = false;
-      panel.hidden = false;
-    } catch (error) {
-      if (current !== generation || !local() || error.status === 403) return;
-      failure.textContent = label('readFailed');
-      failure.hidden = false;
-      allow.card.hidden = hosts.card.hidden = true;
-      panel.hidden = false;
-    }
+      registered = value?.channels ?? null;
+      if (data) renderAllowlist();
+    });
+    await Promise.all([list.refresh({ first: true }), registry]);
   }
 
   async function submit(request, card) {
@@ -193,9 +213,11 @@ export function mountSessionHostSettings(root, { t, locale, local, read, readCha
     try {
       const value = await write(request);
       if (current !== generation || !local()) return;
-      data = value;
+      data = { ...data, allowlist: value.allowlist };
       if (request.action === 'allow') input.value = '';
-      render();
+      renderAllowlist();
+      await list.refresh({ first: true });
+      if (current !== generation || !local()) return;
       card.append(status);
       status.textContent = label(value.changed ? 'updated' : 'unchanged');
       status.focus();
@@ -204,7 +226,8 @@ export function mountSessionHostSettings(root, { t, locale, local, read, readCha
     } finally {
       if (current === generation) {
         busy = false;
-        for (const control of panel.querySelectorAll('button, input')) control.disabled = false;
+        for (const control of controls) control.disabled = false;
+        list.relabel();
         syncAdd();
       }
     }

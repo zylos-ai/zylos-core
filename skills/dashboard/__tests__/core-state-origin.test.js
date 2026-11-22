@@ -4,7 +4,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { CoreState, projectOrigin } from '../src/lib/core-state.js';
 import { describeOrigin } from '../../../cli/lib/origin-presence.js';
-import { stateMood, buildAgentFleetView, defaultAgentFleetLabels } from '../public/js/agent-fleet.js';
+import { stateMood } from '../public/js/fleet-status.js';
+import { buildAgentFleetView as buildAgentFleetViewPage, defaultAgentFleetLabels } from '../public/js/agent-fleet.js';
+import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
+
+const buildAgentFleetView = (payload, options) => buildAgentFleetViewPage(fleetPageFixture(payload), options);
 
 const absent = () => ({ identity: { present: false, ready: false, runtime: 'unknown' }, status: { valid: false, reason: 'not_running' }, usage: { valid: false } });
 const live = () => ({ identity: { present: true, ready: true, runtime: 'claude', runId: 'run-current', sessionId: 'session-current' }, status: { valid: true, reason: null, value: { state: 'busy' } }, usage: { valid: false } });

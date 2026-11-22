@@ -35,7 +35,7 @@ test('Fleet diagnostics wrap and remain literal across desktop/mobile and themes
               { kind: 'rate_limited', runtime: 'codex' },
               { kind: 'data_unreadable', group: 'ops', reasonCode: '<img src=x onerror=alert(1)>' + 'very-long-reason-'.repeat(12) },
             ];
-            const fleet = { agents: [{ name: 'Local', self: true, state: 'IDLE', session_mode: 'multi',
+            const fleet = { items: [{ name: 'Local', self: true, state: 'IDLE', session_mode: 'multi',
               group_summary: { running: 5, listKnown: true, counts: { busy: 2, idle: 1, no_response: 1, unknown: 1 }, problems: [], problemCount: 0, attention } }] },
               options = { t: (key, values = {}) => (pack[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? '')) };
             renderAgentFleet(document.querySelector('#root'), fleet, options);

@@ -9,8 +9,11 @@ import { publicDir } from '../src/lib/config.js';
 import { FleetProxy } from '../src/lib/fleet-proxy.js';
 import { FleetPoller } from '../src/lib/fleet-poller.js';
 import { acceptObserverWebSocket, connectObserverWebSocket } from '../src/lib/observer-websocket.js';
-import { renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+import { renderAgentFleetHtml as renderAgentFleetHtmlPage } from '../public/js/agent-fleet.js';
 import { objectResponse } from './fixtures/fleet-object-api.js';
+import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
+
+const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
 
 async function listen(handler) {
   const server = http.createServer(handler);

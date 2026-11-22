@@ -2,10 +2,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { fleetGroupSummary, sanitizeFleetGroupSummary } from '../skills/dashboard/src/lib/workbench/fleet-summary.js';
-import { renderFleetAttention, renderAgentFleetHtml } from '../skills/dashboard/public/js/agent-fleet.js';
+import { renderFleetAttention, renderAgentFleetHtml as renderAgentFleetHtmlPage } from '../skills/dashboard/public/js/agent-fleet.js';
 import { setInstanceZone, instanceZoneReady, formatZoned } from '../skills/dashboard/public/js/wb/instance-zone.js';
 import { FleetPoller } from '../skills/dashboard/src/lib/fleet-poller.js';
 import { objectResponse } from '../skills/dashboard/__tests__/fixtures/fleet-object-api.js';
+import { fleetPageFixture } from '../skills/dashboard/__tests__/helpers/fleet-page-fixture.js';
+
+const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
 
 // In-memory product projections and fake HTTP responses only. Run when changing
 // Fleet attention contracts/rendering/polling; unrelated channel adapters may skip.

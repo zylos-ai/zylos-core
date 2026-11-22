@@ -60,12 +60,12 @@ const ACTIVITY = [
   ...beneath('header.presence', GROUP), ...beneath('working', WORKING),
 ];
 const FLEET_RECORD = [
-  ...ms('rate_limit_7d_recorded_at', 'updated_at', 'link.sampled_at', 'link.samples.*.at'),
+  ...ms('rate_limit_7d_recorded_at', 'updated_at', 'last_seen', 'link.sampled_at', 'latency.samples.*.at'),
   ...seconds('group_summary.problems.*.createdAt', 'group_summary.attention.*.until'),
   ...beneath('instance', INSTANCE), ...ms('system_metrics.sampledAt'), ...beneath('groups', ms('readAt')),
   ...beneath('group_summary.rows.*', GROUP),
 ];
-const FLEET = [...beneath('self', FLEET_RECORD), ...beneath('agents.*', FLEET_RECORD)];
+const FLEET = [...ms('updated_at'), ...beneath('items.*', FLEET_RECORD)];
 const EVENTS = ms('events.*.timestamp', 'gaps.*.timestamp', 'events.*.metadata.pasted_at');
 const MEMORY = ms('firstAt', 'items.*.firstAt', 'originSync.firstAt', 'commit.author_date', 'mtime');
 
@@ -102,7 +102,7 @@ export function projectApiTimestamps(pathname, value) {
     return project(value, ms('since', 'until', 'messagesSampledAt', 'buckets.*', 'costByRuntime.*.at', 'tokensByRuntime.*.at',
       'messages.*.at', 'rotations.*.at', 'cache.*.at', 'series.*.at', 'current.at', 'cpuPeak.at', 'pm2.at'));
   }
-  if (pathname === '/api/session-hosts') return project(value, seconds('relationships.*.attached_at'));
+  if (pathname === '/api/session-hosts') return project(value, seconds('items.*.attached_at'));
   if (pathname === '/api/auth/token') return project(value, ms('expires_at'));
   if (pathname === '/api/keys' || pathname.startsWith('/api/keys/')) return project(value,
     ms('created_at', 'last_used_at', 'revoked_at', 'key.created_at', 'key.last_used_at', 'key.revoked_at',
@@ -113,14 +113,14 @@ export function projectApiTimestamps(pathname, value) {
   if (pathname.startsWith('/api/observer/')) return project(value, ms('expiresAt', 'current.startedAt', 'sessions.*.startedAt',
     'sessions.*.updatedAt', 'session.startedAt', 'session.updatedAt', 'entries.*.ts', 'entry.ts'));
   if (pathname === '/api/fleet') return project(value, FLEET);
-  if (pathname.startsWith('/api/fleet/')) return project(value, [...FLEET_RECORD, ...FLEET]);
+  if (pathname === '/api/fleet/agents') return project(value, ms('items.*.latency.samples.*.at'));
   return value;
 }
 
 export function projectEventTimestamps(event, value) {
   if (event === 'instance') return project(value, INSTANCE);
   if (event === 'groups') return project(value, ms('readAt'));
-  if (event === 'fleet') return project(value, FLEET);
+  if (event === 'fleet') return project(value, ms('updated_at'));
   if (event === 'metric_update') return project(value, [...ms('timestamp', 'point.timestamp', 'point.at', 'data.timestamp'),
     ...seconds('dimensions.resets_at', 'dimensions.rate_limit_7d_resets_at', 'dimensions.rate_limit_5h_resets_at')]);
   if (event.startsWith('chat_')) return project(value, [...CHAT, ...ACTIVITY]);

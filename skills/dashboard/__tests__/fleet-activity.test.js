@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { buildAgentFleetView, defaultAgentFleetLabels, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+import { buildAgentFleetView as buildAgentFleetViewPage, defaultAgentFleetLabels, renderAgentFleetHtml as renderAgentFleetHtmlPage } from '../public/js/agent-fleet.js';
 import { fleetStateFromObjects, stateToFleetRecord } from '../src/lib/fleet-poller.js';
 import { fleetGroupSummary } from '../src/lib/workbench/fleet-summary.js';
+import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
+
+const buildAgentFleetView = (payload, options) => buildAgentFleetViewPage(fleetPageFixture(payload), options);
+const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
 
 const states = [
   ['BUSY', 'busy', 'Working', 'busy'], ['IDLE', 'idle', 'Idle', 'idle'],
