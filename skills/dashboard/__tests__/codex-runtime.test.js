@@ -1,4 +1,5 @@
 import { usageTokenRows } from '../src/lib/workbench/cost-query.js';
+import { usageSeries } from '../src/lib/workbench/usage-series.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -467,7 +468,7 @@ test('Project distribution uses canonical total input without double-counting Co
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('Project distribution falls back to Codex rollout project signals', () => {
+test('Project distribution falls back to Codex rollout project signals', t => {
   const dir = tmpDir();
   const rolloutPath = path.join(dir, 'rollout-codex-session-1.jsonl');
   fs.writeFileSync(rolloutPath, [
@@ -488,6 +489,7 @@ test('Project distribution falls back to Codex rollout project signals', () => {
   ].join('\n'));
 
   const store = new Store(path.join(dir, 'dashboard.db'));
+  t.after(() => { store.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   store.upsertCodexRolloutPath({
     runtime: 'codex',
     sessionId: 'codex-session-1',
@@ -512,16 +514,17 @@ test('Project distribution falls back to Codex rollout project signals', () => {
     confidence: 'actual'
   });
 
-  const bounds = { since: '2026-05-23T00:00:00.000Z', until: '2026-05-23T02:00:00.000Z' };
-  const distribution = store.getProjectDistribution({ ...bounds, toolWeights: codexCollector.projectWeights(store, bounds) });
+  const since = '2026-05-23T00:00:00.000Z';
+  const until = '2026-05-23T02:00:00.000Z';
+  const c4Reader = { getMessageSeries: () => ({ points: [], total: { in: 0, out: 0 } }) };
+  const { projects: distribution } = usageSeries(store, c4Reader, {
+    range: 'custom', since, until, tz: 'UTC', now: new Date(until)
+  });
 
   assert.equal(distribution.totalTokens, 12800);
   assert.equal(distribution.items.length, 1);
   assert.equal(distribution.items[0].name, 'zylos-dashboard');
   assert.equal(distribution.items[0].outputTokens, 800);
-
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('CodexRolloutCollector uses rollout position identity when response item call_id is absent', () => {
