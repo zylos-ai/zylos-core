@@ -4,6 +4,8 @@
 
 This reference describes Dashboard HTTP routes, including health, instance, session groups, usage, memory, schedules, settings, chat, terminal history, Fleet and push. Any PR that changes an API documented here must update this file in the same PR. Check methods, paths, parameters, permissions, fields and errors against the implementation, rather than copying a design proposal.
 
+Collection endpoints follow the [list API standard](list-api-standard.md) for paths, filters, paging, cursors, errors, ordering and cost. This file documents each concrete route.
+
 Paths are relative to the Dashboard base URL. For example, with the default HTTP mount, `/api/instance` is available at `/dashboard/api/instance`. Group IDs are URL-encoded session-group keys such as `telegram%3Aexample`, or `origin` for the single session and the multi-session Origin. Display names are not IDs.
 
 ## Access and Common Results
