@@ -1,4 +1,4 @@
-import { DEFAULT_RUNTIME } from '../../runtime-descriptors.js';
+import { DEFAULT_RUNTIME, runtimeInstallPolicy } from '../../runtime-descriptors.js';
 import { countLabel } from '../count-label.js';
 import { effortOptionState, modelOptionState } from '../runtime-ui.js';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js';
@@ -22,6 +22,10 @@ export function modelFollowers(snapshot, runtime) {
     !row.modelOverridden && !(row.desired?.mode === 'override' && row.desired.runtime === runtime) &&
     !snapshot.overrides.model?.some(item => item.sessionGroup === row.sessionGroup && item.runtime === runtime));
 }
+export function runtimeNotFound(snapshot, runtime) {
+  return runtimeInstallPolicy(runtime) === 'whenUsed' && snapshot?.instance?.versions?.[runtime]?.installed === null;
+}
+
 export function runtimeHealth(snapshot, runtime) {
   const health = snapshot?.instance?.runtimeHealth?.[runtime]?.health;
   return health === 'auth_failed' ? 'unavailable' : health == null ? 'unknown' : 'available';
@@ -63,7 +67,6 @@ export function createOverrideSearch({ read, onChange, setTimer = setTimeout, cl
 }
 
 const runtimes = ['claude', 'codex'];
-const engineName = runtime => runtime === 'codex' ? 'Codex' : 'Claude Code';
 /** Drafted model/effort pairs that differ from what each engine's metadata reports. */
 export function modelDraftChanges(metadata = {}, drafts = {}) {
   const changes = [];
@@ -89,10 +92,10 @@ export function modelThresholdValue(meta, model) {
 const effortText = (value, t) => { const key = 'effort.' + value, label = t(key); return label && label !== key ? label : value; };
 /** One line per drafted change, as the confirmation and the result name it. */
 export function modelChangeLabel(change, t = key => key, metadata = {}) {
-  if (change.action === 'set-threshold') return t('wb.settings.changeThreshold', { runtime: engineName(change.runtime), model: change.model, value: change.value });
+  if (change.action === 'set-threshold') return t('wb.settings.changeThreshold', { runtime: runtimeName(change.runtime), model: change.model, value: change.value });
   const model = () => metadata[change.runtime]?.models?.find(item => item.id === change.value)?.display_name ?? change.value;
   return t(change.key === 'model' ? 'wb.settings.changeModel' : 'wb.settings.changeEffort',
-    { runtime: engineName(change.runtime), value: change.key === 'effort' ? effortText(change.value, t) : model() });
+    { runtime: runtimeName(change.runtime), value: change.key === 'effort' ? effortText(change.value, t) : model() });
 }
 function modelRestartFollowers(snapshot, runtime) {
   if (snapshot?.listKnown !== true || snapshot.rows?.some(row => row.presence === 'running' &&
@@ -121,7 +124,7 @@ function restartFailures(data, rows, t) {
 }
 /** The engine switch confirmation: what happens, then which groups restart with it. */
 export function runtimeSaveConfirmation(runtime, snapshot, t = key => key) {
-  return [runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: engineName(runtime) }), runtimeConfirmation(snapshot, t)].join('\n');
+  return [t('confirm.switch_runtime', { value: runtimeName(runtime) }), runtimeConfirmation(snapshot, t)].join('\n');
 }
 
 export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoot, document = root.ownerDocument,
@@ -213,7 +216,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
       }
       groups.baseline = draftRuntime = result?.data?.baseline ?? runtime;
       const saved = t(result?.messageKey ?? 'result.runtime_saved', {
-        ...result?.messageParams, value: engineName(groups.baseline),
+        ...result?.messageParams, value: runtimeName(groups.baseline),
       });
       engineResult.textContent = [saved, ...restartFailures(result?.data, current?.rows, t)].join('\n');
       redrawEngine();
@@ -268,7 +271,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
     for (const runtime of runtimes) {
       segButtons[runtime].setAttribute('aria-pressed', String(draftRuntime === runtime));
       const name = segNames[runtime];
-      name.textContent = engineName(runtime);
+      name.textContent = runtimeName(runtime);
       if (runtime === groups.baseline) {
         name.textContent += ' ';
         name.append(element(document, 'span', t('wb.settings.defaultEngineBadge'), 'wb-tag'));
@@ -291,7 +294,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   for (const runtime of runtimes) {
     let meta = metadata[runtime];
     const row = element(document, 'div', undefined, 'wb-pref');
-    const label = element(document, 'span', undefined, 'wb-pref-l'); label.append(element(document, 'i', undefined, 'wb-sw wb-sw-' + runtime), element(document, 'span', engineName(runtime)));
+    const label = element(document, 'span', undefined, 'wb-pref-l'); label.append(element(document, 'i', undefined, 'wb-sw wb-sw-' + runtime), element(document, 'span', runtimeName(runtime)));
     const cell = element(document, 'div', undefined, 'wb-pref-c'); row.append(label, cell); models.card.append(row);
     if (!meta) { cell.append(element(document, 'span', t('wb.unknown'), 'wb-note')); continue; }
     drafts[runtime] = { model: meta.current_model ?? '', effort: meta.current_effort ?? '' };

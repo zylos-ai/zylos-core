@@ -148,7 +148,6 @@
   "actions.effort_unavailable": "{value}（能力未知）",
   "confirm.restart": "重启 Agent 会话？上下文通过 Memory 保留。",
   "confirm.switch_runtime": "将 {value} 设为默认引擎？正在运行且跟随默认设置的会话会立即重启。",
-  "confirm.switch_runtime_codex": "将 Codex 设为默认引擎？正在运行且跟随默认设置的会话会立即重启。",
   "confirm.switch_model": "切换模型为 {value}？",
   "confirm.switch_effort": "切换思考强度为 {value}？",
   "confirm.fallback": "执行 {action}？",

@@ -148,7 +148,6 @@
   "actions.effort_unavailable": "{value} (capability unavailable)",
   "confirm.restart": "Restart the agent session? Context is preserved via memory.",
   "confirm.switch_runtime": "Set {value} as the default? Running sessions that follow the default will restart immediately.",
-  "confirm.switch_runtime_codex": "Set Codex as the default? Running sessions that follow the default will restart immediately.",
   "confirm.switch_model": "Switch model to {value}?",
   "confirm.switch_effort": "Switch effort to {value}?",
   "confirm.fallback": "Execute {action}?",

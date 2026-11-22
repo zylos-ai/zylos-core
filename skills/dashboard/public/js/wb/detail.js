@@ -1,3 +1,4 @@
+import { SUPPORTED_RUNTIMES } from '../../runtime-descriptors.js';
 import { instantSeconds } from './api-time.js';
 import { listen, reconcileChildren } from './detail-update.js';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js';
@@ -9,6 +10,7 @@ import { eventTypesFor, recentWindow } from './timeline-rows.js';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js';
 import { renderNameEditor } from './name-edit.js';
 import { formatZoned, zonedDay } from './instance-zone.js';
+import { runtimeNotFound } from './settings-defaults.js';
 
 export function resolveDetailRow(selection, snapshot = {}) {
   const item = typeof selection === 'string' || selection == null ? { sessionGroup: selection } : selection;
@@ -108,13 +110,14 @@ export function runtimeInfoText(info, t = key => key, { technical = false } = {}
 export function createGroupDetail({ root, document = root.ownerDocument, fetch = globalThis.fetch,
   t = key => key, writable = () => true, detail = () => 'plain', identity = () => '', showLastReceived = true,
   onClose = () => {}, onMemory = () => {}, onRename = () => {}, onConversation, conversationAvailable = () => true, confirm, observable = () => false, onObserve = () => {},
-  configView, onConfigSaved,
+  configView, onConfigSaved, onInstance = () => {},
   isVisible = () => document.visibilityState !== 'hidden', now = Date.now } = {}) {
   const state = { row: null, detailKnown: false, snapshot: null, historical: false, tab: 'overview', recent: [], backlog: null,
     totalEvents: 0, totalRuns: 0, unattributed: 0, currentEvents: [], error: null, lastSuccess: null, level: null,
     usage: null, configOpen: false, nameOpen: false, nameDraft: '', actionResult: '', actionBusy: false };
   let generation = 0, controller = null, owner = null, config = null, stopped = false, refreshTask = null;
   let renderedLevel = null, configRevision = 0, configRead = 0, rowRead = 0;
+  let recheckError = null;
   let subagentRun = null, subagentCursor = 0, subagentReady = false, subagentController = null;
   const getWritable = () => typeof writable === 'function' ? writable() : writable;
   const getLevel = () => typeof detail === 'function' ? detail() : detail;
@@ -129,6 +132,24 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     const value = await fetchJson(fetch, path, { ...options, signal: options.signal ?? controller.signal });
     if (!active(gen)) { invalidateOwner(); throw Object.assign(new Error('view_changed'), { name: 'AbortError' }); }
     return value;
+  }
+  async function recheckRuntime() {
+    const gen = generation;
+    try {
+      await request('/api/instance/actions/recheck-runtime-cli', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      });
+      const instance = await request('/api/instance');
+      state.snapshot = { ...state.snapshot, instance: { ...state.snapshot?.instance, versions: instance.versions } };
+      if (config.state.error === recheckError) config.state.error = null;
+      recheckError = null;
+      onInstance(instance);
+    } catch (error) {
+      if (error.name === 'AbortError' || !active(gen)) return;
+      recheckError = config.state.error = t('status.failed', { error: error.message });
+    }
+    configRevision++;
+    draw();
   }
   const timeline = createTimelineLoader({ request, now, active: () => active(generation), detail: readLevel,
     onChange(value) {
@@ -227,12 +248,13 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       });
       if (state.configOpen) {
         const defaultRuntime = state.snapshot?.baselineRuntime;
+        const notFound = SUPPORTED_RUNTIMES.filter(id => runtimeNotFound(state.snapshot, id));
         renderGroupConfig(sections.config, config, { document, t, writable: getWritable(), rotationThreshold: row.rotationThreshold,
-          defaultRuntime, onSave: applyConfig, onCancel: () => { state.configOpen = false; draw(); } });
+          defaultRuntime, notFound, onRecheck: recheckRuntime, onSave: applyConfig, onCancel: () => { state.configOpen = false; draw(); } });
         // Form handlers own their field references. A controller publication
         // changes the form; ordinary board snapshots keep the mounted editor.
         const form = [...sections.config.children].find(node => node.classList.contains('wb-cfg-edit'));
-        if (form) form.dataset.updateKey = `config:${configRevision}:${getWritable()}:${row.rotationThreshold}:${defaultRuntime}`;
+        if (form) form.dataset.updateKey = `config:${configRevision}:${getWritable()}:${row.rotationThreshold}:${defaultRuntime}:${notFound}`;
       }
       const usage = element(document, 'section', undefined, 'wb-ip-card');
       usage.append(element(document, 'h3', t('wb.groupUsage.title')));
@@ -525,6 +547,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       state.row = selected.row; state.historical = selected.historical; state.snapshot = snapshot;
       const gen = generation, key = state.row.sessionGroup ?? 'origin';
       configRevision = 0;
+      recheckError = null;
       config = createGroupConfig({ key, request, t, active: () => active(gen), onChange: () => { configRevision++; draw(); } });
       draw();
       if (configView) await reloadConfig();

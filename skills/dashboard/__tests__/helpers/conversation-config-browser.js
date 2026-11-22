@@ -9,8 +9,8 @@ const mine = 'dashboard:mobile-browser';
 const external = 'telegram:mobile-browser';
 const row = group => '[data-conversation-id="g:' + Buffer.from(group).toString('hex').toUpperCase() + '"]';
 const words = {
-  en: 'Cancel',
-  zh: '取消',
+  en: { cancel: 'Cancel', save: 'Save', recheck: 'Check again' },
+  zh: { cancel: '取消', save: '保存', recheck: '重新检查' },
 };
 
 export async function runConversationConfigBrowser(t, sandbox) {
@@ -28,6 +28,7 @@ export async function runConversationConfigBrowser(t, sandbox) {
     sandbox.addCleanup(() => context.close());
     const updates = [];
     let runtime = 'claude', model = 'opus', effort = 'high', running = false, failModel = false;
+    let agyVersion = null;
     const pair = () => ({ runtime, model, effort, mode: 'override' });
     const prefix = readOnly ? '/fleet/phone' : '';
     await context.route('**/*', async route => {
@@ -42,6 +43,15 @@ export async function runConversationConfigBrowser(t, sandbox) {
           .replace('data-base-path=""', 'data-base-path="' + prefix + '"')
           .replace('data-remote-access="admin"', 'data-remote-access="read"')
           .replaceAll('"/_assets/', '"' + prefix + '/_assets/') });
+      }
+      if (pathname === '/api/instance/actions/recheck-runtime-cli' && request.method() === 'POST') {
+        agyVersion = '1.5.11';
+        return route.fulfill({ json: { ok: true } });
+      }
+      if (pathname === '/api/instance') {
+        const response = await route.fetch({ url: original });
+        const value = await response.json();
+        return route.fulfill({ json: { ...value, versions: { ...value.versions, agy: { installed: agyVersion } } } });
       }
       if (readOnly && pathname === '/api/settings/chat') return route.fulfill({ json: { chat_allow_remote: true } });
       const detailPath = '/api/groups/' + encodeURIComponent(mine);
@@ -137,6 +147,25 @@ export async function runConversationConfigBrowser(t, sandbox) {
         const bounds = await panel.boundingBox();
         assert.ok(phone ? bounds.y + bounds.height >= 843 : bounds.y + bounds.height <= chip.y);
         await f.capture('mine-editor');
+        const editor = panel.locator('.wb-cfg-edit');
+        const note = editor.locator('.wb-note-act');
+        const save = editor.getByRole('button', { name: words[locale].save, exact: true });
+        const engine = editor.locator('.wb-cfg-engine select');
+        assert.equal(await note.count(), 0);
+        await engine.selectOption('agy');
+        await note.waitFor();
+        assert.equal(await save.isDisabled(), true);
+        assert.ok((await note.innerText()).includes('zylos group runtime set --group ' + mine + ' --runtime agy'));
+        assert.ok(await note.evaluate(node => node.scrollWidth <= node.clientWidth));
+        await f.capture('mine-editor-engine-missing');
+        await engine.selectOption('inherit');
+        await note.waitFor({ state: 'detached' });
+        assert.equal(await save.isEnabled(), true);
+        await engine.selectOption('agy');
+        await note.getByRole('button', { name: words[locale].recheck, exact: true }).click();
+        await note.waitFor({ state: 'detached' });
+        assert.equal(await save.isEnabled(), true);
+        assert.deepEqual(f.updates, []);
         await page.keyboard.press('Escape');
         assert.equal(await panel.isVisible(), false);
         if (phone) await page.locator('.conversation-back').click();
@@ -151,7 +180,7 @@ export async function runConversationConfigBrowser(t, sandbox) {
         await button.click();
         await f.ready(panel);
         await f.capture('external-editor');
-        await panel.getByRole('button', { name: words[locale], exact: true }).click();
+        await panel.getByRole('button', { name: words[locale].cancel, exact: true }).click();
         assert.equal(await panel.isVisible(), false);
         assert.deepEqual(f.errors, []);
         console.info('Configuration layout', { width, locale, input: text.width, chip: chip.height, composer: text.height, footer: footer.height });

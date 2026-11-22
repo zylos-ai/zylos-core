@@ -210,7 +210,8 @@ test('each engine choice carries its own sign-in state, and group lines with a c
   renderDefaults(root, { confirm: async () => true, snapshot: quiet, page: { runtimeTotal: 0, runtime: [] }, metadata: {}, document, t, read: async () => ({}), execute: async () => true });
   const claude = root.querySelector('#settings-use-claude'), codex = root.querySelector('#settings-use-codex');
   // The state sits inside the engine's own button, so it cannot wrap away from the engine it describes.
-  assert.match(claude.textContent, /^Claude.*wb\.settings\.health\.available$/);
+  assert.match(claude.textContent, /^Claude wb\.settings\.defaultEngineBadgewb\.settings\.health\.available$/);
+  assert.equal(root.querySelectorAll('.wb-pref-l')[0].children.at(-1).textContent, 'Claude');
   assert.match(codex.textContent, /^Codex.*wb\.settings\.health\.unavailable$/);
   assert.equal(root.querySelectorAll('.wb-login').every(login => login.closest('#settings-use-claude, #settings-use-codex')), true, 'no sign-in state outside the engine choices');
   const counts = root.querySelectorAll('.wb-gsum');
@@ -257,14 +258,15 @@ test('default engine keeps the sign-in gate and model and effort save together p
 test('changing the default engine is a draft until saved and the undo restores the current one', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const healthy = { ...snapshot(), instance: { runtimeHealth: { codex: { health: 'ok' }, claude: { health: 'ok' } } } };
+  const confirmations = [];
   healthy.rows[0].run = { runId: 'run-origin' };
   let rejection = "Fixture credentials were rejected";
-  const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, page: { runtimeTotal: 1 }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body });
+  const panel = renderDefaults(root, { confirm: async text => { confirmations.push(text); return true; }, snapshot: healthy, page: { runtimeTotal: 1 }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body });
     if (rejection) throw new Error(rejection);
-    return { ok: true, data: { baseline: 'codex', groups: [
+    return { ok: true, data: { baseline: body.runtime, groups: [
       { sessionGroup: 'origin', restart: { status: 'not_restarted', reason: 'fence_conflict' } },
       { sessionGroup: 'c', restart: { status: 'unknown', reason: 'no_reply' } },
-    ] }, messageKey: 'result.runtime_saved', messageParams: { value: 'Codex' } }; } });
+    ] }, messageKey: 'result.runtime_saved', messageParams: { value: body.runtime } }; } });
   const save = root.querySelector('#settings-save-runtime');
   assert.equal(save.hidden, true); assert.equal(root.querySelector('#settings-use-claude').getAttribute('aria-pressed'), 'true');
   await root.querySelector('#settings-use-codex').dispatch('click');
@@ -279,7 +281,7 @@ test('changing the default engine is a draft until saved and the undo restores t
   rejection = null;
   await save.dispatch('click');
   assert.deepEqual(calls, Array.from({ length: 2 }, () => ({ action: 'switch-runtime', body: { runtime: 'codex', confirmed: true } })));
-  assert.match(root.textContent, /result.runtime_saved/);
+  assert.match(root.textContent, /result\.runtime_saved:\{"value":"Codex"\}/);
   const feedback = root.querySelector('#settings-engine-result').textContent;
   assert.match(feedback, /savedRestartFailed.*Name origin.*fence_conflict/);
   assert.match(feedback, /savedRestartUnknown.*Name c.*no_reply/);
@@ -287,6 +289,10 @@ test('changing the default engine is a draft until saved and the undo restores t
   await root.querySelector('#settings-use-claude').dispatch('click');
   await root.querySelector('#settings-undo-runtime').dispatch('click');
   assert.equal(root.querySelector('#settings-use-codex').getAttribute('aria-pressed'), 'true');
+  await root.querySelector('#settings-use-claude').dispatch('click');
+  await save.dispatch('click');
+  assert.match(confirmations.at(-1), /^confirm\.switch_runtime:\{"value":"Claude"\}/);
+  assert.match(root.textContent, /result\.runtime_saved:\{"value":"Claude"\}/);
   panel.destroy();
 });
 
@@ -410,7 +416,7 @@ test('a model save that fails part way names what took effect and what did not',
   assert.equal(calls.length, 2, 'stops at the first failure');
   const text = root.textContent;
   assert.match(text, /wb\.settings\.partlySaved/);
-  assert.match(text, /"done":"wb\.settings\.changeModel\{\\"runtime\\":\\"Claude Code\\",\\"value\\":\\"two\\"\}"/);
+  assert.match(text, /"done":"wb\.settings\.changeModel\{\\"runtime\\":\\"Claude\\",\\"value\\":\\"two\\"\}"/);
   assert.match(text, /"left":"wb\.settings\.changeEffort/);
   assert.equal(root.querySelector('#settings-save-models').hidden, false, 'what did not apply is still a draft'); panel.destroy();
 });

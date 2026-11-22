@@ -114,7 +114,8 @@ test('every action that changes the running agent is asked with its own question
     assert.deepEqual(a.sent, [], action);
   }
   assert.equal(actionConfirmText('switch-effort', { effort: 'high' }, { t, effortLabel: value => `effort:${value}` }), 'confirm.switch_effort:{"value":"effort:high"}');
-  assert.equal(actionConfirmText('switch-runtime', { runtime: 'codex' }, { t }), 'confirm.switch_runtime_codex');
+  assert.equal(actionConfirmText('switch-runtime', { runtime: 'codex' }, { t }), 'confirm.switch_runtime:{"value":"Codex"}');
+  assert.equal(actionConfirmText('switch-runtime', { runtime: 'agy' }, { t }), 'confirm.switch_runtime:{"value":"Antigravity"}');
 });
 
 test('nothing is asked or sent while the viewed machine was reached with a read-only key', async () => {
