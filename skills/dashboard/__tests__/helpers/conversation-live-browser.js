@@ -214,7 +214,7 @@ async function observe(page) {
 async function measure(page) {
   return page.evaluate(() => {
     const area = document.querySelector('#wb-chat .conversation-activity-message');
-    const rect = node => { if (!node) return null; const r = node.getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width, height: r.height }; };
+    const rect = node => { if (!node) return null; const r = node.getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width, height: r.height, top: r.top, bottom: r.bottom }; };
     // The area itself and the bubble of the message it sits under.
     const live = area?.querySelector('.conversation-activity-live');
     const bubble = area?.previousElementSibling?.querySelector('.conversation-message-body');
@@ -233,7 +233,7 @@ async function measure(page) {
       clipped, anchorIso: area?.previousElementSibling?.querySelector('.conversation-message-meta time')?.dateTime ?? null,
       width: box ? Math.round(box.width) : null, under: area?.dataset.under ?? null, live: rect(live), bubble: rect(bubble),
       reply: rect(replies[replies.length - 1]),
-      avatar: rect(avatar), replyAvatar: rect(replies[replies.length - 1]?.previousElementSibling),
+      time: rect(time), avatar: rect(avatar), replyAvatar: rect(replies[replies.length - 1]?.previousElementSibling),
       author: rect(author), replyAuthor: rect(replyMeta?.querySelector('.chat-message-author')),
       identity: area ? { bot: !!avatar?.querySelector('.wb-ico-bot'), author: author?.textContent,
         time: time?.textContent, iso: time?.dateTime, timeVisible: !!time && !time.hidden,
@@ -339,7 +339,12 @@ export async function runConversationLiveBrowser(t, sandbox) {
         assert.ok(headerTime >= anchorTime, `${name}: header time never precedes its anchor message`);
         assert.match(layout.identity.time, /\d{2}:\d{2}/, `${name}: header formats the time`);
         assert.equal(layout.identity.actions, 0, `${name}: activity has no quote button`);
-        if (layout.replyAvatar) {
+        if (width === 390) {
+          assert.equal(layout.avatar.width, 0, `${name}: the phone hides the activity avatar`);
+          assert.equal(layout.author.width, 0, `${name}: the phone hides the activity author`);
+          assert.ok(layout.time.top >= layout.live.bottom, `${name}: activity time follows the activity content`);
+        }
+        if (width === 1280 && layout.replyAvatar) {
           assert.ok(Math.abs(layout.avatar.left - layout.replyAvatar.left) <= 1, `${name}: AI avatar columns align`);
           assert.ok(Math.abs(layout.author.left - layout.replyAuthor.left) <= 1, `${name}: AI name columns align`);
           assert.equal(layout.avatar.width, layout.replyAvatar.width, `${name}: avatar size matches`);
@@ -369,7 +374,7 @@ export async function runConversationLiveBrowser(t, sandbox) {
   for (const { width, theme } of pages) assert.ok(replyLeft.has(`${width}-${theme}`), `${width}-${theme}: a scene shows a reply`);
   for (const row of results.filter(row => row.live)) {
     const left = replyLeft.get(row.page);
-    assert.ok(Math.abs(row.avatar.left - avatarLeft.get(row.page)) <= 1, `${row.name}: activity and AI avatars share a left edge`);
+    if (row.page.startsWith('1280')) assert.ok(Math.abs(row.avatar.left - avatarLeft.get(row.page)) <= 1, `${row.name}: activity and AI avatars share a left edge`);
     assert.ok(Math.abs(row.live.left - left) <= 1, `${row.name}: the area under ${row.under === 'in' ? 'a user message' : 'a reply'} starts where the AI's bubbles start (${row.live.left} / ${left})`);
   }
   assert.ok(results.some(row => row.live && row.under === 'in') && results.some(row => row.live && row.under === 'out'), 'the area shows under both kinds of message');

@@ -45,6 +45,7 @@ test('segmented controls share raised selection in both themes and screen sizes'
             const page = await context.newPage(); page.setDefaultTimeout(7000);
             await page.goto(base + route);
             if (name === 'memory') await page.locator('#memory-tree .memory-file[data-path="state.md"]').click();
+            if (name === 'settings' && width === 390) await page.locator('[data-settings-section="account"]').click();
             await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
             const control = page.locator(selector).filter({ visible: true }).first();
             await control.waitFor();

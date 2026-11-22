@@ -209,14 +209,22 @@ export async function runInternalConversationBrowser(t, sandbox) {
         const edge = direction === 'in' ? 'right' : 'left';
         const opposite = direction === 'in' ? 'left' : 'right';
         const difference = Math.abs(internal[edge] - reference[edge]);
-        assert.ok(difference <= 2,
-          `${side} ${width} ${theme}: ${direction} bubble shares ordinary ${edge} margin (${JSON.stringify({internal, reference})})`);
         assert.ok(internal[edge] < internal[opposite], `${direction} bubble is on the ${edge}, not centered`);
-        for (const key of ['maxWidth', 'radius', 'padding', 'metaDirection', 'metaGap', 'timeMargin', 'timeFontSize', 'timeSide']) {
-          assert.equal(internal[key], reference[key], `${side} ${direction}: ordinary ${key}`);
+        if (width === 390 && direction === 'out') {
+          assert.equal(internal.left, 34, 'internal output keeps its original avatar gutter');
+          assert.equal(internal.maxWidth, 'calc(100% - 35px)');
+          assert.equal(internal.radius, '12px');
+          assert.equal(internal.padding, '12px 16px');
+          assert.ok(internal.metaHeight >= 16 && internal.metaHeight <= 18, 'internal metadata retains one compact row');
+        } else {
+          assert.ok(difference <= 2,
+            `${side} ${width} ${theme}: ${direction} bubble shares ordinary ${edge} margin (${JSON.stringify({internal, reference})})`);
+          for (const key of ['maxWidth', 'radius', 'padding', 'metaDirection', 'metaGap', 'timeMargin', 'timeFontSize', 'timeSide']) {
+            assert.equal(internal[key], reference[key], `${side} ${direction}: ordinary ${key}`);
+          }
+          assert.ok(Math.abs(internal.metaHeight - reference.metaHeight) <= 2, 'internal label keeps the ordinary metadata line height');
         }
         assert.equal(internal.timeSide, direction === 'in' ? 'left' : 'right', 'time keeps its ordinary side of the label');
-        assert.ok(Math.abs(internal.metaHeight - reference.metaHeight) <= 2, 'internal label keeps the ordinary metadata line height');
         assert.ok(Math.abs(internal.timeCenterOffset - reference.timeCenterOffset) <= 2, 'time keeps ordinary vertical alignment in metadata');
         assert.notEqual(internal.background, reference.background, 'internal bubble has its own background');
         const channels = value => {

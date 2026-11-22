@@ -84,7 +84,6 @@ test('runtime upgrades use the viewed runtime name and distinguish unknown and c
           };
           await page.goto(base);
           await openDashboardTab(page, 'settings');
-          if (width === 390) await page.locator('.wb-set-drawer-btn').click();
           await page.locator('[data-settings-section="defaults"]').click();
           const button = page.locator('[data-action="upgrade-cc"]');
           await button.waitFor({ state: 'visible' });

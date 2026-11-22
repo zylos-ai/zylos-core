@@ -1,6 +1,6 @@
 import { readGroupSnapshot } from './group-data.js';
 import { element, icon } from './plain-text.js';
-import { createSettingsDrawer } from './settings-drawer.js';
+import { createSettingsNavigation } from './settings-navigation.js';
 
 // Grouped by who a setting affects: who may enter this machine, this browser only, the whole machine, other
 // machines, the defaults for groups without their own choice, and model prices.
@@ -30,33 +30,37 @@ export function settingsCard(document, { icon: name, title = '', sub = '', id } 
 export function composeSettings(root, { settings, fleet, actions, controls = [], document = root.ownerDocument, t = key => key }) {
   root.replaceChildren();
   const layout = element(document, 'div', undefined, 'wb-set');
-  const nav = element(document, 'nav', undefined, 'wb-set-nav'); nav.setAttribute('aria-label', t('wb.settings')); nav.id = 'settings-nav';
-  // Phones: the section list is a drawer with its own title and close button, opened from a button naming the current section.
-  const drawerHead = element(document, 'div', undefined, 'wb-set-drawer-h');
-  const drawerTitle = element(document, 'b', t('wb.settings.sections'));
-  const drawerClose = element(document, 'button', undefined, 'wb-icon-btn wb-set-drawer-x'); drawerClose.type = 'button';
-  drawerClose.setAttribute('aria-label', t('wb.settings.sectionsClose')); drawerClose.append(icon(document, 'x'));
-  drawerHead.append(drawerTitle, drawerClose); nav.append(drawerHead);
-  const scrim = element(document, 'div', undefined, 'wb-set-scrim'); scrim.setAttribute('aria-hidden', 'true');
+  const nav = element(document, 'nav', undefined, 'wb-set-nav'); nav.setAttribute('aria-label', t('wb.settings'));
   const body = element(document, 'div', undefined, 'wb-set-body');
-  const toggle = element(document, 'button', undefined, 'wb-set-drawer-btn'); toggle.type = 'button';
-  toggle.setAttribute('aria-haspopup', 'true'); toggle.setAttribute('aria-controls', 'settings-nav'); toggle.setAttribute('aria-expanded', 'false');
-  const toggleCurrent = element(document, 'span', undefined, 'wb-set-drawer-cur');
-  toggle.append(icon(document, 'menu'), toggleCurrent, icon(document, 'chev', 'xs')); body.append(toggle);
   const wrap = element(document, 'div', undefined, 'wb-set-wrap'); body.append(wrap);
   const status = element(document, 'div', undefined, 'wb-set-status'); wrap.append(status);
-  const sections = {}, buttons = {}, labels = {}, badges = {}, relabels = [];
+  const sections = {}, buttons = {}, backButtons = {}, badges = {}, relabels = [];
   for (const name of settingsSections) {
     const section = element(document, 'section', undefined, 'wb-set-sec'); section.id = 'settings-section-' + name;
+    const header = element(document, 'div', undefined, 'wb-set-section-head');
+    const back = element(document, 'button', undefined, 'wb-icon-btn wb-set-back'); back.type = 'button';
+    back.setAttribute('aria-label', t('wb.settings.backToSections'));
+    back.append(icon(document, 'back', 'xs'));
+    back.addEventListener('click', () => navigation.backToList());
+    backButtons[name] = back;
     const heading = element(document, 'h2', t('wb.settings.section.' + name), 'wb-set-h');
+    header.append(back, heading);
     const lead = element(document, 'p', t('wb.settings.lead.' + name), 'wb-set-lead');
-    section.append(heading, lead); sections[name] = section; wrap.append(section);
-    relabels.push(() => { heading.textContent = t('wb.settings.section.' + name); lead.textContent = t('wb.settings.lead.' + name); });
+    section.append(header, lead); sections[name] = section; wrap.append(section);
     const button = element(document, 'button', undefined, 'wb-set-nav-btn'); button.type = 'button'; button.dataset.settingsSection = name;
-    const label = element(document, 'span', t('wb.settings.section.' + name)); labels[name] = label;
+    const copy = element(document, 'span', undefined, 'wb-set-nav-copy');
+    const label = element(document, 'span', t('wb.settings.section.' + name));
+    const description = element(document, 'span', t('wb.settings.summary.' + name), 'wb-set-nav-summary');
+    copy.append(label, description);
     const badge = element(document, 'span', '', 'wb-set-nav-n'); badge.hidden = true; badges[name] = badge;
-    button.append(icon(document, sectionIcons[name]), label, badge);
-    button.addEventListener('click', () => { select(name); drawer.close(); }); nav.append(button); buttons[name] = button;
+    button.append(icon(document, sectionIcons[name]), copy, badge, icon(document, 'chev', 'xs'));
+    button.addEventListener('click', () => navigation.pick(name)); nav.append(button); buttons[name] = button;
+    relabels.push(() => {
+      heading.textContent = label.textContent = t('wb.settings.section.' + name);
+      lead.textContent = t('wb.settings.lead.' + name);
+      description.textContent = t('wb.settings.summary.' + name);
+      back.setAttribute('aria-label', t('wb.settings.backToSections'));
+    });
   }
   const move = (source, selector, destination) => { const node = source.querySelector(selector); if (node) destination.append(node); return node; };
 
@@ -131,31 +135,35 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   move(fleet, '#fleet-manage-status', status);
   for (const selector of ['#action-status']) move(actions, selector, status);
 
-  layout.append(nav, scrim, body); root.append(layout);
-  const drawer = createSettingsDrawer({ layout, nav, toggle, closeButton: drawerClose, scrim, window: document.defaultView });
+  layout.append(nav, body); root.append(layout);
   let current = null;
-  function showCurrent() { if (!current) return; toggleCurrent.replaceChildren(icon(document, sectionIcons[current]), element(document, 'span', t('wb.settings.section.' + current))); }
-  function select(name) {
-    if (!sections[name] || buttons[name].hidden) name = 'account';
-    // A key or machine notice sits in the card that started it: a finished one is cleared on leaving its section,
-    // one still running stays there for when that section is shown again.
+  function select(name, { focus = false } = {}) {
+    if (name !== null && (!sections[name] || buttons[name].hidden)) name = 'account';
+    // Clear finished key or machine notices when leaving the section that displayed them.
     const notice = layout.querySelector('#fleet-manage-status');
     if (current && name !== current && notice && !/\bwb-status-running\b/.test(notice.className)) { notice.textContent = ''; notice.hidden = true; }
     current = name;
+    layout.classList.toggle('wb-set-list', name === null);
     for (const key of settingsSections) { sections[key].hidden = key !== name; buttons[key].setAttribute('aria-current', String(key === name)); }
-    showCurrent();
+    if (focus) {
+      document.defaultView.scrollTo(0, 0);
+      backButtons[name]?.focus({ preventScroll: true });
+    }
+  }
+  function showList({ focus = false } = {}) {
+    const previous = current;
+    select(null, { focus });
+    if (focus) buttons[previous]?.focus({ preventScroll: true });
   }
   function relabel() {
     nav.setAttribute('aria-label', t('wb.settings'));
-    drawerTitle.textContent = t('wb.settings.sections'); drawerClose.setAttribute('aria-label', t('wb.settings.sectionsClose'));
-    for (const name of settingsSections) labels[name].textContent = t('wb.settings.section.' + name);
-    showCurrent();
     for (const fn of relabels) fn();
   }
   /** Unsaved-change count on a navigation item; zero hides it. */
   function badge(name, count) { badges[name].textContent = count ? String(count) : ''; badges[name].hidden = !count; badges[name].title = count ? t('wb.settings.unsaved') : ''; }
+  const navigation = createSettingsNavigation({ layout, select, showList });
   select('account');
-  return { sections, prefs, slots: { chat, version: versionBody, timezone, idleReclaim, hosts }, select, relabel, badge, drawer, actionsScope: root };
+  return { sections, prefs, slots: { chat, version: versionBody, timezone, idleReclaim, hosts }, select, relabel, badge, navigation, actionsScope: root };
 }
 
 // The compact list supplies live groups. Detail distinguishes inherited settings from overrides.

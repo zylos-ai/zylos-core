@@ -175,10 +175,10 @@
 /* Text in every button, segment, tab, tag and pill sits in the middle of its box: flex centring and one line
    height (Latin, Chinese, and icon with text alike), not padding. Zero specificity, so a control's own display
    (hidden, column layouts) and fixed line heights still apply; the pill keeps its height with min-height. */
-:where(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .app-header .tab, .wb-seg button, .wb-seg2 button, .wb-seg-sm button, .wb-tag, .wb-pill, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-detail-tabs button, .wb-chip, .wb-scope-b) { display: inline-flex; align-items: center; }
+:where(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .app-header .tab, .wb-seg button, .wb-seg2 button, .wb-seg-sm button, .wb-tag, .wb-pill, .wb-set-nav-btn, .wb-detail-tabs button, .wb-chip, .wb-scope-b) { display: inline-flex; align-items: center; }
 :where(.wb-btn, .header-icon-btn, .app-header .tab, .wb-seg button, .wb-seg2 button, .wb-seg-sm button, .wb-detail-tabs button, .wb-chip) { justify-content: center; }
 /* `button { font: inherit }` would bring back the page's 1.5 line height, so the line height is set at class weight. */
-:is(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-pill), .wb-seg button, .wb-seg2 button, .wb-detail-tabs button, .app-header .tab, .wb-chip { line-height: 1.2; }
+:is(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .wb-set-nav-btn, .wb-pill), .wb-seg button, .wb-seg2 button, .wb-detail-tabs button, .app-header .tab, .wb-chip { line-height: 1.2; }
 .wb-pill { min-height: 24px; }
 .wb-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--text-muted); }
 
@@ -1188,8 +1188,8 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-set-nav-btn[hidden] { display: none; }
 .wb-set-nav-n { margin-left: auto; color: var(--wb-wait); font-size: 11px; font-weight: 600; }
 .wb-set-nav-n[hidden] { display: none; }
-/* The section drawer's title, its opening button and its backdrop exist only on phones. */
-.wb-set-drawer-h, .wb-set-drawer-btn, .wb-set-scrim { display: none; }
+.wb-set-section-head { display: contents; }
+.wb-set-back.wb-icon-btn, .wb-set-nav-summary, .wb-set-nav-btn > .wb-ico-chev { display: none; }
 .wb-set-body { flex: 1; min-width: 0; padding: 22px 28px 40px; }
 .wb-set-wrap { max-width: 920px; }
 /* The long lists (session hosts, keys, other machines, prices): search, one page of rows, the pager. Rows off the
@@ -1589,26 +1589,23 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
 
 @media (max-width: 760px) {
   .wb-set { flex-direction: column; background: none; }
-  /* Phones: the sections live in a drawer that slides in from the left; a button at the top of the page names the current section. */
-  .wb-set-nav { position: fixed; top: 0; bottom: 0; left: 0; z-index: 61; align-self: stretch; width: min(300px, 84vw); max-height: none; padding: calc(8px + env(safe-area-inset-top)) 10px calc(16px + env(safe-area-inset-bottom)) calc(10px + env(safe-area-inset-left)); border-right: 1px solid var(--wb-line); background: var(--wb-panel); box-shadow: var(--wb-shadow); transform: translateX(-104%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; }
-  .wb-set-drawer-open .wb-set-nav { transform: none; visibility: visible; transition: transform .2s ease; }
-  .wb-set-drawer-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; padding: 2px 2px 8px 8px; border-bottom: 1px solid var(--wb-line); font-size: 14px; white-space: nowrap; }
-  .wb-set-nav-btn { height: auto; min-height: 44px; font-size: 14.5px; }
-  .wb-set-scrim { display: block; position: fixed; inset: 0; z-index: 60; background: var(--wb-scrim); opacity: 0; visibility: hidden; transition: opacity .2s ease, visibility 0s linear .2s; }
-  .wb-set-drawer-open .wb-set-scrim { opacity: 1; visibility: visible; transition: opacity .2s ease; }
-  .wb-set-drawer-btn { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; margin: 0 0 14px; padding: 0 12px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font: inherit; font-size: 14.5px; font-weight: 600; text-align: left; cursor: pointer; }
-  .wb-set-drawer-cur { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; }
-  .wb-set-drawer-cur > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .wb-set-drawer-btn .wb-ico { color: var(--text-dim); }
-  .wb-set-drawer-btn > .wb-ico:last-child { transform: rotate(90deg); }
-  /* The section button stays under the top bar while the page scrolls, so another section is always one tap away. */
-  .wb-set-drawer-btn { position: sticky; top: var(--wb-header-h); z-index: 5; box-shadow: 0 0 0 6px var(--bg); }
+  .wb-set-nav { display: none; position: static; align-self: stretch; width: auto; max-height: none; padding: 12px 12px 32px; overflow: visible; }
+  .wb-set-list .wb-set-nav { display: flex; }
+  .wb-set-list .wb-set-body { display: none; }
+  .wb-set-nav-btn { height: auto; min-height: 44px; padding: 8px 12px; color: var(--text); font-size: 14.5px; white-space: normal; }
+  .wb-set-nav-btn:is(:hover, :active) { background: var(--wb-hover); }
+  .wb-set-nav-btn:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+  .wb-set-nav-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .wb-set-nav-summary { display: block; margin-top: 2px; color: var(--text-dim); font-size: 12px; line-height: 1.4; }
+  .wb-set-nav-btn > .wb-ico-chev { display: inline-block; color: var(--text-dim); }
+  .wb-set-section-head { position: sticky; top: var(--wb-header-h); z-index: 5; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; background: var(--bg); box-shadow: 0 0 0 6px var(--bg); }
+  .wb-set-back.wb-icon-btn { display: inline-flex; flex: none; width: 44px; height: 44px; justify-content: center; }
+  .wb-set-section-head .wb-set-h { margin: 0; overflow-wrap: anywhere; }
   .wb-plist-search .wb-input { width: 100%; }
   .wb-host-chip { height: 36px; padding-left: 12px; border-radius: 18px; }
   .wb-host-chip-x { width: 36px; height: 36px; }
   .wb-host-combo { flex: 1 1 100%; }
   .wb-host-option { min-height: 36px; font-size: 14px; }
-  @media (prefers-reduced-motion: reduce) { .wb-set-nav, .wb-set-scrim, .wb-set-drawer-open :is(.wb-set-nav, .wb-set-scrim) { transition: none; } }
   /* One 12px page edge and a lighter card padding leave the cards' content most of the width. */
   .wb-set-body { padding: 12px 12px 32px; }
   /* Price-table tabs share the width; who uses each table drops to a second line instead of pushing the other tab off screen. */
@@ -1616,8 +1613,6 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   .wb-rt-tab small { flex: 1 1 100%; font-size: 11.5px; }
   /* The sound switch's 40px touch frame is transparent; pull it back so the visible switch starts at the text edge. */
   .fleet-sound-toggle.wb-switch-btn { margin-left: -10px; }
-  /* The section button at the top names the section, so the section's own heading is not repeated under it. */
-  .wb-set-h { display: none; }
   .wb-set-lead { margin-bottom: 12px; font-size: 13px; }
   .wb-set-card { padding: 12px; border-radius: 10px; }
   .wb-set-card-h { margin-bottom: 8px; }
@@ -1670,11 +1665,11 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
 #settings-price-show-all { height: var(--wb-h); }
 
 /* ─── Phones: ordinary single-line interaction frames use 36px ───
-   (The settings drawer's section rows and its opening button set their own 44px minimum.) */
+   (The settings list rows and Back to sections button set their own 44px minimum.) */
 .memory-back { display: none; }
 @media (max-width: 760px) {
   :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
-    :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden], .wb-search input)):not(.wb-vh, .wb-switch-btn, .wb-sched-dot, .wb-set-nav-btn, .wb-set-drawer-btn) { min-height: var(--wb-control-touch); }
+    :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden], .wb-search input)):not(.wb-vh, .wb-switch-btn, .wb-sched-dot, .wb-set-nav-btn, .wb-set-back) { min-height: var(--wb-control-touch); }
   /* Text fields, number fields and dropdowns are 16px so focusing one does not zoom the page (visual-design
      decision 14). Important: page and table rules set 12–12.5px on specific fields with higher specificity. */
   :is(input:not([type=checkbox], [type=radio], [type=range], [type=hidden], [type=button], [type=submit], [type=file], [type=color]), select, textarea) { font-size: 16px !important; }
