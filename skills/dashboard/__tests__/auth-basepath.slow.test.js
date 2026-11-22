@@ -1655,6 +1655,7 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
 test('the Fleet routes page 20 machines, preserve the summary and reject invalid queries', { timeout: TEST_TIMEOUT_MS }, async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
   const names = Array.from({ length: 19 }, (_, i) => `remote-${String(i + 1).padStart(2, '0')}`);
+  names[17] = 'Remote-18';
   writeConfig(zylosDir, 'secret', {
     agent: { name: 'local' },
     fleet: { agents: [...names].reverse().map(name => ({
@@ -1695,6 +1696,7 @@ test('the Fleet routes page 20 machines, preserve the summary and reject invalid
     assert.equal(exact.summary.count, 20);
     assert.equal(exact.items[0].access, 'read');
     assert.deepEqual((await get(wall + '?q=REMOTE-19')).items.map(row => row.name), ['remote-19']);
+    assert.deepEqual((await get(wall + '?q=remote-18')).items.map(row => row.name), ['Remote-18']);
     assert.equal((await get(wall + '?name=remote')).items.length, 0);
     const first = await get(settings + '?limit=8&include=total');
     const next = await get(settings + '?limit=8&cursor=' + encodeURIComponent(first.nextCursor));

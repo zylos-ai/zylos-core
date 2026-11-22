@@ -89,7 +89,7 @@ test('the owner can manage session hosting at desktop and phone widths', {
     assert.equal(cursor, null);
     assert.equal(new Set(keys).size, 60);
     assert.deepEqual(keys, [...keys].sort());
-    for (const search of ['source-59', 'target-59']) {
+    for (const search of ['SOURCE-59', 'target-59']) {
       const match = await get('?q=' + search);
       assert.deepEqual(match.items.map(row => row.source_group), ['telegram:Source-59']);
       assert.equal(Object.hasOwn(match, 'total'), false);
