@@ -5,16 +5,9 @@ import { splitContentAndAttachments, sanitizeDisplayName } from '../../../../com
 import { answerDisplay } from '../../../public/js/wb/chat-answer.js';
 import { parseChatQuote, stripChatQuote } from '../../../../comm-bridge/scripts/chat-quote.js';
 import { ORIGIN, ORIGIN_CONVERSATION_ID, ORIGIN_DISPLAY_NAME } from './origin.js';
+import { messageVisible, originMessageVisible, originVisible, visible } from './visibility.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
-const shown = (groups, channels) => `c.direction IN ('in','out') AND c.session_group NOT IN (${groups})
-  AND c.channel <> '' AND c.channel NOT IN (${channels})`;
-// Lists and summaries never include internal messages; message pages do.
-// The `origin` group is shown only through the Origin conversation's range.
-const visible = shown("'origin','*'", "'void','internal','system','scheduler','control'");
-const messageVisible = shown("'origin','*'", "'void','system','scheduler','control'");
-const originVisible = shown("'*'", "'void','internal','system','scheduler','control'");
-const originMessageVisible = shown("'*'", "'void','system','scheduler','control'");
 const visibleIn = (range, messages = false) => range?.origin
   ? messages ? originMessageVisible : originVisible
   : messages ? messageVisible : visible;

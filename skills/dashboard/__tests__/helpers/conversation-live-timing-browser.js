@@ -39,7 +39,7 @@ async function startApi(sandbox) {
   const conversation = { id: ID, localId: 'live-timing', sessionGroup: GROUP, channel: 'dashboard', state: 'active', origin: false, displayName: '计时示例' };
   const answer = url => {
     const p = url.pathname;
-    if (['/api/groups/running', '/api/groups/offline', '/api/groups/counts'].includes(p) || /^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'counts', 'offline'].includes(p.split('/').at(-1)) || p === '/api/instance') { counts.groups++; return workbenchSnapshotAnswer(url, snapshot(url), NOW); }
+    if (['/api/groups', '/api/groups/counts'].includes(p) || /^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'counts', 'offline'].includes(p.split('/').at(-1)) || p === '/api/instance') { counts.groups++; return workbenchSnapshotAnswer(url, snapshot(url), NOW); }
     if (p === '/api/chat/conversations') {
       if (url.searchParams.get('tab') === 'external') return { items: [], nextCursor: null, tz: 'UTC' };
       return { items: [{ ...conversation, session_group: GROUP, display_name: '计时示例' }], nextCursor: null, tz: 'UTC' };

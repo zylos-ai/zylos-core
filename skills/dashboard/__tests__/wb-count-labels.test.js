@@ -8,7 +8,7 @@ import { renderDistribution } from '../public/js/wb/board.js';
 import { systemItems } from '../public/js/wb/instance-strip.js';
 import { createMemoryScope } from '../public/js/wb/memory-scope.js';
 import { memoryBacklogPage, parseBacklogQuery } from '../src/lib/workbench/memory-backlog.js';
-import { modelSaveConfirmation, renderDefaults, runtimeConfirmation } from '../public/js/wb/settings-defaults.js';
+import { modelSaveConfirmation, renderDefaults, runtimeSaveConfirmation } from '../public/js/wb/settings-defaults.js';
 import { mountSchedule } from '../public/js/wb/schedule.js';
 import { createDocument, allNodes, tick } from './fixtures/workbench-dom.js';
 import { documentFixture } from './fixtures/settings-dom.js';
@@ -39,15 +39,15 @@ for (const count of [1, 2]) {
   });
   test(`Workbench defaults render English count ${count}`, () => {
     const document = documentFixture(), root = document.createElement('div');
-    const snapshot = { rows: groups(count), baselineRuntime: 'claude', overrides: { runtime: [], model: [] } };
-    const panel = renderDefaults(root, { document, t, snapshot, page: { runtimeTotal: count }, metadata: { claude: { runtime: 'claude', current_model: 'one', current_effort: 'high', models: [{ id: 'one' }], efforts_by_model: { one: ['high'] } } }, read: async () => ({}) });
+    const page = { items: groups(count).map(row => ({ id: row.sessionGroup, displayName: row.name.displayName })), total: count, listKnown: true };
+    const panel = renderDefaults(root, { document, t, instance: { default_runtime: 'claude' }, groupCounts: { followers: count, overrides: count, models: { claude: count } }, metadata: { claude: { runtime: 'claude', current_model: 'one', current_effort: 'high', models: [{ id: 'one' }], efforts_by_model: { one: ['high'] } } }, read: async () => ({}) });
     assert.ok(root.textContent.includes(`Switching interrupts ${count} running group${noun}`));
     assert.ok(root.textContent.includes(`${count} group${noun} ${count === 1 ? 'sets its' : 'set their'} own engine`));
     assert.ok(root.textContent.includes(count === 1 ? 'Show this group' : 'Show these 2 groups'));
     assert.ok(root.textContent.includes(`${count} running group${noun} ${count === 1 ? 'uses' : 'use'} these defaults`), root.textContent);
-    assert.ok(runtimeConfirmation(snapshot, t).includes(`${count} running group${noun} that ${count === 1 ? 'follows' : 'follow'} the default`));
+    assert.ok(runtimeSaveConfirmation('claude', page, t).includes(`${count} running group${noun} that ${count === 1 ? 'follows' : 'follow'} the default`));
     const modelQuestion = modelSaveConfirmation([{ runtime: 'claude', action: 'switch-model', key: 'model', value: 'one' }],
-      t, {}, { ...snapshot, listKnown: true });
+      t, {}, { claude: page });
     assert.ok(modelQuestion.includes(`${count} running group${noun} that ${count === 1 ? 'uses' : 'use'} this default model will restart immediately:`));
     panel.destroy();
   });

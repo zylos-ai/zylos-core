@@ -57,10 +57,10 @@ export async function runUnreadableAttentionBrowser(sandbox) {
           return route.fulfill({ json: { agents: [record('browser-case', true), record('remote-case', false)],
             updated_at: new Date(now).toISOString() } });
         }
-        if (url.pathname === '/api/groups/running') {
+        if (url.pathname === '/api/groups') {
           const data = workbenchAnswer(url, now);
-          data.rows[0].displayName = 'Operations room';
-          data.rows[0].flags = { unreadable: { reasons: ['identity_mismatch'] } };
+          data.items[0].displayName = 'Operations room';
+          data.items[0].flags = { unreadable: { reasons: ['identity_mismatch'] } };
           return route.fulfill({ json: data });
         }
         return route.fallback();

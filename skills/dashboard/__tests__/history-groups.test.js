@@ -56,7 +56,7 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   await fs.writeFile(rollout, JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'codex needle' }] } }) + '\n');
   store.db.prepare('INSERT INTO codex_rollout_paths(runtime,session_id,transcript_path) VALUES(?,?,?)').run('codex', 'codex-session', rollout);
   const service = new HistoryService({ config, store, resolveScope: createHistoryScope({ config, store, load,
-    readCurrentSessionId: () => liveSingleSessionId, readGroupKey: key => groups.detail(key, { include: [] }) }) });
+    readCurrentSessionId: () => liveSingleSessionId, readGroupKey: key => groups.detail(key, new URLSearchParams(key === 'origin' ? 'include=' : '')) }) });
   t.after(() => service.close());
   const server = http.createServer((req, res) => { const url = new URL(req.url, 'http://fixture'); res.apiPath = url.pathname; return service.handle(req, res, url); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

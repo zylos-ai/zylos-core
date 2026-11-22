@@ -395,29 +395,27 @@ registerIntegrationCase('group resources precede details and preserve include an
   // Seed an existing import without changing the current C4 write grammar.
   api.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run(historical, imported.id);
   api.db.prepare('UPDATE group_heads SET session_group=? WHERE session_group=?').run(historical, imported.session_group);
-  for (const path of ['/api/groups/runtime-overrides', '/api/groups/runtime-overrides?q=private']) {
-    const result = await api.request(path);
-    assert.equal(result.status, 200, path);
-    assert.equal(result.body.runtime.length, 0);
-  }
+  const result = await api.request('/api/groups?q=private');
+  assert.equal(result.status, 200);
+  assert.equal(result.body.items.length, 0);
   // The naming resource only accepts the POST that sends its prompt; a read is never parsed as a group detail.
   const naming = await api.request('/api/groups/naming-prompt');
   assert.equal(naming.status, 404);
   assert.deepEqual(naming.body, { ok: false, error: { code: 'not_found', message: 'not_found' } });
   const group = '/api/groups/' + encodeURIComponent('dashboard:' + active.draft.localId);
-  const compact = await api.request(group + '?include=');
+  const compact = await api.request(group);
   assert.equal(compact.status, 200);
   assert.equal(Object.hasOwn(compact.body, 'raw'), false);
   assert.equal(Object.hasOwn(compact.body, 'config'), false);
   const invalid = await api.request(group + '?include=unknown');
-  assert.equal(invalid.status, 400); assert.equal(invalid.body.error.code, 'INVALID_INCLUDE');
-  const missing = await api.request('/api/groups/dashboard%3Amissing?include=');
-  assert.equal(missing.status, 404); assert.equal(missing.body.error.code, 'GROUP_NOT_FOUND');
-  const historicalDetail = await api.request('/api/groups/' + encodeURIComponent(historical) + '?include=');
+  assert.equal(invalid.status, 400); assert.equal(invalid.body.error.code, 'invalid_parameter');
+  const missing = await api.request('/api/groups/dashboard%3Amissing');
+  assert.equal(missing.status, 404); assert.equal(missing.body.error.code, 'not_found');
+  const historicalDetail = await api.request('/api/groups/' + encodeURIComponent(historical));
   assert.equal(historicalDetail.status, 200); assert.equal(historicalDetail.body.id, historical);
-  const unknownHistorical = await api.request('/api/groups/' + encodeURIComponent('telegram:未导入群') + '?include=');
+  const unknownHistorical = await api.request('/api/groups/' + encodeURIComponent('telegram:未导入群'));
   assert.equal(unknownHistorical.status, 400); assert.equal(unknownHistorical.body.error.code, 'SESSION_GROUP_INVALID');
-  const malformed = await api.request('/api/groups/%ZZ?include=');
+  const malformed = await api.request('/api/groups/%ZZ');
   assert.equal(malformed.status, 400); assert.equal(malformed.body.error.code, 'SESSION_GROUP_INVALID');
 });
 
@@ -454,13 +452,13 @@ registerIntegrationCase('remote chat off, on and off enforces both direct and pr
       for (const identity of ['read', 'admin']) for (const fleet of [false, true]) {
         const client = fleet ? local : remote;
         const options = { identity, ...(fleet ? { fleet: true } : {}) };
-        const overview = await client.request('/api/groups/offline', options);
+        const overview = await client.request('/api/groups?side=offline', options);
         assert.equal(overview.status, 200);
-        const running = await client.request('/api/groups/running', options);
+        const running = await client.request('/api/groups?side=running', options);
         assert.equal(running.status, 200);
-        const row = [...overview.body.rows, ...running.body.rows].find(item => item.id === 'dashboard:' + active.draft.localId);
+        const row = [...overview.body.items, ...running.body.items].find(item => item.id === 'dashboard:' + active.draft.localId);
         assert.ok(row); assert.equal(row.flags.queued.count, 2);
-        const detail = await client.request('/api/groups/' + encodeURIComponent(row.id) + '?include=', options);
+        const detail = await client.request('/api/groups/' + encodeURIComponent(row.id), options);
         assert.equal(detail.status, 200); assert.ok(detail.body.state);
         assert.equal(detail.body.queue.pending.count, 2);
         assert.ok(detail.body.preview.text.length <= 80); assert.ok(detail.body.preview.text.includes('[REDACTED]'));
@@ -469,8 +467,8 @@ registerIntegrationCase('remote chat off, on and off enforces both direct and pr
         assert.ok(!running.text.includes(fakeCredential));
         const summary = await client.request('/api/groups/counts', options);
         assert.equal(summary.status, 200); assert.ok(summary.body.running);
-        const search = await client.request('/api/groups/search?q=' + active.draft.localId, options);
-        assert.equal(search.status, 200); assert.equal(search.body.rows.length, 1);
+        const search = await client.request('/api/groups?q=' + active.draft.localId, options);
+        assert.equal(search.status, 200); assert.equal(search.body.items.length, 1);
         assert.ok(!search.text.includes(fakeCredential));
         const activity = await client.request('/api/groups/activity?range=60m&ids=' + encodeURIComponent(row.id), options);
         assert.equal(activity.status, 200); assert.ok(activity.body.groups[row.id]);

@@ -156,10 +156,11 @@
           <h2 id="observer-title" data-i18n="observer.title">Terminal Observer</h2>
           <p id="observer-target"></p>
         </div>
-        <label class="wb-o-picker" id="observer-group-picker" hidden>
-          <span class="wb-vh" data-i18n="wb.observer.chooseGroup">Choose a running group</span>
+        <div class="wb-o-picker" id="observer-group-picker" hidden>
+          <label class="wb-vh" for="observer-group-select" data-i18n="wb.observer.chooseGroup">Choose a running group</label>
           <select class="wb-input" id="observer-group-select"></select>
-        </label>
+          <button class="wb-btn" id="observer-group-more" type="button" data-i18n="wb.groups.more" hidden>Load more groups</button>
+        </div>
         <p class="wb-note wb-o-scope" data-i18n="wb.observer.scope">One group at a time: switching groups reconnects.</p>
         <span class="wb-grow"></span>
         <button class="wb-btn wb-o-size-btn" id="observer-size-toggle" type="button" aria-controls="observer-size-form" aria-expanded="false"><span data-i18n="wb.observer.size">Size</span><span class="wb-o-size-now" id="observer-size-now"></span></button>

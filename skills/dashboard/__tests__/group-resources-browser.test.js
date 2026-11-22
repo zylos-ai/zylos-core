@@ -37,10 +37,31 @@ test('separate group and instance resources render across desktop and phone page
           if (evidence) await page.screenshot({ path: path.join(evidence, `${width}-${theme}-${name}.png`), fullPage: true });
         };
         try {
-          await page.goto(fixture.base + '/');
+          await page.goto(fixture.base + '/', { waitUntil: 'domcontentloaded' });
           await page.locator('#wb-board .wb-row').first().waitFor();
           assert.equal(await page.locator('#wb-board .wb-row').count(), 2);
           await shot('overview-running');
+          const isRunningPage = url => url.pathname === '/api/groups' && url.searchParams.get('side') === 'running';
+          const arriving = 'dashboard:browser-message';
+          const answerArrival = async route => {
+            const response = await route.fetch();
+            const value = await response.json();
+            const [origin, ...other] = value.items;
+            await route.fulfill({ response, json: { ...value, items: [origin, {
+              id: arriving, displayName: 'Group with a new message', channel: 'dashboard', state: { kind: 'idle' },
+              flags: {}, lastActivityAt: new Date().toISOString(),
+            }, ...other] } });
+          };
+          await page.route(isRunningPage, answerArrival);
+          await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+          const notice = page.getByRole('button', { name: '1 groups have new messages', exact: true });
+          await notice.waitFor();
+          assert.equal(await page.locator(`#wb-board .wb-row[data-group="${arriving}"]`).count(), 0);
+          await shot('overview-new-messages');
+          await notice.click();
+          await page.locator(`#wb-board .wb-row[data-group="${arriving}"]`).waitFor();
+          assert.equal(await notice.isVisible(), false);
+          await page.unroute(isRunningPage, answerArrival);
           await page.locator('#wb-host-open').click();
           await page.locator('.wb-host-body').waitFor();
           await shot('instance-resources');
@@ -49,12 +70,12 @@ test('separate group and instance resources render across desktop and phone page
           await page.waitForFunction(() => document.querySelectorAll('#wb-board .wb-row').length === 1);
           const heldRefresh = fixture.holdOffline();
           await heldRefresh.waiting;
-          await page.getByRole('button', { name: 'Load more offline groups', exact: true }).click();
+          await page.getByRole('button', { name: 'Load more groups', exact: true }).click();
           await page.waitForFunction(() => document.querySelectorAll('#wb-board .wb-row').length === 2);
           heldRefresh.release();
           await page.waitForTimeout(200);
           assert.equal(await page.locator('#wb-board .wb-row').count(), 2, 'the earlier first-page refresh cannot discard a loaded second page');
-          const nextRefresh = page.waitForResponse(response => new URL(response.url()).pathname === '/api/groups/offline' && !new URL(response.url()).searchParams.has('cursor'));
+          const nextRefresh = page.waitForResponse(response => new URL(response.url()).pathname === '/api/groups' && new URL(response.url()).searchParams.get('side') === 'offline' && !new URL(response.url()).searchParams.has('cursor'));
           await nextRefresh;
           await page.waitForFunction(() => document.querySelectorAll('#wb-board .wb-row').length === 2);
           await shot('overview-offline');

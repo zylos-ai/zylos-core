@@ -48,7 +48,7 @@ test('instance and group projections convert exact evidence fields while preserv
   assert.equal(projected.working.subagents.lastActivityAt, iso);
   assert.equal(projected.duration, 123);
   assert.equal(projected.preview.text, group.preview.text);
-  assert.equal(projectApiTimestamps('/api/groups/running', { readAt: at, rows: [group] }).rows[0].queue.pending.oldestAt, iso);
+  assert.equal(projectApiTimestamps('/api/groups', { readAt: at, items: [group] }).items[0].queue.pending.oldestAt, iso);
   assert.deepEqual(projectApiTimestamps('/api/groups/activity', { start: at, cellSeconds: 60, groups: { origin: { inbound: [at] } } }),
     { start: iso, cellSeconds: 60, groups: { origin: { inbound: [iso] } } });
 });

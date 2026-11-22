@@ -72,6 +72,13 @@ export async function runObserverBrowser(t, sandbox, signal) {
     value.rows[2] = { ...value.rows[2], sessionGroup: OTHER, name: null, presence: 'running', state: { kind: 'idle' }, live: { runId: 'run-lark', sessionId: 's2' }, launchConfig: { runtime: 'claude', mode: 'default' } };
     if (!groupCount) for (const row of value.rows) { row.presence = 'not_running'; row.live = null; row.state = { kind: 'offline' }; }
 
+    if (scenario === 'paged-targets' && p === '/api/groups' && url.searchParams.get('side') === 'running') {
+      const first = new URL(url);
+      first.searchParams.delete('cursor');
+      const result = workbenchSnapshotAnswer(first, value, now);
+      return url.searchParams.has('cursor') ? { ...result, items: result.items.slice(1), nextCursor: null }
+        : { ...result, items: result.items.slice(0, 1), nextCursor: 'more-targets' };
+    }
     return workbenchSnapshotAnswer(url, value, now);
   }
   const server = http.createServer((req, res) => {
@@ -177,15 +184,34 @@ export async function runObserverBrowser(t, sandbox, signal) {
     await page.locator(`[data-group="${GROUP}"]`).click();
     const button = page.locator(`button[data-observer-group="${GROUP}"]`); await button.waitFor({ state: 'visible' });
     await page.evaluate(() => { document.querySelector('#observer-tab').click = () => { throw new Error('Observer entry must activate the page directly'); }; });
-    const before = writes.length, groupReads = reads.filter(row => row.path === '/api/groups/running').length;
+    const before = writes.length, groupReads = reads.filter(row => row.path === '/api/groups').length;
     const detailReads = reads.filter(row => row.path === '/api/groups/' + encodeURIComponent(GROUP)).length;
     await button.click(); await page.waitForFunction(() => window.__observerSockets.length > 0);
     assert.equal(leaseWrites(before)[0].body.sessionGroup, GROUP);
-    assert.ok(reads.filter(row => row.path === '/api/groups/running').length > groupReads);
+    assert.ok(reads.filter(row => row.path === '/api/groups').length > groupReads);
     assert.equal(reads.filter(row => row.path === '/api/groups/' + encodeURIComponent(GROUP)).length, detailReads,
       'a selected running group is recognized by compact id without a redundant detail request');
     assert.equal(await page.locator('#observer-group-picker').isVisible(), false);
   });
+  scenario = 'paged-targets';
+  await step('the phone picker makes later running groups available on demand', async page => {
+    await openTab(page, 'observer');
+    const more = page.locator('#observer-group-more');
+    const selectGroup = page.locator('#observer-group-select');
+    await more.waitFor();
+    assert.equal(await selectGroup.locator(`option[value="${OTHER}"]`).count(), 0);
+    const cursorReads = () => reads.filter(row => row.scenario === 'paged-targets' && row.path === '/api/groups' &&
+      new URLSearchParams(row.search).get('cursor') === 'more-targets').length;
+    assert.equal(cursorReads(), 0);
+    await more.click();
+    await selectGroup.locator(`option[value="${OTHER}"]`).waitFor({ state: 'attached' });
+    assert.equal(cursorReads(), 1);
+    assert.equal(await more.isVisible(), false);
+    const before = writes.length;
+    await select(page, OTHER);
+    await until(() => leaseWrites(before).some(row => row.body.sessionGroup === OTHER), 'the selected later group receives its own lease');
+  }, 390);
+  scenario = 'normal';
   await step('selected offline observation hydrates canonical detail and retains its history target', async page => {
     await page.locator('.wb-group-sides > button').nth(1).click();
     await page.locator('#wb-board [data-group="origin"]').click();

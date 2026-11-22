@@ -942,6 +942,11 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
       }));
       return;
     }
+    if (req.url === '/api/instance') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ versions: { zylos: { installed: '1.0.0-beta.16' } } }));
+      return;
+    }
     if (req.url === '/api/groups/origin/actions/interrupt' || req.url === '/api/groups/origin/actions/chop-chop') {
       actionHits += 1;
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -1696,7 +1701,7 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
     if (isObjectApi(req.url)) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(await objectResponse(req.url, { working: 1,
-        instance: { agent: { name: 'masked zylos_ak_...abcd in identity text' }, versions: { zylos: { installed: '0.3.0', latest: '0.4.0', update: '0.4.0' } } },
+        instance: { agent: { name: 'masked zylos_ak_...abcd in identity text' }, versions: { zylos: { installed: '1.0.0-beta.16', latest: '1.0.0', update: '1.0.0' } } },
         rows: [{ id: 'origin', displayName: 'Origin', runtime: 'claude', model: null, state: { kind: 'working' }, flags: { blocked: { reason: 'auth_failed' } } }],
       }).text());
       return;

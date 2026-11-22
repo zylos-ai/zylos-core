@@ -6,7 +6,7 @@ export function createBoardSearch({ fetchRows, onRows, onClear, onError,
   let timer, query = '';
   return {
     input(value) {
-      query = value.trim();
+      query = value.trim().slice(0, 64);
       clearTimer(timer);
       const gen = guard.next();
       if (!query) {
@@ -16,7 +16,7 @@ export function createBoardSearch({ fetchRows, onRows, onClear, onError,
       timer = setTimer(async () => {
         try {
           const result = await fetchRows(query);
-          if (guard.current(gen)) onRows(result.rows ?? []);
+          if (guard.current(gen)) onRows(result.rows ?? [], result.nextCursor ?? null);
         } catch (error) {
           if (guard.current(gen)) onError(error);
         }

@@ -42,7 +42,7 @@ async function startPage(sandbox) {
   const conversation = id => ({ id, localId: 'working-browser', sessionGroup: id === OTHER_ID ? OTHER : group(), channel: id === OTHER_ID ? 'telegram' : 'dashboard', state: 'active', origin: id === ORIGIN_ID, displayName: id === OTHER_ID ? '外部会话' : title });
   const answer = url => {
     const p = url.pathname;
-    if (['/api/groups/running', '/api/groups/offline', '/api/groups/counts'].includes(p) || /^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'counts', 'offline'].includes(p.split('/').at(-1)) || p === '/api/instance') { if (p === '/api/groups/' + encodeURIComponent(group())) counts.groups++; return workbenchSnapshotAnswer(url, snapshot(url), NOW); }
+    if (['/api/groups', '/api/groups/counts'].includes(p) || /^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'counts', 'offline'].includes(p.split('/').at(-1)) || p === '/api/instance') { if (p === '/api/groups/' + encodeURIComponent(group())) counts.groups++; return workbenchSnapshotAnswer(url, snapshot(url), NOW); }
     if (p === '/api/chat/conversations') {
       const external = url.searchParams.get('tab') === 'external';
       return { items: [{ ...conversation(external ? OTHER_ID : activeId()), session_group: external ? OTHER : group(), display_name: external ? '外部会话' : title }], nextCursor: null, tz: 'UTC' };

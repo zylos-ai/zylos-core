@@ -103,7 +103,7 @@ test('workbench HTTP routes retain read authentication, method guards and source
   const token = `zylos_st_${'b'.repeat(64)}`, key = engine.store.insertApiKey({ name: 'fixture-read', keyHash: hashApiKey(`zylos_ak_${'c'.repeat(64)}`), scope: 'read' });
   engine.store.insertApiSession({ apiKeyId: Number(key.lastInsertRowid), tokenHash: crypto.createHash('sha256').update(token).digest('hex'), createdAt: Date.now(), scope: 'read', expiresAt: Date.now() + 60000 });
   const request = (route, options = {}) => fetch(origin + route, { signal: AbortSignal.timeout(3000), headers: { Authorization: `Bearer ${token}` }, ...options });
-  for (const route of ['/api/groups/running', '/api/groups/search?q=', '/api/groups/activity?range=60m&ids=telegram%3Aa', '/api/groups/telegram%3Aa']) {
+  for (const route of ['/api/groups?side=running', '/api/groups?q=', '/api/groups/activity?range=60m&ids=telegram%3Aa', '/api/groups/telegram%3Aa']) {
     assert.equal((await request(route, { headers: {} })).status, 401, route);
     assert.equal((await request(route, { method: 'POST' })).status, 403, route);
   }
@@ -116,10 +116,10 @@ test('workbench HTTP routes retain read authentication, method guards and source
     const response = await request('/api/groups/activity' + query + '&ids=telegram%3Aa');
     assert.equal(response.status, 400); assert.equal((await response.json()).error.code, 'invalid_range');
   }
-  const empty = await request('/api/groups/search?q=');
-  assert.equal(empty.status, 200); assert.deepEqual(await empty.json(), { rows: [], truncated: false });
+  const empty = await request('/api/groups?q=');
+  assert.equal(empty.status, 200); assert.ok((await empty.json()).items.some(row => row.id === 'telegram:a'));
   // The server dispatches the per-group stored-message read; the fixture has no stored message for the group.
-  const stored = await request('/api/groups/telegram%3Aa');
+  const stored = await request('/api/groups/telegram%3Aa?include=raw');
   assert.equal(stored.status, 200);
   assert.equal((await service.getSnapshot()).sources.status.ok, true, 'the injected shared batch reaches status projection');
   const detail = await stored.json(); assert.equal(detail.raw, null); assert.equal(detail.id, 'telegram:a');
@@ -135,11 +135,11 @@ test('workbench HTTP routes retain read authentication, method guards and source
   await collectPm2(); assert.equal(service.channelRestartCounter.get('zylos-telegram', clock), 0);
   assert.equal(engine._state.pm2, collector.getLatestPM2Data());
   clock += 2100;
-  await request('/api/groups/running');
+  await request('/api/groups?side=running');
   assert.equal((await (await request('/api/instance')).json()).services.channels.find(row => row.channel === 'telegram').restarts10m, 0);
   restarts = 15;
   await collectPm2(); clock += 2100;
-  await request('/api/groups/running');
+  await request('/api/groups?side=running');
   assert.equal((await (await request('/api/instance')).json()).services.channels.find(row => row.channel === 'telegram').restarts10m, 3);
   // Counter failure must not suppress the existing PM2 state callback.
   const realUpdate = service.channelRestartCounter.update;
@@ -149,8 +149,8 @@ test('workbench HTTP routes retain read authentication, method guards and source
   assert.equal(engine._state.pm2, data);
   service.channelRestartCounter.update = realUpdate;
   failSearch = true; clock += 2100;
-  const failedSearch = await request('/api/groups/search?q=telegram');
-  assert.equal(failedSearch.status, 502); assert.equal((await failedSearch.json()).error.code, 'GROUP_CATALOG_UNREADABLE');
+  const failedSearch = await request('/api/groups?q=telegram');
+  assert.equal(failedSearch.status, 503); assert.equal((await failedSearch.json()).error.code, 'unavailable');
   failSearch = false; clock += 2100;
   for (const [index, event_type] of ['user_prompt_submit', 'stop'].entries()) assert.equal(engine.store.insertEvent({
     id: `inbound-fixture-${index}`, ingest_id: `inbound-fixture:${index}`, timestamp: new Date(clock - 1000 + index * 500).toISOString(),
@@ -174,7 +174,7 @@ test('workbench HTTP routes retain read authentication, method guards and source
   const realQuery = engine.store.queryEvents;
   engine.store.queryEvents = () => { throw new Error('private storage details'); };
   clock += 2100;
-  const unexpected = await request('/api/groups/running');
+  const unexpected = await request('/api/groups?side=running');
   assert.equal(unexpected.status, 500); assert.deepEqual(await unexpected.json(), { ok: false, error: { code: 'internal_error', message: 'Request failed' } });
   engine.store.queryEvents = realQuery;
   assert.equal(childCalls.every(([, args]) => args.length === 1 && args[0] === '--version'), true);

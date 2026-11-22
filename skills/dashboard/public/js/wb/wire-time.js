@@ -91,6 +91,7 @@ export function projectApiTimestamps(pathname, value) {
   if (pathname === '/api/instance') return project(value, INSTANCE);
   if (pathname === '/api/health') return project(value, ms('startedAt', 'source.*.*.updated_at'));
   if (pathname === '/api/groups/activity') return project(value, ms('start', 'groups.*.inbound.*'));
+  if (pathname === '/api/groups') return project(value, [...ms('readAt'), ...beneath('items.*', GROUP)]);
   if (pathname.startsWith('/api/groups/')) {
     return project(value, [...GROUP, ...beneath('rows.*', GROUP), ...beneath('group', GROUP), ...EVENTS,
       ...ms('messages.*.timestamp', 'runs.*.startAt', 'runs.*.endAt', 'firstAt', 'data.updatedAt')]);

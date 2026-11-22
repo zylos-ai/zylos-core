@@ -1,5 +1,9 @@
 import { agentColor } from './agent-color.js';
 import { sanitizeFleetGroupSummary, fleetGroupSummary } from './workbench/fleet-summary.js';
+import { compareVersions } from './version-utils.js';
+
+// Hub pages use the peer's list APIs through the Fleet proxy.
+const MINIMUM_LIST_API_VERSION = '1.0.0-beta.16';
 
 const DEFAULT_POLL_INTERVAL_MS = 3000;
 const DEFAULT_TIMEOUT_MS = 2500;
@@ -213,6 +217,7 @@ function classifyHttpStatus(resp, { tokenEndpoint = false } = {}) {
 function reasonError(reason) {
   const err = new Error(reason);
   err.reason = reason;
+  if (reason === 'version_unsupported') err.status = 502;
   return err;
 }
 
@@ -406,10 +411,12 @@ export class FleetPoller {
     this.running = true;
     this._startSelfHealWatchdog();
     if (this.agents.length === 0) return;
-    for (const agent of this.agents) this._startLatencyProbe(agent);
     this.pollOnce().finally(() => {
       if (!this.running) return;
-      for (const agent of this.agents) this._connectSse(agent);
+      for (const agent of this.agents) {
+        this._startLatencyProbe(agent);
+        this._connectSse(agent);
+      }
     });
   }
 
@@ -463,9 +470,11 @@ export class FleetPoller {
       this.running = true;
       this._startSelfHealWatchdog();
     }
-    this._startLatencyProbe(normalized);
-    this._pollAgentAndNotify(normalized);
-    this._connectSse(normalized);
+    this._pollAgentAndNotify(normalized).finally(() => {
+      if (!this.running || !this._isCurrentAgent(normalized)) return;
+      this._startLatencyProbe(normalized);
+      this._connectSse(normalized);
+    });
     this.onPoll?.(this.getFleet());
   }
 
@@ -551,7 +560,44 @@ export class FleetPoller {
       err.status = 404;
       throw err;
     }
-    return this._ensureToken(agent, { force: Boolean(options.force) });
+    return this._getCompatibleToken(agent, { force: Boolean(options.force), recheck: Boolean(options.recheck) });
+  }
+
+  async _getCompatibleToken(agent, { force = false, recheck = false } = {}) {
+    const generation = this._agentGeneration(agent);
+    const ensureCurrent = () => {
+      if (!this._isCurrentAgent(agent, generation)) throw Object.assign(reasonError('unknown_agent'), { status: 404 });
+    };
+    let token = await this._ensureToken(agent, { force });
+    ensureCurrent();
+    let cached = this.tokens.get(agent.name);
+    if (cached?.token === token && cached.listApiSupported !== undefined) {
+      if (!cached.listApiSupported) throw reasonError('version_unsupported');
+      if (!recheck) return token;
+    }
+
+    let response = await this._fetchObject(agent, token, '/api/instance');
+    if (response.status === 401 && !force) {
+      ensureCurrent();
+      token = await this._ensureToken(agent, { force: true });
+      ensureCurrent();
+      cached = this.tokens.get(agent.name);
+      response = await this._fetchObject(agent, token, '/api/instance');
+    }
+    if (!response.ok && response.status !== 404) {
+      throw Object.assign(reasonError(classifyHttpStatus(response)), { status: response.status });
+    }
+    try {
+      await this._readSupportedInstance(agent, response, cached?.token === token ? cached : null);
+    } catch (error) {
+      if (this._isCurrentAgent(agent, generation) && error.reason === 'version_unsupported') {
+        this._setFailure(agent, error.reason);
+        this.onPoll?.(this.getFleet());
+      }
+      throw error;
+    }
+    ensureCurrent();
+    return token;
   }
 
   _agentGeneration(agent) {
@@ -688,9 +734,8 @@ export class FleetPoller {
     }
 
     if (!resp.ok) {
-      const err = new Error(classifyHttpStatus(resp, { tokenEndpoint: true }));
-      err.reason = classifyHttpStatus(resp, { tokenEndpoint: true });
-      err.status = resp.status;
+      const err = reasonError(classifyHttpStatus(resp, { tokenEndpoint: true }));
+      err.status ??= resp.status;
       throw err;
     }
 
@@ -748,32 +793,73 @@ export class FleetPoller {
     this.onPoll?.(this.getFleet());
   }
 
+  _fetchObject(agent, token, apiPath) {
+    return fetchWithTimeout(this.fetch, joinUrl(agent.base_url, apiPath), {
+      method: 'GET', headers: { Authorization: `Bearer ${token}` }
+    }, this.timeoutMs);
+  }
+
+  async _readSupportedInstance(agent, response, cached) {
+    const instance = response.ok ? await response.json().catch(() => null) : null;
+    const comparison = compareVersions(instance?.versions?.zylos?.installed, MINIMUM_LIST_API_VERSION, { prerelease: true });
+    const supported = comparison !== null && comparison >= 0;
+    if (cached && this.tokens.get(agent.name) === cached) cached.listApiSupported = supported;
+    if (!supported) throw reasonError('version_unsupported');
+    return instance;
+  }
+
+  async _readGroupPages(agent, token, path, first, generation) {
+    let items = [];
+    let response = first;
+    const visited = new Set();
+    let restarted = false;
+    while (this._isCurrentAgent(agent, generation)) {
+      const page = await readJsonOrBadPayload(response);
+      if (!response.ok) {
+        if (response.status !== 400 || page?.error?.code !== 'invalid_cursor' || !visited.size || restarted) {
+          throw reasonError(classifyHttpStatus(response));
+        }
+        items = [];
+        visited.clear();
+        restarted = true;
+        response = await this._fetchObject(agent, token, path);
+        continue;
+      }
+      if (!Array.isArray(page?.items)) throw reasonError('bad_payload');
+      items.push(...page.items);
+      const cursor = page.nextCursor;
+      if (cursor == null) return items;
+      if (typeof cursor !== 'string' || !cursor || visited.has(cursor)) throw reasonError('bad_payload');
+      visited.add(cursor);
+      if (this._isCurrentAgent(agent, generation)) {
+        response = await this._fetchObject(agent, token, `${path}&cursor=${encodeURIComponent(cursor)}`);
+      }
+    }
+    return items;
+  }
+
   async _fetchState(agent, token) {
-    const responses = await Promise.all(['/api/instance', '/api/groups/counts', '/api/usage/summary', '/api/groups/running'].map(apiPath =>
-      fetchWithTimeout(this.fetch, joinUrl(agent.base_url, apiPath), {
-        method: 'GET', headers: { Authorization: `Bearer ${token}` }
-      }, this.timeoutMs)));
+    const generation = this._agentGeneration(agent);
+    const cached = this.tokens.get(agent.name);
+    const instanceResponse = await this._fetchObject(agent, token, '/api/instance');
+    if (!instanceResponse.ok && instanceResponse.status !== 404) return instanceResponse;
+    const instance = await this._readSupportedInstance(agent, instanceResponse, cached?.token === token ? cached : null);
+    if (!this._isCurrentAgent(agent, generation)) throw reasonError('unknown_agent');
+    const runningPath = '/api/groups?side=running';
+    const responses = await Promise.all(['/api/groups/counts', '/api/usage/summary', runningPath].map(apiPath =>
+      this._fetchObject(agent, token, apiPath)));
     const failed = responses.find(response => !response.ok);
     if (failed) return failed;
-    const [instance, counts, usage, running] = await Promise.all(responses.map(response => readJsonOrBadPayload(response)));
-    if (running && counts?.offline?.startFailed > 0) {
+    const [counts, usage, rows] = await Promise.all([
+      ...responses.slice(0, 2).map(response => readJsonOrBadPayload(response)),
+      this._readGroupPages(agent, token, runningPath, responses[2], generation),
+    ]);
+    const running = { rows };
+    if (counts?.offline?.startFailed > 0 && this._isCurrentAgent(agent, generation)) {
       try {
-        const failedRows = [], visited = new Set();
-        let cursor = null;
-        do {
-          const apiPath = '/api/groups/offline?flag=startFailed' + (cursor == null ? '' : '&cursor=' + encodeURIComponent(cursor));
-          const response = await fetchWithTimeout(this.fetch, joinUrl(agent.base_url, apiPath), {
-            method: 'GET', headers: { Authorization: `Bearer ${token}` }
-          }, this.timeoutMs);
-          if (!response.ok) throw reasonError('bad_payload');
-          const page = await readJsonOrBadPayload(response);
-          if (!Array.isArray(page.rows)) throw reasonError('bad_payload');
-          failedRows.push(...page.rows);
-          cursor = page.nextCursor ?? null;
-          if (cursor !== null && visited.has(cursor)) throw reasonError('bad_payload');
-          if (cursor !== null) visited.add(cursor);
-        } while (cursor !== null);
-        running.failedRows = failedRows;
+        const failedPath = '/api/groups?side=offline&flag=startFailed';
+        const first = await this._fetchObject(agent, token, failedPath);
+        running.failedRows = await this._readGroupPages(agent, token, failedPath, first, generation);
       } catch { running.attentionFailures = [...(running.attentionFailures ?? []), 'offline_start_failed']; }
     }
     const state = fleetStateFromObjects(instance, counts, usage, running);
@@ -808,13 +894,15 @@ export class FleetPoller {
   async _probeAgentLatency(agent) {
     const generation = this._agentGeneration(agent);
     const state = this._latencyState(agent);
-    const startedAtMs = this.now();
     try {
+      await this._getCompatibleToken(agent);
+      if (!this._isCurrentAgent(agent, generation)) return;
+      const startedAtMs = this.now();
       let resp = await this._fetchHealth(agent, `Bearer ${agent.read_api_key}`);
       if (!this._isCurrentAgent(agent, generation)) return;
       if (resp.status === 401 || resp.status === 403) {
         this.tokens.delete(agent.name);
-        const token = await this._ensureToken(agent, { force: true });
+        const token = await this._getCompatibleToken(agent, { force: true });
         if (!this._isCurrentAgent(agent, generation)) return;
         resp = await this._fetchHealth(agent, `Bearer ${token}`);
       }
@@ -836,7 +924,7 @@ export class FleetPoller {
       state.consecutiveFailures = 0;
       state.failureReason = null;
     } catch (err) {
-      if (!this._isCurrentAgent(agent, generation)) return;
+      if (!this._isCurrentAgent(agent, generation) || err?.reason === 'version_unsupported') return;
       state.samples.push({ latencyMs: null, sampledAtMs: this.now() });
       if (state.samples.length > LATENCY_SAMPLE_LIMIT) {
         state.samples.splice(0, state.samples.length - LATENCY_SAMPLE_LIMIT);
@@ -906,14 +994,16 @@ export class FleetPoller {
 
   async _runSse(agent, stream, signal) {
     const generation = this._agentGeneration(agent);
-    let token = await this._ensureToken(agent);
+    let token = await this._getCompatibleToken(agent, { recheck: true });
     if (!this._isCurrentAgent(agent, generation, stream)) return;
+    signal.throwIfAborted();
     let resp = await this._fetchStream(agent, token, signal);
     if (!this._isCurrentAgent(agent, generation, stream)) return;
     if (resp.status === 401) {
       this.tokens.delete(agent.name);
-      token = await this._ensureToken(agent, { force: true });
+      token = await this._getCompatibleToken(agent, { force: true });
       if (!this._isCurrentAgent(agent, generation, stream)) return;
+      signal.throwIfAborted();
       resp = await this._fetchStream(agent, token, signal);
       if (!this._isCurrentAgent(agent, generation, stream)) return;
     }
@@ -931,14 +1021,18 @@ export class FleetPoller {
     this._stopFallbackPolling(agent, 'sse-takeover');
     stream.backoffMs = this.reconnectBaseMs;
     stream.seenFleetState = false;
-    await this._pollAgentAndNotify(agent);
-    if (stream.compatibilityTimer) this.clearTimeout(stream.compatibilityTimer);
-    stream.compatibilityTimer = this.setTimeout(() => {
-      const current = this.streams.get(agent.name);
-      if (this.running && current === stream && !current.seenFleetState) this._startFallbackPolling(agent, 'compatibility-timer');
-    }, this.pollIntervalMs);
-    stream.compatibilityTimer.unref?.();
     try {
+      await this._pollAgentAndNotify(agent);
+      if (signal.aborted) {
+        await resp.body.cancel().catch(() => {});
+        return;
+      }
+      if (stream.compatibilityTimer) this.clearTimeout(stream.compatibilityTimer);
+      stream.compatibilityTimer = this.setTimeout(() => {
+        const current = this.streams.get(agent.name);
+        if (this.running && current === stream && !current.seenFleetState) this._startFallbackPolling(agent, 'compatibility-timer');
+      }, this.pollIntervalMs);
+      stream.compatibilityTimer.unref?.();
       await this._readSseBody(agent, stream, resp.body, signal);
     } finally {
       stream.reading = false;
@@ -1048,6 +1142,12 @@ export class FleetPoller {
   }
 
   _setFailure(agent, reason) {
+    const stream = this.streams.get(agent.name);
+    if (reason === 'version_unsupported' && stream?.reading) {
+      stream.controller?.abort();
+      this._startFallbackPolling(agent, reason);
+      this._scheduleReconnect(agent);
+    }
     const existing = this.records.get(agent.name) || {};
     const color = agentColor(agent.name);
     this.records.set(agent.name, sanitizeRecord({

@@ -1,3 +1,4 @@
+import { groupDetailPath } from './group-data.js';
 import { instantMs, conversationStampMs, activityTimes } from './api-time.js';
 import { parseC4Content, evaluateFormState } from '../../chat-schema.js';
 import { messageState } from './chat-delivery-state.js';
@@ -894,7 +895,7 @@ export function createConversationState({
     const stillCurrent = () => valid(e) && navigation === selectedVersion && version === current.groupPresenceVersion;
     record.promise = (async () => {
       try {
-        const data = await request('/api/groups/' + encodeURIComponent(sessionGroup) + '?include=', { signal: record.controller.signal });
+        const data = await request(groupDetailPath(sessionGroup), { signal: record.controller.signal });
         if (!stillCurrent()) return;
         const origin = sessionGroup === 'origin';
         const group = data;

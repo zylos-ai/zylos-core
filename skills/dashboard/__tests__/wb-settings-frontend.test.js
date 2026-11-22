@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } from '../public/js/wb/settings.js';
-import { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults as renderDefaultsCard, renderHotTtl, modelSaveConfirmation } from '../public/js/wb/settings-defaults.js';
+import { runtimeHealth, runtimeSaveConfirmation, renderDefaults as renderDefaultsCard, renderHotTtl, modelSaveConfirmation } from '../public/js/wb/settings-defaults.js';
 import { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, orderedPricePrefixes } from '../public/js/wb/settings-pricing.js';
 import { keyActionConfirmation, remoteStatus, renderKeyTable, renderRemoteAgents } from '../public/js/wb/settings-access.js';
 import { mountLanguageControl, mountThemeControl } from '../public/js/wb/settings-ui.js';
@@ -19,56 +19,167 @@ function snapshot() {
     rows: ['origin', 'a', 'b', 'c'].map(sessionGroup => ({ sessionGroup, presence: 'running', name: { displayName: 'Name ' + sessionGroup }, target: { runtime: sessionGroup === 'a' ? 'codex' : 'claude' } })) };
 }
 
-const renderDefaults = (root, options) => renderDefaultsCard(root, { readSnapshot: async () => options.snapshot, ...options });
+function groupPage(items, total = items.length, nextCursor = null) {
+  return { items, total, nextCursor, listKnown: true };
+}
 
-test('default lists use independent sources, include Origin, and never enumerate all overrides', () => {
-  const data = snapshot(), value = defaultGroups(data, { runtimeTotal: 3, runtime: [] });
-  assert.equal(value.followers.length, 3); assert.equal(value.total, 3); assert.equal(value.flat.length, 1); assert.equal(value.older, true);
-  assert.equal(defaultGroups(data, { runtimeTotal: 1 }).older, false);
-  assert.equal(defaultGroups({ ...data, hasOlder: null }, { runtimeTotal: 3 }).older, false);
-  assert.equal(defaultGroups({ ...data, rows: [{ presence: 'running' }], hasOlder: null }, { runtimeTotal: 3 }).flat.length, 0);
-  const failed = defaultGroups({ ...data, overrides: null }, { runtimeTotal: 3 });
-  assert.equal(failed.followers, null); assert.equal(failed.flat.length, 0); assert.equal(failed.total, 3); assert.equal(failed.older, false);
-  const pageFailed = defaultGroups(data, null); assert.equal(pageFailed.followers.length, 3); assert.equal(pageFailed.flat.length, 1); assert.equal(pageFailed.total, null); assert.equal(pageFailed.older, false);
-  assert.equal(defaultGroups({ ...data, baselineRuntime: null }, null).baseline, null);
-  assert.equal(modelFollowers(data, 'claude').length, 2); assert.equal(modelFollowers({ ...data, overrides: null }, 'claude'), null);
-});
+function renderDefaults(root, { snapshot: data = snapshot(), groupCounts, read, ...options }) {
+  const rows = data.rows.map(row => ({ ...row, id: row.sessionGroup, displayName: row.name?.displayName, runtime: row.target?.runtime }));
+  const followers = rows.filter(row => row.presence === 'running' && !data.overrides?.runtime.find(value => value.sessionGroup === row.id));
+  const models = runtime => rows.filter(row => row.presence === 'running' && row.runtime === runtime &&
+    !data.overrides?.model.some(value => value.sessionGroup === row.id && value.runtime === runtime));
+  const instance = { ...data.instance, default_runtime: data.baselineRuntime };
+  return renderDefaultsCard(root, {
+    instance,
+    groupCounts: groupCounts ?? { followers: data.overrides == null ? null : followers.length, overrides: data.overrides?.runtime.length ?? null,
+      models: { claude: models('claude').length, codex: models('codex').length } },
+    read: async path => {
+      const url = new URL(path, 'http://fixture');
+      if (url.pathname === '/api/groups') {
+        const query = url.searchParams;
+        if (data.overrides == null) return { ...groupPage([]), listKnown: false };
+        const matching = query.has('modelOverridden') ? models(query.get('runtime')) : followers;
+        return groupPage(matching.slice(0, Number(query.get('limit'))), matching.length);
+      }
+      return read?.(path);
+    },
+    ...options,
+  });
+}
 
 test('runtime health and interruption confirmation retain unknown and unavailable distinctions', () => {
-  const data = snapshot(); assert.equal(runtimeHealth(data, 'claude'), 'available'); assert.equal(runtimeHealth(data, 'codex'), 'unavailable');
-  assert.equal(runtimeHealth({ instance: { runtimeHealth: null } }, 'codex'), 'unknown');
-  assert.match(runtimeConfirmation(data, t), /Name origin/); assert.doesNotMatch(runtimeConfirmation(data, t), /Name a\n/);
-  assert.match(runtimeConfirmation({ ...data, overrides: null }, t), /cannotList/);
-  assert.match(runtimeConfirmation({ ...data, listKnown: false, rows: [] }, t), /cannotList/);
-  const many = { ...data, overrides: { runtime: [] }, rows: Array.from({ length: 8 }, (_, i) => ({ sessionGroup: String(i), presence: 'running', name: { displayName: 'Group ' + i } })) };
-  const text = runtimeConfirmation(many, t); assert.match(text, /Group 4/); assert.doesNotMatch(text, /Group 5/); assert.match(text, /moreGroups.*8/);
+  const { instance } = snapshot();
+  assert.equal(runtimeHealth(instance, 'claude'), 'available');
+  assert.equal(runtimeHealth(instance, 'codex'), 'unavailable');
+  assert.equal(runtimeHealth({ runtimeHealth: null }, 'codex'), 'unknown');
+  const items = Array.from({ length: 5 }, (_, i) => ({ id: 'group:' + i, displayName: 'Group ' + i }));
+  const confirmation = runtimeSaveConfirmation('codex', groupPage(items, 8), t);
+  assert.match(confirmation, /Group 4/);
+  assert.doesNotMatch(confirmation, /Group 5/);
+  assert.match(confirmation, /moreGroups.*8/);
+  assert.match(runtimeSaveConfirmation('codex', null, t), /cannotList/);
+  assert.match(runtimeSaveConfirmation('codex', { ...groupPage(items, 8), listKnown: false }, t), /cannotList/);
 });
 
-test('override search shares search and more generations and ignores late responses after clear', async () => {
-  let fire; const reads = [], changes = [];
-  const search = createOverrideSearch({ read: path => { const result = deferred(); reads.push({ path, ...result }); return result.promise; }, onChange: value => changes.push(value), setTimer: fn => { fire = fn; return 1; }, clearTimer() {} });
-  search.input('AbC'); fire(); assert.equal(reads.length, 1); assert.match(reads[0].path, /q=AbC/);
-  search.input('竞品'); fire(); reads[1].resolve({ runtime: [{ sessionGroup: 'new' }], nextAfter: 'next' }); await tick();
-  reads[0].resolve({ runtime: [{ sessionGroup: 'old' }] }); await tick(); assert.equal(changes.at(-1).rows[0].sessionGroup, 'new');
-  const more = search.more(); assert.match(reads[2].path, /after=next/); assert.match(reads[2].path, /q=/);
-  search.input(''); assert.equal(reads.length, 3); assert.equal(changes.at(-1), null);
-  reads[2].resolve({ runtime: [{ sessionGroup: 'late' }] }); await more; assert.equal(changes.at(-1), null);
-  search.destroy();
-});
-
-test('override search appends one batch and reports read failures without replacing prior results', async () => {
-  let fire, calls = 0; const changes = [];
-  const search = createOverrideSearch({ read: async () => { calls++; if (calls === 1) return { runtime: [{ sessionGroup: 'one' }], nextAfter: 'one' }; if (calls === 2) return { runtime: [{ sessionGroup: 'two' }], nextAfter: 'two' }; throw Error('502'); }, onChange: value => changes.push(value), setTimer: fn => { fire = fn; return 1; }, clearTimer() {} });
-  search.input('oc_'); await fire(); await search.more(); assert.equal(changes.at(-1).rows.length, 2); await search.more(); assert.equal(changes.at(-1).rows.length, 2); assert.equal(changes.at(-1).error.message, '502'); search.destroy();
-});
-
-test('settings loader reads one group snapshot and one first batch on each open and invalidates stale opens', async () => {
+test('settings opens with filtered totals and invalidates stale opens', async () => {
   const paths = [], loads = [], pending = [];
-  const loader = createSettingsLoader({ read: path => { paths.push(path); const item = deferred(); pending.push(item); return item.promise; }, onLoad: value => loads.push(value) });
-  const first = loader.open(); assert.equal(paths.filter(path => path === '/api/groups/running').length, 1); assert.equal(paths.filter(path => path === '/api/groups/runtime-overrides').length, 1);
-  loader.invalidate(); pending.forEach(item => item.resolve({ runtimeTotal: 100000, runtime: [], nextAfter: 'next' })); await first; assert.equal(loads.length, 0);
-  const second = loader.open(); pending.slice(8).forEach(item => item.resolve({ runtimeTotal: 100000, runtime: [], nextAfter: 'next' })); await second;
-  assert.equal(loads.length, 1); assert.equal(paths.length, 16); assert.equal(paths.some(path => path.includes('after=')), false);
+  const loader = createSettingsLoader({ read: path => {
+    paths.push(path); const item = deferred(); pending.push(item); return item.promise;
+  }, onLoad: value => loads.push(value) });
+  const first = loader.open();
+  const expected = [
+    'side=running&runtimeOverridden=false', 'runtimeOverridden=true',
+    'side=running&runtime=claude&modelOverridden=false', 'side=running&runtime=codex&modelOverridden=false',
+    'side=running&runtime=claude', 'side=running&runtime=codex',
+  ].map(filter => '/api/groups?' + filter + '&limit=1&include=total');
+  assert.deepEqual(paths.filter(path => path.startsWith('/api/groups')), expected);
+  loader.invalidate();
+  pending.forEach(item => item.resolve(groupPage([], 100000)));
+  await first;
+  assert.equal(loads.length, 0);
+  const second = loader.open();
+  pending.slice(11).forEach((item, index) => item.resolve(index === 0 ? { default_runtime: 'claude' }
+    : { ...groupPage([], index), listKnown: index !== 8 }));
+  await second;
+  assert.equal(loads.length, 1);
+  assert.equal(paths.length, 22);
+  assert.equal(loads[0].instance.default_runtime, 'claude');
+  assert.deepEqual(loads[0].groupCounts, { followers: 5, overrides: 6, models: { claude: 7, codex: null }, pricing: { claude: 9, codex: 10 } });
+});
+
+test('folded override rows load on demand, reuse previous cursors and recover after a restart', async () => {
+  const document = documentFixture(), root = node(document, 'div'), reads = [], opened = [];
+  const overrider = n => ({ id: 'group:' + n, displayName: 'Group ' + n, runtime: 'codex' });
+  const items = Array.from({ length: 25 }, (_, index) => overrider(index + 1));
+  let restarted = false;
+  const panel = renderDefaultsCard(root, {
+    document, t, groupCounts: { followers: 0, overrides: 25 }, onGroup: id => opened.push(id),
+    read: async path => {
+      const query = new URL(path, 'http://fixture').searchParams;
+      assert.equal(query.get('runtimeOverridden'), 'true');
+      assert.equal(query.get('limit'), '8');
+      const cursor = query.get('cursor');
+      assert.equal(query.get('include'), cursor == null ? 'total' : null);
+      reads.push(cursor);
+      if (restarted && cursor != null) throw Object.assign(Error('restarted'), { code: 'invalid_cursor' });
+      const start = Number(cursor);
+      const page = groupPage(items.slice(start, start + 8), 25, start < 24 ? String(start + 8) : null);
+      if (cursor != null) delete page.total;
+      return page;
+    },
+  });
+  try {
+    const details = root.querySelector('.wb-glist'), first = () => details.querySelector('.wb-gl-row').textContent;
+    const previous = details.querySelector('.wb-plist-prev'), next = details.querySelector('.wb-plist-next');
+    const page = () => details.querySelector('.wb-plist-at').textContent;
+    assert.equal(reads.length, 0);
+    assert.equal(details.querySelectorAll('.wb-gl-row').length, 0);
+    details.open = true; await details.dispatch('toggle');
+    assert.equal(details.querySelectorAll('.wb-gl-row').length, 8);
+    assert.equal(page(), t('wb.list.page', { page: 1, pages: 4 }));
+    await next.dispatch('click'); await tick();
+    assert.equal(first(), 'Group 9Codex');
+    await next.dispatch('click'); await tick();
+    await previous.dispatch('click'); await tick();
+    assert.equal(page(), t('wb.list.page', { page: 2, pages: 4 }));
+    assert.deepEqual(reads, [null, '8', '16', '8']);
+    await next.dispatch('click'); await tick();
+    await next.dispatch('click'); await tick();
+    assert.equal(details.querySelectorAll('.wb-gl-row').length, 1);
+    await details.querySelector('.wb-gl-row').dispatch('click');
+    assert.deepEqual(opened, ['group:25']);
+    assert.equal(page(), t('wb.list.page', { page: 4, pages: 4 }));
+    // The previous-page cursor was issued before Dashboard restarted.
+    restarted = true;
+    let before = reads.length;
+    await previous.dispatch('click'); await tick();
+    assert.deepEqual(reads.slice(before), ['16', null]);
+    assert.equal(page(), t('wb.list.page', { page: 1, pages: 4 }));
+    before = reads.length;
+    details.open = false; await details.dispatch('toggle');
+    assert.equal(reads.length, before);
+    details.open = true; await details.dispatch('toggle');
+    assert.deepEqual(reads.slice(before), [null]);
+  } finally { panel.destroy(); }
+});
+
+test('group search debounces server requests and discards a late response after the query changes', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const document = documentFixture(), root = node(document, 'div'), reads = [], late = deferred();
+  const panel = renderDefaultsCard(root, {
+    document, t, groupCounts: { followers: 17, overrides: 0 },
+    read: async path => {
+      const query = new URL(path, 'http://fixture').searchParams;
+      reads.push(query.get('q'));
+      if (query.get('q') === 'Display') return late.promise;
+      if (query.get('q') === 'group:8') return groupPage([{ id: 'group:8', displayName: 'Only by ID' }]);
+      return groupPage([], 17);
+    },
+  });
+  try {
+    const details = root.querySelector('.wb-glist'), input = details.querySelector('input');
+    details.open = true; await details.dispatch('toggle');
+    input.value = 'Dis'; await input.dispatch('input');
+    context.mock.timers.tick(299); assert.deepEqual(reads, [null]);
+    input.value = 'Display'; await input.dispatch('input');
+    context.mock.timers.tick(300); assert.deepEqual(reads, [null, 'Display']);
+    input.value = 'group:8'; await input.dispatch('input');
+    context.mock.timers.tick(300); await tick();
+    assert.equal(details.querySelector('.wb-gl-row').children[0].textContent, 'Only by ID');
+    late.resolve(groupPage([{ id: 'group:1', displayName: 'Display name' }])); await tick();
+    assert.equal(details.querySelector('.wb-gl-row').children[0].textContent, 'Only by ID');
+    input.value = 'none'; await input.dispatch('input');
+    context.mock.timers.tick(300); await tick();
+    assert.equal(details.querySelector('.wb-plist-empty').hidden, false);
+    assert.equal(details.querySelectorAll('.wb-gl-row').length, 0);
+    assert.deepEqual(reads, [null, 'Display', 'group:8', 'none']);
+    input.value = 'group:8'; await input.dispatch('input');
+    details.open = false; await details.dispatch('toggle');
+    context.mock.timers.tick(300); await tick();
+    assert.deepEqual(reads, [null, 'Display', 'group:8', 'none']);
+    details.open = true; await details.dispatch('toggle');
+    assert.deepEqual(reads, [null, 'Display', 'group:8', 'none', 'group:8']);
+  } finally { panel.destroy(); }
 });
 
 test('idle reclaim minutes reject invalid drafts and save one confirmed global action', async () => {
@@ -195,19 +306,18 @@ test('idle reclaim missing metadata stays unknown and does not reuse the prior i
 test('each engine choice carries its own sign-in state, and group lines with a count of zero are left out', () => {
   const document = documentFixture(), root = document.createElement('div');
   const quiet = { ...snapshot(), rows: snapshot().rows.map(row => ({ ...row, presence: 'not_running' })) };
-  renderDefaults(root, { confirm: async () => true, snapshot: quiet, page: { runtimeTotal: 0, runtime: [] }, metadata: {}, document, t, read: async () => ({}), execute: async () => true });
+  renderDefaults(root, { confirm: async () => true, snapshot: quiet, groupCounts: { followers: 0, overrides: 0 }, metadata: {}, document, t, read: async () => ({}), execute: async () => true });
   const claude = root.querySelector('#settings-use-claude'), codex = root.querySelector('#settings-use-codex');
   // The state sits inside the engine's own button, so it cannot wrap away from the engine it describes.
   assert.match(claude.textContent, /^Claude.*wb\.settings\.health\.available$/);
   assert.match(codex.textContent, /^Codex.*wb\.settings\.health\.unavailable$/);
   assert.equal(root.querySelectorAll('.wb-login').every(login => login.closest('#settings-use-claude, #settings-use-codex')), true, 'no sign-in state outside the engine choices');
   const counts = root.querySelectorAll('.wb-gsum');
-  assert.equal(counts.length, 1, 'only the override line is rendered; nothing runs on the default');
-  assert.equal(counts[0].parentElement.hidden, true, 'no group overrides the engine, so that line is hidden too');
-  assert.equal(root.querySelector('#settings-overrides-search'), null);
+  assert.ok(counts.every(count => count.parentElement.hidden), 'both zero-count lines are hidden');
+  assert.equal(root.querySelector('.wb-glist'), null);
 
   const busy = document.createElement('div');
-  renderDefaults(busy, { confirm: async () => true, snapshot: snapshot(), page: { runtimeTotal: 2, runtime: [] }, metadata: {}, document, t, read: async () => ({}), execute: async () => true });
+  renderDefaults(busy, { confirm: async () => true, snapshot: snapshot(), groupCounts: { followers: 3, overrides: 2 }, metadata: {}, document, t, read: async () => ({}), execute: async () => true });
   const lines = busy.querySelectorAll('.wb-gsum').filter(line => !line.parentElement.hidden).map(line => line.textContent);
   assert.deepEqual(lines, ['wb.settings.followers:{"count":3}', 'wb.settings.overrides:{"count":2}'], 'counts above zero keep their lines');
 });
@@ -215,7 +325,7 @@ test('each engine choice carries its own sign-in state, and group lines with a c
 test('when the groups following the default cannot be listed, that line stays with an unknown count and a read note', () => {
   const document = documentFixture(), root = document.createElement('div');
   const unlisted = { ...snapshot(), overrides: null };
-  renderDefaults(root, { confirm: async () => true, snapshot: unlisted, page: { runtimeTotal: null, runtime: [] }, metadata: {}, document, t, read: async () => ({}), execute: async () => true });
+  renderDefaults(root, { confirm: async () => true, snapshot: unlisted, metadata: {}, document, t, read: async () => ({}), execute: async () => true });
   const follower = root.querySelectorAll('.wb-gsum').find(line => line.textContent.startsWith('wb.settings.followers'));
   assert.ok(follower, 'the follower line is rendered');
   assert.equal(follower.textContent, 'wb.settings.followers:{"count":"wb.unknown"}');
@@ -226,7 +336,7 @@ test('when the groups following the default cannot be listed, that line stays wi
 test('default engine keeps the sign-in gate and model and effort save together per engine', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const meta = runtime => ({ runtime, current_model: 'one', current_effort: 'high', models: [{ id: 'one' }, { id: 'two' }], efforts_by_model: { one: ['high'], two: ['low'] } });
-  const panel = renderDefaults(root, { confirm: async () => true, snapshot: snapshot(), page: { runtimeTotal: 100000 }, metadata: { claude: meta('claude'), codex: meta('codex') }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  const panel = renderDefaults(root, { confirm: async () => true, snapshot: snapshot(), metadata: { claude: meta('claude'), codex: meta('codex') }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body }); return true; } });
   // Codex is signed out: it cannot become the default, and the reason is its tooltip.
   assert.equal(root.querySelector('#settings-use-codex').disabled, true); assert.match(root.querySelector('#settings-use-codex').title, /unavailable/);
   const save = root.querySelector('#settings-save-models');
@@ -239,7 +349,7 @@ test('default engine keeps the sign-in gate and model and effort save together p
   assert.equal(save.hidden, true, 'saved values become the new baseline');
   model.value = '__custom__'; await model.dispatch('change'); const custom = root.querySelector('#settings-model-custom-codex');
   assert.equal(custom.hidden, false); custom.value = 'unknown'; await custom.dispatch('input'); assert.equal(effort.disabled, true);
-  assert.ok(root.querySelector('#settings-overrides-search')); panel.destroy();
+  panel.destroy();
 });
 
 test('changing the default engine is a draft until saved and the undo restores the current one', async () => {
@@ -247,11 +357,19 @@ test('changing the default engine is a draft until saved and the undo restores t
   const healthy = { ...snapshot(), instance: { runtimeHealth: { codex: { health: 'ok' }, claude: { health: 'ok' } } } };
   healthy.rows[0].run = { runId: 'run-origin' };
   let rejection = "Fixture credentials were rejected";
-  const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, page: { runtimeTotal: 1 }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body });
+  const detailReads = [];
+  const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, document, t, read: async path => {
+    detailReads.push(path);
+    if (path === '/api/groups/chat%3Amissing') return { displayName: 'Name outside preview' };
+    throw Error('missing detail');
+  }, execute: async (action, body) => { calls.push({ action, body });
     if (rejection) throw new Error(rejection);
     return { ok: true, data: { baseline: 'codex', groups: [
       { sessionGroup: 'origin', restart: { status: 'not_restarted', reason: 'fence_conflict' } },
       { sessionGroup: 'c', restart: { status: 'unknown', reason: 'no_reply' } },
+      { sessionGroup: 'chat:missing', restart: { status: 'unknown', reason: 'no_reply' } },
+      { sessionGroup: 'chat:gone', restart: { status: 'unknown', reason: 'no_reply' } },
+      { sessionGroup: 'chat:ok', restart: { status: 'accepted' } },
     ] }, messageKey: 'result.runtime_saved', messageParams: { value: 'Codex' } }; } });
   const save = root.querySelector('#settings-save-runtime');
   assert.equal(save.hidden, true); assert.equal(root.querySelector('#settings-use-claude').getAttribute('aria-pressed'), 'true');
@@ -271,6 +389,9 @@ test('changing the default engine is a draft until saved and the undo restores t
   const feedback = root.querySelector('#settings-engine-result').textContent;
   assert.match(feedback, /savedRestartFailed.*Name origin.*fence_conflict/);
   assert.match(feedback, /savedRestartUnknown.*Name c.*no_reply/);
+  assert.match(feedback, /savedRestartUnknown.*Name outside preview.*no_reply/);
+  assert.match(feedback, /savedRestartUnknown.*chat:gone.*no_reply/);
+  assert.deepEqual(detailReads, ['/api/groups/chat%3Amissing', '/api/groups/chat%3Agone']);
   assert.equal(save.hidden, true, 'successful save updates the baseline in the mounted card');
   await root.querySelector('#settings-use-claude').dispatch('click');
   await root.querySelector('#settings-undo-runtime').dispatch('click');
@@ -285,7 +406,7 @@ test('the mounted default effort uses configured metadata and only saves a user 
   const data = snapshot();
   data.rows[0] = { ...data.rows[0], runtimeInfo: { effort: 'high', model: 'one' }, effective: { runtime: 'claude', effort: 'high' } };
   const meta = { runtime: 'claude', current_model: 'one', current_effort: 'low', models: [{ id: 'one' }], efforts_by_model: { one: ['low', 'high'] } };
-  const panel = renderDefaults(root, { snapshot: data, page: { runtimeTotal: 1 }, metadata: { claude: meta }, document, t,
+  const panel = renderDefaults(root, { snapshot: data, metadata: { claude: meta }, document, t,
     confirm: async question => { questions.push(question); return true; }, read: async () => ({}),
     execute: async (action, body) => { calls.push({ action, body }); return true; } });
   try {
@@ -316,7 +437,7 @@ async function draftBothEngines(root) {
 test('saving model and effort for both engines asks once, lists every change and runs them without asking again', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [], asked = [];
   const tr = (key, params) => key === 'effort.minimal' ? 'Minimal' : t(key, params);
-  const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 1 }, metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t: tr, read: async () => ({}),
+  const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t: tr, read: async () => ({}),
     confirm: async text => { asked.push(text); return true; }, execute: async (action, body, options) => { calls.push({ action, body, options }); return true; } });
   await draftBothEngines(root);
   await root.querySelector('#settings-save-models').dispatch('click');
@@ -352,7 +473,7 @@ test('saving an engine or model with no running followers skips confirmation', a
 test('a defaults card wired without a confirmation runs no change', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const healthy = { ...snapshot(), instance: { runtimeHealth: { codex: { health: 'ok' }, claude: { health: 'ok' } } } };
-  const panel = renderDefaults(root, { snapshot: healthy, page: { runtimeTotal: 1 }, metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t,
+  const panel = renderDefaults(root, { snapshot: healthy, metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t,
     read: async () => ({}), execute: async (action, body) => { calls.push({ action, body }); return true; } });
   await root.querySelector('#settings-use-codex').dispatch('click');
   const saveRuntime = root.querySelector('#settings-save-runtime'); assert.equal(saveRuntime.disabled, false);
@@ -368,7 +489,7 @@ test('the effort dropdown names each level the way the confirmation does', () =>
   const document = documentFixture(), root = document.createElement('div');
   const names = { 'effort.high': '高', 'effort.low': '低', 'effort.minimal': '极低' };
   const tr = (key, params) => names[key] ?? t(key, params);
-  const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 1 }, metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t: tr, read: async () => ({}) });
+  const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t: tr, read: async () => ({}) });
   const codex = root.querySelector('#settings-effort-codex');
   assert.deepEqual(codex.children.map(option => [option.value, option.textContent]), [['high', '高']]);
   const model = root.querySelector('#settings-model-codex'); model.value = 'two'; model.dispatch('change');
@@ -379,7 +500,7 @@ test('the effort dropdown names each level the way the confirmation does', () =>
 
 test('cancelling the model confirmation sends nothing and shows no result', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
-  const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 1 }, metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t, read: async () => ({}),
+  const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t, read: async () => ({}),
     confirm: async () => false, execute: async (action, body) => { calls.push({ action, body }); return true; } });
   await draftBothEngines(root);
   const save = root.querySelector('#settings-save-models'), before = root.textContent;
@@ -390,7 +511,7 @@ test('cancelling the model confirmation sends nothing and shows no result', asyn
 
 test('a model save that fails part way names what took effect and what did not', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
-  const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 1 }, metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document,
+  const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document,
     t: (key, params) => params ? key + JSON.stringify(params) : key, read: async () => ({}),
     confirm: async () => true, execute: async (action, body) => { calls.push({ action, body }); return calls.length < 2; } });
   await draftBothEngines(root);
@@ -402,14 +523,6 @@ test('a model save that fails part way names what took effect and what did not',
   assert.match(text, /"left":"wb\.settings\.changeEffort/);
   assert.equal(root.querySelector('#settings-save-models').hidden, false, 'what did not apply is still a draft'); panel.destroy();
 });
-test('zero override count hides search and local follower filtering sends no request', async () => {
-  const document = documentFixture(), root = document.createElement('div'); let reads = 0;
-  const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 0 }, document, t, read: () => { reads++; } });
-  assert.equal(root.querySelector('#settings-overrides-search'), null);
-  const search = root.querySelector('input'); search.value = 'Name b'; await search.dispatch('input'); assert.equal(reads, 0);
-  assert.equal(root.querySelector('details').querySelectorAll('button').length, 1); panel.destroy();
-});
-
 function priceFixture() {
   const document = documentFixture(), root = document.createElement('div'), host = root;
   for (const id of ['settings-model-pricing-group', 'settings-priority-pricing-group', 'settings-fast-mode-group']) root.append(node(document, 'div', id));
@@ -424,7 +537,7 @@ function priceFixture() {
 
 test('two pricing tabs list every price row and keep custom deletion, premium rates and explicit multiplier reset in one save', async () => {
   const fixture = priceFixture(), writes = [];
-  const panel = createPricingPanel({ ...fixture, data: fixture.data, snapshot: snapshot(), usage: { models: [{ runtime: 'claude', model: 'base-1', cost: 3 }] }, t, write: async body => writes.push(body) });
+  const panel = createPricingPanel({ ...fixture, data: fixture.data, groupCounts: { claude: 3, codex: 1 }, usage: { models: [{ runtime: 'claude', model: 'base-1', cost: 3 }] }, t, write: async body => writes.push(body) });
   assert.deepEqual(fixture.base.children.map(row => row.dataset.prefix), ['base', 'unused', 'custom']);
   fixture.base.children.find(row => row.dataset.prefix === 'custom').remove();
   fixture.base.children[0].querySelectorAll('input')[1].value = '4';
@@ -613,28 +726,6 @@ test('failed pricing summary is unknown while a successful empty response is zer
   const empty = priceFixture(); const good = createPricingPanel({ ...empty, usage: { models: [], unmatched: [] }, write: async () => {}, t }); assert.match(empty.root.textContent, /\$0.0000/); good.destroy();
 });
 
-test('default engine confirmation counts only running followers while model followers can include starts', () => {
-  const data=snapshot(); data.rows.push(
-    {sessionGroup:'starting',presence:'starting',target:{runtime:'claude'}},
-    {sessionGroup:'gone',presence:'not_running',target:{runtime:'claude'}},
-    {sessionGroup:'unknown',presence:'unknown',target:{runtime:'claude'}});
-  data.overrides.model.push({sessionGroup:'starting',runtime:'codex'});
-  assert.deepEqual(defaultGroups(data).followers.map(r=>r.sessionGroup),['origin','b','c']);
-  assert.deepEqual(modelFollowers(data,'claude').map(r=>r.sessionGroup),['origin','c','starting']);
-});
-test('clearing pending override debounce cancels the request after 300 milliseconds', context => {
-  context.mock.timers.enable({apis:['setTimeout']}); let calls=0;const changes=[];
-  const search=createOverrideSearch({read:async()=>{calls++;return{};},onChange:value=>changes.push(value)});
-  search.input('pending');search.input('');context.mock.timers.tick(300);assert.equal(calls,0);assert.equal(changes.at(-1),null);search.destroy();
-});
-test('unknown override count retains search and failed search preserves the flat list', async context => {
-  context.mock.timers.enable({apis:['setTimeout']});
-  const document=documentFixture(),root=document.createElement('div');const panel=renderDefaults(root,{snapshot:snapshot(),page:null,document,t,read:async()=>{throw Error('502');}});
-  const input=root.querySelector('#settings-overrides-search');assert.ok(input);
-  const flat=root.querySelectorAll('button').find(n=>n.textContent.startsWith('Name a')).parentElement;
-  input.value='gone';await input.dispatch('input');context.mock.timers.tick(300);await tick();
-  assert.equal(flat.hidden,false);assert.ok(flat.textContent.includes('Name a'));assert.ok(root.textContent.includes('wb.readFailed'));panel.destroy();
-});
 test('literal settings translation keys used by modules exist in a language pack', () => {
   const packs=['en','zh'].map(lang=>({...JSON.parse(fs.readFileSync(new URL('../public/i18n/'+lang+'.json',import.meta.url))),...JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.'+lang+'.json',import.meta.url)))}));
   for(const file of ['settings','settings-defaults','settings-pricing','settings-ui','settings-version']){
@@ -648,7 +739,7 @@ test('default controls retain the restart lock after an accepted runtime change'
   let writable = true;
   const meta = { current_model: 'one', current_effort: 'high', models: [{ id: 'one' }], efforts_by_model: { one: ['high'] } };
   const healthy = { ...snapshot(), instance: { runtimeHealth: { codex: { health: 'ok' }, claude: { health: 'ok' } } } };
-  const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, page: {}, metadata: { claude: meta, codex: meta }, document, t,
+  const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, metadata: { claude: meta, codex: meta }, document, t,
     read: async () => ({}), writable: () => writable,
     execute: async () => { writable = false; return true; } });
   await root.querySelector('#settings-use-codex').dispatch('click');
@@ -765,7 +856,7 @@ test('price change counts cover edited cells, added rows and removed rows', () =
 test('a successful price save clears the unsaved count, the save bar, the navigation badge and the dirty cells', async () => {
   const fixture = priceFixture(), counts = [], writes = [];
   const bar = node(fixture.document, 'div'); bar.className = 'settings-footer'; bar.hidden = true; fixture.root.append(bar);
-  const panel = createPricingPanel({ ...fixture, snapshot: snapshot(), usage: { models: [] }, t, write: async body => writes.push(body), onDirty: count => counts.push(count) });
+  const panel = createPricingPanel({ ...fixture, groupCounts: { claude: 3, codex: 1 }, usage: { models: [] }, t, write: async body => writes.push(body), onDirty: count => counts.push(count) });
   const input = fixture.base.children[0].querySelectorAll('input')[1]; input.value = '9'; await input.dispatch('input');
   const fast = fixture.root.querySelector('#settings-fast-multiplier'); fast.value = '4'; await fast.dispatch('input');
   assert.equal(counts.at(-1), 2); assert.equal(bar.hidden, false);
@@ -784,7 +875,7 @@ test('a successful price save clears the unsaved count, the save bar, the naviga
 
 test('saving an edited Codex priority price clears the unsaved count and keeps the value', async () => {
   const fixture = priceFixture(), counts = [], writes = [];
-  const panel = createPricingPanel({ ...fixture, snapshot: snapshot(), usage: { models: [] }, t, write: async body => writes.push(body), onDirty: count => counts.push(count) });
+  const panel = createPricingPanel({ ...fixture, groupCounts: { claude: 3, codex: 1 }, usage: { models: [] }, t, write: async body => writes.push(body), onDirty: count => counts.push(count) });
   await fixture.root.querySelector('#settings-price-tab-codex').dispatch('click');
   const priority = () => fixture.priority.children[0].querySelectorAll('input')[1];
   priority().value = '7'; await priority().dispatch('input');
@@ -800,7 +891,7 @@ test('saving an edited Codex priority price clears the unsaved count and keeps t
 
 test('a failed price save keeps the unsaved count', async () => {
   const fixture = priceFixture(), counts = [];
-  const panel = createPricingPanel({ ...fixture, snapshot: snapshot(), usage: { models: [] }, t, write: async () => { throw new Error('write_failed'); }, onDirty: count => counts.push(count) });
+  const panel = createPricingPanel({ ...fixture, groupCounts: { claude: 3, codex: 1 }, usage: { models: [] }, t, write: async () => { throw new Error('write_failed'); }, onDirty: count => counts.push(count) });
   const input = fixture.base.children[0].querySelectorAll('input')[1]; input.value = '9'; await input.dispatch('input');
   await panel.save(); assert.equal(counts.at(-1), 1); assert.equal(fixture.root.querySelector('#settings-status').textContent, 'write_failed'); panel.destroy();
 });
@@ -808,7 +899,7 @@ test('a failed price save keeps the unsaved count', async () => {
 test('the pricing panel reports unsaved changes to its navigation badge and save bar', async () => {
   const fixture = priceFixture(), counts = [];
   const bar = node(fixture.document, 'div'); bar.className = 'settings-footer'; bar.hidden = true; fixture.root.append(bar);
-  const panel = createPricingPanel({ ...fixture, snapshot: snapshot(), usage: { models: [] }, t, write: async () => {}, onDirty: count => counts.push(count) });
+  const panel = createPricingPanel({ ...fixture, groupCounts: { claude: 3, codex: 1 }, usage: { models: [] }, t, write: async () => {}, onDirty: count => counts.push(count) });
   assert.equal(counts.at(-1), 0); assert.equal(bar.hidden, true);
   const input = fixture.base.children[0].querySelectorAll('input')[1]; input.value = '9'; await input.dispatch('input');
   assert.equal(counts.at(-1), 1); assert.equal(bar.hidden, false);
@@ -921,18 +1012,23 @@ test('a custom model requests its own threshold instead of showing the current m
 });
 
 
-test('settings group status labels include sample age and last-known status tooltip', () => {
+test('settings group status labels include sample age and last-known status tooltip', async () => {
   const document = documentFixture(), root = node(document, 'div');
   const data = snapshot(), sampledAt = Date.now() - 20000;
   data.rows[0] = { ...data.rows[0], state: { kind: 'idle', stale: true, sampledAt } };
-  const options = { snapshot: data, page: { runtime: [], runtimeTotal: 1 }, document, t, metadata: {} };
-  renderDefaults(root, options);
+  const panel = renderDefaults(root, { snapshot: data, document, t });
+  const details = root.querySelector('details'); details.open = true;
+  await details.dispatch('toggle');
   assert.ok(root.querySelector('.wb-status-age'));
   data.rows[0].state = { kind: 'unknown', reason: 'stale', sampledAt, lastState: 'idle' };
-  renderDefaults(root, options);
+  panel.destroy();
+  const next = renderDefaults(root, { snapshot: data, document, t });
+  const updated = root.querySelector('details'); updated.open = true;
+  await updated.dispatch('toggle');
   const labels = root.querySelectorAll('small');
   assert.ok(labels.some(label => label.title?.startsWith('wb.state.lastStatus:')));
   assert.equal(root.querySelector('.wb-status-age'), null);
+  next.destroy();
 });
 
 test('pricing tabs render English for one and two running groups', () => {
@@ -940,39 +1036,12 @@ test('pricing tabs render English for one and two running groups', () => {
   const en = (key, values = {}) => (labels[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? `{${name}}`));
   for (const count of [1, 2]) {
     const fixture = priceFixture();
-    const panel = createPricingPanel({ ...fixture, snapshot: { rows: Array.from({ length: count }, () => ({ presence: 'running', target: { runtime: 'claude' } })) }, usage: { models: [] }, t: en, write: async () => {} });
+    const panel = createPricingPanel({ ...fixture, groupCounts: { claude: count }, usage: { models: [] }, t: en, write: async () => {} });
     assert.ok(fixture.root.textContent.includes(count === 1 ? '1 running group uses these prices' : '2 running groups use these prices'));
     panel.destroy();
   }
 });
 
-
-test('settings hydrates only the bounded running rows to recover explicit detail override provenance', async () => {
-  for (const failure of [false, true]) {
-    const paths = [], loads = [];
-    const loader = createSettingsLoader({ read: async path => {
-      paths.push(path);
-      if (path === '/api/instance') return { default_runtime: 'claude', session_mode: { sessionMode: 'multi' } };
-      if (path === '/api/groups/counts') return { running: { total: 2 }, offline: { total: 10000 }, pool: { used: 2, capacity: 4 } };
-      if (path === '/api/groups/running') return { rows: ['a', 'b'].map(id => ({ id, displayName: id, channel: 'telegram', runtime: 'codex', model: 'actual', state: { kind: 'working' }, flags: {}, duration: 1, mainAgent: 'busy', contextPct: 20, lastActivityAt: 1 })) };
-      if (path.startsWith('/api/groups/a?')) return { sessionGroup: 'a', runtimeOverridden: true, modelOverridden: false };
-      if (path.startsWith('/api/groups/b?')) {
-        if (failure) throw Error('detail_unreadable');
-        return { sessionGroup: 'b', runtimeOverridden: false, modelOverridden: true };
-      }
-      return {};
-    }, onLoad: value => loads.push(value) });
-    await loader.open();
-    assert.deepEqual(paths.filter(path => /^\/api\/groups\/[^/?]+\?include=$/.test(path)).sort(), ['/api/groups/a?include=', '/api/groups/b?include=']);
-    assert.equal(paths.some(path => path.startsWith('/api/groups/offline')), false);
-    assert.equal(loads.length, 1);
-    if (failure) assert.equal(loads[0].snapshot.overrides, null, 'failed detail reads keep provenance unknown');
-    else {
-      assert.deepEqual(loads[0].snapshot.overrides.runtime.map(row => row.sessionGroup), ['a']);
-      assert.deepEqual(loads[0].snapshot.overrides.model.map(row => row.sessionGroup), ['b']);
-    }
-  }
-});
 
 test('key table formats UTC key clocks in the instance timezone', () => {
   const document = documentFixture(), root = document.createElement('div');
@@ -992,7 +1061,7 @@ test('default model without effort options hides the whole field and restores it
   const document = documentFixture(), root = node(document, 'div');
   const meta = { runtime: 'claude', current_model: 'haiku', current_effort: 'high',
     models: [{ id: 'haiku' }, { id: 'opus' }], efforts_by_model: { haiku: [], opus: ['high'] } };
-  const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 1 }, metadata: { claude: meta }, document, t });
+  const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude: meta }, document, t });
   const effort = root.querySelector('#settings-effort-claude'), field = effort.closest('label');
   assert.equal(field.hidden, true);
   assert.equal(field.children[0].textContent, 'actions.effort');

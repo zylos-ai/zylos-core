@@ -10,7 +10,7 @@ const publicDir = path.resolve(fileURLToPath(new URL('../../skills/dashboard/pub
 const mainPath = '/_assets/i18n/zh.json';
 const wbPath = '/_assets/i18n/wb.zh.json';
 const observerPath = '/api/observer/status';
-const groupsPath = '/api/groups/running';
+const groupsPath = '/api/groups';
 const pack = locale => JSON.parse(fs.readFileSync(path.join(publicDir, 'i18n', `wb.${locale}.json`), 'utf8'));
 
 export async function runStartupParallelBrowser(sandbox, scenario) {

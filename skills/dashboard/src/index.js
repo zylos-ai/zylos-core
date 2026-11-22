@@ -8,8 +8,6 @@ import { createReadinessCheck } from './lib/readiness.js';
 import { bootId, publishHealthProcess } from './lib/health-process.js';
 import { createCoalescedBroadcast } from './lib/coalesced-broadcast.js';
 import http from 'node:http';
-import { execFile, execFileSync } from 'node:child_process';
-import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -85,7 +83,7 @@ import { createOriginBacklog } from './lib/workbench/origin-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
 import { createSessionHostRoutes } from './lib/session-host-routes.js';
 import { createGroupDeletionRoutes } from './lib/workbench/group-deletion.js';
-import { createGroupsApi, groupCounts, projectGroup, projectListRow } from './lib/workbench/groups-api.js';
+import { createGroupsApi, groupCounts, groupListRows } from './lib/workbench/groups-api.js';
 import { usageSummary, usagePricing, createUsageCostReader } from './lib/workbench/usage-api.js';
 import { isSameOriginRequest } from './lib/request-origin.js';
 import { usageSeries } from './lib/workbench/usage-series.js';
@@ -101,7 +99,7 @@ import { createInstanceTimezone, handleInstanceTimezone, handleInstanceTimezoneR
 import { handleAction, readCodexRootString } from './lib/actions.js';
 import { VersionChecker } from './lib/version-checker.js';
 import { isNewerVersion } from './lib/version-utils.js';
-import { DASHBOARD_RUNTIMES, createRuntimeOverridesReader, runtimeVersionRecord as projectRuntimeVersion, runtimeDefaults, handleRuntimeOptions } from './lib/runtime-api.js';
+import { DASHBOARD_RUNTIMES, runtimeVersionRecord as projectRuntimeVersion, runtimeDefaults, handleRuntimeOptions } from './lib/runtime-api.js';
 
 const { readConfigStrict } = await loadCoreModule('config-store.js');
 const startedAt = new Date();
@@ -251,14 +249,13 @@ async function broadcastFleetState() {
     const snapshot = await workbench.getSnapshot(undefined, { cachedObservations: true });
     const instance = buildInstancePayload();
     const counts = groupCounts(snapshot, { allowUnreadable: true });
-    const rows = snapshot.rows.map(row => projectGroup(row, snapshot));
-    const running = rows.filter(row => row.side === 'running').map(projectListRow);
+    const running = groupListRows(snapshot, 'running');
     const instanceKey = publicationKey(instance), groupsKey = publicationKey({ counts, running });
     const instanceChanged = instanceKey !== lastInstancePublication, groupsChanged = groupsKey !== lastGroupsPublication;
     if (instanceChanged) { sse.broadcast('instance', instance); lastInstancePublication = instanceKey; }
     if (groupsChanged) { sse.broadcast('groups', counts); lastGroupsPublication = groupsKey; }
     if ((instanceChanged || groupsChanged) && fleetPollerReady) {
-      broadcastFleet(fleetPoller.getFleet(), () => selfFleetState(instance, counts, rows, running));
+      broadcastFleet(fleetPoller.getFleet(), () => selfFleetState(instance, counts, snapshot, running));
     }
   } catch (err) {
     process.stderr.write(`[fleet] instance/groups SSE broadcast skipped: ${err.message}\n`);
@@ -323,7 +320,7 @@ const stateEngine = new StateEngine(store, collectors, config, {
 timeMethod(stateEngine, '_periodicSnapshot', 'state.snapshot');
 timeMethod(stateEngine, '_readAMHeartbeat', 'state.heartbeat');
 
-observerService.historyService = new HistoryService({ config, store, stateEngine, readCurrentSessionId: () => coreState.getSingleSessionId(), readGroupKey: key => groupsApi.detail(key, { include: [] }) });
+observerService.historyService = new HistoryService({ config, store, stateEngine, readCurrentSessionId: () => coreState.getSingleSessionId(), readGroupKey: key => groupsApi.detail(key, new URLSearchParams(key === 'origin' ? 'include=' : '')) });
 
 // Wire collector updates to state engine
 pm2Collector._onUpdate = (data) => {
@@ -374,7 +371,6 @@ function recordDashboardInterrupt(record) {
 const groupAction = createGroupActions({ zylosDir: config.zylosDir, config, onInterrupt: recordDashboardInterrupt });
 const sendNamingPrompt = createNamingRequest({ zylosDir: config.zylosDir, readMode: () => loadZylosConfig(config.zylosDir).session_mode });
 
-const runtimeOverridesPage = createRuntimeOverridesReader({ zylosDir: config.zylosDir, displayNames, run: promisify(execFile) });
 function installedVersions() {
   return { zylos: zylosVersion, claude: ccInstalledVersion, codex: codexInstalledVersion, agy: agyInstalledVersion };
 }
@@ -432,17 +428,16 @@ async function refreshDashboardState({ fresh = false } = {}) {
 // Fleet records reuse a cost summary for at most 30 s; usage HTTP reads do not.
 const readFleetCost = createUsageCostReader(store);
 
-function selfFleetState(instance, counts, rows, running = rows.filter(row => row.side === 'running').map(projectListRow)) {
+function selfFleetState(instance, counts, snapshot, running = groupListRows(snapshot, 'running')) {
   return fleetStateFromObjects(instance, counts, readFleetCost({ tz: instanceTz() }), {
     rows: running,
-    failedRows: rows.filter(row => row.side === 'offline' && row.flags?.startFailed).map(projectListRow),
+    failedRows: groupListRows(snapshot, 'offline', 'startFailed'),
   });
 }
 
 function cachedSelfFleetState() {
   const snapshot = workbench.getCachedSnapshot() ?? { rows: [], readAt: Date.now(), listKnown: false };
-  return selfFleetState(buildInstancePayload(), groupCounts(snapshot, { allowUnreadable: true }),
-    snapshot.rows.map(row => projectGroup(row, snapshot)));
+  return selfFleetState(buildInstancePayload(), groupCounts(snapshot, { allowUnreadable: true }), snapshot);
 }
 
 function buildSelfFleetRecord(buildState = cachedSelfFleetState) {
@@ -967,7 +962,12 @@ async function handleApi(req, res, pathname, url) {
     sendJson(res, 200, buildInstancePayload());
     return true;
   }
-  if (pathname === '/api/groups/counts' || pathname === '/api/groups/running' || pathname === '/api/groups/offline' || pathname === '/api/groups/search' || pathname === '/api/groups/activity') {
+  if (pathname === '/api/groups') {
+    try { sendJson(res, 200, await groupsApi.list(url.searchParams)); }
+    catch (error) { workbenchFailure(res, error); }
+    return true;
+  }
+  if (pathname === '/api/groups/counts' || pathname === '/api/groups/activity') {
     try {
       const operation = pathname.split('/').at(-1);
       sendJson(res, 200, await groupsApi[operation](url.searchParams));
@@ -990,7 +990,7 @@ async function handleApi(req, res, pathname, url) {
       const { lookupRestartRequest } = await loadCoreModule('am-sock-client.js');
       const completion = await lookupRestartRequest(requestId, { deadlineAt: Date.now() + 10000, sessionGroup: key });
       await workbench.getSnapshot(undefined, { fresh: true });
-      const row = await groupsApi.detail(key, { include: [] });
+      const row = await groupsApi.detail(key, new URLSearchParams(key === 'origin' ? 'include=' : ''));
       sendJson(res, 200, { requestId, completion: completion === 'deadline_exceeded' ? 'unknown' : completion,
         group: { id: key, runId: row.runId ?? row.run?.runId ?? null, sessionId: row.sessionId ?? row.run?.sessionId ?? null,
           ready: row.presence === 'running' && row.live?.status?.valid === true, state: row.state } });
@@ -1062,12 +1062,6 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
-  if (pathname === '/api/groups/runtime-overrides') {
-    try { sendJson(res, 200, await runtimeOverridesPage(url.searchParams)); }
-    catch { sendJson(res, 502, { error: 'override_list_failed' }); }
-    return true;
-  }
-
   if (pathname === '/api/usage/pricing') {
     try { sendJson(res, 200, usagePricing(store, { tz: (await scheduleTz()).tz })); }
     catch (error) { workbenchFailure(res, error); }
@@ -1076,7 +1070,7 @@ async function handleApi(req, res, pathname, url) {
 
   const groupDetail = pathname.match(/^\/api\/groups\/([^/]+)$/);
   if (groupDetail) {
-    try { sendJson(res, 200, await groupsApi.detail(workbenchGroupDetailKey(groupDetail[1]), { include: url.searchParams })); }
+    try { sendJson(res, 200, await groupsApi.detail(workbenchGroupDetailKey(groupDetail[1]), url.searchParams)); }
     catch (error) { workbenchFailure(res, error); }
     return true;
   }

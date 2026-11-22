@@ -336,9 +336,13 @@ export class FleetProxy {
       const prefix = browserPath(browserBase, `fleet/${encodeURIComponent(agent.name)}`);
       let access = 'read';
       try {
-        await this.poller.getSessionToken(agent.name);
+        await this.poller.getSessionToken(agent.name, { recheck: true });
         access = this.poller.getAgentAccess?.(agent.name) === 'admin' ? 'admin' : 'read';
-      } catch {
+      } catch (error) {
+        if (error.reason === 'version_unsupported') {
+          sendJson(res, 502, { error: error.reason });
+          return true;
+        }
         access = 'read';
       }
       const html = fs.readFileSync(path.join(this.rootDir, 'index.html'), 'utf8')
@@ -437,7 +441,7 @@ export class FleetProxy {
       }
     } catch (err) {
       if (err.status === 413) sendJson(res, 413, { error: 'request_body_too_large' });
-      else sendJson(res, 502, { error: 'upstream_unreachable' });
+      else sendJson(res, 502, { error: err.reason === 'version_unsupported' ? err.reason : 'upstream_unreachable' });
       return;
     }
 
@@ -670,9 +674,9 @@ export class FleetProxy {
       upstream.activate();
       downstream.activate();
       return true;
-    } catch {
+    } catch (error) {
       if (!downstream && !socket.destroyed && !socket.writableEnded) {
-        rejectObserverUpgrade(socket, 502, 'upstream_unreachable');
+        rejectObserverUpgrade(socket, 502, error.reason === 'version_unsupported' ? error.reason : 'upstream_unreachable');
       }
       close();
       return true;

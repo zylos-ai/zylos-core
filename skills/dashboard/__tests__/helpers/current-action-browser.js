@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { stateToFleetRecord } from '../../src/lib/fleet-poller.js';
 import { fleetGroupSummary } from '../../src/lib/workbench/fleet-summary.js';
 import { GROUP, workbenchSnapshot, workbenchSnapshotAnswer } from '../fixtures/workbench-browser-api.js';
-import { formatZoned } from '../../public/js/wb/instance-zone.js';
+import { formatZoned, zonedDay } from '../../public/js/wb/instance-zone.js';
 import { startPage } from './workbench-browser.js';
 
 export async function runCurrentActionBrowser(sandbox, { width, locale }) {
@@ -14,11 +14,13 @@ export async function runCurrentActionBrowser(sandbox, { width, locale }) {
   const snapshot = workbenchSnapshot(now), busy = snapshot.rows.find(row => row.sessionGroup === GROUP);
   busy.noResponse = { since };
   busy.preview.timestamp = receivedAt;
+  const sortAt = (Math.floor(Date.parse(receivedAt) / 60000) + 1) * 60000;
+  busy.lastActivityAt = new Date(sortAt).toISOString();
   const copy = JSON.parse(fs.readFileSync(new URL(`../../public/i18n/wb.${locale}.json`, import.meta.url), 'utf8'));
   const t = (key, params = {}) => copy[key].replace(/\{(\w+)\}/g, (_, name) => String(params[name]));
-  const running = workbenchSnapshotAnswer(new URL('http://fixture/api/groups/running'), snapshot, now);
-  const row = running.rows.find(row => row.id === GROUP);
-  assert.deepEqual(Object.keys(row).sort(), ['id', 'displayName', 'channel', 'lastActivityAt', 'flags', 'runtime', 'model', 'state', 'duration', 'currentAction', 'mainAgent', 'contextPct'].sort());
+  const running = workbenchSnapshotAnswer(new URL('http://fixture/api/groups?side=running'), snapshot, now);
+  const row = running.items.find(row => row.id === GROUP);
+  assert.deepEqual(Object.keys(row).sort(), ['id', 'displayName', 'channel', 'lastActivityAt', 'flags', 'runtime', 'model', 'state', 'duration', 'currentAction', 'mainAgent', 'contextPct', 'runtimeOverridden', 'modelOverridden'].sort());
   assert.deepEqual(row.currentAction, { tool: 'Bash', message: 'Run the tests again please', receivedAt });
   assert.deepEqual(row.flags.noResponse, { since: new Date(since).toISOString() });
   assert.equal(workbenchSnapshotAnswer(new URL('http://fixture/api/groups/counts'), snapshot, now).running.flags.noResponse, 1);
@@ -78,6 +80,7 @@ export async function runCurrentActionBrowser(sandbox, { width, locale }) {
     && document.getAnimations().every(animation => animation.playState !== 'running' || animation.effect?.getComputedTiming().iterations === Infinity));
   const boardRow = page.locator(`#wb-board [data-group="${GROUP}"]`), current = boardRow.locator('.wb-current');
   await current.waitFor();
+  await page.waitForFunction(() => !document.querySelector('.app-view.is-leaving'));
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal(await current.locator('.wb-tool-label').innerText(), t('wb.tool.Bash'));
   assert.ok((await current.innerText()).includes(t('wb.board.lastIn', { text: 'Run the tests again please' })));
@@ -93,20 +96,22 @@ export async function runCurrentActionBrowser(sandbox, { width, locale }) {
   await page.locator('#wb-tech-btn').evaluate(node => node.click());
   busy.tools = [];
   {
-    const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/groups/running');
+    const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/groups' && new URL(response.url()).searchParams.get('side') === 'running');
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     await refreshed;
   }
-  await page.waitForFunction(({ group, message }) => document.querySelector(`#wb-board [data-group="${group}"] .wb-current`)?.textContent.includes(message), { group: GROUP, message: 'Run the tests again please' });
-  assert.equal(await current.innerText(), t('wb.board.lastReceived', { text: 'Run the tests again please' }));
+  const message = t('wb.board.lastReceived', { text: 'Run the tests again please' });
+  await page.waitForFunction(({ group, message }) => document.querySelector(`#wb-board [data-group="${group}"] .wb-current`)?.textContent === message, { group: GROUP, message });
+  assert.equal(await current.innerText(), message);
   busy.preview.text = null;
-  const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/groups/running');
+  const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/groups' && new URL(response.url()).searchParams.get('side') === 'running');
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
   await refreshed;
-  const time = new Intl.DateTimeFormat(locale, { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' }).format(new Date(receivedAt));
+  const clock = { hour: '2-digit', minute: '2-digit' };
+  const time = formatZoned(sortAt, locale, zonedDay(sortAt, 'UTC') === zonedDay(now, 'UTC') ? clock : { month: 'numeric', day: 'numeric', ...clock }, 'UTC');
   const expected = t('wb.board.lastReceivedAt', { channel: t('wb.platform.telegram'), time });
   await page.waitForFunction(({ group, expected }) => document.querySelector(`#wb-board [data-group="${group}"] .wb-current`)?.textContent === expected, { group: GROUP, expected });
-  assert.equal(await current.innerText(), expected, 'receivedAt survives the compact list and renders with the instance timezone');
+  assert.equal(await current.innerText(), expected, 'the compact list shows the sort timestamp in the instance timezone');
   await shot('received-time');
   assert.equal(apiReads.filter(path => path === '/api/groups/origin').length, 0, 'list presentation needs no Origin detail request');
   assert.deepEqual(errors, []);

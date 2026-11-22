@@ -1,4 +1,4 @@
-import { formatZoned } from './instance-zone.js';
+import { formatZoned, zonedDay } from './instance-zone.js';
 import { instantMs } from './api-time.js';
 import { countLabel } from '../count-label.js';
 import { chatKind, element, fallbackName, icon, lastReceived, platformOf, runtimeName } from './plain-text.js';
@@ -113,11 +113,22 @@ function nowCell(document, row, { level, t }) {
     current.title = action.tool;
     return current;
   }
-  const text = action && (action.message || action.receivedAt) ? lastReceived({ ...row,
-    preview: { text: action.message, timestamp: action.receivedAt, channel: row.channel } }, t)
+  const hasPreview = Boolean(action?.message || action?.receivedAt);
+  const text = hasPreview ? lastReceived({ ...row,
+    preview: { text: action.message, timestamp: row.lastActivityAt, channel: row.channel } }, t)
     : row.state?.kind === 'offline' && level !== 'technical' ? t('wb.board.standby') : '';
-  current.append(element(document, 'span', text));
+  if (text) current.append(element(document, 'span', text));
   current.title = text;
+  const timestamp = instantMs(row.lastActivityAt);
+  if (!hasPreview && Number.isFinite(timestamp)) {
+    const clock = { hour: '2-digit', minute: '2-digit' };
+    const fields = zonedDay(timestamp) === zonedDay(Date.now()) ? clock : { month: 'numeric', day: 'numeric', ...clock };
+    const label = formatZoned(timestamp, document.documentElement?.lang, fields);
+    const time = element(document, 'time', label);
+    time.dateTime = new Date(timestamp).toISOString();
+    current.append(time);
+    current.title = [text, label].filter(Boolean).join(' · ');
+  }
   return current;
 }
 
@@ -145,16 +156,36 @@ export function renderRow(row, { document, level = 'plain', activity, single = f
   root.addEventListener('click', () => onSelect(row));
   return root;
 }
+/** Keep the displayed order and count arrivals that would pass a displayed row. */
+export function keepGroupOrder(previous, latest, missing, pending) {
+  const positions = new Map(latest.map((row, index) => [row.sessionGroup, index]));
+  const displayed = new Set(previous.map(row => row.sessionGroup));
+  for (const row of latest) if (!displayed.has(row.sessionGroup)) pending.add(row.sessionGroup);
+  let preceding = -1;
+  return previous.map(row => {
+    const position = positions.get(row.sessionGroup);
+    if (position === undefined) {
+      const replacement = missing.has(row.sessionGroup) ? missing.get(row.sessionGroup) : row;
+      if (replacement && (replacement.state?.kind === 'offline') === (row.state?.kind === 'offline')) preceding = latest.length;
+      return replacement;
+    }
+    const fresh = latest[position];
+    if (position < preceding && (instantMs(fresh.lastActivityAt) || 0) > (instantMs(row.lastActivityAt) || 0)) pending.add(row.sessionGroup);
+    preceding = Math.max(preceding, position);
+    return fresh;
+  }).filter(Boolean);
+}
+
 export function renderBoard(root, snapshot, { rows = snapshot?.rows ?? [], query = '', document = root.ownerDocument,
-  t = key => key, activity, onSearch = () => {}, onMore = onSearch, selected = undefined, ...options } = {}) {
+  t = key => key, activity, onSearch = () => {}, onMore = onSearch, loadingMore = false, selected = undefined, ...options } = {}) {
   root.replaceChildren();
   if (!rows.length) root.append(element(document, 'p', t(query ? 'wb.noMatch' : 'wb.noGroups'), 'wb-empty'));
   for (const row of rows) root.append(renderRow(row, { document, t, single: snapshot?.view === 'single',
     selected: selected !== undefined && row.sessionGroup === selected,
     activity: activity ? { start: activity.start, cellSeconds: activity.cellSeconds,
       inboundUnknown: Boolean(activity.inboundError), ...activity.groups?.[row.sessionGroup] } : null, ...options }));
-  if (snapshot?.hasOlder === true && !query) {
-    const older = element(document, 'button', t(snapshot?.nextCursor != null ? 'wb.groups.more' : 'wb.older'), 'wb-older'); older.type = 'button';
+  if (snapshot?.nextCursor != null || (snapshot?.hasOlder === true && !query)) {
+    const older = element(document, 'button', t(snapshot?.nextCursor != null ? 'wb.groups.more' : 'wb.older'), 'wb-older'); older.type = 'button'; older.disabled = loadingMore;
     older.addEventListener('click', onMore); root.append(older);
   }
 }
