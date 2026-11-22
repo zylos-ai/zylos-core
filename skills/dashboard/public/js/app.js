@@ -66,7 +66,6 @@ const state = {
   sourceUpdatedAt: null,
   pollTimer: null,
   fleetFallbackTimer: null,
-  fleetHoverPaused: false,
   fleetRenderPending: false,
   eventSource: null,
   multiAgent: false,
@@ -290,7 +289,8 @@ function setFleet(payload, { force = false } = {}) {
   fleetSounds?.handleFleet(payload);
   state.fleet = payload;
   const modeChanged = state.fleetModeInitialized ? syncLiveFleetMode(payload.summary) : false;
-  state.fleetRenderPending = state.fleetHoverPaused && !modeChanged && !force;
+  const hovering = window.matchMedia('(hover: hover)').matches && $('#agent-fleet-root')?.matches(':hover');
+  state.fleetRenderPending = hovering && !modeChanged && !force;
   if (!state.fleetRenderPending) renderFleet();
 }
 
@@ -326,9 +326,7 @@ function initFleetSounds() {
 function initFleetHoverPause() {
   const root = $('#agent-fleet-root');
   if (!root) return;
-  root.addEventListener('mouseenter', () => { state.fleetHoverPaused = true; });
   root.addEventListener('mouseleave', () => {
-    state.fleetHoverPaused = false;
     if (state.fleetRenderPending) renderFleet();
     state.fleetRenderPending = false;
   });
@@ -1688,7 +1686,7 @@ function applySse(name, data) {
   } else if (name === 'fleet') {
     if (state.fleetModeInitialized) syncLiveFleetMode(data.summary);
     refreshPushedFleet();
-    if (activeTabName() === 'settings' && !settingsPage?.sections.fleet.hidden && !machineReads) {
+    if (!document.hidden && activeTabName() === 'settings' && settingsPage?.sections.fleet.hidden === false && !machineReads) {
       void machineList?.refresh();
     }
     scheduleFleetFallback();

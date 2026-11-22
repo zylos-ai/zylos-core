@@ -239,7 +239,7 @@ function workbenchAnswerData(url, now) {
   if (p === '/api/usage/pricing') return { models: [], unmatched: [] };
   if (p === '/api/fleet') {
     const name = url.searchParams.get('name');
-    const items = name ? [{ name, access: name === 'admin' ? 'admin' : 'read' }] : [{ name: 'browser-case', self: true, access: 'admin' }];
+    const items = !name || name === 'browser-case' ? [{ name: 'browser-case', self: true, access: 'admin' }] : [];
     return { items, nextCursor: null, summary: { count: 1 }, updated_at: iso(now) };
   }
   if (p === '/api/fleet/agents') return { self: { name: 'browser-case' }, items: [], nextCursor: null, total: 0 };

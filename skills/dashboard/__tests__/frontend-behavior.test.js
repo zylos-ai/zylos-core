@@ -660,10 +660,10 @@ test('fleet wall pauses re-render on hover so native tooltips can appear', () =>
   // Fleet payload applications still go through the hover gate after the sound
   // tracker and live view-mode reconciliation; a 0<->1 remote transition is
   // allowed to pierce hover pause so the page changes mode immediately.
-  assert.match(app, /state\.fleetRenderPending = state\.fleetHoverPaused && !modeChanged && !force;/);
+  assert.match(app, /state\.fleetRenderPending = hovering && !modeChanged && !force;/);
   assert.doesNotMatch(app, /state\.fleet = data;\n\s*renderFleet\(\)/);
-  // ...armed by pointer enter/leave on the grid root, flushing pending data on leave.
-  assert.match(app, /addEventListener\('mouseenter', \(\) => \{ state\.fleetHoverPaused = true; \}\)/);
+  // Read the actual hover state and flush the pending page when the pointer leaves.
+  assert.match(app, /matches\(':hover'\)/);
   assert.match(app, /addEventListener\('mouseleave'/);
   assert.match(app, /if \(state\.fleetRenderPending\) renderFleet\(\)/);
 });
