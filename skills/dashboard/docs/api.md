@@ -722,7 +722,7 @@ Other forbidden routes return 403. Same-version peers return the common JSON err
 
 **Parameters:** no parameters for ordinary instance events. Chat opt-in requires admin at both instances and uses `chat=1`, optional `chat_tab=mine|external` (default mine) and `chat_conversation` (an encoded conversation ID); repeated subscription parameters and legacy `chat_ids` are invalid; invalid subscriptions are rejected rather than treated as an ordinary stream. Response is `text/event-stream`, not JSON.
 
-Opening the stream samples current session state immediately. While at least one Dashboard stream is connected, session observations refresh every 2.5 seconds and are shared by Origin, group and Fleet projections. Closing the last stream stops periodic session reads. HTTP instance and Fleet reads still sample on demand.
+Opening the stream samples current session state immediately. While at least one Dashboard stream is connected, session observations refresh every 2.5 seconds and are shared by Origin, group and Fleet projections. Closing the last stream stops periodic session reads. HTTP instance reads still sample on demand. Fleet reads use the shared observation cache while a stream is connected and force a fresh local observation when no stream is connected.
 
 | SSE event | Data | Meaning |
 |---|---|---|

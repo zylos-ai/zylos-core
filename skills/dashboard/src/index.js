@@ -1019,9 +1019,9 @@ async function handleApi(req, res, pathname, url) {
       const query = parseListQuery('fleet', url.searchParams, {
         filters: { name: value => value.length ? value : undefined }, q: true, include: ['total'],
       });
-      // Remote records arrive through the existing poller/SSE lifecycle. A slow
-      // or unreachable remote must not delay a local Fleet response.
-      await refreshDashboardState({ fresh: true });
+      // Remote records come from the poller cache. Connected streams keep the
+      // local observation warm, so only unobserved Dashboards force a sample.
+      await refreshDashboardState({ fresh: sse.clients.size === 0 });
       sendJson(res, 200, fleetPage(buildFullFleetPayload().payload, query));
     } catch (error) { fleetListFailure(res, error); }
     return true;
