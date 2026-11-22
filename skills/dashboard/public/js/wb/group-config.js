@@ -323,10 +323,22 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   actions.append(save, cancel);
   form.append(engineRow);
   if (blocked) {
-    const message = t('wb.runtimeNotFound', {
-      runtime: runtimeName(runtime.value),
-      command: `zylos group runtime set --group ${controller.key} --runtime ${runtime.value}`,
-    });
+    const prefix = ['zylos', 'group', 'runtime', 'set', '--group'];
+    const command = [...prefix, controller.key, '--runtime', runtime.value];
+    const commandText = command.join(' ');
+    const message = t('wb.runtimeNotFound', { runtime: runtimeName(runtime.value), command: commandText });
+    const hint = element(document, 'span');
+    const start = message.indexOf(commandText);
+    if (start === -1) {
+      hint.textContent = message;
+    } else {
+      hint.append(message.slice(0, start));
+      command.forEach((word, index) => {
+        if (index > 0) hint.append(' ');
+        hint.append(element(document, 'span', word, index === prefix.length ? 'wb-cfg-command-group' : 'wb-cfg-command-word'));
+      });
+      hint.append(message.slice(start + commandText.length));
+    }
     const note = element(document, 'p', undefined, 'wb-note wb-note-act');
     const recheck = element(document, 'button', t('wb.recheck'), 'wb-btn wb-btn-sm');
     recheck.type = 'button';
@@ -336,7 +348,7 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
       recheck.disabled = true;
       await onRecheck();
     });
-    note.append(element(document, 'span', message), recheck);
+    note.append(hint, recheck);
     form.append(note);
   }
   form.append(modelRow, !supportsModelOverride
