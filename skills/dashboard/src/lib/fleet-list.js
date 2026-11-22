@@ -47,9 +47,11 @@ export function fleetPage(payload, query) {
   const name = query.filters.name;
   const rows = payload.agents.filter(agent => (name === undefined || agent.name === name) &&
     (!term || agent.name.toLowerCase().includes(term)));
+  const page = pageFleetRows(rows, query, agent => [sortTier(agent), agent.name],
+    (a, b) => a[0] - b[0] || compareFleetNames(a[1], b[1]));
   return {
-    ...pageFleetRows(rows, query, agent => [sortTier(agent), agent.name],
-      (a, b) => a[0] - b[0] || compareFleetNames(a[1], b[1])),
+    ...page,
+    items: page.items.map(({ latency, ...agent }) => agent),
     summary: fleetSummary(payload.agents),
     updated_at: payload.updated_at,
   };
