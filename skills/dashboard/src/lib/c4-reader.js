@@ -163,23 +163,6 @@ export class C4Reader {
     }));
   }
 
-  getGroupMessages(key, { since = 0, until = Date.now() } = {}) {
-    const failure = () => Object.assign(new Error('Group messages unavailable'), { code: 'READ_FAILED', statusCode: 502 });
-    const db = this._open();
-    if (!db) throw failure();
-    const bound = value => {
-      const parsed = typeof value === 'number' ? value : Date.parse(value);
-      if (!Number.isFinite(parsed)) throw Object.assign(new Error('Invalid message time range'), { code: 'INVALID_ARGUMENT', statusCode: 400 });
-      return new Date(parsed).toISOString().slice(0, 19).replace('T', ' ');
-    };
-    const start = bound(since), end = bound(until);
-    try {
-      return db.prepare(`SELECT id, direction, channel, timestamp FROM conversations
-        WHERE session_group IS ? AND channel <> 'internal' AND timestamp BETWEEN ? AND ?
-        ORDER BY id`).all(key, start, end);
-    } catch { throw failure(); }
-  }
-
   getGroupMessagePage(key, search) {
     const query = timelineQuery(`group-messages:${key ?? ''}`, search);
     const failure = () => listFailure(503, 'unavailable', 'Group messages unavailable');

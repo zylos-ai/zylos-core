@@ -33,6 +33,10 @@ test('group timelines seek in both directions and suppress restart exits before 
   assert.deepEqual(firstEvents.items.map(row => [row.id, row.interrupted]), [['interrupted', true]]);
   assert.deepEqual((await read({ runId: 'run-a', cursor: firstEvents.nextCursor })).items.map(row => row.id), ['restart']);
   await assert.rejects(read({ runId: 'run-a', filter: 'tools', cursor: firstEvents.nextCursor }), { code: 'invalid_cursor' });
+  const tools = await read({ runId: 'run-a', filter: 'tools', limit: 1 });
+  assert.deepEqual(tools.items.map(row => [row.id, row.interrupted]), [['interrupted', true]]);
+  assert.equal(tools.nextCursor, null);
+  assert.deepEqual((await read({ runId: 'run-a', filter: 'lifecycle' })).items.map(row => row.id), ['restart']);
   for (const [parameters, param] of [['offset=1', 'offset'], ['session_group=x', 'session_group'], ['since=x', 'since'],
     ['limit=0', 'limit'], ['limit=1&limit=2', 'limit'], ['filter=foo', 'filter']]) {
     await assert.rejects(read(parameters), { code: 'invalid_parameter', param });

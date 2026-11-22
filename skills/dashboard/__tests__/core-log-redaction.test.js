@@ -6,6 +6,9 @@ import path from 'node:path';
 import { Store } from '../src/lib/store.js';
 import { CoreLogImporter } from '../src/lib/core-log-importer.js';
 
+const receiveWarnings = store => store.getSourceHealth().filter(row =>
+  row.signal_type === 'history' && row.status !== 'healthy' && row.extra?.stream === 'receive');
+
 function fixture(t, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'core-content-'));
   const store = new Store(path.join(root, 'dashboard.db'));
@@ -18,7 +21,7 @@ function fixture(t, options = {}) {
 test('an existing source directory without any past file remains quiet across polls', async t => {
   const f = fixture(t);
   for (let i = 0; i < 3; i++) await f.read();
-  assert.deepEqual(f.store.getHistoryDiagnostics({ stream: 'receive' }), []);
+  assert.deepEqual(receiveWarnings(f.store), []);
   assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM core_log_cursors').get().n, 0);
 });
 
@@ -28,7 +31,7 @@ test('a previously imported file disappearing reports a persistent source gap', 
   await f.read();
   fs.unlinkSync(f.file);
   await f.read();
-  assert.ok(f.store.getHistoryDiagnostics({ stream: 'receive' }).some(row => row.extra.reason === 'source_missing'));
+  assert.ok(receiveWarnings(f.store).some(row => row.extra.reason === 'source_missing'));
   assert.equal(f.store.queryEvents().length, 1);
 });
 

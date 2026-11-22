@@ -9,7 +9,7 @@ import { C4Reader } from '../src/lib/c4-reader.js';
 import { createRuns } from '../src/lib/workbench/runs.js';
 import { createGroupBacklog } from '../src/lib/workbench/group-backlog.js';
 import { importSupervisorRecords, supervisorRecord, supervisorSequences } from './helpers/supervisor-records.js';
-import { eventTypesFor, restartEffect, restartRows } from '../public/js/wb/timeline-rows.js';
+import { eventTypesFor } from '../public/js/wb/timeline-rows.js';
 
 const query = values => new URLSearchParams(values);
 
@@ -103,11 +103,6 @@ test('run and group counts leave out the crash report an automatic restart cause
     assert.deepEqual(n, { ...raw, silent: raw.silent - 1, tool: raw.tool - 1, edge: raw.edge - 1 }, `${label}: run counts`);
     assert.equal(page.totalEvents, Object.values(raw).reduce((sum, count) => sum + count, 0) - 3, `${label}: group count`);
     assert.equal(page.unattributed, 1, `${label}: events in no run are counted as before`);
-    // Each run's count is the number of rows its timeline shows.
-    for (const run of page.items) {
-      const events = f.store.queryEvents({ sessionGroup: group, runId: run.runId, types, limit: 1000 });
-      assert.equal(run.n, restartRows(events, restartEffect(events)).length, `${label}: ${run.runId} count equals its rows`);
-    }
   }
 });
 
@@ -161,7 +156,7 @@ test('single view reads only ungrouped runs while multi Origin keeps its own his
 });
 
 // Integration boundary: a real read-only C4Reader over a private SQLite DB. Run
-// for message projection/range queries; skip UI-only changes. The official runner
+// for message projection or pagination; skip UI-only changes. The official runner
 // isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; no subprocess/tmux/network. Close
 // reader and fixture writer before removing the owned root.
 test('group messages expose direction and time without content or internal traffic', t => {
@@ -176,17 +171,19 @@ test('group messages expose direction and time without content or internal traff
   put.run(4, 'telegram:b', 'in', 'telegram', '2026-10-02 12:00:00', 'private other group');
   const reader = new C4Reader(f.root);
   f.addCleanup(() => { reader.close(); db.close(); });
-  const rows = reader.getGroupMessages('telegram:a', { since: '2026-10-01T00:00:00Z', until: '2026-10-03T00:00:00Z' });
+  const rows = reader.getGroupMessagePage('telegram:a', new URLSearchParams()).items;
   assert.deepEqual(rows.map(row => row.id), [1, 2]);
   assert.deepEqual(Object.keys(rows[0]), ['id', 'direction', 'channel', 'timestamp']);
   assert.doesNotMatch(JSON.stringify(rows), /private|content/);
-  assert.equal(reader.getGroupMessages('telegram:a', { since: '2026-10-02T00:00:00Z', until: '2026-10-03T00:00:00Z' }).length, 1);
+  const latest = reader.getGroupMessagePage('telegram:a', new URLSearchParams('limit=1'));
+  assert.deepEqual(latest.items.map(row => row.id), [2]);
+  assert.deepEqual(reader.getGroupMessagePage('telegram:a', new URLSearchParams({ cursor: latest.nextCursor })).items.map(row => row.id), [1]);
   assert.throws(() => reader._open().prepare('DELETE FROM conversations').run(), /readonly/i);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM conversations').get().n, 4);
 });
 
 // Integration boundary: NULL message attribution in a private read-only C4 DB.
-// Run when message scope/range SQL changes; rendering-only edits can skip.
+// Run when message scope SQL changes; rendering-only edits can skip.
 // Teardown closes both connections before removing the isolated fixture root.
 test('single messages retain NULL scope and never include Origin or other groups', t => {
   const f = fixture(t);
@@ -199,16 +196,13 @@ test('single messages retain NULL scope and never include Origin or other groups
   put.run(3, null, 'in', 'internal', '2026-10-02 12:00:00', 'private internal');
   put.run(4, 'origin', 'in', 'telegram', '2026-10-02 12:00:00', 'private Origin');
   put.run(5, 'telegram:a', 'in', 'telegram', '2026-10-02 12:00:00', 'private group');
-  put.run(6, null, 'in', 'telegram', '2026-10-04 12:00:00', 'private outside range');
   const reader = new C4Reader(f.root);
   f.addCleanup(() => { reader.close(); db.close(); });
-  const range = { since: '2026-10-01T00:00:00Z', until: '2026-10-03T00:00:00Z' };
-  const rows = reader.getGroupMessages(null, range);
+  const rows = reader.getGroupMessagePage(null, new URLSearchParams()).items;
   assert.deepEqual(rows.map(row => row.id), [1, 2]);
   for (const row of rows) assert.deepEqual(Object.keys(row), ['id', 'direction', 'channel', 'timestamp']);
   assert.doesNotMatch(JSON.stringify(rows), /private|content/);
-  assert.deepEqual(reader.getGroupMessages('origin', range).map(row => row.id), [4]);
-  assert.throws(() => reader.getGroupMessages(null, { since: 'invalid' }), { code: 'INVALID_ARGUMENT', statusCode: 400 });
+  assert.deepEqual(reader.getGroupMessagePage('origin', new URLSearchParams()).items.map(row => row.id), [4]);
 });
 
 // Core's ranges from an in-memory answer, and a Sync marker file for every group, so each group asks for its status.

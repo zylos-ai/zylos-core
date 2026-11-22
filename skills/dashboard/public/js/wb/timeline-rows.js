@@ -18,11 +18,10 @@ export function eventChip(event) {
 /**
  * The event types to ask the server for. A single chip asks for its own list; the unfiltered
  * view asks for every plain event in plain view and for everything in technical view (null).
- * The tools chip also asks for automatic restarts, which it does not show, to tell the tool calls they cut off.
  */
 export function eventTypesFor(filter, level = 'plain') {
   if (filter === 'messages') return [];
-  if (filter === 'tools') return [...toolEventTypes, ...automaticRestarts];
+  if (filter === 'tools') return toolEventTypes;
   if (filter === 'lifecycle') return lifecycleEventTypes;
   if (filter === 'subagents') return ['subagent_start', 'subagent_stop'];
   return level === 'technical' ? null : plainEventTypes;
@@ -69,16 +68,6 @@ export function runRestartEffect(events) {
   return event => effects.get(event.run_id)?.(event) ?? null;
 }
 
-/** Timeline rows for events: the crash reports of automatic restarts left out, the tool calls they cut off marked. */
-export function restartRows(events, effect) {
-  const rows = [];
-  for (const event of events) {
-    const kind = effect(event);
-    if (kind !== 'exit') rows.push({ at: timeValue(event.timestamp), event, ...(kind === 'interrupted' ? { interrupted: true } : {}) });
-  }
-  return rows;
-}
-
 export function eventRows(events) {
   return events.map(event => ({ at: timeValue(event.timestamp), event, ...(event.interrupted === true ? { interrupted: true } : {}) }));
 }
@@ -116,7 +105,7 @@ export const recentLimit = 5;
  * filled its window, the group holding the window's earliest recorded event may continue before it:
  * that group is marked `open`, so its count is a lower bound and its first time is unknown. The server
  * cuts the window by recorded order, which can differ from timestamp order, so the open group is found
- * by recorded order, not by position. Automatic restarts read as on the timeline (see restartRows).
+ * by recorded order, not by position.
  */
 export function recentRows(events, { window = recentWindow, limit = recentLimit } = {}) {
   const rows = newestFirst(eventRows(events));

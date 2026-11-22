@@ -532,6 +532,145 @@ test('timeline run rows, events and messages hide run ids and raw codes in plain
   assert.match(root.textContent, /wb.timeline.noEarlier/, 'all runs loaded ends the list explicitly');
 });
 
+test('mixed timeline reveals older messages only as event coverage grows', async () => {
+  const document = createDocument(), root = document.createElement('div');
+  const event = (id, millis) => ({ id, event_seq: id, event_type: 'session_start', timestamp: new Date(millis).toISOString() });
+  const loader = createTimelineLoader({ now: () => 9000, request: async path => {
+    const url = new URL(path, 'http://fixture');
+    if (url.pathname.endsWith('/runs')) return { ...emptyRuns, items: [run('r', 1000, 9000)] };
+    if (url.pathname.endsWith('/messages')) return timelinePage([1000, 3000, 5000, 7000].map((millis, id) => ({ id, direction: 'in', timestamp: new Date(millis).toISOString() })));
+    const cursor = url.searchParams.get('cursor');
+    if (cursor === 'end') return timelinePage([event(1, 2000)]);
+    if (cursor === 'middle') return timelinePage([event(2, 3000)], 'end');
+    return timelinePage([event(3, 5000)], 'middle');
+  } });
+  const visible = () => {
+    renderTimeline(root, loader, { document, t, level: 'technical' });
+    return allNodes(root).filter(node => node.classList.contains('wb-timeline-message'))
+      .map(node => allNodes(node).find(child => child.tagName === 'TIME').title);
+  };
+  try {
+    await loader.open('a', 'r');
+    assert.deepEqual(visible(), [7000, 5000].map(at => new Date(at).toISOString()));
+    await loader.loadEarlierEvents('r');
+    assert.deepEqual(visible(), [7000, 5000, 3000].map(at => new Date(at).toISOString()));
+    await loader.setChips(['messages']);
+    assert.equal(visible().length, 4, 'the messages-only view is not bounded by events');
+    await loader.setChips(['messages', 'tools', 'lifecycle']);
+    await loader.loadEarlierEvents('r');
+    await loader.loadEarlierEvents('r');
+    assert.equal(visible().length, 4, 'the final event page removes the event boundary');
+  } finally { loader.close(); }
+});
+
+test('message paging attributes 300 metadata rows and polls only for new ids', async () => {
+  const stamp = seconds => new Date(seconds * 1000).toISOString();
+  const message = id => ({ id, direction: 'in', channel: 'telegram', timestamp: stamp(id), content: 'fixture payload' });
+  const rows = Array.from({ length: 300 }, (_, index) => message(index + 1));
+  const reads = [];
+  const loader = createTimelineLoader({ now: () => Date.parse(stamp(301)), request: async path => {
+    const url = new URL(path, 'http://fixture');
+    if (url.pathname.endsWith('/runs')) return { ...emptyRuns, items: [run('live', 201000, 300000), run('past', 1000, 100000)] };
+    if (url.pathname.endsWith('/events')) return timelinePage();
+    const { searchParams } = url;
+    const cursor = searchParams.get('cursor'), limit = Number(searchParams.get('limit'));
+    const after = searchParams.get('direction') === 'after';
+    reads.push([cursor, after, limit]);
+    const matching = rows.filter(row => cursor === null || (after ? row.id > Number(cursor) : row.id < Number(cursor)));
+    const items = after ? matching.slice(0, limit) : matching.slice(-limit);
+    return timelinePage(items, !after && matching.length > limit ? String(items[0].id) : null, String(items.at(-1)?.id ?? cursor));
+  } });
+  try {
+    await loader.open('a', 'live');
+    assert.deepEqual(reads, [[null, false, 100], ['201', false, 100], ['101', false, 100]]);
+    for (const [items, first, last] of [[loader.state.messages.get('past'), 1, 100], [loader.state.between, 101, 200], [loader.state.messages.get('live'), 201, 300]]) {
+      assert.deepEqual(items.map(item => item.id), Array.from({ length: 100 }, (_, index) => index + first));
+      assert.equal(items.at(-1).id, last);
+      assert.ok(items.every(item => !Object.hasOwn(item, 'content')));
+    }
+    rows.push(message(301));
+    await loader.refresh();
+    assert.deepEqual(reads.slice(3), [['300', true, 100]]);
+    assert.equal(loader.state.messages.get('live').at(-1).id, 301);
+  } finally { loader.close(); }
+});
+
+test('a live run missing from the runs response does not show a partial event count', async () => {
+  const document = createDocument(), root = document.createElement('div');
+  const loader = createTimelineLoader({ request: async path => path.includes('/events')
+    ? timelinePage([{ id: 'first', event_type: 'session_start', timestamp: new Date(1100).toISOString() }], 'older')
+    : emptyRuns });
+  try {
+    await loader.open('a', 'r');
+    renderTimeline(root, loader, { document, t });
+    assert.match(root.textContent, /wb\.timeline\.currentRun/);
+    assert.doesNotMatch(root.textContent, /wb\.timeline\.count/);
+    assert.match(root.textContent, /wb\.event\.session_start/);
+  } finally { loader.close(); }
+});
+
+test('message unavailability does not hide a delayed current run event on open or poll', async () => {
+  const current = row('a'), document = createDocument(), root = document.createElement('div');
+  let pending = deferred();
+  const loader = createTimelineLoader({ onChange: () => renderTimeline(root, loader, { document, t }), request: async path => {
+    const url = new URL(path, 'http://fixture');
+    if (url.pathname.endsWith('/runs')) return { ...emptyRuns, items: [run(current.live.runId)] };
+    if (url.pathname.endsWith('/messages')) throw Object.assign(new Error('Group messages unavailable'), { status: 503, code: 'unavailable' });
+    return pending.promise;
+  } });
+  try {
+    const opened = loader.open('a', current.live.runId);
+    await tick();
+    pending.resolve(timelinePage([{ id: 'first', event_type: 'session_start', timestamp: new Date(1100).toISOString() }]));
+    await opened;
+    assert.match(root.textContent, /wb\.event\.session_start/);
+    assert.match(root.textContent, /wb\.timeline\.count.*wb\.readFailed · Group messages unavailable/);
+    pending = deferred();
+    const refreshed = loader.refresh();
+    await tick();
+    pending.resolve(timelinePage([{ id: 'second', event_type: 'stop', timestamp: new Date(1200).toISOString() }]));
+    await refreshed;
+    assert.match(root.textContent, /wb\.event\.stop/);
+    assert.match(root.textContent, /wb\.readFailed · Group messages unavailable/);
+  } finally { loader.close(); }
+});
+
+test('each expired timeline cursor silently reloads only its own stream', async t => {
+  for (const stream of ['runs', 'events', 'messages']) await t.test(stream, async () => {
+    const calls = [], errors = [];
+    let expired = false;
+    const stamp = new Date(1200).toISOString();
+    const loader = createTimelineLoader({ onError: error => errors.push(error), request: async path => {
+      const url = new URL(path, 'http://fixture'), resource = url.pathname.split('/').at(-1), cursor = url.searchParams.get('cursor');
+      calls.push([resource, cursor]);
+      if (expired && resource === stream && cursor) throw Object.assign(new Error('cursor expired'), { code: 'invalid_cursor' });
+      const suffix = expired ? 'fresh' : 'old';
+      if (resource === 'runs') return { ...emptyRuns, items: [run('r'), run(suffix, 300, 900)], nextCursor: expired ? null : 'old-runs' };
+      if (resource === 'events') return timelinePage([{ id: suffix, timestamp: stamp }], expired ? null : 'old-events');
+      return timelinePage([{ id: expired ? 2 : 1, timestamp: stamp }], null, 'old-messages');
+    } });
+    try {
+      await loader.open('a', 'r');
+      expired = true;
+      calls.length = 0;
+      if (stream === 'runs') {
+        await loader.loadEarlier();
+        assert.ok(loader.state.runs.some(item => item.runId === 'fresh'));
+        assert.ok(!loader.state.runs.some(item => item.runId === 'old'));
+      } else if (stream === 'events') {
+        await loader.loadEarlierEvents('r');
+        assert.deepEqual(loader.state.events.get('r').map(item => item.id), ['fresh']);
+      } else {
+        await loader.refresh();
+        assert.deepEqual(loader.state.messages.get('r').map(item => item.id), [2]);
+      }
+      assert.deepEqual(calls.filter(([resource]) => resource === stream), [[stream, `old-${stream}`], [stream, null]]);
+      assert.deepEqual(errors, []);
+      assert.equal(loader.state.error, null);
+    } finally { loader.close(); }
+  });
+});
+
 test('message attribution projects only direction metadata and leaves gaps between runs', () => {
   const messages = [
     { id: 1, timestamp: '1970-01-01 00:00:01', direction: 'in', channel: 'telegram', content: 'SECRET' },
@@ -1353,6 +1492,26 @@ test('subagent initial read paginates its typed stream and later snapshots consu
   assert.equal(calls.length, 1);
   assert.equal(calls[0].searchParams.get('cursor'), 'newer-201');
   f.controller.destroy();
+});
+
+test('subagent pages keep the greater id when the same sequence straddles a page', async () => {
+  const current = row('a'), calls = [];
+  const event = (id, event_type) => ({ id, event_type, run_id: 'run-a', event_seq: 20, agent_id: 'worker' });
+  const f = detailFixture(async path => {
+    const url = new URL(path, 'http://fixture');
+    if (url.searchParams.get('filter') !== 'subagents') return response(defaultRead(path));
+    const cursor = url.searchParams.get('cursor');
+    calls.push(cursor);
+    if (cursor === 'middle') return response(timelinePage([event('entry-a', 'subagent_start')], 'oldest'));
+    if (cursor === 'oldest') return response(timelinePage([{ ...event('other', 'subagent_start'), event_seq: 19, agent_id: 'other' }]));
+    return response(timelinePage([event('entry-b', 'subagent_stop')], 'middle'));
+  });
+  try {
+    await f.controller.open(current, { rows: [current], listKnown: true });
+    assert.deepEqual(calls, [null, 'middle', 'oldest']);
+    assert.deepEqual(activeSubagents(f.controller.state.currentEvents, 'run-a').map(item => item.id), ['other']);
+    assert.equal(f.controller.state.currentEvents.find(item => item.agent_id === 'worker').id, 'entry-b');
+  } finally { f.controller.destroy(); }
 });
 
 test('filter reload excludes refresh append until the new filtered array is authoritative', async () => {

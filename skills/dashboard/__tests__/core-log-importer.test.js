@@ -31,6 +31,9 @@ function fixture(t, options = {}) {
     diagnostics: () => store.getSourceHealth().map(r => r.extra),
   };
 }
+const historyWarnings = (store, stream) => store.getSourceHealth().filter(row =>
+  row.signal_type === 'history' && row.status !== 'healthy' && (stream === undefined || row.extra?.stream === stream));
+
 function unchanged(old, current) {
   for (const key of ['anchor_len', 'anchor_sha256', 'byte_offset', 'file_name']) assert.equal(current[key], old[key], key);
 }
@@ -256,12 +259,12 @@ test('filtered SQL pagination includes group/runtime/run/session/type before LIM
 });
 test('poll discovery failures persist a diagnostic that successful discovery clears',async t=>{
   const f=fixture(t);await f.importer.poll();
-  assert.ok(!f.store.getHistoryDiagnostics().some(row=>row.name==='core-log'));
+  assert.ok(!historyWarnings(f.store).some(row=>row.name==='core-log'));
   const discover=f.importer.discover.bind(f.importer);f.importer.discover=async()=>{throw Object.assign(new Error('fixture'),{code:'EACCES'});};
   await assert.rejects(f.importer.poll(),{code:'EACCES'});
-  assert.equal(f.store.getHistoryDiagnostics().find(row=>row.name==='core-log').extra.reason,'import_failed');
+  assert.equal(historyWarnings(f.store).find(row=>row.name==='core-log').extra.reason,'import_failed');
   f.importer.discover=discover;await f.importer.poll();
-  assert.ok(!f.store.getHistoryDiagnostics().some(row=>row.name==='core-log'));
+  assert.ok(!historyWarnings(f.store).some(row=>row.name==='core-log'));
 });
 
 test('Supervisor diagnostics preserve explicit producer IDs, never infer missing identity from another record',async t=>{
@@ -311,9 +314,9 @@ test('source recovery clears only current failures; historical gaps remain; quie
   const f = fixture(t);
   const absent = path.join(f.root, 'absent', 'events.jsonl');
   await f.importer.importStream({ stream: 'events:origin', file: absent });
-  assert.equal(f.store.getHistoryDiagnostics({ stream: 'events:origin' }).length, 1);
+  assert.equal(historyWarnings(f.store, 'events:origin').length, 1);
   f.write(line('ok') + '{bad}\n'); await f.read();
-  const diagnostics = f.store.getHistoryDiagnostics({ sessionGroup: 'origin' });
+  const diagnostics = historyWarnings(f.store, 'events:origin');
   assert.deepEqual(diagnostics.map(row => row.extra.reason), ['malformed_line']);
   const before = f.store.db.prepare('SELECT total_changes() AS n').get().n;
   await f.read(); await f.importer.importStream({ stream: 'missing', file: path.join(f.root, 'missing', 'events.jsonl') });
@@ -329,30 +332,9 @@ test('single-stream failures affect health and recover without erasing historica
   const statFile = f.importer.statFile;
   f.importer.statFile = async () => { throw Object.assign(new Error('fixture'), { code: 'EACCES' }); };
   await f.importer.poll();
-  assert.equal(f.store.getHistoryDiagnostics()[0].extra.reason, 'read_failed');
+  assert.equal(historyWarnings(f.store)[0].extra.reason, 'read_failed');
   f.importer.statFile = statFile; await f.importer.poll();
-  assert.equal(f.store.getHistoryDiagnostics().length, 0);
-});
-
-// Real private Store diagnostics. Run for event-scope or diagnostic-pagination
-// changes; skip UI-only changes. The fixture owns its files/importer and closes
-// them through test teardown; no network, tmux, PM2 or live database is opened.
-test('single Origin diagnostics include its hook stream and legacy streams before pagination', t => {
-  const f = fixture(t);
-  for (const [name, stream] of [['a-origin', 'events:origin'], ['b-legacy', 'router'], ['c-other', 'events:other'], ['d-receive', 'receive']]) {
-    f.store.upsertSourceHealth(name, 'history', 'warning', { stream, reason: 'file_missing' });
-  }
-  // Keep the primary sort key tied so these scope/pagination checks use name
-  // order regardless of how long the individual fixture writes take.
-  f.store.db.prepare("UPDATE source_health SET updated_at = ? WHERE signal_type = 'history'").run('2026-01-01 00:00:00');
-  const names = filter => f.store.getHistoryDiagnostics(filter).map(row => row.name);
-  assert.deepEqual(names({ sessionGroup: null }), ['b-legacy', 'd-receive']);
-  assert.deepEqual(names({ sessionGroup: null, includeLegacyOrigin: true }), ['a-origin', 'b-legacy', 'd-receive']);
-  assert.deepEqual(names({ sessionGroup: null, includeLegacyOrigin: true, limit: 1, offset: 1 }), ['b-legacy']);
-  assert.deepEqual(names({ sessionGroup: null, includeLegacyOrigin: true, stream: 'events:origin' }), ['a-origin']);
-  assert.deepEqual(names({ sessionGroup: null, includeLegacyOrigin: true, stream: 'events:other' }), []);
-  assert.deepEqual(names({ sessionGroup: 'origin' }), ['a-origin']);
-  assert.deepEqual(names({ sessionGroup: 'other', includeLegacyOrigin: true }), ['c-other']);
+  assert.equal(historyWarnings(f.store).length, 0);
 });
 
 test('scan descriptors survive rename before consumption; old tail precedes next current', async t => {
@@ -461,13 +443,13 @@ for (const absentDirectory of [false, true]) test(`read failure recovers when so
   const file = path.join(directory, 'events.jsonl'); fs.writeFileSync(file, line('a'));
   f.importer.discover = async () => [{ stream: 'events:origin', file }];
   const stat = f.importer.statFile; f.importer.statFile = async () => { throw Object.assign(new Error('fixture'), { code: 'EACCES' }); };
-  await f.importer.poll(); assert.ok(f.store.getHistoryDiagnostics().some(row => row.extra.reason === 'read_failed'));
+  await f.importer.poll(); assert.ok(historyWarnings(f.store).some(row => row.extra.reason === 'read_failed'));
   f.importer.statFile = stat; fs.unlinkSync(file); if (absentDirectory) fs.rmdirSync(directory);
   await f.importer.poll();
-  assert.ok(!f.store.getHistoryDiagnostics().some(row => row.extra.reason === 'read_failed'));
+  assert.ok(!historyWarnings(f.store).some(row => row.extra.reason === 'read_failed'));
   fs.mkdirSync(directory, { recursive: true }); fs.writeFileSync(file, line('b'));
   f.importer.statFile = async () => { throw Object.assign(new Error('fixture'), { code: 'EACCES' }); };
-  await f.importer.poll(); assert.ok(f.store.getHistoryDiagnostics().some(row => row.extra.reason === 'read_failed'));
+  await f.importer.poll(); assert.ok(historyWarnings(f.store).some(row => row.extra.reason === 'read_failed'));
 });
 
 test('successful discovery clears global error even while one stream still fails', async t => {
@@ -476,7 +458,7 @@ test('successful discovery clears global error even while one stream still fails
   await assert.rejects(f.importer.poll());
   f.importer.discover = async () => [{ stream: 'events:origin', file: f.file }];
   f.importer.statFile = async () => { throw Object.assign(new Error('read'), { code: 'EACCES' }); };
-  await f.importer.poll(); const diagnostics = f.store.getHistoryDiagnostics();
+  await f.importer.poll(); const diagnostics = historyWarnings(f.store);
   assert.ok(!diagnostics.some(row => row.name === 'core-log'));
   assert.ok(diagnostics.some(row => row.extra.reason === 'read_failed'));
 });
@@ -584,9 +566,9 @@ test('a newly created empty source directory clears its earlier missing warning 
   const source = { stream: 'receive', file: path.join(directory, 'receive.jsonl') };
   await f.importer.importStream(source);
   assert.equal(f.rows().length, 0);
-  assert.ok(f.store.getHistoryDiagnostics({ stream: 'receive' }).some(row => row.extra.reason === 'source_missing'));
+  assert.ok(historyWarnings(f.store, 'receive').some(row => row.extra.reason === 'source_missing'));
   fs.mkdirSync(directory);
   await f.importer.importStream(source);
-  assert.deepEqual(f.store.getHistoryDiagnostics({ stream: 'receive' }), []);
+  assert.deepEqual(historyWarnings(f.store, 'receive'), []);
   assert.equal(f.rows().length, 0);
 });

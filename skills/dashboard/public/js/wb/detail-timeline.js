@@ -14,6 +14,12 @@ export const chipNames = ['messages', 'tools', 'lifecycle'];
 const filters = ['all', ...chipNames];
 export const isInvalidCursor = error => (error.body?.error?.code ?? error.code) === 'invalid_cursor';
 
+async function settleReads(reads) {
+  const results = await Promise.allSettled(reads);
+  const failure = results.find(result => result.status === 'rejected' && result.reason.name !== 'AbortError');
+  if (failure) throw failure.reason;
+}
+
 export function attributeMessages(messages, runs) {
   const attributed = new Map(runs.map(run => [run.runId, []]));
   const between = [];
@@ -63,7 +69,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
     if (!starts.length || !ends.length) return;
     const start = Math.floor(Math.min(...starts) / 1000) * 1000;
     const end = Math.floor(Math.max(...ends) / 1000) * 1000;
-    const readMessages = (cursor, direction) => readPage('messages', {}, cursor, direction, gen);
+    const readMessages = (cursor, direction) => readPage('messages', { limit: 100 }, cursor, direction, gen);
     const remember = value => {
       for (const row of value.items ?? []) messageRows.set(row.id, row);
     };
@@ -158,11 +164,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
     state.events.clear();
     state.eventPages.clear();
     state.currentEvents = [];
-    await guarded(async () => {
-      const results = await Promise.allSettled([alongside(filterGen), ...[...state.expanded].map(runId => runEvents(runId, null, gen, filterGen))]);
-      const failure = results.find(result => result.status === 'rejected');
-      if (failure) throw failure.reason;
-    });
+    await guarded(() => settleReads([alongside(filterGen), ...[...state.expanded].map(runId => runEvents(runId, null, gen, filterGen))]));
   }
   async function guarded(operation) {
     const gen = generation;
@@ -192,16 +194,12 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
       state.expanded = new Set(currentRunId ? [currentRunId] : []);
       controller = new AbortController();
       const gen = generation;
-      await guarded(async () => {
-        await Promise.all([loadRuns(null, gen), currentRunId ? runEvents(currentRunId, null, gen) : Promise.resolve()]);
-      });
+      await guarded(() => settleReads([loadRuns(null, gen), currentRunId ? runEvents(currentRunId, null, gen) : Promise.resolve()]));
     },
     async refresh() {
       if (!state.open || !active() || state.loading) return;
       const gen = generation;
-      await guarded(async () => {
-        await Promise.all([state.currentRunId ? runEvents(state.currentRunId, 'after', gen) : Promise.resolve(), loadMessages(gen, true)]);
-      });
+      await guarded(() => settleReads([state.currentRunId ? runEvents(state.currentRunId, 'after', gen) : Promise.resolve(), loadMessages(gen, true)]));
     },
     async loadEarlier() {
       if (!state.runsCursor || state.loading) return;
@@ -300,7 +298,7 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
   const showMessages = chips.has('messages'), showEvent = event => showsEvent(event, { chips, chipCount: chipNames.length, level });
   const messageLabel = message => t(message.direction === 'in' ? 'wb.timeline.received' : 'wb.timeline.replied');
   const current = state.currentRunId && !state.runs.some(run => run.runId === state.currentRunId)
-    ? [{ runId: state.currentRunId, endReason: 'running', n: state.events.get(state.currentRunId)?.length ?? 0 }, ...state.runs]
+    ? [{ runId: state.currentRunId, endReason: 'running' }, ...state.runs]
     : state.runs;
   const lang = document.documentElement?.lang;
   for (const run of current) {
@@ -323,8 +321,15 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
       const rows = [];
       const events = state.filter === 'messages' ? [] : state.events.get(run.runId) ?? [];
       rows.push(...eventRows(events.filter(showEvent)));
-      if (showMessages && ['all', 'messages'].includes(state.filter)) for (const message of state.messages.get(run.runId) ?? []) {
-        rows.push({ at: timeValue(message.timestamp), message });
+      if (showMessages && ['all', 'messages'].includes(state.filter)) {
+        const page = state.eventPages?.get(run.runId);
+        const earliest = page?.nextCursor
+          ? events.reduce((bound, event) => Math.min(bound, timeValue(event.timestamp)), Infinity)
+          : state.filter === 'messages' || page || !state.loading ? -Infinity : Infinity;
+        for (const message of state.messages.get(run.runId) ?? []) {
+          const at = timeValue(message.timestamp);
+          if (at >= earliest) rows.push({ at, message });
+        }
       }
       // Newest first inside a run as across runs, so "back to latest" (the top) is the latest row.
       for (const group of mergeRepeats(newestFirst(rows))) {
