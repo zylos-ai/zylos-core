@@ -387,7 +387,7 @@ async function sync({
   const settingsPath = path.join(zylosDir, '.claude', 'settings.json');
 
   if (!fs.existsSync(TEMPLATE_SETTINGS)) {
-    console.log('Settings hooks: template not found, skipping.');
+    log('Settings hooks: template not found, skipping.');
     return { abort: true };
   }
 
@@ -395,7 +395,7 @@ async function sync({
   try {
     templateSettings = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS, 'utf8'));
   } catch {
-    console.log('Settings hooks: failed to parse template, skipping.');
+    log('Settings hooks: failed to parse template, skipping.');
     return { abort: true };
   }
   try {
@@ -415,7 +415,7 @@ async function sync({
     dryRun, desiredHooks: desiredClaudeHooks({ zylosDir, stopFailureSupported, subagentHooksSupported }),
     zylosDir, log,
   });
-  if (!stopFailureSupported) console.log('Health hooks: StopFailure unavailable or unverified; retaining screen-based fallback.');
+  if (!stopFailureSupported) log('Health hooks: StopFailure unavailable or unverified; retaining screen-based fallback.');
 
   // --- Sync top-level statusLine from template ---
   let statusLineChanged = false;
@@ -428,7 +428,7 @@ async function sync({
         installedSettings.statusLine = templateSettings.statusLine;
       }
       statusLineChanged = true;
-      console.log(`  ${symbol} statusLine: ${templateSettings.statusLine.command || '(set)'}`);
+      log(`  ${symbol} statusLine: ${templateSettings.statusLine.command || '(set)'}`);
     }
   } else if (installedSettings.statusLine) {
     // Template removed statusLine — clean up installed copy
@@ -436,13 +436,14 @@ async function sync({
       delete installedSettings.statusLine;
     }
     statusLineChanged = true;
-    console.log(`  - statusLine: (removed)`);
+    log(`  - statusLine: (removed)`);
   }
 
   const modelSync = syncTemplateModelSetting({
     templateSettings,
     installedSettings,
     dryRun,
+    log,
   });
 
   // Backfill boolean settings (autoMemoryEnabled, autoDreamEnabled)
@@ -453,6 +454,7 @@ async function sync({
       templateSettings,
       installedSettings,
       dryRun,
+      log,
     });
     if (result.changed) settingsBackfilled = true;
   }
@@ -479,6 +481,16 @@ async function sync({
       };
     },
   };
+}
+
+export async function repairProjectSettings(zylosDir, settingsPath) {
+  const backupPath = `${settingsPath}.corrupt.${Date.now()}`;
+  fs.renameSync(settingsPath, backupPath);
+  writePrivateFile(settingsPath, fs.readFileSync(TEMPLATE_SETTINGS));
+  const report = await sync({ zylosDir, log: () => {} });
+  if (report.abort) throw new Error('Cannot synchronize Claude hooks after rebuilding settings');
+  await report.commit();
+  console.log(`Claude settings were not valid JSON; moved to ${backupPath} and rebuilt from the template`);
 }
 
 function features() {
