@@ -76,6 +76,7 @@ import { createDisplayNames } from './lib/workbench/display-names.js';
 import { workbenchGroupKey, workbenchGroupDetailKey, workbenchFailure } from './lib/workbench/group-http.js';
 import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
 import { createRuns } from './lib/workbench/runs.js';
+import { readTimelineEvents } from './lib/workbench/timeline-events.js';
 import { createGroupConfig } from './lib/workbench/group-config.js';
 import { createGroupBacklog } from './lib/workbench/group-backlog.js';
 import { createMemoryBacklog, readBacklogPage, treeBacklog } from './lib/workbench/memory-backlog.js';
@@ -1011,31 +1012,6 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
-  const groupEvents = pathname.match(/^\/api\/groups\/([^/]+)\/events$/);
-  if (groupEvents) {
-    const key = await groupsApi.readKey(workbenchGroupDetailKey(groupEvents[1]));
-    const since = url.searchParams.get('since') || undefined;
-    const until = url.searchParams.get('until') || undefined;
-    const types = url.searchParams.get('types')?.split(',').filter(Boolean) || undefined;
-    const sessionId = url.searchParams.get('session_id') || undefined;
-    const limit = parseInt(url.searchParams.get('limit') || '100', 10);
-    const offset = parseInt(url.searchParams.get('offset') || '0', 10);
-    const order = url.searchParams.get('order') === 'desc' ? 'desc' : 'asc';
-    const sessionGroup = key === 'origin' && readFleetSessionMode() === 'single' ? null : key;
-    const runId = url.searchParams.get('run_id') || undefined;
-    const runtime = url.searchParams.get('runtime') || undefined;
-    const afterSeq = Number(url.searchParams.get('after_seq'));
-    const events = await coreLogImporter.sanitizeEvents(store.queryEvents({ since, until, types, sessionId,
-      sessionGroup, includeLegacyOrigin: key === 'origin' && readFleetSessionMode() === 'single', runId, runtime, afterSeq, limit: Math.min(1000, limit), offset, order }));
-    const stream = url.searchParams.get('stream') || undefined;
-    const gapLimit = parseInt(url.searchParams.get('gap_limit') || '100', 10);
-    const gapOffset = parseInt(url.searchParams.get('gap_offset') || '0', 10);
-    const gaps = await coreLogImporter.sanitizeEvents(store.getHistoryDiagnostics({
-      sessionGroup, includeLegacyOrigin: key === 'origin' && readFleetSessionMode() === 'single', stream, limit: gapLimit, offset: gapOffset }));
-    sendJson(res, 200, { events, count: events.length, gaps });
-    return true;
-  }
-
   if (pathname === '/api/memory/backlog') {
     try {
       sendJson(res, 200, await readBacklogPage(memoryBacklog, url.searchParams));
@@ -1077,25 +1053,22 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
-  const detailRead = pathname.match(/^\/api\/groups\/([^/]+)\/(runs|messages|backlog)$/);
+  const detailRead = pathname.match(/^\/api\/groups\/([^/]+)\/(runs|events|messages|backlog)$/);
   if (detailRead) {
     try {
       const key = await groupsApi.readKey(workbenchGroupDetailKey(detailRead[1]));
       let data;
       switch (detailRead[2]) {
         case 'runs':
-          data = await groupRuns(key, {
-            before: url.searchParams.get('before') ?? undefined,
-            limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 3,
-            types: url.searchParams.get('types')?.split(',').filter(Boolean) || undefined,
-          });
+          data = await groupRuns(key, url.searchParams);
+          break;
+        case 'events':
+          data = await readTimelineEvents(store, key, key === 'origin' && readFleetSessionMode() === 'single',
+            url.searchParams, events => coreLogImporter.sanitizeEvents(events));
           break;
         case 'messages':
-          data = { messages: c4Reader.getGroupMessages(key === 'origin' &&
-            (await getDetailSnapshot()).view === 'single' ? null : key, {
-            since: url.searchParams.get('since') ?? 0,
-            until: url.searchParams.get('until') ?? Date.now(),
-          }) };
+          data = c4Reader.getGroupMessagePage(key === 'origin' &&
+            (await getDetailSnapshot()).view === 'single' ? null : key, url.searchParams);
           break;
         case 'backlog': data = await groupBacklog(key); break;
       }
