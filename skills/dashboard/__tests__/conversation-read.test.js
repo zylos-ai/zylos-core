@@ -34,6 +34,9 @@ test('read positions are monotonic, scoped, and updated by a stored send',
       assert.equal(send.body.stored, true);
       assert.equal(f.history.readPosition(id), send.body.messageId);
       assert.equal((await list('mine')).find(item => item.id === id).unread, false);
+      f.c4.insertConversation('in', 'dashboard', a.draft.localId, 'Own message beyond the read position',
+        { groupName: a.draft.localId });
+      assert.equal((await list('mine')).find(item => item.id === id).unread, false);
 
       const next = f.addOutbound(a.draft.localId, 'newer reply');
       const upTo = await read(next.id);
