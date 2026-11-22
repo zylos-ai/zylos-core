@@ -861,6 +861,8 @@ async function loadMemoryTree({ force = false } = {}) {
     if (rootList.error) throw Object.assign(new Error(rootList.error), { code: rootList.error });
     state.memory.ready = true;
     const selected = linked || state.memory.selectedPath || preferredMemoryPath(rootList.items);
+    // A link names the file to read, so a phone shows that file rather than the list.
+    if (linked) state.memory.filePaneOpen = true;
     // A link to a file that cannot be opened shows the usual failure, then the default file.
     if (selected && !(await openMemoryFile(selected)) && linked) {
       const fallback = preferredMemoryPath(rootList.items);
@@ -905,8 +907,9 @@ async function openMemoryFile(filePath) {
     state.memory.git = git;
     state.memory.error = null;
     memoryScopeView.revealFile(file).catch(() => {});
-    // The address names the open file, so a refresh or a copied link opens it again; no history entry is added.
-    if (activeTabName() === 'memory' && tabForPath(window.location.pathname) === 'memory') {
+    // The address names a file the reader opened (or a link named), so a refresh or a copied link opens it again;
+    // the default file shown on arrival is not named, so a refresh on a phone stays on the list. No history entry.
+    if (state.memory.filePaneOpen && activeTabName() === 'memory' && tabForPath(window.location.pathname) === 'memory') {
       window.history.replaceState(window.history.state, '', api(`${remotePrefix()}/memory?file=${encodeURIComponent(file.path)}`));
     }
     const draft = readMemoryDraft(file.path);
@@ -1876,7 +1879,13 @@ function initMemoryControls() {
   $('#memory-refresh')?.addEventListener('click', () => loadMemoryTree({ force: true }).catch(() => {}));
   $('#memory-edit-btn')?.addEventListener('click', startMemoryEdit);
   // Phones show the file list and the open file one at a time; this returns to the list.
-  $('#memory-back')?.addEventListener('click', () => { state.memory.filePaneOpen = false; renderMemory(); window.scrollTo(0, 0); });
+  $('#memory-back')?.addEventListener('click', () => {
+    state.memory.filePaneOpen = false;
+    // Back on the list, the address no longer names the file, so a refresh stays on the list.
+    if (tabForPath(window.location.pathname) === 'memory') window.history.replaceState(window.history.state, '', api(`${remotePrefix()}/memory`));
+    renderMemory();
+    window.scrollTo(0, 0);
+  });
   $('#memory-save-btn')?.addEventListener('click', () => saveMemoryDraftToServer().catch(() => {}));
   $('#memory-reset-btn')?.addEventListener('click', resetMemoryEdit);
   $('#memory-fold')?.addEventListener('click', () => memoryScopeView.collapseAll());

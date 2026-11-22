@@ -556,6 +556,8 @@ export async function runWorkbenchBrowser(t, sandbox) {
     // Memory: the list starts folded; with the reference folder open it fills the screen, and a file opened from
     // further down starts at the top of its own screen.
     await page.locator('#memory-tree .memory-file').first().waitFor();
+    await page.waitForFunction(() => document.querySelector('#memory-content')?.textContent.includes('Short file.'));
+    assert.equal(await page.evaluate(() => location.search), '', 'the default file is not named in the address, so a refresh stays on the list');
     await check('memory-list');
     await openReference(page);
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
@@ -567,6 +569,15 @@ export async function runWorkbenchBrowser(t, sandbox) {
     assert.equal(file.scrollY, 0, 'the open file starts at the top');
     assert.ok(file.memoryShare >= MEMORY_SHARE, `the file text fills at least ${MEMORY_SHARE * 100}% of the screen under the app header (was ${file.memoryShare.toFixed(3)}, page top ${file.memoryPageTop})`);
     assert.ok(await page.locator('#memory-tree').evaluate(node => node.getBoundingClientRect().height === 0 || getComputedStyle(node).display === 'none'), 'the list is not on the file screen');
+    assert.equal(await page.evaluate(() => location.search), `?file=${encodeURIComponent(LONG_FILE)}`);
+    // A link to a group's file opens that file's screen; back on the list the address drops the file.
+    await page.goto(`${base}/memory?file=${encodeURIComponent(GROUP_FILE)}`);
+    await page.locator('#tab-memory.memory-file-open').waitFor();
+    await page.waitForFunction(path => document.querySelector('#memory-content')?.textContent.includes(path), GROUP_FILE);
+    await shot('memory-link');
+    await page.locator('#memory-back').click();
+    await page.locator(`#memory-tree .memory-file[data-path="${GROUP_FILE}"].active`).waitFor();
+    assert.equal(await page.evaluate(() => location.search), '');
 
     // Overview and group detail: icon, name and state share the first row; the actions are the second row, starting
     // at the icon's left edge, one row of equal-height buttons with the conversation first.
