@@ -52,8 +52,8 @@ export function projectGroup(row, snapshot) {
     errors.push(row.live?.error?.code ?? row.reason ?? snapshot.sources?.status?.reason ?? 'status_unreadable');
   }
   let kind;
-  if (row.presence === 'not_running') kind = 'offline';
-  else if (errors.length) kind = 'unknown';
+  if (errors.length) kind = 'unknown';
+  else if (row.presence === 'not_running') kind = 'offline';
   else if (row.presence === 'starting') kind = 'starting';
   else if (row.presence === 'running' && row.fence) kind = 'stopping';
   else if (row.presence === 'running' && ['busy', 'idle'].includes(activity)) {

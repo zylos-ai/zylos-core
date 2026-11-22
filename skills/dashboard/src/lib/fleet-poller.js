@@ -1142,12 +1142,6 @@ export class FleetPoller {
   }
 
   _setFailure(agent, reason) {
-    const stream = this.streams.get(agent.name);
-    if (reason === 'version_unsupported' && stream?.reading) {
-      stream.controller?.abort();
-      this._startFallbackPolling(agent, reason);
-      this._scheduleReconnect(agent);
-    }
     const existing = this.records.get(agent.name) || {};
     const color = agentColor(agent.name);
     this.records.set(agent.name, sanitizeRecord({

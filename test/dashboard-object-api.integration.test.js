@@ -34,7 +34,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ auth: { enabled: true, password: hashPassword('fixture-password') }, fleet: { agents: [{ name: 'remote-fixture', base_url: 'http://127.0.0.1:1', read_api_key: 'fixture' }] }, chat: { allowRemote: true } }));
   const configFile = path.join(root, '.zylos/config.json');
   let usageVersion = '1.0.0', usageModel = 'fixture-model', usageEffort = 'high', modeStatusReadable = true, originRun = 'fixture-run';
-  let mode = 'single', clock = Date.now(), server, seedStore, catalogReadable = true;
+  let mode = 'single', clock = Date.now(), server, seedStore, catalogReadable = true, groupListReadable = true;
   let originRuntime = 'claude', originReady = true, pinWorking = false, overrideFixture = [];
   const isOrigin = key => key === null || key === 'origin';
   const actionCalls = [], cliCalls = [], runtimeCalls = [], records = [];
@@ -201,7 +201,10 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => clock, cli,
       loadCoreModule: async name => name === 'status-view.js' ? { collectStatus: options => collectStatus({ ...options,
         mode: () => ({ mode }), resolveRoot: () => root, configIssue: () => null, requests: () => [], now: () => clock,
-        list: () => [{ sessionGroup: 'telegram:working' }, { sessionGroup: 'telegram:child' }],
+        list: () => {
+          if (!groupListReadable) throw new Error('fixture group list unavailable');
+          return [{ sessionGroup: 'telegram:working' }, { sessionGroup: 'telegram:child' }];
+        },
         facts: () => ({ originNeed: null }), health: () => ({ health: 'rate_limited', cooldownUntil: clock / 1000 + 60, updatedAt: clock }),
       }) } : name === 'config.js' ? { readSessionMode: () => ({ mode }) }
         : name === 'session-pool-config.js' ? { readPoolCapacity: () => ({ k: 3, valid: true, fresh: true }) } : core(name),
@@ -552,9 +555,20 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       const invalidInclude = await request(groups + '/telegram%3Aworking?include=config,config', { expected: 400 });
       assert.equal(invalidInclude.error.code, 'invalid_parameter');
       assert.equal(invalidInclude.error.param, 'include');
+
+      groupListReadable = false;
+      clock += 3000;
+      const query = 'runtimeOverridden=true&q=zzz-override-only';
+      const unknown = await list('side=running&' + query);
+      assert.equal(unknown.listKnown, false);
+      assert.equal(unknown.items.length, 1);
+      assert.equal(unknown.items[0].id, 'telegram:zzz-override-only');
+      assert.equal(unknown.items[0].state.kind, 'unknown');
+      assert.equal((await list('side=offline&' + query)).items.length, 0);
     } finally {
       db.close();
       overrideFixture = [];
+      groupListReadable = true;
       clock += 3000;
     }
   });

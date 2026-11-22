@@ -145,6 +145,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     const taskNames = c4.ok ? await namesOfTasks(c4.data.groups) : new Map();
     const names = await displayNames.listAll();
     const { rows, hasOlder } = mergeGroups({ status, c4, q, names, taskNames, statusError }, sanitizer);
+    const listKnown = status != null && status.groupListError == null;
     const ov = await cli.readOverrides([...new Set([...rows.map(row => row.sessionGroup).filter(group => group !== null), 'origin'])]);
     sources.ov = source(ov);
     const runtimeOverrides = new Map((ov.ok ? ov.data.runtime : []).map(item => [item.sessionGroup, item.runtime]));
@@ -155,8 +156,9 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     }
     const known = new Set(rows.map(row => row.sessionGroup ?? 'origin'));
     for (const sessionGroup of runtimeOverrides.keys()) if (!known.has(sessionGroup)) {
-      rows.push({ sessionGroup, presence: 'not_running', name: names.get(sessionGroup) ?? null,
-        live: null, c4: null, preview: null, origin: false, reason: null });
+      rows.push({ sessionGroup, presence: listKnown ? 'not_running' : 'unknown', name: names.get(sessionGroup) ?? null,
+        live: null, c4: null, preview: null, origin: false,
+        reason: listKnown ? null : statusError ?? 'group_list_failed' });
     }
     const messageTimes = new Map();
     let messageOrderKnown = true;
@@ -290,7 +292,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     const restarts = store.queryEvents({ types: AUTO_RESTART_TYPES, since: new Date(at - AUTO_RESTART_WINDOW_MS).toISOString(),
       until: new Date(at).toISOString(), sourceTime: true, limit: 1000 }).length;
     const value = { readAt: at, mode, view: status?.view ?? null, rows, counts: countRows(rows), hasOlder,
-      listKnown: status !== null && status.groupListError === null, baselineRuntime,
+      listKnown, baselineRuntime,
       instance: { runtimeHealth: status?.runtimeHealth ?? null, supervisorPaused: status?.supervisorPaused ?? null, accounts: accountsCache.accounts,
         pool, services, system, sessionModeStatus, autoRestarts: { count: restarts } },
       overrides: ov.ok ? ov.data : null, sources };
