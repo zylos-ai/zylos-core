@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendHtml, sendJson, sendCommandJson, serveStatic } from '../../src/lib/http.js';
 import { GROUP, GROUP_FILE, LONG_FILE, workbenchAnswer } from '../fixtures/workbench-browser-api.js';
+import { keyPage } from '../fixtures/key-pages.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const PAGES = ['/', '/index.html', '/memory', '/schedule', '/usage', '/settings'];
@@ -264,12 +265,13 @@ export async function runWorkbenchBrowser(t, sandbox) {
     for (const [width, height] of [[390, 844], [1280, 800]]) {
       const phone = width < 761;
       const { page, context, errors, shot } = await open(width, height, '/settings');
-      const created = [];
-      await context.route('**/api/keys', route => {
-        if (route.request().method() === 'GET') return route.fulfill({ json: { keys } });
+      const created = [], listed = [...keys];
+      await context.route(url => url.pathname.endsWith('/api/keys'), route => {
+        if (route.request().method() === 'GET') return route.fulfill({ json: keyPage(listed, new URL(route.request().url())) });
         created.push(route.request().postDataJSON());
         const key = { name: 'new-key', scope: 'read', status: 'active', created_at: '2026-11-20T02:00:00Z', last_used_at: null };
-        return route.fulfill({ json: { keys: [...keys, key], key, plaintext_key: 'zk_browser_case_only' } });
+        listed.unshift(key);
+        return route.fulfill({ json: { ok: true, key, plaintext_key: 'zk_browser_case_only' } });
       });
       await context.route('**/api/fleet/agents', route => route.request().method() === 'GET'
         ? route.fulfill({ json: { self: { name: 'browser-case' }, agents: [{ name: 'lab', base_url: 'https://lab.example', access: 'read' }] } }) : route.fallback());

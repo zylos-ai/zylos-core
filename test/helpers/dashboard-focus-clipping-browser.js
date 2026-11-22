@@ -4,7 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendHtml, sendJson, serveStatic } from '../../skills/dashboard/src/lib/http.js';
-import { workbenchSnapshot, workbenchSnapshotAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
+import { backlogAnswer, workbenchSnapshot, workbenchSnapshotAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
 import { openDashboardTab } from '../../skills/dashboard/__tests__/helpers/browser-navigation.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../skills/dashboard/public/', import.meta.url)));
@@ -88,12 +88,10 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, memoryRef
         }
         const value = workbenchSnapshotAnswer(url, snapshot, now);
         if (p === '/api/memory/backlog') {
-          const row = value.groups[0];
-          value.groups.push({ ...row, sessionGroup: 'lark:oc_product', displayName: 'Product weekly', count: 18 },
-            { ...row, sessionGroup: 'origin', displayName: 'Origin', count: 21 });
-          value.originSync = { ...row, count: 25, threshold: 30 };
-          value.hasOlder = true;
-          value.budgets = { limits: { 'identity.md': 8000, 'references.md': 8000 }, warnings: { 'identity.md': 7000, 'references.md': 7000 } };
+          const row = value.items[0];
+          Object.assign(value, backlogAnswer({ groups: [row, { ...row, sessionGroup: 'lark:oc_product', displayName: 'Product weekly', count: 18 },
+            { ...row, sessionGroup: 'origin', displayName: 'Origin', count: 21 }], originSync: { ...row, count: 25, threshold: 30 }, hasOlder: true,
+          budgets: { limits: { 'identity.md': 8000, 'references.md': 8000 }, warnings: { 'identity.md': 7000, 'references.md': 7000 } } }, url));
         }
         if (p === '/api/settings/pricing') {
           // Normal saved custom rows stay visible without a show-unused action.

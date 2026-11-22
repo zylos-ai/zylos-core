@@ -29,11 +29,11 @@ function page({ answer = true } = {}) {
 }
 
 // The page side of key requests: records each request as method and path, answers `answer`, and records what it shows.
-function keyRequests(sent, { answer = { ok: true, data: { keys: [] } }, created = null } = {}) {
-  const shown = { keys: [], created: [], status: [], busy: [] };
+function keyRequests(sent, { answer = { ok: true, data: {} }, created = null } = {}) {
+  const shown = { reloads: 0, created: [], status: [], busy: [] };
   const keyPage = {
     request: async (method, path) => { sent.push([method, path]); return typeof answer === 'function' ? answer(method, path) : answer; },
-    renderKeys: data => shown.keys.push(data), renderCreated: key => { shown.created.push(key); created = key; }, createdKey: () => created,
+    reload: () => { shown.reloads++; }, renderCreated: key => { shown.created.push(key); created = key; }, createdKey: () => created,
     status: (text, kind) => shown.status.push([text, kind]), busy: on => shown.busy.push(on), errorText: (code, fallback) => code ?? fallback,
   };
   return Object.assign(keyPage, { shown });
@@ -114,13 +114,13 @@ test('each key action sends its own request after the table confirms it', async 
 
 test('rotating a key shows the new key once, with the name the server gave it', async () => {
   const p = page(), sent = [];
-  const keyPage = keyRequests(sent, { answer: { ok: true, data: { keys: [{ name: 'ops' }], key: { name: 'ops' }, plaintext_key: 'zdk_new' } } });
+  const keyPage = keyRequests(sent, { answer: { ok: true, data: { key: { name: 'ops' }, plaintext_key: 'zdk_new' } } });
   const root = node(p.document, 'div');
   wired(p, { keyPage }).renderKeyTable(root, [{ name: 'ops', scope: 'admin', status: 'active' }]);
   await root.querySelector('.api-key-rotate').dispatch('click');
   assert.deepEqual(sent, [['POST', '/api/keys/ops/rotate']]);
   assert.deepEqual(keyPage.shown.created, [{ name: 'ops', plaintext_key: 'zdk_new' }], 'the new key is shown');
-  assert.deepEqual(keyPage.shown.keys, [{ keys: [{ name: 'ops' }], key: { name: 'ops' }, plaintext_key: 'zdk_new' }], 'the list is redrawn from the answer');
+  assert.equal(keyPage.shown.reloads, 1, 'the page shown is read again from the server');
   assert.deepEqual(keyPage.shown.status.at(-1), ['fleet_manage.key_rotated_status', 'success']);
   assert.deepEqual(keyPage.shown.busy, [true, false]);
 });
@@ -149,7 +149,7 @@ test('revoking the key that is shown hides it; a refused request shows why and c
   const other = node(p.document, 'div');
   wired(p, { keyPage: refused }).renderKeyTable(other, [{ name: 'ops', scope: 'admin', status: 'active' }]);
   await other.querySelector('.api-key-rotate').dispatch('click');
-  assert.deepEqual(refused.shown.keys, []); assert.deepEqual(refused.shown.created, []);
+  assert.equal(refused.shown.reloads, 0); assert.deepEqual(refused.shown.created, []);
   assert.deepEqual(refused.shown.status.at(-1), ['must_revoke_first', 'error']);
   assert.deepEqual(refused.shown.busy, [true, false]);
 });

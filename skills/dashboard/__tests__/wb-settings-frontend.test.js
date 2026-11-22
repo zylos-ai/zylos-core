@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } from '../public/js/wb/settings.js';
 import { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults as renderDefaultsCard, renderHotTtl, modelSaveConfirmation } from '../public/js/wb/settings-defaults.js';
 import { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, orderedPricePrefixes } from '../public/js/wb/settings-pricing.js';
-import { keyActionConfirmation, keyCounts, remoteStatus, renderKeyTable, renderRemoteAgents } from '../public/js/wb/settings-access.js';
+import { keyActionConfirmation, remoteStatus, renderKeyTable, renderRemoteAgents } from '../public/js/wb/settings-access.js';
 import { mountLanguageControl, mountThemeControl } from '../public/js/wb/settings-ui.js';
 import { coreVersion, coreUpgradePrompt, renderBrandVersion, renderCoreUpdate, renderEngineVersion } from '../public/js/wb/settings-version.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
@@ -742,16 +742,15 @@ test('a key table wired without a confirmation runs nothing', async () => {
   assert.deepEqual(ran, []);
 });
 
-test('key table lists active keys before revoked ones with their own text actions', async () => {
+test('key table keeps the server order and gives each key its own text actions', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
-  const keys = [{ name: 'old', scope: 'read', status: 'revoked', created_at: '2026-01-02T03:04:05Z' }, { name: 'ops', scope: 'admin', status: 'active', created_at: '2026-02-03T04:05:06Z', last_used_at: null }];
+  const keys = [{ name: 'ops', scope: 'admin', status: 'active', created_at: '2026-02-03T04:05:06Z', last_used_at: null }, { name: 'old', scope: 'read', status: 'revoked', created_at: '2026-01-02T03:04:05Z' }];
   renderKeyTable(root, keys, { document, t, confirm: async () => true, onAction: (action, name) => calls.push([action, name]) });
   const rows = root.querySelector('tbody').children; assert.deepEqual(rows.map(row => row.children[0].textContent), ['ops', 'old']);
-  assert.ok(rows[0].textContent.includes(formatZoned(keys[1].created_at)));
+  assert.ok(rows[0].textContent.includes(formatZoned(keys[0].created_at)));
   assert.match(rows[0].textContent, /wb\.settings\.keys\.never/);
   assert.ok(rows[0].querySelector('.api-key-rotate')); assert.ok(rows[0].querySelector('.api-key-revoke')); assert.equal(rows[0].querySelector('.api-key-delete'), null);
   await rows[1].querySelector('.api-key-delete').dispatch('click'); assert.deepEqual(calls, [['delete', 'old']]);
-  assert.deepEqual(keyCounts(keys), { active: 1, revoked: 1 });
 });
 
 test('price change counts cover edited cells, added rows and removed rows', () => {

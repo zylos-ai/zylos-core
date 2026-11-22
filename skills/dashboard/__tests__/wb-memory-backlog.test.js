@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createMemoryBacklog } from '../src/lib/workbench/memory-backlog.js';
+import { createMemoryBacklog, memoryBacklogPage, parseBacklogQuery } from '../src/lib/workbench/memory-backlog.js';
 import { createGroupBacklog } from '../src/lib/workbench/group-backlog.js';
 import { createOriginBacklog } from '../src/lib/workbench/origin-backlog.js';
 import { AuthGate } from '../src/lib/auth.js';
@@ -298,7 +298,7 @@ test('memory backlog HTTP route shares the detail cache and accepts read scope',
   const { root, engine, request, calls, versionCalls, snapshotReads } = await setupMemoryHttp(t);
   const readable = await request('/api/memory/backlog');
   assert.equal(readable.status, 200);
-  assert.equal((await readable.json()).groups[0].count, 7);
+  assert.equal((await readable.json()).items[0].count, 7);
   assert.deepEqual(versionCalls, ['zylos', 'claude', 'codex', 'agy'].map(file => ({ file, args: ['--version'] })),
     'startup probes use the injected async transport; API reads add no version calls');
   const detail = await request('/api/groups/origin/backlog', 'admin');
@@ -309,11 +309,13 @@ test('memory backlog HTTP route shares the detail cache and accepts read scope',
   const response = await request('/api/memory/backlog', 'admin');
   assert.equal(response.status, 200);
   const value = await response.json();
-  assert.equal(value.groups.length, 1);
-  assert.equal(value.groups[0].sessionGroup, 'origin');
-  assert.equal(value.groups[0].count, 7);
-  assert.equal(value.groups[0].syncing, true, 'Origin\'s own row reads its own sync lock');
-  assert.equal(value.groups[0].threshold, 15);
+  assert.equal(value.items.length, 1);
+  assert.equal(value.nextCursor, null);
+  assert.equal(value.items[0].sessionGroup, 'origin');
+  assert.equal(value.items[0].count, 7);
+  assert.equal(value.items[0].syncing, true, 'Origin\'s own row reads its own sync lock');
+  assert.equal(value.items[0].threshold, 15);
+  assert.deepEqual(value.summary, { groups: 1, waiting: 1, aged: 0, syncing: 1, unknown: 0, quiet: 0, threshold: 15 });
   assert.deepEqual(value.originSync, { count: 60, pendingSummaries: 2, firstAt: '2026-10-01T11:00:00.000Z',
     aged: true, syncing: false, threshold: 50 });
   assert.deepEqual(value.budgets.limits['identity.md'], BUDGETS['identity.md']);
@@ -328,9 +330,18 @@ test('memory backlog HTTP route shares the detail cache and accepts read scope',
   assert.deepEqual(scoped.root, original.root, 'all original tree fields stay identical');
   assert.deepEqual(Object.keys(scoped).sort(), ['root', 'sessionGroups']);
   assert.deepEqual(scoped.sessionGroups, [
-    { sessionGroup: 'origin', displayName: null },
-    { sessionGroup: 'telegram:dm-1001', displayName: 'Product notes' },
-  ]);
+    { sessionGroup: 'origin', displayName: null, backlog: { count: 7, syncing: true } },
+    { sessionGroup: 'telegram:dm-1001', displayName: 'Product notes', backlog: { count: 7, syncing: true } },
+  ], 'each tree group carries its badge from the same backlog cache');
+  assert.deepEqual(calls.slice(before).filter(call => call.args[1] === 'unsummarized' && call.args.includes('origin')), [],
+    'the tree reuses the cached backlog of a group the backlog list just read');
+  for (const [query, code, param] of [['?limit=0', 'invalid_parameter', 'limit'], ['?group=x', 'invalid_parameter', 'group'],
+    ['?q=a&q=b', 'invalid_parameter', 'q'], ['?cursor=forged', 'invalid_cursor', undefined]]) {
+    const refused = await request('/api/memory/backlog' + query, 'admin');
+    assert.equal(refused.status, 400, query);
+    const body = await refused.json();
+    assert.equal(body.ok, false); assert.equal(body.error.code, code); assert.equal(body.error.param, param);
+  }
   assert.ok(scoped.root.children.find(node => node.path === 'session-groups').children.some(node => node.name === 'bad name'));
 });
 
@@ -370,4 +381,68 @@ test('memory backlog still warns when a syncable group has old unsummarized mess
   assert.equal(result.groups[0].count, 21);
   assert.equal(result.groups[0].aged, true);
   assert.equal(result.groups[0].syncing, false);
+});
+
+// 120 groups: every fifth waits over six hours, every third has a pending count, every seventh is unknown, the rest are quiet.
+function manyGroups() {
+  const values = new Map();
+  for (let index = 1; index <= 120; index++) {
+    const sessionGroup = `telegram:dm-${String(index).padStart(3, '0')}`;
+    const unknown = index % 7 === 0, aged = index % 5 === 0, pending = aged || index % 3 === 0;
+    values.set(sessionGroup, unknown ? { count: null, firstAt: null, syncing: null, reason: 'backlog_failed' }
+      : { count: pending ? index % 11 + 1 : 0, firstAt: pending ? utcText(at - (aged ? 7 : 1) * 3600000 - index * 1000) : null, syncing: index === 9 });
+  }
+  return values;
+}
+async function readPages(get, base = '') {
+  const pages = [];
+  let cursor = null;
+  do {
+    const params = new URLSearchParams(base);
+    params.set('limit', '50');
+    if (cursor) params.set('cursor', cursor);
+    const page = memoryBacklogPage(await get(at), parseBacklogQuery(params));
+    pages.push(page);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return pages;
+}
+
+test('the backlog pages 120 groups by 50 in one order: long waits, groups needing a look, counts, oldest, ID', async () => {
+  const values = manyGroups(), reads = [];
+  const get = createMemoryBacklog({ ...defaults,
+    getSnapshot: async () => ({ rows: [...values.keys()].reverse().map(sessionGroup => ({ sessionGroup, name: { displayName: sessionGroup === 'telegram:dm-042' ? 'Release desk' : null } })), hasOlder: false }),
+    groupBacklog: async group => { reads.push(group); return values.get(group); } });
+  const pages = await readPages(get);
+  assert.deepEqual(pages.map(page => page.items.length), [50, 50, 20]);
+  const rows = pages.flatMap(page => page.items);
+  assert.deepEqual(rows.map(row => row.sessionGroup).sort(), [...values.keys()].sort(), 'every group once');
+  const rank = row => [row.aged ? 0 : 1, row.count === 0 && !row.aged && row.syncing === false && !row.reason ? 1 : 0];
+  for (let index = 1; index < rows.length; index++) {
+    const [a, b] = [rows[index - 1], rows[index]];
+    const [ra, rb] = [rank(a), rank(b)];
+    assert.ok(ra[0] < rb[0] || (ra[0] === rb[0] && (ra[1] < rb[1] || (ra[1] === rb[1]
+      && ((a.count ?? -1) > (b.count ?? -1) || ((a.count ?? -1) === (b.count ?? -1)
+        && (a.firstAt === b.firstAt ? a.sessionGroup < b.sessionGroup : b.firstAt === null || (a.firstAt !== null && a.firstAt < b.firstAt))))))),
+      `${a.sessionGroup} before ${b.sessionGroup}`);
+  }
+  assert.ok(rows.findIndex(row => row.count === 0 && row.syncing === false) > rows.findLastIndex(row => row.count === null), 'quiet groups come last');
+  const quiet = rows.filter(row => row.count === 0 && !row.aged && row.syncing === false && !row.reason).length;
+  for (const page of pages) {
+    assert.deepEqual(page.summary, { groups: 120, waiting: rows.filter(row => row.count > 0).length, aged: 21, syncing: 1,
+      unknown: 17, quiet, threshold: 15 }, 'the summary covers every group on every page');
+    assert.equal(page.hasOlder, false); assert.ok(page.budgets);
+  }
+  assert.equal(reads.length, 120 * 3, 'each request reads every group once (the group reader caches across requests)');
+
+  const found = await readPages(get, 'q=DM-04&include=total');
+  assert.deepEqual(found.flatMap(page => page.items.map(row => row.sessionGroup)).sort(), Array.from({ length: 10 }, (_, index) => `telegram:dm-04${index}`));
+  assert.equal(found[0].total, 10);
+  const named = await readPages(get, 'q=release');
+  assert.deepEqual(named[0].items.map(row => row.sessionGroup), ['telegram:dm-042'], 'the display name is searched too');
+  assert.equal(named[0].summary.groups, 120);
+  assert.throws(() => parseBacklogQuery(new URLSearchParams('limit=101')), error => error.code === 'invalid_parameter' && error.param === 'limit');
+  assert.throws(() => parseBacklogQuery(new URLSearchParams('cursor=forged')), error => error.code === 'invalid_cursor');
+  assert.throws(() => parseBacklogQuery(new URLSearchParams(`q=dm&cursor=${encodeURIComponent(pages[0].nextCursor)}`)), error => error.code === 'invalid_cursor',
+    'a cursor belongs to its own search');
 });

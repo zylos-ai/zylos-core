@@ -82,7 +82,7 @@ test('chat, observer, fleet and key projections keep user content and identifier
   assert.deepEqual(projected.items[0].content, chat.items[0].content);
   assert.equal(projected.items[0].id, 1700000000);
   assert.equal(projectApiTimestamps('/api/observer/leases', { expiresAt: at }).expiresAt, iso);
-  assert.equal(projectApiTimestamps('/api/keys', { keys: [{ created_at: '2026-11-16 02:03:04' }] }).keys[0].created_at, iso);
+  assert.equal(projectApiTimestamps('/api/keys', { items: [{ created_at: '2026-11-16 02:03:04' }], nextCursor: 'opaque' }).items[0].created_at, iso);
   assert.equal(projectApiTimestamps('/api/fleet', { self: { system_metrics: { sampledAt: at } }, agents: [{ rate_limit_7d_recorded_at: at }] }).agents[0].rate_limit_7d_recorded_at, iso);
 });
 
