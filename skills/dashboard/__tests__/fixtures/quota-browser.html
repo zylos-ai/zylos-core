@@ -36,12 +36,12 @@
       instanceStrip(document.getElementById('strip'), current, { t, level: detail, cost: 1.25 });
       const self = fleetSelfFromSnapshot({ ...current, instance: { ...current.instance,
         accounts: { claude: null, codex: current.instance.accounts.codex } } });
-      document.getElementById('main').innerHTML = renderAgentFleetHtml({ agents: [
+      document.getElementById('main').innerHTML = renderAgentFleetHtml({ items: [
         { name: 'Eva', self: true, state: 'IDLE', daily_cost: 1.25 },
         { name: 'empty-remote', state: 'IDLE', rate_limit_7d_pct: null, daily_cost: 0.4 },
         { name: 'green-sample', state: 'IDLE', rate_limit_7d_pct: 0 },
         { name: 'exhausted-sample', state: 'IDLE', rate_limit_7d_pct: 100 }
-      ] }, { self, labels });
+      ], summary: { count: 4, counts: { idle: 4, busy: 0, stuck: 0, offline: 0 }, daily_cost: 1.65, weekly_cost: null } }, { self, labels });
     };
     window.quotaReady = true;
   </script>
