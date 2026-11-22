@@ -8,6 +8,9 @@ import { startPage } from './helpers/workbench-browser.js';
 import { openDashboardTab } from './helpers/browser-navigation.js';
 import { GROUP, workbenchAnswer } from './fixtures/workbench-browser-api.js';
 import { keyPage } from './fixtures/key-pages.js';
+import { fleetSettingsPageFixture } from './helpers/fleet-page-fixture.js';
+import { parseListQuery } from '../src/lib/list-query.js';
+import { pageFleetRows } from '../src/lib/fleet-list.js';
 
 // Boundary: the real settings page in a local browser with fixed API answers (the workbench fixture plus this case's
 // update check, keys, machines, prices and session hosting); writes are recorded and answered, nothing runs.
@@ -67,7 +70,10 @@ test('the settings page keeps its sections in order, offers the right upgrades a
         }
         if (url.pathname === '/api/instance/actions/upgrade-runtime') return route.fulfill({ json: { ok: true } });
         if (url.pathname === '/api/keys' && method === 'GET') return route.fulfill({ json: keyPage(fixtures.keys, url) });
-        if (url.pathname === '/api/fleet/agents' && method === 'GET') return route.fulfill({ json: { self: { name: 'browser-case' }, agents: fixtures.machines } });
+        if (url.pathname === '/api/fleet/agents' && method === 'GET') {
+          const machines = fixtures.machines.map(agent => ({ ...agent, connection: { kind: 'unknown' } }));
+          return route.fulfill({ json: fleetSettingsPageFixture(machines, url.search, 'browser-case') });
+        }
         if (url.pathname === '/api/settings/pricing' && method === 'PUT') return route.fulfill({ json: { ok: true } });
         if (url.pathname === '/api/settings/pricing' && method === 'GET') return route.fulfill({ json: { active: 'claude', runtimes: {
           claude: { builtInModels: Object.keys(fixtures.prices), modelPrices: fixtures.prices, fastMode: { mode: 'multiplier', configuredMultiplier: 6 } },
@@ -78,9 +84,13 @@ test('the settings page keeps its sections in order, offers the right upgrades a
             if (body.action === 'allow') hosting = { ...hosting, allowlist: [...hosting.allowlist, body.channel].sort() };
             if (body.action === 'disallow') hosting = { ...hosting, allowlist: hosting.allowlist.filter(channel => channel !== body.channel) };
             if (body.action === 'detach') hosting = { ...hosting, relationships: hosting.relationships.filter(row => row.source_group !== body.group) };
-            return route.fulfill({ json: { ...hosting, changed: true } });
+            return route.fulfill({ json: { allowlist: hosting.allowlist, changed: true } });
           }
-          return route.fulfill({ json: hosting });
+          const query = parseListQuery('session-hosts', url.searchParams, { q: true, include: ['total'] });
+          const term = query.q?.toLowerCase();
+          const matches = hosting.relationships.filter(row => !term || [row.source_group, row.target_group].some(name => name.toLowerCase().includes(term)));
+          const page = pageFleetRows(matches, query, row => row.source_group, (a, b) => Number(a > b) - Number(a < b));
+          return route.fulfill({ json: { ...page, allowlist: hosting.allowlist } });
         }
         if (url.pathname === '/api/session-hosts/channels') return route.fulfill(channelsFail ? { status: 502, json: { error: 'session_host_unavailable' } } : { json: { channels } });
         return route.continue();
@@ -210,7 +220,7 @@ test('the settings page keeps its sections in order, offers the right upgrades a
         await list.locator(rowSelector).first().waitFor({ state: 'attached' });
         assert.match(await card.locator('.wb-set-card-sub').allTextContents().then(texts => texts.join(' ')), new RegExp(total), `${section}: the total beside the title`);
         const rows = () => list.locator(rowSelector).evaluateAll(nodes => nodes.filter(node => !node.hidden).length);
-        // The key list asks the server (after the typing pauses); the others page rows already on the page.
+        // The key, machine and host lists ask the server after typing pauses. Prices page rows already on screen.
         const rowsAre = async (count, message) => {
           for (const end = Date.now() + 5000; await rows() !== count && Date.now() < end;) await page.waitForTimeout(50);
           assert.equal(await rows(), count, message);
@@ -257,7 +267,7 @@ test('the settings page keeps its sections in order, offers the right upgrades a
       const tags = page.locator('#settings-host-allowlist .wb-host-chip');
       await tags.first().waitFor();
       assert.deepEqual(await tags.allTextContents(), ['multica', 'lark']);
-      assert.equal(await page.locator('.wb-host-row').count(), 11, 'the hosted groups still show');
+      assert.equal(await page.locator('.wb-host-row').count(), 8, 'the hosted groups still show');
       await page.getByText('无法加载已登记的通道，暂时不能添加。重新打开设置可重试。').waitFor();
       assert.equal(await page.getByRole('combobox', { name: '通道名称' }).isVisible(), false);
       await page.locator('#settings-host-allowlist').scrollIntoViewIfNeeded();
@@ -275,7 +285,7 @@ test('the settings page keeps its sections in order, offers the right upgrades a
       await dialog(page).waitFor({ state: 'detached' });
       await page.waitForTimeout(300);
       assert.deepEqual(writes, [], 'cancelling sends nothing');
-      assert.equal(await page.locator('.wb-host-row').count(), 11);
+      assert.equal(await page.locator('.wb-host-row').count(), 8);
       assert.deepEqual(errors, []);
       await context.close();
     });

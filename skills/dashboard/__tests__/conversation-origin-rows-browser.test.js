@@ -32,7 +32,7 @@ test('in single the Origin conversation shows other conversations and external c
         if (!url.pathname.startsWith('/api/')) return false;
         if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return true; }
         const values = {
-          '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
+          '/api/fleet': { items: [], nextCursor: null, summary: { count: 0 } }, '/api/health': { status: 'ok' },
           '/api/groups/counts': { mode: f.readMode(), running: { total: 0, states: {}, flags: {} }, offline: { total: 0 }, pool: {} },
           '/api/groups': { items: [], listKnown: true }, '/api/instance/runtime-options': { actions: [] },
         };

@@ -11,6 +11,7 @@ import { FleetProxy } from '../src/lib/fleet-proxy.js';
 import { FleetPoller } from '../src/lib/fleet-poller.js';
 import { acceptObserverWebSocket, connectObserverWebSocket } from '../src/lib/observer-websocket.js';
 import { objectResponse } from './fixtures/fleet-object-api.js';
+import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
 
 const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
 const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
@@ -20,7 +21,8 @@ registerHooks({
     return next(specifier, context);
   },
 });
-const { renderAgentFleetHtml } = await import('../public/js/agent-fleet.js');
+const { renderAgentFleetHtml: renderAgentFleetHtmlPage } = await import('../public/js/agent-fleet.js');
+const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
 
 async function listen(handler) {
   const server = http.createServer(handler);

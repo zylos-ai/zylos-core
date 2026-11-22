@@ -1,5 +1,6 @@
 import { runtimesWith } from '../runtime-descriptors.js';
 import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js';
+import { fleetMood, isOffline, stateMood } from './fleet-status.js';
 import { counted } from './count-label.js';
 import { recoveryTime } from './wb/cooldown.js';
 import { formatZoned, instanceZoneReady } from './wb/instance-zone.js';
@@ -45,21 +46,6 @@ function reasonLabel(reason, labels) {
   return labels.reasonLabels?.[key] || labelText(reason, labels.unreachable);
 }
 
-export function stateMood(agent) {
-  const state = String(agent?.state || 'UNKNOWN').toUpperCase();
-  const reason = String(agent?.health_reason || '').toLowerCase();
-  if (state === 'OFFLINE' || reason === 'offline' || reason === 'unreachable' || reason === 'version_unsupported' || reason === 'auth_failed') return 'offline';
-  if (state === 'AUTH_WAIT' || state === 'WAKE_OVERDUE') return 'stuck';
-  if (state === 'IDLE') return 'idle';
-  if (state === 'BUSY') return 'busy';
-  if (state === 'UNKNOWN') return 'unknown';
-  return 'idle';
-}
-
-function isOffline(agent) {
-  return stateMood(agent) === 'offline' || Number(agent?.pulse_rate) === 0;
-}
-
 function stateLabel(agent, labels, mood = stateMood(agent)) {
   const reason = String(agent?.health_reason || '').toLowerCase();
   if (reason === 'version_unsupported') return labels.versionUnsupported;
@@ -77,12 +63,6 @@ function stateLabel(agent, labels, mood = stateMood(agent)) {
 
 function colorForAgent(agent) {
   return agent?.color || '#64748b';
-}
-
-function hasProblem(tile) {
-  const summary = tile.groupSummary;
-  return tile.mood === 'stuck' || tile.supervisorPaused === true ||
-    summary?.problemCount > 0 || summary?.attention?.length > 0 || summary?.autoRestarts?.count > 0;
 }
 
 function latencyLabel(value) {
@@ -225,10 +205,10 @@ export function buildAgentFleetView(fleet, options = {}) {
   const basePath = options.basePath || '';
   const self = options.self || null;
   const ageText = options.ageText || ageLabel;
-  const agents = Array.isArray(fleet?.agents) ? fleet.agents : [];
+  const agents = fleet?.items ?? [];
   const tiles = agents.map((agent) => {
     const offline = isOffline(agent);
-    const mood = offline ? 'offline' : stateMood(agent);
+    const mood = fleetMood(agent);
     const isSelf = agent.self === true;
     const link = agent.link && typeof agent.link === 'object' ? agent.link : null;
     const linkChip = buildLinkChip(link, labels);
@@ -263,51 +243,20 @@ export function buildAgentFleetView(fleet, options = {}) {
       supervisorPaused: isSelf ? self?.supervisorPaused ?? agent.supervisor_paused : agent.supervisor_paused,
       href: isSelf ? `${basePath}/` : `${basePath}/fleet/${encodeURIComponent(String(agent.name || ''))}/`
     };
-  }).sort((a, b) => Number(b.offline) - Number(a.offline) ||
-    Number(hasProblem(b)) - Number(hasProblem(a)) ||
-    Number(b.isSelf) - Number(a.isSelf) || a.name.localeCompare(b.name));
-
-  const counts = tiles.reduce((acc, tile) => {
-    acc[tile.mood] = (acc[tile.mood] || 0) + 1;
-    return acc;
-  }, { busy: 0, idle: 0, stuck: 0, offline: 0 });
-
-  // Fleet-wide totals of the same two cost tiers shown on each card.
-  // null (rendered '--') when no agent reports that tier at all.
-  const sumTier = (pick) => {
-    let total = null;
-    for (const agent of agents) {
-      const value = pick(agent);
-      // Skip absent values before Number(): production payloads send explicit
-      // null for unreported tiers (getCostTiers, offline default records) and
-      // Number(null) is 0, which would fake a '$0.0000' report. A genuine
-      // numeric 0 still counts as reported.
-      if (value == null || value === '') continue;
-      const n = Number(value);
-      if (Number.isFinite(n)) total = (total ?? 0) + n;
-    }
-    return total;
-  };
-  const costTotals = {
-    daily: money(sumTier((a) => a.daily_cost)),
-    weekly: money(sumTier((a) => a.weekly_cost))
-  };
-
-  const pageSize = 8;
-  const pageCount = Math.max(1, Math.ceil(tiles.length / pageSize));
-  const page = Math.min(Math.max(1, options.page ?? 1), pageCount);
-  const offset = (page - 1) * pageSize;
+  });
+  const page = options.page ?? 1;
+  const total = fleet?.summary?.count ?? 0;
   return {
     labels,
     layout: options.layout === 'list' ? 'list' : 'cards',
     page,
-    pageCount,
-    offset,
-    pageTiles: tiles.slice(offset, offset + pageSize),
-    t: options.t || (key => ({ 'wb.term.origin': 'Origin', 'chat.unnamed': 'Untitled conversation' }[key] || key.replace('wb.platform.', ''))),
+    nextCursor: fleet?.nextCursor ?? null,
+    total,
+    offset: (page - 1) * 8,
     tiles,
-    counts,
-    costTotals,
+    t: options.t || (key => ({ 'wb.term.origin': 'Origin', 'chat.unnamed': 'Untitled conversation' }[key] || key.replace('wb.platform.', ''))),
+    counts: fleet?.summary?.counts ?? { busy: 0, idle: 0, stuck: 0, offline: 0 },
+    costTotals: { daily: money(fleet?.summary?.daily_cost), weekly: money(fleet?.summary?.weekly_cost) },
     updatedAt: fleet?.updated_at || null
   };
 }
@@ -528,22 +477,22 @@ function renderListRow(tile, labels, t) {
 }
 
 function renderFleetList(view) {
-  const { labels, t, pageTiles } = view;
+  const { labels, t, tiles } = view;
   const columns = ['machine', 'running', 'condition', 'quota', 'todayWeek', 'pool', 'host'];
   return `<div class="wb-f-list" role="table" aria-label="${escapeHtml(labels.title)}">
     <div class="wb-f-list-head" role="row">${columns.map(key => `<span role="columnheader" class="wb-f-col-${key}${key === 'host' ? ' wb-tech' : ''}">${escapeHtml(labels[key])}</span>`).join('')}</div>
-    ${pageTiles.map(tile => renderListRow(tile, labels, t)).join('')}
+    ${tiles.map(tile => renderListRow(tile, labels, t)).join('')}
   </div>`;
 }
 
 function renderFleetPagination(view) {
-  if (view.pageCount <= 1) return '';
-  const { labels, page, pageCount, pageTiles, offset, tiles } = view;
-  const range = fill(labels.pageRange, { start: offset + 1, end: offset + pageTiles.length, total: tiles.length });
+  if (view.page === 1 && !view.nextCursor) return '';
+  const { labels, page, nextCursor, tiles, offset, total } = view;
+  const range = fill(labels.pageRange, { start: offset + 1, end: offset + tiles.length, total });
   const button = (step, label, disabled) =>
     `<button class="wb-btn wb-btn-sm" type="button" data-fleet-page="${step}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"${disabled ? ' disabled' : ''}><i class="wb-ico wb-ico-chev wb-ico-xs" aria-hidden="true"></i></button>`;
   return `<nav class="wb-f-pagination" aria-label="${escapeHtml(labels.pagination)}"><span aria-live="polite">${escapeHtml(range)}</span>
-    ${button(-1, labels.previousPage, page === 1)}${button(1, labels.nextPage, page === pageCount)}
+    ${button(-1, labels.previousPage, page === 1)}${button(1, labels.nextPage, !nextCursor)}
   </nav>`;
 }
 
@@ -566,11 +515,11 @@ function renderAgentFleetViewHtml(view) {
       </span>
       ${renderFleetPagination(view)}
     </div>`;
-  const empty = view.tiles.length <= 1 ? `<p class="wb-note wb-f-empty">${escapeHtml(labels.empty)}</p>` : '';
-  return `<section class="agent-fleet" data-fleet-count="${view.tiles.length}">
+  const empty = view.total <= 1 ? `<p class="wb-note wb-f-empty">${escapeHtml(labels.empty)}</p>` : '';
+  return `<section class="agent-fleet" data-fleet-count="${view.total}">
     ${summary}
     ${view.layout === 'list' ? renderFleetList(view) : `<div class="wb-f-grid">
-      ${view.pageTiles.map((tile) => renderTile(tile, labels, t)).join('')}
+      ${view.tiles.map((tile) => renderTile(tile, labels, t)).join('')}
     </div>`}
     ${empty}
   </section>`;
@@ -599,7 +548,7 @@ export function renderAgentFleet(container, fleet, options = {}) {
   const cards = container.querySelectorAll?.('.wb-f-card') ?? [];
   for (const [index, card] of Array.from(cards).entries()) {
     const root = card.querySelector('[data-fleet-attention]');
-    if (root) renderFleetAttention(root, view.pageTiles[index].groupSummary?.attention, view.t);
+    if (root) renderFleetAttention(root, view.tiles[index].groupSummary?.attention, view.t);
   }
   return view;
 }

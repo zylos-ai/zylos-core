@@ -1,3 +1,4 @@
+import { fleetPageFixture } from './fleet-page-fixture.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -45,7 +46,7 @@ export async function runCurrentActionBrowser(sandbox, { width, locale }) {
   await context.route('**/api/**', route => {
     const url = new URL(route.request().url());
     if (route.request().method() === 'GET') apiReads.push(url.pathname);
-    if (url.pathname === '/api/fleet') return route.fulfill({ json: fleet });
+    if (url.pathname === '/api/fleet') return route.fulfill({ json: fleetPageFixture(fleet, url.search) });
     const answer = workbenchSnapshotAnswer(url, snapshot, now);
     return answer === undefined ? route.fallback() : route.fulfill({ json: answer });
   });

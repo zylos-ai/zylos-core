@@ -131,7 +131,7 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
   // snapshot changes; UI-only changes may skip. Same isolated server as this file.
   await t.test('instance endpoint reports the effective mode: single without a key, unreadable for invalid or unreadable configuration', async () => {
     const cold = await fetch(`${origin}/api/fleet`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
-    assert.equal(cold.status, 200); assert.equal((await cold.json()).agents.find(agent => agent.self).state, 'BUSY', 'cold single Fleet collects its object snapshot before projection');
+    assert.equal(cold.status, 200); assert.equal((await cold.json()).items.find(agent => agent.self).state, 'BUSY', 'cold single Fleet collects its object snapshot before projection');
     assert.equal(statusReads, 1);
     assert.equal((await readInstance()).session_mode.sessionMode, 'single', 'no mode key reports the effective single mode, unlike zylos status --json');
     assert.equal(statusReads, 1, 'instance reuses the cold Fleet snapshot');
@@ -157,7 +157,7 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
         assert.equal(statusReads, readsBefore + 1, 'one fresh snapshot after the instance cache expires');
         const fleetResponse = await fetch(`${origin}/api/fleet`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
         assert.equal(fleetResponse.status, 200);
-        const self = (await fleetResponse.json()).agents.find(agent => agent.self);
+        const self = (await fleetResponse.json()).items.find(agent => agent.self);
         assert.equal(self.supervisor_paused, paused);
         assert.equal(statusReads, readsBefore + 1, 'Fleet projection reuses the instance snapshot');
       }
@@ -178,7 +178,7 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
     try { response = await fetch(`${origin}/api/fleet`, { headers: { Cookie: cookie }, signal: request.signal }); }
     finally { clearTimeout(timer); }
     assert.equal(response.status, 200);
-    assert.equal((await response.json()).agents.find(agent => agent.self).group_summary.running, 1);
+    assert.equal((await response.json()).items.find(agent => agent.self).group_summary.running, 1);
     assert.equal(pollCalls, 0, 'Fleet reads use the existing remote cache/stream, without request-owned polling');
   });
   releasePoll();
@@ -208,7 +208,12 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
           const event = block.match(/^event: (.*)$/m)?.[1];
           if (!['groups', 'fleet'].includes(event)) continue;
           const value = JSON.parse(block.match(/^data: (.*)$/m)[1]);
-          const running = event === 'groups' ? value.running.total : value.agents.find(agent => agent.self).group_summary?.running;
+          if (event === 'fleet') {
+            assert.deepEqual(Object.keys(value).sort(), ['summary', 'updated_at']);
+            assert.equal(value.summary.count, 2);
+          }
+          const running = event === 'groups' ? value.running.total
+            : (await (await fetch(`${origin}/api/fleet`, { headers: { Cookie: cookie } })).json()).items.find(agent => agent.self).group_summary?.running;
           if (running === expected) {
             if (event === 'groups') {
               let received;
@@ -268,7 +273,7 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
       return response.json();
     };
     const usageBefore = await readJson('/api/usage/summary');
-    const fleetBefore = (await readJson('/api/fleet')).agents.find(agent => agent.self);
+    const fleetBefore = (await readJson('/api/fleet')).items.find(agent => agent.self);
     assert.equal(fleetBefore.weekly_cost, usageBefore.sevenDay.cost);
     store.insertMetric({ timestamp: new Date(Date.now() - 1000).toISOString(), runtime: 'claude', session_group: 'origin',
       session_id: 'fixture-cost', metric_name: 'usage_event', metric_value: 1, dimensions: { total_input: 10, cost: 1.25 },
@@ -291,7 +296,10 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
       if (end >= 0) {
         const block = buffered.slice(0, end); buffered = buffered.slice(end + 2);
         if (block.match(/^event: (.*)$/m)?.[1] !== 'fleet') continue;
-        const record = JSON.parse(block.match(/^data: (.*)$/m)[1]).agents.find(agent => agent.self);
+        const value = JSON.parse(block.match(/^data: (.*)$/m)[1]);
+        assert.deepEqual(Object.keys(value).sort(), ['summary', 'updated_at']);
+        assert.equal(value.summary.weekly_cost, fleetBefore.weekly_cost);
+        const record = (await readJson('/api/fleet')).items.find(agent => agent.self);
         if (record.group_summary?.attention?.some(item => item.kind === 'start_failed' && item.group === 'telegram:failed-offline')) self = record;
         continue;
       }

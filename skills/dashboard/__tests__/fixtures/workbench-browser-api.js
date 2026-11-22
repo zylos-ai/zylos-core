@@ -239,8 +239,12 @@ function workbenchAnswerData(url, now) {
   codex: { builtInModels: ['gpt-5.5'], modelPrices: { 'gpt-5.5': { input: 1.25, output: 10, cacheRead: 0.125, cacheCreation: 0 } },
     builtInPriorityModels: [], priorityModelPrices: {}, fastMode: { mode: 'service_tier' } } } };
   if (p === '/api/usage/pricing') return { models: [], unmatched: [] };
-  if (p === '/api/fleet') return { agents: [{ name: 'browser-case', self: true, access: 'admin' }], updated_at: iso(now) };
-  if (p === '/api/fleet/agents') return { self: { name: 'browser-case' }, agents: [] };
+  if (p === '/api/fleet') {
+    const name = url.searchParams.get('name');
+    const items = !name || name === 'browser-case' ? [{ name: 'browser-case', self: true, access: 'admin' }] : [];
+    return { items, nextCursor: null, summary: { count: 1 }, updated_at: iso(now) };
+  }
+  if (p === '/api/fleet/agents') return { self: { name: 'browser-case' }, items: [], nextCursor: null, total: 0 };
   if (p === '/api/keys') return keyPage([], url);
   if (p === '/api/conversations') return { items: [], nextCursor: null };
   if (p === '/api/settings/timezone') return { tz: 'UTC' };

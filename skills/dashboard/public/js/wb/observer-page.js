@@ -11,9 +11,8 @@ export function observerRecoveryReason(status) {
  * itself was opened through another machine's address), and the access its key has, 'admin' or 'read'. A remote
  * machine counts as read-only unless its key is known to be an admin key; this machine is always 'admin'.
  */
-export function viewedAccess({ remoteAgent = null, fleetAgents = [], pageRemoteAgent = null, pageRemoteAccess = 'read' } = {}) {
-  if (remoteAgent) return { viewingRemote: true, access: fleetAgents.find(agent => agent.name === remoteAgent)?.access === 'admin' ? 'admin' : 'read' };
-  if (pageRemoteAgent) return { viewingRemote: true, access: pageRemoteAccess === 'admin' ? 'admin' : 'read' };
+export function viewedAccess({ remoteAgent = null, remoteAccess = 'read', pageRemoteAgent = null } = {}) {
+  if (remoteAgent || pageRemoteAgent) return { viewingRemote: true, access: remoteAccess === 'admin' ? 'admin' : 'read' };
   return { viewingRemote: false, access: 'admin' };
 }
 

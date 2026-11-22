@@ -85,17 +85,15 @@ test('a missing, disabled or broken observer never opens the live view', () => {
 });
 
 test('the viewed machine\'s access comes from its key: only an admin key may control a remote machine', () => {
-  const fleetAgents = [{ name: 'eva', access: 'read' }, { name: 'lab', access: 'admin' }];
-  assert.deepEqual(viewedAccess({ fleetAgents }), { viewingRemote: false, access: 'admin' }, 'this machine');
-  assert.deepEqual(viewedAccess({ remoteAgent: 'eva', fleetAgents }), { viewingRemote: true, access: 'read' });
-  assert.deepEqual(viewedAccess({ remoteAgent: 'lab', fleetAgents }), { viewingRemote: true, access: 'admin' });
-  assert.deepEqual(viewedAccess({ remoteAgent: 'gone', fleetAgents }), { viewingRemote: true, access: 'read' }, 'an unknown machine counts as read-only');
-  assert.deepEqual(viewedAccess({ pageRemoteAgent: 'eva', pageRemoteAccess: 'admin' }), { viewingRemote: true, access: 'admin' }, 'a page opened through another machine\'s address');
-  assert.deepEqual(viewedAccess({ pageRemoteAgent: 'eva', pageRemoteAccess: 'other' }), { viewingRemote: true, access: 'read' });
-  assert.deepEqual(viewedAccess({ remoteAgent: 'eva', fleetAgents, pageRemoteAgent: 'lab', pageRemoteAccess: 'admin' }), { viewingRemote: true, access: 'read' }, 'the machine chosen in the page wins');
-  assert.equal(observerPageUsable(healthy, viewedAccess({ remoteAgent: 'eva', fleetAgents })), false, 'a read-only key shows the empty state');
-  assert.equal(observerPageUsable(healthy, viewedAccess({ remoteAgent: 'lab', fleetAgents })), true);
-  assert.equal(observerPageUsable(healthy, viewedAccess({ fleetAgents })), true);
+  assert.deepEqual(viewedAccess({}), { viewingRemote: false, access: 'admin' }, 'this machine');
+  assert.deepEqual(viewedAccess({ remoteAgent: 'eva' }), { viewingRemote: true, access: 'read' });
+  assert.deepEqual(viewedAccess({ remoteAgent: 'lab', remoteAccess: 'admin' }), { viewingRemote: true, access: 'admin' });
+  assert.deepEqual(viewedAccess({ remoteAgent: 'gone' }), { viewingRemote: true, access: 'read' }, 'an unknown machine counts as read-only');
+  assert.deepEqual(viewedAccess({ pageRemoteAgent: 'eva', remoteAccess: 'admin' }), { viewingRemote: true, access: 'admin' }, 'a page opened through another machine\'s address');
+  assert.deepEqual(viewedAccess({ pageRemoteAgent: 'eva', remoteAccess: 'other' }), { viewingRemote: true, access: 'read' });
+  assert.equal(observerPageUsable(healthy, viewedAccess({ remoteAgent: 'eva' })), false, 'a read-only key shows the empty state');
+  assert.equal(observerPageUsable(healthy, viewedAccess({ remoteAgent: 'lab', remoteAccess: 'admin' })), true);
+  assert.equal(observerPageUsable(healthy, viewedAccess({})), true);
 });
 
 test('the running group chooser counts actual live identities while Origin sleeps', () => {

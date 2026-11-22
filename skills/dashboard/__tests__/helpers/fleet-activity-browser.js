@@ -1,3 +1,4 @@
+import { fleetPageFixture } from './fleet-page-fixture.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -42,7 +43,7 @@ export async function runFleetActivityBrowser(t, sandbox) {
         page.setDefaultTimeout(10000);
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
-        await page.route('**/api/fleet', route => route.fulfill({ json: { agents } }));
+        await page.route(url => url.pathname === '/api/fleet', route => route.fulfill({ json: fleetPageFixture({ agents }, new URL(route.request().url()).search) }));
         await page.goto(base + '/');
         const single = page.locator('#agent-fleet-root [data-agent="single-session"].wb-f-card');
         const multi = page.locator('#agent-fleet-root [data-agent="multi-session"].wb-f-card');

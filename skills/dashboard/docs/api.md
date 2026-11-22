@@ -26,7 +26,7 @@ Fleet views load the local module through `/fleet/:name/_assets/runtime-descript
 - **Read**: an authenticated browser session or an API session with `read` or `admin` scope. An API key must first be exchanged for an API session through the existing authentication API.
 - **Admin**: an authenticated administrator. Browser-cookie writes also require a same-origin request. Read-scope API sessions cannot write or read conversation content, attachments or full terminal history.
 - **Local owner**: an administrator logged in with the local password cookie. API keys do not grant deletion or deletion-preview access, even with admin scope.
-- **Local only**: answered only by the instance's own Dashboard, never through the Fleet proxy. A request to `/fleet/:name/...` for one of these routes returns 403 `local_endpoint_not_proxyable`. This covers `/api/keys` and everything under it, `/api/fleet/agents` and everything under it, `/api/instance/name`, and writes to `/api/settings/chat`.
+- **Local only**: answered only by the instance's own Dashboard, never through the Fleet proxy. A request to `/fleet/:name/...` for one of these routes returns 403 `local_endpoint_not_proxyable`. This covers `/api/keys` and everything under it, `/api/fleet/agents` and everything under it, `/api/session-hosts` and its channel options, `/api/instance/name`, and writes to `/api/settings/chat`.
 
 Every route that is not Public requires sign-in. There is no setting that turns sign-in off: an `auth.enabled` value left in the Dashboard `config.json` is ignored. Without a configured password nobody can sign in: protected API requests (`/api/...`, including `POST /api/auth/token`, Fleet API paths `/fleet/:name/api/...` and the Observer frame and stream) return 401 `unauthorized`; protected pages redirect (302) to `/login`; and `/login` shows a prompt to run `zylos dashboard reset-password` instead of a password field, with 200 for `GET`/`HEAD` and 503 for `POST`.
 
@@ -715,13 +715,17 @@ Missing/disabled observer history returns 404. Rejected `/observer/stream` upgra
 
 | Method/path | Contract and minimal example |
 |---|---|
-| `GET /api/fleet` | Returns self/remote status records and update metadata. Example: `GET /api/fleet`. |
-| `GET /api/fleet/agents` | Returns `{self,agents}` configuration with credential material redacted. Each agent has `{name,base_url,key_masked,access}`; `access` is `"admin"` when the poller has a cached admin session, otherwise `"read"` (including before a successful probe). Example: `GET /api/fleet/agents`. |
+| `GET /api/fleet` | Read. Returns `{items,nextCursor,total?,summary,updated_at}` with self and remote status records. Ordered by offline first, then machines with problems, this machine first within each tier, then by unique name (English collation with a binary tie-breaker). Accepts `q` for name search and `name` for an exact match (zero or one row). For example, `GET /api/fleet?limit=8`. |
+| `GET /api/fleet/agents` | Local admin. Returns `{items,nextCursor,total?,self:{name}}` ordered by unique name (English collation with a binary tie-breaker). `q` searches names. A row contains `{name,base_url,key_masked,access,connection,latency}`. `access` is `"admin"` with a cached admin session, otherwise `"read"`. `connection.kind` is `unknown`, `pending`, `auth`, `version`, `down` (with `reason`), or `ok` (with `latency` in milliseconds or null). `latency.samples` contains `{at,ms}` probe samples. For example, `GET /api/fleet/agents?limit=8&include=total`. |
 | `POST /api/fleet/agents` | JSON `{name,base_url,read_api_key}` → `{ok:true,agent:{name,base_url,key_masked,access}}` (200). Input is validated, then the destination is probed before saving; a failed probe does not reject the addition. `access` is `"admin"` or `"read"` when the probe established that API-session scope, or `"unknown"` when the probe failed (including invalid credentials or an unreachable destination). Validation returns 400 `invalid_name`, `reserved_name`, `duplicate_name`, `invalid_url` or `missing_read_api_key`; save failure returns 500 `failed_to_save_config`. Example body: `{"name":"worker","base_url":"https://worker.example/dashboard","read_api_key":"<key>"}`. |
 | `POST /api/fleet/agents/test` | JSON `{base_url,read_api_key}` → `{ok:true,reachable:true,scope,version}`. Validation returns 400 `invalid_url` or `missing_read_api_key`. A failed destination probe returns HTTP 502 with `{ok:false,reachable:false,error:{code,message}}`; the code is `auth_failed`, `version_unsupported` or `unreachable`. Example: same destination/key as an add request. |
-| `DELETE /api/fleet/agents/:name` | Removes the configured remote → `{ok:true,self,agents}`. Returns 400 `invalid_name` for an undecodable name, 404 `unknown_agent` when no remote has that name, and 500 `failed_to_save_config` when saving fails. Example: `DELETE /api/fleet/agents/worker`. |
+| `DELETE /api/fleet/agents/:name` | Removes the configured remote → `{ok:true}`. Returns 400 `invalid_name` for an undecodable name, 404 `unknown_agent` when no remote has that name, and 500 `failed_to_save_config` when saving fails. For example, `DELETE /api/fleet/agents/worker`. |
 | `GET /fleet/:name/*` | Proxies allowed read routes/assets using configured credentials. Reads of local-only routes return 403 `local_endpoint_not_proxyable`, and deletion previews return 403 `remote_deletion_forbidden` (see the write row). Example: `GET /fleet/worker/api/settings/chat`. |
 | `PUT`, `PATCH`, `POST`, `DELETE /fleet/:name/*` | Only explicit object-write allowlist entries are proxyable, with admin and browser same origin. Allowed writes include group display names and marking a Mine conversation read. Three refusals apply: a local-only route (see Access; reads and writes alike) returns 403 `local_endpoint_not_proxyable`; group and draft deletion and deletion previews (`/api/groups/:id`, `/api/groups/:id/deletion-preview`, `/api/conversations/drafts/:id`, `/api/conversations/drafts/:id/deletion`; any `DELETE`, and any method on the preview/deletion paths) return 403 `remote_deletion_forbidden`; any other write outside the allowlist returns 403 `not_allowed_via_fleet`. Example: `POST /fleet/worker/api/schedules/report/actions/pause`. |
+
+Both Fleet lists accept `limit` (1–100, default 50), `cursor`, `q` (trimmed, case-insensitive name substring, up to 64 characters), and `include=total` (matching row count). A bad parameter returns 400 `invalid_parameter` with `error.param`. An invalid cursor returns 400 `invalid_cursor`. An unavailable source returns 503 `unavailable`. The client starts from page one if a cursor expires after a restart.
+
+`summary` covers the whole fleet even when filters are active. It contains `count`, `counts:{busy,idle,stuck,offline}`, and `daily_cost` and `weekly_cost` (numbers, or null when no machine reports that tier). The Fleet wall reloads its current page after a `fleet` event and plays start/finish cues for machines on that page. Wall rows carry the current `link` observation. Probe sample history is returned on the configured-machine list.
 
 Fleet rejects unknown agents with 404, invalid memory path queries with 400 `invalid_memory_path`, and upstream failures with 502/504. Suffix handling depends on the path:
 
@@ -740,13 +744,13 @@ Other forbidden routes return 403. Same-version peers return the common JSON err
 
 **Parameters:** no parameters for ordinary instance events. Chat opt-in requires admin at both instances and uses `chat=1`, optional `chat_tab=mine|external` (default mine) and `chat_conversation` (an encoded conversation ID); repeated subscription parameters and legacy `chat_ids` are invalid; invalid subscriptions are rejected rather than treated as an ordinary stream. Response is `text/event-stream`, not JSON.
 
-Opening the stream samples current session state immediately. While at least one Dashboard stream is connected, session observations refresh every 2.5 seconds and are shared by Origin, group and Fleet projections. Closing the last stream stops periodic session reads. HTTP instance and Fleet reads still sample on demand.
+Opening the stream samples current session state immediately. While at least one Dashboard stream is connected, session observations refresh every 2.5 seconds and are shared by Origin, group and Fleet projections. Closing the last stream stops periodic session reads. HTTP instance reads still sample on demand. Fleet reads use the shared observation cache while a stream is connected and force a fresh local observation when no stream is connected.
 
 | SSE event | Data | Meaning |
 |---|---|---|
 | `instance` | Same object as `GET /api/instance` | Instance overview changed; also sent when the ordinary stream opens |
 | `groups` | Same object as `GET /api/groups/counts` | Counts or running-list observations changed; fetch lists if needed |
-| `fleet` | Existing fleet payload | Remote/local fleet changed |
+| `fleet` | `{summary,updated_at}` as in `GET /api/fleet` | Remote or local Fleet changed. Fetch the current page if it is open. |
 | `history_changed` | Existing history invalidation payload | Imported events changed |
 | `metric_update` | Existing metric-update payload | A collector published a metric sample |
 | `chat_*` | Existing chat subscription event payloads | Conversation data/activity invalidation |
@@ -754,7 +758,7 @@ Opening the stream samples current session state immediately. While at least one
 
 Fleet shows instance and group summaries only. It does not fetch Origin group detail, read Origin session metadata, or expose `model`, `effort`, `context_pct` or `new_session_threshold` on Fleet records. These observations remain in group detail and runtime settings. Single-session cards show only the actual state pill. Fleet records do not include current-action text or feeds; aggregate `BUSY` retains the Working label without implying a thinking or tool-activity observation. A known runtime authentication failure remains an error for a running-list row whose activity state is unknown. Its independent no-response count comes from `counts.running.flags.noResponse`; problem durations use `flags.noResponse.since`. Error precedence still keeps the summary categories mutually exclusive, so its no-response category can be smaller than the independent no-response count.
 
-The self Fleet record's `daily_cost` and `weekly_cost` (in `GET /api/fleet` and the `fleet` event) are the `today.cost` and `sevenDay.cost` of `GET /api/usage/summary` at the time they are read. The self record may reuse them for up to 30 seconds; a new instance-local day or a time-zone change reads them again immediately. `GET /api/usage/summary` and group usage reads are not cached.
+The self Fleet record's `daily_cost` and `weekly_cost` (in `GET /api/fleet`) are the `today.cost` and `sevenDay.cost` of `GET /api/usage/summary` at the time they are read. The self record may reuse them for up to 30 seconds. A new instance-local day or a time-zone change reads them again immediately. `GET /api/usage/summary` and group usage reads are not cached.
 
 Multi-session Fleet `group_summary` optionally includes `attention`, projected from the same observations as Overview. Supported kinds are `channel_send_failed`, `channel_restarting`, `start_failed`, `rate_limited` and `data_unreadable`. Items carry only applicable bounded text fields (`group`, `displayName`, `runtime`, `channel`, `service`, `reasonCode`, `source`), nonnegative `count`/`count30m`, and `until:string|null` (ISO UTC recovery time; null means unknown). Channel items have no group link. Group unreadability includes the group name/key and diagnostic reason; clients render reason text through text nodes. Existing running/counts/problems semantics remain unchanged, and older remote summaries without `attention` remain valid. Offline start failures use the existing filtered offline resource, including pagination; a failed read remains a diagnostic observation.
 
@@ -788,16 +792,24 @@ unavailable through the Fleet proxy. `POST` also requires a same-origin request.
 
 ```json
 {
-  "relationships": [
+  "items": [
     {"source_group":"multica:issue-12","target_group":"telegram:topic-1","attached_by":"telegram:topic-1","attached_at":"2025-10-09T08:53:20.000Z"}
   ],
+  "nextCursor": null,
   "allowlist": ["multica"]
 }
 ```
 
 Each active relationship lists its source, effective target, initiating group
 and creation time. The timestamp is an ISO 8601 UTC string or null. The
-allowlist holds channel names whose attach notifications are muted.
+allowlist holds channel names whose attach notifications are muted. Relationships
+are ordered by `source_group` ascending (binary order, unique primary key).
+`q` searches the source or target group by case-insensitive substring (trimmed,
+up to 64 characters). Use `limit` (1–100, default 50), `cursor`, and
+`include=total` for the matching count, for example
+`GET /api/session-hosts?limit=8&include=total`. A bad parameter returns 400
+`invalid_parameter` with `error.param`, and an invalid cursor returns 400
+`invalid_cursor`. If the store cannot be read, this list returns 503 `unavailable`.
 
 `GET /api/session-hosts/channels` takes no parameters and lists the channel
 component names registered in the local C4 database. Names appear once, in
@@ -809,7 +821,7 @@ alphabetical order. Channels already on the notification allowlist are included.
 
 An unauthenticated request returns HTTP 401. An API session cannot replace the
 local admin login cookie and returns HTTP 403. An unavailable C4 store returns
-HTTP 502.
+HTTP 502 from the channel options route.
 
 `POST /api/session-hosts` accepts a JSON object with one of these actions.
 
@@ -819,7 +831,6 @@ HTTP 502.
 | `allow` or `disallow` | `channel`, the component name |
 
 For example, `{"action":"detach","group":"multica:issue-12"}` ends the
-relationship. The response includes the same settings snapshot and a
-`changed` boolean. A change to the notification allowlist sends an owner
+relationship. The response is `{changed,allowlist}`, with a boolean `changed` and the current channel list. A change to the notification allowlist sends an owner
 notice. Invalid input returns HTTP 400, failed access checks return 403,
 and an unavailable C4 store returns 502.

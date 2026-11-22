@@ -3,6 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createActionRunner } from '../public/js/wb/action-runner.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
+import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
+
 
 const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
 const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
@@ -14,7 +16,8 @@ registerHooks({
 });
 const { confirmedRunner, keyActionRequest, keyStillListed, wireSettingsConfirmations } = await import('../public/js/wb/settings-wiring.js');
 const { createSettingsLoader } = await import('../public/js/wb/settings.js');
-const { fleetPageOptions, renderFleetPage } = await import('../public/js/agent-fleet.js');
+const { fleetPageOptions, renderFleetPage: renderFleetPagePage } = await import('../public/js/agent-fleet.js');
+const renderFleetPage = (container, payload, options) => renderFleetPagePage(container, fleetPageFixture(payload), options);
 
 const t = (key, params = {}) => key + (Object.keys(params).length ? ':' + JSON.stringify(params) : '');
 

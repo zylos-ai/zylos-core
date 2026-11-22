@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { CoreState, projectOrigin } from '../src/lib/core-state.js';
 import { describeOrigin } from '../../../cli/lib/origin-presence.js';
+import { stateMood } from '../public/js/fleet-status.js';
+import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
 
 const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
 const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
@@ -14,7 +16,8 @@ registerHooks({
     return next(specifier, context);
   },
 });
-const { stateMood, buildAgentFleetView, defaultAgentFleetLabels } = await import('../public/js/agent-fleet.js');
+const { buildAgentFleetView: buildAgentFleetViewPage, defaultAgentFleetLabels } = await import('../public/js/agent-fleet.js');
+const buildAgentFleetView = (payload, options) => buildAgentFleetViewPage(fleetPageFixture(payload), options);
 
 const absent = () => ({ identity: { present: false, ready: false, runtime: 'unknown' }, status: { valid: false, reason: 'not_running' }, usage: { valid: false } });
 const live = () => ({ identity: { present: true, ready: true, runtime: 'claude', runId: 'run-current', sessionId: 'session-current' }, status: { valid: true, reason: null, value: { state: 'busy' } }, usage: { valid: false } });

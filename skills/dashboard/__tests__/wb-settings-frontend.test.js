@@ -3,6 +3,7 @@ import { formatZoned, setInstanceZone } from '../public/js/wb/instance-zone.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { remoteStatus } from '../public/js/fleet-status.js';
 
 import { documentFixture, node } from './fixtures/settings-dom.js';
 import { deferred, tick } from './fixtures/workbench-dom.js';
@@ -18,7 +19,7 @@ registerHooks({
 const { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } = await import('../public/js/wb/settings.js');
 const { runtimeHealth, runtimeSaveConfirmation, renderDefaults: renderDefaultsCard, renderHotTtl, modelSaveConfirmation } = await import('../public/js/wb/settings-defaults.js');
 const { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, orderedPricePrefixes } = await import('../public/js/wb/settings-pricing.js');
-const { keyActionConfirmation, remoteStatus, renderKeyTable, renderRemoteAgents } = await import('../public/js/wb/settings-access.js');
+const { keyActionConfirmation, renderKeyTable, renderRemoteAgents } = await import('../public/js/wb/settings-access.js');
 const { mountLanguageControl, mountThemeControl } = await import('../public/js/wb/settings-ui.js');
 const { coreVersion, coreUpgradePrompt, renderBrandVersion, renderCoreUpdate, renderEngineVersion } = await import('../public/js/wb/settings-version.js');
 
@@ -894,7 +895,7 @@ test('remote machine rows show the poller connection state and remove through th
   const agents = [{ name: 'ok', base_url: 'https://ok', access: 'admin' }, { name: 'auth', base_url: 'https://a' }, { name: 'down', base_url: 'https://d' }, { name: 'new', base_url: 'https://n' }];
   const records = [{ name: 'ok', link: { quality: 'ok', latency_ms: 120.4 } }, { name: 'auth', health_reason: 'auth_failed', pulse_rate: 0 }, { name: 'down', health_reason: 'unreachable', pulse_rate: 0 }];
   assert.deepEqual(remoteStatus(records[0]), { kind: 'ok', latency: 120 }); assert.equal(remoteStatus(undefined).kind, 'unknown'); assert.equal(remoteStatus({ health_reason: 'not_polled' }).kind, 'pending');
-  renderRemoteAgents(root, agents, { records, document, t, onRemove: name => removed.push(name) });
+  renderRemoteAgents(root, agents.map((agent, index) => ({ ...agent, connection: remoteStatus(records[index]) })), { document, t, onRemove: name => removed.push(name) });
   const rows = root.children; assert.equal(rows.length, 4);
   assert.match(rows[0].textContent, /wb\.settings\.fleet\.reachable · fleet_manage\.scope_admin · 120ms/);
   assert.match(rows[1].textContent, /wb\.settings\.fleet\.auth/); assert.match(rows[2].textContent, /wb\.settings\.fleet\.down/); assert.match(rows[3].textContent, /wb\.settings\.fleet\.unknown/);
