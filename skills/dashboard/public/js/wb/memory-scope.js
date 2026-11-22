@@ -177,18 +177,12 @@ const byteSize = value => {
 const millis = value => typeof value !== 'string' || !value ? NaN
   : Date.parse(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?$/.test(value) ? `${value.replace(' ', 'T')}Z` : value);
 /**
- * Loaded backlog rows, in the server's order (long-waiting groups first, then groups that need a look, by pending
- * count, oldest first). Groups with nothing pending and nothing to report come last and are set apart so the page
- * can fold them. `threshold` is the one most groups share (from the page's summary of all groups); rows with a
- * different one keep it as `ownThreshold`.
+ * Loaded backlog rows, in the server's order (long-waiting groups first, then by pending count, oldest first). The
+ * server lists only groups with something pending, a Sync running or a failed read. `threshold` is the one most
+ * groups share (from the page's summary of the listed groups); rows with a different one keep it as `ownThreshold`.
  */
 export function memoryBacklogView(rows, threshold = null) {
-  const quiet = [], active = [];
-  for (const row of rows ?? []) {
-    const view = { ...row, ownThreshold: isNumber(row.threshold) && row.threshold !== threshold ? row.threshold : null };
-    (row.count === 0 && !row.aged && row.syncing === false && !row.reason ? quiet : active).push(view);
-  }
-  return { threshold, active, quiet };
+  return { threshold, rows: (rows ?? []).map(row => ({ ...row, ownThreshold: isNumber(row.threshold) && row.threshold !== threshold ? row.threshold : null })) };
 }
 /** How long the oldest pending message has waited, in whole hours or days; null without a readable time. */
 export function memoryBacklogAge(firstAt, now = Date.now()) {
@@ -222,7 +216,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
   identity = () => 'local', selectedPath = () => getFile()?.path ?? null, isCollapsed = () => false,
   toggleCollapsed = () => {}, fileTitle = () => '', sizeText = byteSize } = {}) {
   let selected = 'all', selectedGroup = '', backlog = null, loaded = false, owner = identity(), generation = 0, stopped = false,
-    query = '', backlogQuery = '', restOpen = false, backlogTimer = null, loadingMore = false, badges = null, fold = null;
+    query = '', backlogQuery = '', backlogTimer = null, loadingMore = false;
   const search = element(document, 'input');
   search.type = 'search';
   search.addEventListener('input', () => {
@@ -249,7 +243,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
   function currentScope() { return memoryScope(getTree()); }
   function syncIdentity() {
     if (owner !== identity()) {
-      owner = identity(); selected = 'all'; selectedGroup = ''; backlog = null; badges = null; loaded = false; generation++;
+      owner = identity(); selected = 'all'; selectedGroup = ''; backlog = null; loaded = false; generation++;
     }
   }
   function selectGroup(key) {
@@ -391,8 +385,8 @@ export function createMemoryScope({ document = globalThis.document, root, charts
         name.append(element(document, 'b', label));
         if (detail() === 'technical') name.append(element(document, 'span', group.sessionGroup, 'wb-mono'));
         head.append(icon(document, memoryGroupIcon(group), 'xs'), name);
-        // Each group's pending count and syncing state, as read again after the backlog card's last read.
-        const row = (badges?.has(group.sessionGroup) ? badges.get(group.sessionGroup) : group.backlog) ?? null;
+        // Each group's pending count and syncing state, read with the tree.
+        const row = group.backlog ?? null;
         if (row?.syncing === true) {
           const badge = element(document, 'span', undefined, 'wb-memory-badge');
           badge.append(icon(document, 'loader', 'xs'), element(document, 'span', t('wb.memory.syncing')));
@@ -501,43 +495,15 @@ export function createMemoryScope({ document = globalThis.document, root, charts
   function renderBacklogRows() {
     if (stopped) return;
     backlogRows.replaceChildren();
-    const view = memoryBacklogView(backlog?.groups, backlog?.summary?.threshold ?? null);
-    const needle = backlogQuery.toLowerCase(), more = Boolean(backlog?.nextCursor);
-    const { active, quiet } = view;
-    // The quiet groups come last: once one is loaded, or nothing is left, every group needing a look is shown.
-    const reachedQuiet = quiet.length > 0 || !more;
-    // The cross-group row leads and never folds; a search keeps it only when its name matches.
+    const { rows } = memoryBacklogView(backlog?.groups, backlog?.summary?.threshold ?? null);
+    const needle = backlogQuery.toLowerCase();
+    // The cross-group row leads; a search keeps it only when its name matches.
     const cross = backlog?.originSync && (!needle || t('wb.memory.originSync').toLowerCase().includes(needle)) ? backlog.originSync : null;
-    backlogRows.style.setProperty('--wb-bl-value', memoryBacklogValueWidth(cross ? [cross, ...active] : active, t('wb.unknown')));
+    backlogRows.style.setProperty('--wb-bl-value', memoryBacklogValueWidth(cross ? [cross, ...rows] : rows, t('wb.unknown')));
     if (cross) backlogRows.append(backlogItem(cross, true));
-    for (const row of active) backlogRows.append(backlogItem(row));
-    // A search shows every match in order; otherwise groups with nothing pending fold into one line.
-    if (needle) {
-      for (const row of quiet) backlogRows.append(backlogItem(row));
-      if (more) moreButton(backlogRows);
-      if (!cross && !active.length && !quiet.length) backlogRows.append(element(document, 'p', t('wb.memory.noMatch'), 'wb-memory-source'));
-      return;
-    }
-    if (!reachedQuiet) moreButton(backlogRows);
-    const quietTotal = backlog?.summary?.quiet ?? quiet.length;
-    if (quietTotal > 0) {
-      const rest = element(document, 'details', undefined, 'wb-memory-rest');
-      rest.open = restOpen; fold = rest;
-      // Opening the fold goes on reading until its groups arrive. A fold drawn again since then still reports its
-      // own toggle later; only the one on the page counts, judged by what is loaded now.
-      rest.addEventListener('toggle', () => {
-        if (rest !== fold) return;
-        restOpen = rest.open;
-        if (restOpen && !backlogQuery && backlog?.nextCursor && !memoryBacklogView(backlog.groups).quiet.length) loadMore();
-      });
-      const summary = element(document, 'summary', undefined, 'wb-memory-rest-h');
-      const others = (backlog?.summary?.groups ?? 0) - quietTotal;
-      summary.append(icon(document, 'chev', 'xs'), element(document, 'span', countLabel(t, others > 0 ? 'wb.memory.restQuiet' : 'wb.memory.allQuiet', quietTotal)));
-      rest.append(summary);
-      for (const row of quiet) rest.append(backlogItem(row));
-      if (reachedQuiet && more) moreButton(rest);
-      backlogRows.append(rest);
-    }
+    for (const row of rows) backlogRows.append(backlogItem(row));
+    if (backlog?.nextCursor) moreButton(backlogRows);
+    if (needle && !cross && !rows.length) backlogRows.append(element(document, 'p', t('wb.memory.noMatch'), 'wb-memory-source'));
   }
   function renderCharts() {
     if (!chartsRoot || stopped) return;
@@ -602,21 +568,9 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       const value = await request(backlogPath(null));
       if (stopped || operation !== generation || captured !== identity()) return;
       backlog = pageValue(value, value.items ?? []); loaded = true; owner = captured; render();
-      await readBadges(operation, captured);
     } catch {
       if (!stopped && operation === generation && captured === identity()) { backlog = null; loaded = true; render(); }
     }
-  }
-  /**
-   * Reads the tree's group badges again: the tree answers at once with the backlogs read lately, so after the
-   * backlog card has read every group the badges are current.
-   */
-  async function readBadges(operation, captured) {
-    let value;
-    try { value = await request('/api/memory/tree'); } catch { return; }
-    if (stopped || operation !== generation || captured !== identity()) return;
-    badges = new Map((value?.sessionGroups ?? []).map(group => [group.sessionGroup, group.backlog ?? null]));
-    render();
   }
   /** Reads the next page; a cursor the server no longer accepts (after a restart) reads the first page again. */
   async function loadMore() {
@@ -629,8 +583,6 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       const seen = new Set(backlog.groups.map(row => row.sessionGroup));
       backlog = pageValue(value, [...backlog.groups, ...(value.items ?? []).filter(row => !seen.has(row.sessionGroup))]);
       loadingMore = false; render();
-      // An open fold keeps reading until its quiet groups arrive.
-      if (restOpen && !backlogQuery && backlog.nextCursor && !memoryBacklogView(backlog.groups).quiet.length) loadMore();
     } catch (error) {
       if (stopped || operation !== generation || captured !== identity()) return;
       loadingMore = false;

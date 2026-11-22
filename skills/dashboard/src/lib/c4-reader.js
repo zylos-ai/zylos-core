@@ -1,4 +1,5 @@
 import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
+import { progressFunctions } from '../../../comm-bridge/scripts/c4-store-progress.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
@@ -111,6 +112,30 @@ export class C4Reader {
         return { count: row.count, firstAt: row.count ? db.prepare('SELECT timestamp FROM conversations WHERE id=?').get(row.firstId).timestamp : null };
       })();
     } catch { throw failure(); }
+  }
+
+  /**
+   * Core's own unsummarized range (`progressFunctions().api`, the calculation behind `c4-db.js unsummarized`) for
+   * each scope, all in one snapshot of this read-only connection; null is the whole machine (Origin in single
+   * mode). `readConfig` is Core's strict config read, which Origin's range needs. One entry per scope:
+   * `{ count, firstAt }`, or null when that scope cannot be read.
+   */
+  getUnsummarizedRanges(scopes, { readConfig }) {
+    const db = this._open();
+    if (!db) throw Object.assign(new Error('Group backlog unavailable'), { code: 'READ_FAILED', statusCode: 502 });
+    const refuse = () => { throw new Error('The backlog connection is read-only'); };
+    const snapshot = operation => db.transaction(() => operation(db))();
+    const { api } = progressFunctions({
+      read: operation => operation(db), snapshot, write: refuse, run: refuse,
+      get: (c, sql, ...args) => c.prepare(sql).get(...args), all: (c, sql, ...args) => c.prepare(sql).all(...args),
+      seconds: () => Math.floor(Date.now() / 1000), dependencies: { readConfig },
+    });
+    return snapshot(() => scopes.map(scope => {
+      try {
+        const { count, firstAt } = scope === null ? api.getGlobalUnsummarizedRange() : api.getUnsummarizedRange(scope);
+        return { count, firstAt };
+      } catch { return null; }
+    }));
   }
 
   getGroupMessages(key, { since = 0, until = Date.now() } = {}) {

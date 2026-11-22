@@ -365,7 +365,8 @@ const instanceTimezone = createInstanceTimezone({ zylosDir: config.zylosDir,
 const getDetailSnapshot = () => workbench.getCachedSnapshot() ?? workbench.getSnapshot();
 const groupRuns = createRuns({ store, getSnapshot: getDetailSnapshot });
 const groupConfig = createGroupConfig({ zylosDir: config.zylosDir });
-const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, c4Reader, getSnapshot: getDetailSnapshot });
+const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, c4Reader, getSnapshot: getDetailSnapshot,
+  readConfig: () => readConfigStrict(path.join(config.zylosDir, '.zylos', 'config.json')) });
 const memoryBacklog = createMemoryBacklog({ zylosDir: config.zylosDir, getSnapshot: at => workbench.getSnapshot(at), groupBacklog,
   originBacklog: createOriginBacklog({ zylosDir: config.zylosDir }) });
 function recordDashboardInterrupt(record) {
@@ -1337,8 +1338,8 @@ async function handleMemoryApi(req, res, pathname, url) {
       const sessionGroups = (groupRoot?.children ?? [])
         .filter(node => node.type === 'directory' && parseSessionGroup(node.name) !== null)
         .map(node => ({ sessionGroup: node.name, displayName: names.get(node.name)?.displayName ?? null }));
-      // Each group's pending count and syncing state for the badge beside its name, if the backlog was read lately.
-      const backlogs = treeBacklog(sessionGroups.map(group => group.sessionGroup), groupBacklog.cached);
+      // Each group's pending count and syncing state for the badge beside its name.
+      const backlogs = await treeBacklog(groupBacklog, sessionGroups.map(group => group.sessionGroup));
       sendJson(res, 200, { ...tree, sessionGroups: sessionGroups.map((group, index) => ({ ...group, backlog: backlogs[index] })) });
       return true;
     }

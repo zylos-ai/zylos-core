@@ -45,7 +45,7 @@ export async function runKeysBacklogPaginationBrowser(t, sandbox) {
   const groups = backlogGroups(Date.now());
   const readBacklog = createMemoryBacklog({ zylosDir: sandbox.paths.zylos, readConfig: async () => ({}), env: {},
     getSnapshot: async () => ({ view: 'single', rows: [...groups.keys()].map(sessionGroup => ({ sessionGroup, name: { displayName: null } })) }),
-    groupBacklog: async group => groups.get(group) });
+    groupBacklog: { many: async keys => keys.map(key => groups.get(key)) } });
   const reads = [];
   // A Dashboard restart changes the cursor key. Each cursor sent out carries the fixture's epoch; after restart()
   // a cursor of an earlier epoch is altered on arrival, so the real list code refuses it with invalid_cursor.
@@ -111,8 +111,15 @@ export async function runKeysBacklogPaginationBrowser(t, sandbox) {
       sandbox.addCleanup(() => context.close());
       let page;
       const errors = [];
-      // The whole card, pager and fold included, however far it reaches below the screen.
-      const shot = async (name, target) => { if (evidence) await target.screenshot({ path: path.join(evidence, `${width}-${theme}-${locale}-${name}.png`) }); };
+      // The whole card, pager included, however far it reaches below the screen. The memory page may draw the
+      // card again while the shot waits for it to hold still; the locator then finds the new card on the next try.
+      const shot = async (name, target) => {
+        if (!evidence) return;
+        for (let attempt = 1; ; attempt++) {
+          try { return await target.screenshot({ path: path.join(evidence, `${width}-${theme}-${locale}-${name}.png`) }); }
+          catch (error) { if (attempt === 3 || !/not attached/.test(error.message)) throw error; }
+        }
+      };
       try {
         await context.route('**/*', route => route.request().url().startsWith(base + '/') ? route.continue() : route.abort());
         await context.addInitScript(({ theme, locale }) => {
@@ -176,37 +183,32 @@ export async function runKeysBacklogPaginationBrowser(t, sandbox) {
         await search.fill('');
         await until(keyRows, rows => rows[0] === forward[0][0], 'the full list again');
 
-        // The memory backlog: 120 groups, 50 a request; the quiet ones fold under one line with the server's count.
+        // The memory backlog: 120 groups, of which the 70 with something pending are listed, 50 a request.
         await openDashboardTab(page, 'memory');
         const card = page.locator('.wb-memory-progress');
         const backlogRows = () => card.locator('.wb-memory-bl').evaluateAll(rows => rows.map(row => row.querySelector('.wb-memory-chart-label')?.textContent ?? ''));
         await until(backlogRows, rows => rows.length === 50, 'fifty groups first');
-        const fold = card.locator('.wb-memory-rest');
-        assert.match(await fold.locator('summary').textContent(), /50/, 'the fold counts every quiet group');
-        assert.equal(await fold.evaluate(node => node.open), false);
+        assert.equal(await card.locator('details').count(), 0, 'no fold for groups with nothing pending');
         await shot('backlog-first', card);
         // A refused backlog cursor reads the first page again, silently.
         restart();
-        await card.locator('.wb-memory-more').first().click();
+        await card.locator('.wb-memory-more').click();
         await until(() => reads.filter(url => url.startsWith('/api/memory/backlog') && !url.includes('cursor')).length, count => count >= 2, 'the first page is read again');
         await until(backlogRows, rows => rows.length === 50, 'fifty groups again');
-        await card.locator('.wb-memory-more').first().click();
-        await until(backlogRows, rows => rows.length === 100, 'the next fifty: the last 20 needing a look, then 30 quiet in the fold');
-        assert.equal(await card.locator(':scope > .wb-memory-rows > .wb-memory-more').count(), 0, 'every group needing a look is loaded');
-        await fold.locator('summary').click();
-        await fold.locator('.wb-memory-more').click();
-        await until(backlogRows, rows => rows.length === 120, 'all 120 groups');
+        await card.locator('.wb-memory-more').click();
+        const all = await until(backlogRows, rows => rows.length === 70, 'the other twenty listed groups');
+        assert.equal(new Set(all).size, 70, 'no group twice');
+        assert.ok(all.every(label => Number(label.match(/(\d+)$/)?.[1]) <= 70), 'no group with nothing pending is listed');
         assert.equal(await card.locator('.wb-memory-more').count(), 0, 'nothing left to load');
         await shot('backlog-all', card);
-        // The search goes to the server: dm-11 matches dm-110 to dm-119, unfolded.
-        await card.locator('.wb-memory-gfilter input').fill('dm-11');
+        // The search goes to the server: dm-06 matches dm-060 to dm-069; dm-11 matches only groups with nothing pending.
+        await card.locator('.wb-memory-gfilter input').fill('dm-06');
         await until(() => card.locator('.wb-memory-bl').count(), count => count === 10, 'ten matching groups');
-        assert.equal(await card.locator('.wb-memory-rest').count(), 0, 'a search shows the matches unfolded');
+        await card.locator('.wb-memory-gfilter input').fill('dm-11');
+        await card.locator('.wb-memory-rows .wb-memory-source').waitFor();
+        assert.equal(await card.locator('.wb-memory-bl').count(), 0);
         await card.locator('.wb-memory-gfilter input').fill('');
-        // The fold opened above stays open, so after the first page it reads one more page, which brings the
-        // first quiet groups into the fold; the remaining quiet groups wait behind the fold's own load-more.
-        await until(backlogRows, rows => rows.length === 100 && new Set(rows).size === 100, 'the first page again, then the open fold given its first quiet groups');
-        assert.equal(await fold.locator('.wb-memory-more').count(), 1, 'the rest of the fold waits behind its own load-more');
+        await until(backlogRows, rows => rows.length === 50, 'the first page again');
         assert.equal(errors.length, 0, errors.join('\n'));
       } catch (error) {
         failed = true;

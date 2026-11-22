@@ -54,20 +54,16 @@ for (const count of [1, 2]) {
   test(`Workbench memory renders English count ${count}`, async () => {
     const document = createDocument(), root = document.createElement('div'), chartsRoot = document.createElement('div'), summaryRoot = document.createElement('div');
     const active = groups(count).map(row => ({ sessionGroup: row.sessionGroup, count, threshold: 15, pendingSummaries: count, syncing: true }));
-    const quiet = groups(count).map(row => ({ sessionGroup: row.sessionGroup + 'quiet', count: 0, threshold: 15, syncing: false }));
-    let rows = [...active, ...quiet], level = 'plain';
-    const controller = createMemoryScope({ document, root, chartsRoot, summaryRoot, t, getTree: () => ({ root: { children: [] }, sessionGroups: [] }), detail: () => level, request: async path => memoryBacklogPage({ groups: rows, originSync: { count, threshold: 15, pendingSummaries: count, syncing: false }, budgets: null },
+    let level = 'plain';
+    const controller = createMemoryScope({ document, root, chartsRoot, summaryRoot, t, getTree: () => ({ root: { children: [] }, sessionGroups: [] }), detail: () => level, request: async path => memoryBacklogPage({ groups: active, originSync: { count, threshold: 15, pendingSummaries: count, syncing: false }, budgets: null },
       parseBacklogQuery(new URL(path, 'http://dashboard').searchParams)) });
     await controller.load();
     assert.ok(summaryRoot.textContent.includes(`${count} group${noun} being saved`));
     assert.ok(summaryRoot.textContent.includes(`${count} group${noun} ${count === 1 ? 'has' : 'have'} new conversation waiting`));
     level = 'technical'; controller.render();
     assert.ok(chartsRoot.textContent.includes(`${count} unread summar${count === 1 ? 'y' : 'ies'}`));
-    assert.ok(chartsRoot.textContent.includes(`${count} more group${noun} with nothing pending`));
     const tracks = []; const visit = node => { if (node.getAttribute?.('aria-label')?.includes('sync threshold')) tracks.push(node.getAttribute('aria-label')); for (const child of node.children ?? []) visit(child); }; visit(chartsRoot);
     assert.ok(tracks.includes(`${count} message${noun}, sync threshold 15`));
-    rows = quiet; await controller.load();
-    assert.ok(chartsRoot.textContent.includes(count === 1 ? '1 group has nothing pending' : 'All 2 groups have nothing pending'));
     controller.destroy();
   });
 }

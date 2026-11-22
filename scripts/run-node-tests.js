@@ -46,6 +46,7 @@ const ROOT_NODE_TESTS = [
   'test/dashboard-demand-poll.integration.test.js',
   'test/legacy-group-reads-browser.test.js',
   'test/dashboard-object-api.integration.test.js',
+  'test/dashboard-memory-backlog-core.integration.test.js',
   'test/dashboard-static-cache-browser.integration.test.js',
   'test/account-usage-cache.integration.test.js',
   'test/dashboard-transcript-idle.integration.test.js',
