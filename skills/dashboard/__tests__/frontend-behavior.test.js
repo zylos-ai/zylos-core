@@ -1436,14 +1436,15 @@ test('memory browser is admin-scoped, agent-routed, with a stable entry URL', ()
   assert.match(index, /app\.js/);
   assert.match(index, /style\.css/);
 
-  assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
+  assert.match(app, /request: fetchAgentJson, getFile: \(\) => state\.memory\.file,/);
+  assert.match(fs.readFileSync(new URL('../public/js/wb/memory-entries.js', import.meta.url).pathname, 'utf8'), /request\(memoryEntriesPath\(/);
   assert.match(app, /fetchAgentJson\(`\/api\/memory\/file\?path=\$\{encoded\}`\)/);
   assert.match(app, /fetchAgentJson\(`\/api\/memory\/git\?path=\$\{encoded\}`\)/);
   assert.match(app, /saveMemoryOnce\(\{ request: requestAgentJson, readFile: fetchAgentJson,/);
   assert.match(app, /path: file\.path, text, sha256,/);
-  assert.match(app, /if \(!applyMemorySave\(captured, state\.memory, saved\)\) return;/);
+  assert.match(app, /if \(!applyMemorySave\(captured, state\.memory, saved, memoryScopeView\.updateFile\)\) return;/);
   const memoryActions = app.slice(app.indexOf('function renderMemoryActions()'), app.indexOf('function renderMemory()'));
-  assert.match(memoryActions, /applyMemoryWriteAccess\(editBtn, saveBtn, state\.memory\.tree, file\?\.path\)/);
+  assert.match(memoryActions, /applyMemoryWriteAccess\(editBtn, saveBtn, memoryScopeView\.known\(\), file\?\.path\)/);
   const memorySave = app.slice(app.indexOf('async function saveMemoryDraftToServer('), app.indexOf('async function resolveMemoryConflict('));
   assert.doesNotMatch(memorySave, /loadMemoryTree\(/);
   assert.match(memorySave, /renderMemoryPreservingEditor\(renderMemory, document\)/);
@@ -1758,16 +1759,16 @@ test('fleet sound cues use the marimba strike timbre Howard picked (#223)', () =
   assert.match(sounds, /strike\(ctx, \{ freq: 494, at: at \+ 0\.24, decay: 0\.4 \}\)/);
 });
 
-test('memory tree has a collapse-all/expand-all toggle (#226)', () => {
+test('memory list has a collapse-all button that folds every open folder and group (#226)', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url).pathname, 'utf8');
   const i18nEn = fs.readFileSync(new URL('../public/i18n/en.json', import.meta.url).pathname, 'utf8');
   const i18nZh = fs.readFileSync(new URL('../public/i18n/zh.json', import.meta.url).pathname, 'utf8');
   assert.match(html, /id="memory-fold"/);
-  // Toggle folds every directory at once, or expands everything back.
-  assert.match(app, /state\.memory\.collapsed = allCollapsed \? new Set\(\) : new Set\(dirs\)/);
-  // Button label tracks whether everything is already collapsed.
-  assert.match(app, /allCollapsed \? t\('memory\.expand_all'\) : t\('memory\.collapse_all'\)/);
+  // The list loads folded, so the button only folds; it is disabled when nothing is open.
+  assert.match(app, /fold\.disabled = !memoryScopeView\.anyExpanded\(\)/);
+  assert.match(app, /\$\('#memory-fold'\)\?\.addEventListener\('click', \(\) => memoryScopeView\.collapseAll\(\)\)/);
+  assert.doesNotMatch(i18nEn, /memory\.expand_all/);
   assert.match(i18nEn, /memory\.collapse_all/);
   assert.match(i18nZh, /memory\.collapse_all/);
 });

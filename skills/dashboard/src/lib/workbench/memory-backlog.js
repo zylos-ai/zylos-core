@@ -25,7 +25,7 @@ async function readAll(groupBacklog, keys) {
 const listed = row => (known(row.count) && row.count > 0) || row.syncing === true || Boolean(row.reason);
 
 /**
- * The supplied group reader owns the only per-group backlog cache, shared with details and the memory tree. Every
+ * The supplied group reader owns the only per-group backlog cache, shared with details and the memory entries' group badges. Every
  * group is read; only the groups with something to show are listed. Each row, Origin's own included, compares its own
  * unsummarized count with the group threshold. The cross-group Origin Sync backlog is a separate field, read only in
  * multi mode.
@@ -137,7 +137,7 @@ export function parseBacklogQuery(searchParams) {
 
 /**
  * One page of the backlog under the list API standard. The listed groups are ordered in memory (the group
- * reader's 30-second cache is shared with group details and the memory tree), then `q` (session-group ID or
+ * reader's 30-second cache is shared with group details and the memory entries' group badges), then `q` (session-group ID or
  * display name) selects and the cursor pages. Origin Sync, budgets and the summary are page fields.
  */
 export function memoryBacklogPage(value, query) {
@@ -169,10 +169,11 @@ export async function readBacklogPage(read, searchParams) {
 }
 
 /**
- * Pending count and syncing state for each session group of the memory tree, read with the backlog's own reader.
- * A count or state that cannot be read is null, and a failed read leaves every badge null: the tree still answers.
+ * Pending count and syncing state for the given session groups (the groups on a page of memory entries), read with
+ * the backlog's own reader. A count or state that cannot be read is null, and a failed read leaves every badge null:
+ * the entries still answer.
  */
-export async function treeBacklog(groupBacklog, keys) {
+export async function groupBadges(groupBacklog, keys) {
   const reads = await readAll(groupBacklog, keys);
   return reads.map(read => read ? { count: known(read.count) ? read.count : null, syncing: read.syncing ?? null } : null);
 }
