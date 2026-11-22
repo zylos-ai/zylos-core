@@ -1,3 +1,4 @@
+import { fleetPageFixture } from './fleet-page-fixture.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -44,7 +45,7 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       if (!url.href.startsWith(base + '/')) return route.abort();
       if (url.pathname === '/api/fleet') {
         const machine = (name, extra = {}) => ({ name, state: 'IDLE', access: 'admin', health_reason: null, pulse_rate: 1, updated_at: new Date().toISOString(), ...extra });
-        return route.fulfill({ json: { agents: [machine('browser-case', { self: true }), machine(REMOTE)], updated_at: new Date().toISOString() } });
+        return route.fulfill({ json: fleetPageFixture({ agents: [machine('browser-case', { self: true }), machine(REMOTE)], updated_at: new Date().toISOString() }, url.search) });
       }
       const remote = url.pathname.match(/^\/fleet\/([^/]+)(\/api\/.*)$/);
       if (!remote) return route.fallback();

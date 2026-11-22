@@ -242,6 +242,7 @@ test('Fleet reloads the visible page and settings page the configured machines',
         await context.route('**/*', route => route.request().url().startsWith(base + '/') ? route.continue() : route.abort());
         await context.route('**/_assets/vendor/chart.umd.js', route => route.fulfill({ path: process.env.ZYLOS_CHAT_CHART_ASSET, contentType: 'text/javascript' }));
         await context.addInitScript(({ locale, theme }) => {
+          if (window.top !== window) return;
           localStorage.setItem('zylos-dashboard-theme', theme);
           localStorage.setItem('zylos-dashboard-locale', locale);
           window.EventSource = class extends EventTarget {
@@ -327,6 +328,7 @@ test('Fleet reloads the visible page and settings page the configured machines',
           await root.locator(previous).click();
           await waitForCard('Node 08');
           await page.mouse.move(0, 0);
+          await page.waitForFunction(() => !document.querySelector('#agent-fleet-root').matches(':hover'));
           const changed = data.agents.find(agent => agent.name === 'Node 08');
           changed.state = 'OFFLINE'; changed.pulse_rate = 0;
           const read = page.waitForResponse(response => {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { fleetPageFixture } from './fleet-page-fixture.js';
 import { conversationAction, openConversationMenu, openGroupDetail, openMobileMore, openDashboardTab } from './browser-navigation.js';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -42,7 +43,7 @@ export async function startPage(sandbox, publicDir = currentPublic, messageRows)
       if (p.endsWith('/status') || p.endsWith('/questions')) return { items: [], nextCursor: null };
       return { conversation: conversation(id) };
     }
-    if (p === '/api/session-hosts') return { relationships: [], allowlist: [] };
+    if (p === '/api/session-hosts') return { items: [], nextCursor: null, allowlist: [] };
     if (p === '/api/session-hosts/channels') return { channels: [] };
     if (p === '/api/settings/timezone') return { tz: 'UTC', writable: true, restart_status: 'known', restart_services: [] };
     if (p === '/api/observer/status' && observerStatus) return observerStatus;
@@ -51,8 +52,8 @@ export async function startPage(sandbox, publicDir = currentPublic, messageRows)
       return { ...value, agent: { name: 'luna' }, session_mode: { ...value.session_mode, sessionMode },
         versions: { ...value.versions, zylos: { ...value.versions.zylos, installed: '1.0.0-beta.7' } } };
     }
-    if (p === '/api/fleet') return fleet();
-    if (p === '/api/fleet/agents') return { self: { name: 'luna' }, agents: [] };
+    if (p === '/api/fleet') return fleetPageFixture(fleet(), url.search);
+    if (p === '/api/fleet/agents') return { self: { name: 'luna' }, items: [], nextCursor: null, total: 0 };
     if (p.startsWith('/api/groups/') && p.endsWith('/runs')) return { runs: [{ runId: 'run-tg', startAt: iso(-20 * 60000), endAt: iso(-30000), n: 2, endReason: 'running' }], totalRuns: 1, totalEvents: 2, unattributed: 0 };
     if (p.startsWith('/api/groups/') && p.endsWith('/messages')) return { messages: [] };
     if (p === '/api/groups' || p === '/api/groups/counts' || /^\/api\/groups\/[^/]+$/.test(p) && !['offline', 'search', 'activity', 'runtime-overrides', 'naming-prompt'].includes(p.split('/').at(-1))) {
@@ -109,7 +110,8 @@ export async function startPage(sandbox, publicDir = currentPublic, messageRows)
     pushFleet(multiAgent) {
       agents = multiAgent ? [self, { name: 'remote-agent', access: 'admin', state: 'IDLE' }] : [self];
       assert.ok(streams.size > 0, 'a browser stream is connected before the fleet event');
-      for (const stream of streams) stream.write(`event: fleet\ndata: ${JSON.stringify(fleet())}\n\n`);
+      const { summary, updated_at } = fleetPageFixture(fleet());
+      for (const stream of streams) stream.write(`event: fleet\ndata: ${JSON.stringify({ summary, updated_at })}\n\n`);
     },
     setScene(value) { scene = value; }, setTitle(value) { title = value; }, setChannel(value) { channel = value; }, reconnect() { connected = true; }, setSessionMode(value) { sessionMode = value; }, setObserverStatus(value) { observerStatus = value; }, disconnect() { connected = false; for (const stream of streams) stream.end(); } };
 }

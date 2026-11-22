@@ -1,3 +1,4 @@
+import { fleetPageFixture } from './fleet-page-fixture.js';
 import assert from 'node:assert/strict';
 import { openDashboardTab, openMobileMore } from './browser-navigation.js';
 import fs from 'node:fs';
@@ -275,8 +276,8 @@ export async function runWorkbenchBrowser(t, sandbox) {
         listed.unshift(key);
         return route.fulfill({ json: { ok: true, key, plaintext_key: 'zk_browser_case_only' } });
       });
-      await context.route('**/api/fleet/agents', route => route.request().method() === 'GET'
-        ? route.fulfill({ json: { self: { name: 'browser-case' }, agents: [{ name: 'lab', base_url: 'https://lab.example', access: 'read' }] } }) : route.fallback());
+      await context.route(url => url.pathname === '/api/fleet/agents', route => route.request().method() === 'GET'
+        ? route.fulfill({ json: { self: { name: 'browser-case' }, items: [{ name: 'lab', base_url: 'https://lab.example', access: 'read', connection: { kind: 'unknown' } }], nextCursor: null, total: 1 } }) : route.fallback());
       await page.reload();
       await page.locator('#api-key-list tbody tr').first().waitFor({ state: 'attached' });
       const sections = await page.locator('[data-settings-section]').evaluateAll(buttons => buttons.filter(button => !button.hidden).map(button => button.dataset.settingsSection));
@@ -966,7 +967,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       const url = new URL(route.request().url());
       if (url.pathname === '/api/fleet') {
         const machine = (name, extra = {}) => ({ name, state: 'IDLE', access: 'admin', health_reason: null, pulse_rate: 1, updated_at: new Date().toISOString(), ...extra });
-        return route.fulfill({ json: { agents: [machine('browser-case', { self: true }), ...Object.keys(remotes).map(name => machine(name))], updated_at: new Date().toISOString() } });
+        return route.fulfill({ json: fleetPageFixture({ agents: [machine('browser-case', { self: true }), ...Object.keys(remotes).map(name => machine(name))], updated_at: new Date().toISOString() }, url.search) });
       }
       const remote = url.pathname.match(/^\/fleet\/([^/]+)(\/api\/.*)$/);
       if (!remote) return route.fallback();
@@ -1165,12 +1166,12 @@ export async function runWorkbenchBrowser(t, sandbox) {
     const offline = 'lark:oc_product', offlineReads = [];
     let target = GROUP;
     await answerFleet(page, { spark: '1.0.0' });
-    await page.route(url => url.pathname === '/api/fleet', route => route.fulfill({ json: {
+    await page.route(url => url.pathname === '/api/fleet', route => route.fulfill({ json: fleetPageFixture({
       agents: [{ name: 'browser-case', self: true, state: 'IDLE', access: 'admin',
         group_summary: { listKnown: true, running: 2, counts: { busy: 1, idle: 1 }, problemCount: 3,
           problems: [{ sessionGroup: target, displayName: 'Locate target', reason: 'auth_failed' }] } },
         { name: 'spark', state: 'IDLE', access: 'admin' }], updated_at: new Date().toISOString(),
-    } }));
+    }, new URL(route.request().url()).search) }));
     await page.route(url => url.pathname === '/api/groups' && url.searchParams.get('side') === 'offline', route => {
       const url = new URL(route.request().url());
       offlineReads.push(url.search);
