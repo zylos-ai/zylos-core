@@ -20,7 +20,7 @@ import { watchHeader } from './wb/header-fit.js';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js';
 import { createRemoteAccess } from './wb/remote-access.js';
 import { mountPagedList } from './wb/paged-list.js';
-import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js';
+import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js';
 import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide, observerReturnPage } from './wb/observer-page.js';
 import { bindActionControls, createPageActions } from './wb/page-actions.js';
 import { watchScrollHint } from './wb/scroll-hint.js';
@@ -33,7 +33,6 @@ import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPa
 import { createFleetSounds } from './fleet-sounds.js';
 import { refreshDashboardState } from './state-refresh.js';
 import { formatActionResult, actionFailureMessage } from './action-result.js';
-import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from './origin-lock.js';
 import { countLabel } from './count-label.js';
 
 const BASE_PATH = document.documentElement.dataset.basePath || '';
@@ -275,8 +274,7 @@ function renderInfoBar() {
 }
 
 // ─── Render: State ───
-function renderObserverAvailability() {
-  lockObserverButtons(document.querySelectorAll(OBSERVER_ACCESS_SELECTOR), { readOnly: remoteIsReadOnly() });
+function syncAccessControls() {
   remoteAccess.sync();
   mobileNavigation?.sync();
 }
@@ -365,7 +363,7 @@ function renderAll() {
     refreshSettingsVersion();
   }
   renderInfoBar();
-  renderObserverAvailability();
+  syncAccessControls();
   renderObserverPage();
   renderFleet();
   renderMemory();
@@ -1038,7 +1036,7 @@ async function refreshState() {
   if (!data) return;
   state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
   renderInfoBar();
-  renderObserverAvailability();
+  syncAccessControls();
   renderObserverPage();
 }
 
@@ -1459,7 +1457,7 @@ async function openObserver() {
 
 
 function activeTabName() {
-  return document.querySelector('.tab.active')?.dataset.tab || 'overview';
+  return document.querySelector('.tab-panel.active')?.id.slice('tab-'.length) || 'overview';
 }
 
 // ─── Fleet view switch (multi-agent mode) ───
@@ -1631,7 +1629,7 @@ function applySse(name, data) {
     if (!data.agent && prevAgent) state.dashboardState.agent = prevAgent;
     state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
     workbench?.applyInstance?.(data);
-    renderInfoBar(); renderObserverAvailability(); renderObserverPage();
+    renderInfoBar(); syncAccessControls(); renderObserverPage();
   } else if (name === 'groups') {
     void workbench?.refresh?.(data);
   } else if (name === 'fleet') {
@@ -1751,7 +1749,7 @@ function initTabs() {
     if (push) state.navigationGeneration += 1;
     if (name !== 'observer') state.observer.selectionGeneration += 1;
     if (name === 'memory' && remoteIsReadOnly()) name = 'overview';
-    if (name === 'observer' && ($('#observer-tab')?.hidden || remoteIsReadOnly())) name = 'overview';
+    if (name === 'observer' && !observerPageAvailable()) name = 'overview';
     if (remoteAccess.blocks(name)) name = 'overview';
     if (activeTabName() === 'observer' && name !== 'observer') closeObserver({ release: true }).catch(() => {});
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
@@ -1783,11 +1781,7 @@ function initTabs() {
     }
   };
   document.querySelectorAll('.tab').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (btn.dataset.tab === 'observer') {
-        openObserverFor(workbench?.selectedGroup?.(), 'live', { focus: false }).catch(() => {});
-      } else activateTab(btn.dataset.tab, true);
-    });
+    btn.addEventListener('click', () => activateTab(btn.dataset.tab, true));
   });
   window.addEventListener('popstate', async () => {
     // Handle conversation overlays and settings history before routing between tabs and instances.
@@ -1910,6 +1904,7 @@ function applyFleetMode(fleet) {
   // size is irrelevant here); the header's machines icon returns to the wall
   // the viewer drilled down from.
   state.multiAgent = hasFleetWall(fleet);
+  mobileNavigation?.sync();
   const fleetView = $('#fleet-view');
   const agentDetail = $('#agent-detail');
   if (!state.multiAgent) {
@@ -2944,7 +2939,7 @@ function setModalBodyDisabled(disabled) {
   body.classList.toggle('modal-body-disabled', disabled);
   body.querySelectorAll('button, select, input').forEach(el => { el.disabled = disabled; });
   syncModeSegment();
-  if (!disabled) renderObserverAvailability();
+  if (!disabled) syncAccessControls();
 }
 
 async function showConfirm(text, options) {
@@ -3108,7 +3103,7 @@ await Promise.all([
 initSettingsPage();
 initTabs();
 mobileNavigation = mountMobileNavigation({ document, t,
-  getView: () => ({ tab: activeTabName(), fleet: state.fleetViewActive }),
+  getView: () => ({ tab: activeTabName(), fleet: state.fleetViewActive, multiAgent: state.multiAgent }),
   onTab: name => {
     if (state.fleetViewActive) showAgentDetail({ navigation: false });
     document.querySelector(`.tab[data-tab="${name}"]`)?.click();
@@ -3205,7 +3200,7 @@ chatPage = mountConversationPage({ root: document.querySelector('#wb-chat'), t,
     onObserve: openObserverFor,
     observable: row => {
       const status = state.observer.status;
-      return groupObservable(observerOpenable(status) ? observerNavEntry(status, document.documentElement.dataset.detail, t) : null, row);
+      return observerOpenable(status) && groupObservable(status, document.documentElement.dataset.detail, row);
     },
   },
 });

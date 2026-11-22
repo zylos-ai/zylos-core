@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { openDashboardTab, openGroupDetail, openMobileMore } from './browser-navigation.js';
+import { openDashboardTab, openGroupDetail, observeGroupFromOverview } from './browser-navigation.js';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -137,17 +137,8 @@ export async function runObserverBrowser(t, sandbox, signal) {
     page.on('pageerror', error => record(errors, error.message));
     try {
       await page.goto(base + '/');
-      if (width <= 760) {
-        // The phone exposes Observer through More; the desktop tab remains a hidden proxy source.
-        await openMobileMore(page);
-        const observer = page.locator('[data-mobile-action="observer"]');
-        await observer.waitFor({ state: 'visible' });
-        assert.equal(await observer.isEnabled(), true, 'the phone Observer entry is available');
-        assert.equal(await page.locator('#observer-tab').isVisible(), false, 'the desktop Observer tab is replaced on phones');
-        if (evidence) await page.screenshot({ path: path.join(evidence, `observer-entry-${locale}-${width}.png`) });
-        await page.keyboard.press('Escape');
-        await page.locator('#wb-mobile-more-sheet').waitFor({ state: 'hidden' });
-      } else await page.locator('#observer-tab').waitFor({ state: 'visible' });
+      await page.locator('#wb-board .wb-row').first().waitFor();
+      assert.equal(await page.locator('[data-tab="observer"], [data-mobile-action="observer"]').count(), 0);
       return { page, context };
     } catch (error) {
       console.log('Observer startup diagnostics:', JSON.stringify({ startup, errors: errors.slice(0, 5), reads: reads.slice(-15) }));
@@ -156,9 +147,10 @@ export async function runObserverBrowser(t, sandbox, signal) {
     }
   }
   const openTab = openDashboardTab;
+  const openObserverAddress = page => page.goto(base + '/observer');
   const openGroupInfo = openGroupDetail;
   const select = (page, group) => page.locator('#observer-group-select').selectOption(group);
-  async function observing(page, group = GROUP) { await openTab(page, 'observer'); await select(page, group); await page.waitForFunction(() => window.__observerSockets.length > 0); }
+  async function observing(page, group = GROUP) { await observeGroupFromOverview(page, group); await page.waitForFunction(() => window.__observerSockets.length > 0); }
   const leaseWrites = start => writes.slice(start).filter(row => row.path === '/api/observer/leases');
   const step = async (name, fn, width = 1280) => {
     let failure;
@@ -176,7 +168,6 @@ export async function runObserverBrowser(t, sandbox, signal) {
   await step('group detail activates observation directly and sends the selected group', async page => {
     await page.locator(`[data-group="${GROUP}"]`).click();
     const button = page.locator(`button[data-observer-group="${GROUP}"]`); await button.waitFor({ state: 'visible' });
-    await page.evaluate(() => { document.querySelector('#observer-tab').click = () => { throw new Error('Observer entry must activate the page directly'); }; });
     const before = writes.length, groupReads = reads.filter(row => row.path === '/api/groups/running').length;
     const detailReads = reads.filter(row => row.path === '/api/groups/' + encodeURIComponent(GROUP)).length;
     await button.click(); await page.waitForFunction(() => window.__observerSockets.length > 0);
@@ -186,7 +177,7 @@ export async function runObserverBrowser(t, sandbox, signal) {
       'a selected running group is recognized by compact id without a redundant detail request');
     assert.equal(await page.locator('#observer-group-picker').isVisible(), false);
   });
-  await step('selected offline observation hydrates canonical detail and retains its history target', async page => {
+  for (const width of [1280, 390]) await step(`sleeping group history opens and returns at ${width}px`, async page => {
     await page.locator('.wb-group-sides > button').nth(1).click();
     await page.locator('#wb-board [data-group="origin"]').click();
     const observe = page.locator('button[data-observer-group="origin"]');
@@ -196,10 +187,16 @@ export async function runObserverBrowser(t, sandbox, signal) {
     await until(() => reads.slice(start).some(row => row.path === '/api/groups/origin' && row.search === '?include='),
       'a selected offline group absent from the running catalog hydrates canonical detail');
     assert.equal(await page.locator('#observer-group-select').inputValue(), 'origin');
-    await page.locator('[data-observer-view="history"]').click();
+    await page.locator('#observer-back').click();
+    await observe.waitFor();
+    await page.locator('#wb-side [role="tab"]').nth(1).click();
+    await page.locator('#wb-side .wb-timeline-filters button.wb-link-btn').click();
     await page.locator('#observer-history').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#observer-group-select').inputValue(), 'origin', 'history preserves the offline target');
-  });
+    await page.locator('#observer-back').click();
+    await page.locator('#wb-side').waitFor({ state: 'visible' });
+    assert.equal(new URL(page.url()).pathname, '/');
+  }, width);
   for (const width of [1280, 390]) await step(`history queries retain the selected group at ${width}px`, async page => {
     await page.locator(`[data-group="${GROUP}"]`).click();
     await page.locator(`button[data-observer-group="${GROUP}"]`).click();
@@ -212,29 +209,6 @@ export async function runObserverBrowser(t, sandbox, signal) {
     assert.ok(queries.every(row => new URLSearchParams(row.search).get('session_group') === GROUP));
     if (evidence) await page.screenshot({ path: path.join(evidence, `observer-history-${width}.png`) });
   }, width);
-  await step('top observer entry clears a previously observed group after its detail closes', async page => {
-    await page.locator(`[data-group="${GROUP}"]`).click();
-    await page.locator(`button[data-observer-group="${GROUP}"]`).click();
-    await page.waitForFunction(() => window.__observerSockets.length > 0);
-    assert.equal(leaseWrites(0).at(-1).body.sessionGroup, GROUP);
-
-    await openTab(page, 'overview');
-    await page.locator('#wb-side').waitFor({ state: 'visible' });
-    assert.equal(await page.locator(`#wb-board [data-group="${GROUP}"]`).getAttribute('aria-current'), 'true');
-    await page.keyboard.press('Escape');
-    await page.locator('#wb-side').waitFor({ state: 'hidden' });
-    assert.equal(await page.locator('#wb-board [aria-current="true"]').count(), 0, 'closing detail leaves no current group');
-
-    const before = writes.length, sockets = await page.evaluate(() => window.__observerSockets.length);
-    await openTab(page, 'observer');
-    await page.locator('#tab-observer').waitFor({ state: 'visible' });
-    await page.locator('#observer-group-picker').waitFor({ state: 'visible' });
-    assert.equal(await page.locator('#observer-group-select').inputValue(), '', 'top entry must clear the stale observed group');
-    await page.waitForFunction(() => /Choose a running group/.test(document.querySelector('#observer-notice')?.textContent || ''));
-    assert.equal(leaseWrites(before).length, 0, 'no selected detail means no automatic lease acquisition');
-    assert.equal(await page.evaluate(() => window.__observerSockets.length), sockets, 'stale observation must not reconnect');
-    assert.equal(await page.locator('.observer-frame-shell').isVisible(), false);
-  });
   // The status row describes the live connection: the history view hides it (the view switch re-renders the
   // page), and going back to the live view shows it again.
   await step('the history view hides the live status row', async page => {
@@ -253,7 +227,7 @@ export async function runObserverBrowser(t, sandbox, signal) {
   // Status row, wide-terminal hint and size button follow the page state: hidden while a running group is to be
   // picked; a terminal wider than its frame marks the frame and shows the hint; the size button goes with the form.
   await step('the status row, the wide-terminal hint and the size button follow the page state', async page => {
-    await openTab(page, 'observer');
+    await openObserverAddress(page);
     await page.locator('#observer-group-picker').waitFor({ state: 'visible' });
     await page.waitForFunction(() => /Choose a running group/.test(document.querySelector('#observer-notice')?.textContent || ''));
     assert.equal(await page.locator('.wb-o-notice').isVisible(), false, 'choosing among running groups: the picker speaks, the row is hidden');
@@ -276,7 +250,7 @@ export async function runObserverBrowser(t, sandbox, signal) {
   });
   scenario = 'pending-lease';
   await step('late lease acquisition cannot block selecting another group and is released', async page => {
-    await openTab(page, 'observer'); await select(page, GROUP); await until(() => heldLease, 'pending lease');
+    await openObserverAddress(page); await select(page, GROUP); await until(() => heldLease, 'pending lease');
     const started = Date.now(); await select(page, OTHER); await page.waitForFunction(() => window.__observerSockets.length > 0);
     assert.ok(Date.now() - started < 2500, 'navigation cannot wait for the unresolved old lease');
     const old = heldLease; heldLease = null; held.delete(old.res); sendJson(old.res, 201, old.lease);
@@ -284,12 +258,14 @@ export async function runObserverBrowser(t, sandbox, signal) {
   });
   scenario = 'pending-release';
   await step('unresolved release cannot block navigation to a new group', async page => {
-    await observing(page); const started = Date.now(); await select(page, OTHER); await page.waitForFunction(() => window.__observerSockets.length >= 2);
+    await openObserverAddress(page); await select(page, GROUP);
+    await page.waitForFunction(() => window.__observerSockets.length > 0);
+    const started = Date.now(); await select(page, OTHER); await page.waitForFunction(() => window.__observerSockets.length >= 2);
     assert.ok(Date.now() - started < 2500, 'new group must connect before release resolves');
   });
   scenario = 'wrong-group';
   await step('mismatched lease is released without a live frame or retry', async page => {
-    const before = writes.length; await openTab(page, 'observer'); await select(page, GROUP);
+    const before = writes.length; await openObserverAddress(page); await select(page, GROUP);
     await page.waitForFunction(() => /does not support/.test(document.querySelector('#observer-notice')?.textContent || ''));
     await until(() => writes.slice(before).some(row => row.path.endsWith('/release')), 'wrong lease release');
     await pause(1200); assert.equal(leaseWrites(before).length, 1); assert.equal(await page.evaluate(() => window.__observerSockets.length), 0);
@@ -311,7 +287,7 @@ export async function runObserverBrowser(t, sandbox, signal) {
   for (const interval of [150, 500, 1000]) {
     scenario = 'rapid'; rapidInterval = interval; rapidCalls = 0;
     await step(`alternating groups recover a superseded request at ${interval}ms`, async page => {
-      await openTab(page, 'observer'); await select(page, GROUP); await until(() => rapidCalls === 1, 'first alternating request');
+      await openObserverAddress(page); await select(page, GROUP); await until(() => rapidCalls === 1, 'first alternating request');
       await pause(interval); await select(page, OTHER); await until(() => rapidCalls === 2, 'second alternating request');
       await pause(interval); await select(page, GROUP); await page.waitForFunction(() => window.__observerSockets.length > 0);
       assert.ok(rapidCalls >= 4, 'the latest obsolete request must retry');
@@ -323,7 +299,7 @@ export async function runObserverBrowser(t, sandbox, signal) {
   }
   mode = 'legacy'; scenario = 'normal';
   await step('legacy producer still observes Origin without a lease group field', async page => {
-    const before = writes.length; await openTab(page, 'observer'); await page.waitForFunction(() => window.__observerSockets.length > 0);
+    const before = writes.length; await observeGroupFromOverview(page, 'origin'); await page.waitForFunction(() => window.__observerSockets.length > 0);
     assert.equal(Object.hasOwn(leaseWrites(before)[0].body, 'sessionGroup'), false);
   });
   await step('legacy producer rejects other groups before creating a lease', async page => {
@@ -335,19 +311,19 @@ export async function runObserverBrowser(t, sandbox, signal) {
   });
   mode = 'single'; scenario = 'normal';
   await step('modern single mode sends and accepts the explicit null binding', async page => {
-    const before = writes.length; await openTab(page, 'observer'); await page.waitForFunction(() => window.__observerSockets.length > 0);
+    const before = writes.length; await observeGroupFromOverview(page, 'origin'); await page.waitForFunction(() => window.__observerSockets.length > 0);
     assert.equal(leaseWrites(before)[0].body.sessionGroup, null);
   });
   scenario = 'single-undefined';
   await step('modern single mode rejects an absent lease binding', async page => {
-    const before = writes.length; await openTab(page, 'observer');
+    const before = writes.length; await observeGroupFromOverview(page, 'origin');
     await page.waitForFunction(() => /does not support/.test(document.querySelector('#observer-notice')?.textContent || ''));
     await until(() => writes.slice(before).some(row => row.path.endsWith('/release')), 'single mismatch release');
     assert.equal(await page.evaluate(() => window.__observerSockets.length), 0);
   });
   // The observer's back button returns to the page the group's detail was opened on: the overview with that
   // detail open, or the conversation page with that group's conversation selected and its detail beside it.
-  // Opening the observer page from its own entry (no detail) offers no back button.
+  // Opening the observer page by address (no detail) offers no back button.
   mode = 'multi'; scenario = 'normal';
   const observeFromDetail = async (page, scope) => {
     await page.locator(`${scope} button[data-observer-group="${GROUP}"]`).click();
@@ -412,8 +388,8 @@ export async function runObserverBrowser(t, sandbox, signal) {
     assert.equal(new URL(page.url()).pathname, '/');
     assert.equal(await page.locator('#tab-chat').isVisible(), false);
   });
-  for (const width of [1280, 390]) await step(`the observer page opened from its own entry offers no back button at ${width}px`, async page => {
-    await openTab(page, 'observer');
+  for (const width of [1280, 390]) await step(`the observer page opened by address offers no back button at ${width}px`, async page => {
+    await openObserverAddress(page);
     await page.locator('#tab-observer').waitFor({ state: 'visible' });
     await page.locator('#observer-group-picker').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#observer-back').isVisible(), false);

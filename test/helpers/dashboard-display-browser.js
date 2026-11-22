@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { startPage } from '../../skills/dashboard/__tests__/helpers/workbench-browser.js';
 import { workbenchAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
-import { openDashboardTab } from '../../skills/dashboard/__tests__/helpers/browser-navigation.js';
+import { openDashboardTab, observeGroupFromOverview } from '../../skills/dashboard/__tests__/helpers/browser-navigation.js';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const now = Date.parse('2026-11-16T13:00:00Z');
@@ -167,7 +167,8 @@ export async function runDashboardDisplayBrowser(t, sandbox) {
         await alignment('effort');
         await shot('settings-supported');
 
-        await openDashboardTab(page, 'observer');
+        await openDashboardTab(page, 'overview');
+        await observeGroupFromOverview(page, 'origin');
         await page.locator('[data-observer-view="history"]').click();
         await page.locator('.history-entry header').waitFor();
         const session = await page.locator('[data-history="sessions"]').innerText();

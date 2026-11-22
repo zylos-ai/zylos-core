@@ -4,8 +4,8 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendHtml, sendJson, serveStatic } from '../../skills/dashboard/src/lib/http.js';
-import { openDashboardTab } from '../../skills/dashboard/__tests__/helpers/browser-navigation.js';
-import { workbenchAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
+import { openDashboardTab, observeGroupFromOverview } from '../../skills/dashboard/__tests__/helpers/browser-navigation.js';
+import { GROUP, workbenchAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../skills/dashboard/public/', import.meta.url)));
 const primaryPath = '/_assets/i18n/zh.json';
@@ -189,7 +189,7 @@ export async function runStartupTimeoutBrowser(sandbox, scenario) {
     const openStart = performance.now();
     const response = page.waitForResponse(r => new URL(r.url()).pathname === observerPath, { timeout: 6000 });
     response.catch(() => {}); // Teardown may close the page after an earlier assertion fails.
-    await openDashboardTab(page, 'observer');
+    await observeGroupFromOverview(page, GROUP);
     await pause(1200);
     assert.equal(await page.locator('#observer-main').getAttribute('hidden'), null, 'pending slow refresh retains known observer state');
     assert.notEqual(await page.locator('#observer-notice').getAttribute('data-state'), 'error');
