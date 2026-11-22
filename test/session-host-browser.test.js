@@ -132,7 +132,13 @@ test('the owner can manage session hosting at desktop and phone widths', {
         assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
         assert.equal(await panel.locator('.wb-host-allow input').evaluate(input => Math.round(input.getBoundingClientRect().height)), width === 390 ? 36 : 30);
         assert.match(await panel.textContent(), /origin/);
-        if (evidence) await panel.screenshot({ path: path.join(evidence, `host-${width}-${locale}-${theme}.png`) });
+        if (evidence) {
+          const screenshot = path.join(evidence, `host-${width}-${locale}-${theme}.png`);
+          if (width === 390) {
+            await panel.locator('#settings-host-relationships input[type=search]').scrollIntoViewIfNeeded();
+            await page.screenshot({ path: screenshot });
+          } else await panel.screenshot({ path: screenshot });
+        }
         if (width === 390 && locale === 'zh' && theme === 'dark') {
           const relationships = panel.locator('#settings-host-relationships');
           await relationships.locator('.wb-plist-next').click();
