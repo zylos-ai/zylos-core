@@ -31,6 +31,14 @@ for (const id of SUPPORTED_RUNTIMES) {
     }
     assert.equal(runtime.launch.efforts !== UNSUPPORTED, runtimesWith('modelOverride', 'supported').includes(id),
       'modelOverride in the registry must agree with launch.efforts');
+    const { modelConfig } = runtime.launch;
+    assert.equal(modelConfig !== UNSUPPORTED, runtimesWith('modelOverride').includes(id),
+      'modelOverride in the registry must agree with launch.modelConfig');
+    if (modelConfig !== UNSUPPORTED) {
+      assert.ok(Object.isFrozen(modelConfig));
+      assert.equal(typeof modelConfig.read, 'function');
+      assert.equal(typeof modelConfig.write, 'function');
+    }
     const { screen, hookHealth, toolWatchdog, noticeRules } = runtime.health;
     assert.ok(screen !== UNSUPPORTED || hookHealth !== UNSUPPORTED, 'health must have an evidence source');
     assert.equal(hookHealth !== UNSUPPORTED, runtimesWith('hookHealth').includes(id),

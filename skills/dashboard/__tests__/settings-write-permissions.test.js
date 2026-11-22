@@ -50,3 +50,35 @@ test('an effort change tightens world-readable project settings', async t => {
   assert.equal(mode(file), '600');
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).effortLevel, 'low');
 });
+
+test('Claude defaults reject damaged settings and create a missing file', async t => {
+  const { file, config } = fixture(t);
+  const actions = [
+    ['switch-model', { runtime: 'claude', model: 'sonnet' }, { model: 'sonnet' }],
+    ['switch-effort', { runtime: 'claude', effort: 'high' }, { effortLevel: 'high' }],
+  ];
+  for (const [name, original] of [
+    ['truncated JSON', '{"model": "opus", "env": {"A": "1"'],
+    ['array root', '[]'],
+    ['missing file', null],
+  ]) {
+    await t.test(name, async () => {
+      const { handleAction: dispatch } = await import(`../src/lib/actions.js?settings-content=${encodeURIComponent(name)}`);
+      for (const [action, body, expected] of actions) {
+        if (original === null) fs.rmSync(file, { force: true });
+        else fs.writeFileSync(file, original);
+        const result = await dispatch(action, body, config);
+        if (original === null) {
+          assert.equal(result.ok, true);
+          assert.equal(fs.readFileSync(file, 'utf8'), JSON.stringify(expected, null, 2) + '\n');
+          continue;
+        }
+        assert.equal(result.ok, false);
+        assert.equal(result.error, 'internal_error');
+        assert.equal(result.messageKey, 'result.internal_error');
+        assert.ok(result.message.includes(file));
+        assert.equal(fs.readFileSync(file, 'utf8'), original);
+      }
+    });
+  }
+});

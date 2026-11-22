@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { END_TYPES, MAIN_ACTION_TYPES, STOP_HOOK_LAG_MS, inputAfterStop } from '../workbench/working.js';
 import { RESTART_EXIT_MS, runRestartEffect } from '../../../public/js/wb/timeline-rows.js';
+import { loadCoreModule } from '../core-modules.js';
+import { getDashboardRuntime } from '../runtime/index.js';
+import { UNSUPPORTED } from '../runtime/contract.js';
 
 /**
  * What the agent is doing right now, for a Dashboard conversation page.
@@ -34,13 +37,25 @@ const LAUNCH_LEAD_MS = 10_000;
 const PROMPT_DELIVERY_LAG_MS = 2_000;
 // Memory Sync workers, named by what they do rather than by their worker type.
 const MEMORY_SYNC_AGENTS = /^zylos-(group|origin|global)-sync$/;
-// Calls that manage subagents rather than do work (both multi-agent tool generations, including an `exec` that
-// calls them from code mode); the subagent itself is a subtask row. A code-mode `wait` with a cell id is not one of
-// them: it resumes a yielded `exec`, whose step it ends.
-const CODEX_AGENT_CONTROLS = new Set(['spawn_agent', 'send_input', 'wait_agent', 'close_agent', 'resume_agent',
-  'send_message', 'list_agents', 'followup_task', 'interrupt_agent', 'wait', 'sleep']);
-const CODEX_COMMANDS = new Set(['exec', 'exec_command', 'shell', 'local_shell', 'container.exec', 'write_stdin', 'unified_exec']);
-const CLAUDE_AGENT_TOOLS = new Set(['Agent', 'Task']);
+// This module awaits the Dashboard runtime factory at top level. Runtime implementations must not statically import it.
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
+const dashboardRuntimes = await Promise.all(SUPPORTED_RUNTIMES.map(id => getDashboardRuntime(id)));
+const VOCAB = new Map(dashboardRuntimes.map(({ id, activityVocabulary }) => [id, activityVocabulary]));
+const STANDARD = Object.freeze({
+  toolEvents: 'hooks',
+  stepLabel: () => ({ key: 'tool' }),
+  opensStep: UNSUPPORTED,
+  subagentLaunchTools: Object.freeze([]),
+  resumesCells: false,
+});
+const LAUNCH_TOOLS = [...new Set([...VOCAB.values()]
+  .filter(vocabulary => vocabulary !== UNSUPPORTED)
+  .flatMap(vocabulary => vocabulary.subagentLaunchTools))];
+
+function vocab(runtime) {
+  const vocabulary = VOCAB.get(runtime);
+  return vocabulary && vocabulary !== UNSUPPORTED ? vocabulary : STANDARD;
+}
 
 const toolName = meta => typeof meta.tool_name === 'string' ? meta.tool_name.replace(/^functions\./, '') : '';
 const iso = ms => new Date(ms).toISOString();
@@ -48,7 +63,6 @@ const ms = value => { const time = Date.parse(value); return Number.isFinite(tim
 /** C4 stores UTC seconds as `YYYY-MM-DD HH:MM:SS`. */
 const c4Time = value => typeof value === 'string' ? ms(value.replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(value) ? '' : 'Z')) : null;
 const parse = text => { try { const value = JSON.parse(text); return value && typeof value === 'object' ? value : {}; } catch { return {}; } };
-const shortPath = value => String(value).split('/').filter(Boolean).slice(-3).join('/');
 const plain = value => typeof value === 'string' && value.trim() ? value.trim().replace(/\s+/g, ' ') : null;
 const positiveId = value => Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : null;
 /**
@@ -80,20 +94,7 @@ export function stepLabel(event) {
   const meta = event.meta;
   const tool = toolName(meta);
   const detail = plain(meta.tool_detail);
-  if (event.runtime === 'codex') {
-    if (CODEX_COMMANDS.has(tool)) return { key: 'runCommand' };
-    if (tool === 'apply_patch') {
-      const files = (plain(event.summary) ?? '').replace(/^Edit files:?\s*/, '').split(', ').filter(Boolean);
-      return files.length === 1 ? { key: 'edit', arg: shortPath(files[0]) } : { key: 'editFiles' };
-    }
-    return { key: 'tool' };
-  }
-  if (['Read', 'Edit', 'Write'].includes(tool)) return detail ? { key: tool.toLowerCase(), arg: detail } : { key: 'tool' };
-  if (tool === 'Bash') return detail && meta.detail_source === 'description' ? { key: 'described', arg: detail } : { key: 'runCommand' };
-  if (tool === 'WebSearch' && detail) return { key: 'search', arg: detail };
-  if (tool === 'WebFetch' && detail) return { key: 'open', arg: detail };
-  if (tool === 'Skill' && detail) return { key: 'skill', arg: detail };
-  return { key: 'tool' };
+  return vocab(event.runtime).stepLabel(event, { tool, detail });
 }
 
 /**
@@ -115,8 +116,9 @@ function subtaskLabel(start, launch = null) {
 function subtaskLaunches(events) {
   const launches = new Map(), calls = [];
   for (const event of events) {
-    if (event.type === 'pre_tool_use' && !agentOf(event) && CLAUDE_AGENT_TOOLS.has(toolName(event.meta))) calls.push(event);
-    else if (event.type === 'subagent_start' && agentOf(event) && event.runtime !== 'codex') {
+    const { subagentLaunchTools } = vocab(event.runtime);
+    if (event.type === 'pre_tool_use' && !agentOf(event) && subagentLaunchTools.includes(toolName(event.meta))) calls.push(event);
+    else if (event.type === 'subagent_start' && agentOf(event) && subagentLaunchTools.length) {
       const index = calls.findLastIndex(call => call.at <= event.at && event.at - call.at <= LAUNCH_LEAD_MS);
       if (index >= 0) launches.set(agentOf(event), calls.splice(index, 1)[0]);
     }
@@ -139,12 +141,12 @@ export function recordGroupInterrupt(store, { sessionGroup, runId = null, sessio
  * `exec`, are not steps.
  */
 export function opensStep(event) {
-  if (event.runtime === 'codex' ? event.type !== 'tool_call' : event.type !== 'pre_tool_use') return false;
-  const meta = event.meta, tool = toolName(meta);
-  if (event.runtime !== 'codex') return !CLAUDE_AGENT_TOOLS.has(tool) && !!meta.tool_use_id;
-  if (typeof meta.resumes_cell === 'string' || CODEX_AGENT_CONTROLS.has(tool)) return false;
-  if (Array.isArray(meta.wraps_agent_tools) && meta.wraps_agent_tools.length) return false;
-  return !!(meta.tool_use_id ?? meta.call_id);
+  const vocabulary = vocab(event.runtime);
+  const start = vocabulary.toolEvents === 'transcript' ? 'tool_call' : 'pre_tool_use';
+  if (event.type !== start) return false;
+  const tool = toolName(event.meta);
+  if (vocabulary.opensStep !== UNSUPPORTED) return vocabulary.opensStep(event, tool);
+  return !vocabulary.subagentLaunchTools.includes(tool) && !!event.meta.tool_use_id;
 }
 
 /**
@@ -162,11 +164,12 @@ export function buildSteps(events, { agent = null, ends = [], now, restartCut = 
     if (agentOf(event) !== agent) continue;
     const meta = event.meta;
     if (!['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'tool_call', 'tool_result'].includes(event.type)) continue;
-    if (event.runtime === 'codex' && ['pre_tool_use', 'post_tool_use', 'post_tool_failure'].includes(event.type)) continue;
-    if (event.runtime !== 'codex' && ['tool_call', 'tool_result'].includes(event.type)) continue;
+    const vocabulary = vocab(event.runtime);
+    if (vocabulary.toolEvents === 'transcript' && ['pre_tool_use', 'post_tool_use', 'post_tool_failure'].includes(event.type)) continue;
+    if (vocabulary.toolEvents === 'hooks' && ['tool_call', 'tool_result'].includes(event.type)) continue;
     // A `wait` on a code-mode cell reads more of the `exec` that yielded it; the exec's step ends when one reports the
     // script finished.
-    if (event.runtime === 'codex' && typeof meta.resumes_cell === 'string') {
+    if (vocabulary.resumesCells && typeof meta.resumes_cell === 'string') {
       const step = event.type === 'tool_result' && !meta.cell_running ? cells.get(meta.resumes_cell) : null;
       if (step && step.end === null) {
         step.end = event.at;
@@ -401,9 +404,9 @@ export class ChatActivity {
     for (const start of starts) latest.set(agentOf(start), start);
     const first = Math.min(...[...latest.values()].map(start => start.at));
     const launchers = Number.isFinite(first) ? this._events(`SELECT event_seq, timestamp, runtime, session_id, event_type, summary, metadata
-      FROM runtime_events WHERE session_group=@group AND event_type='pre_tool_use' AND json_extract(metadata, '$.tool_name') IN ('Agent','Task')
+      FROM runtime_events WHERE session_group=@group AND event_type='pre_tool_use' AND json_extract(metadata, '$.tool_name') IN (SELECT value FROM json_each(@launchTools))
       AND timestamp >= @from AND timestamp <= @now ORDER BY timestamp, event_seq LIMIT ${STEP_LIMIT}`,
-    { group, from: iso(first - LAUNCH_LEAD_MS), now: iso(now) }).map(row => this._row(row)) : [];
+    { group, launchTools: JSON.stringify(LAUNCH_TOOLS), from: iso(first - LAUNCH_LEAD_MS), now: iso(now) }).map(row => this._row(row)) : [];
     const launches = subtaskLaunches([...launchers, ...starts].sort((a, b) => a.at - b.at || (a.seq ?? 0) - (b.seq ?? 0)));
     // Each row counts the steps its open list shows: one per call that opens a step since that subtask's start.
     const calls = Number.isFinite(first) ? this._events(`SELECT event_seq, timestamp, runtime, session_id, event_type, summary, metadata

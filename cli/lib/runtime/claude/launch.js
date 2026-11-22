@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CLAUDE_BUILTIN_ENV_KEYS, ZYLOS_DIR } from '../../config.js';
 import { claudeProbeEnvironment } from './auth.js';
+import { context } from './context.js';
 import { writePrivateFile } from '../../private-file.js';
 import { memoryMcpServerPath } from '../session-command.js';
 
@@ -163,3 +164,45 @@ export function preAccept() {
 
   return changed;
 }
+
+export const modelConfig = Object.freeze({
+  read(zylosDir) {
+    const model = context.readDefaultModel({ zylosDir });
+    try {
+      const settings = JSON.parse(fs.readFileSync(path.join(zylosDir, '.claude/settings.json'), 'utf8'));
+      return { model, effort: settings.effortLevel || null };
+    } catch {
+      return { model, effort: null };
+    }
+  },
+
+  write(zylosDir, field, value) {
+    const file = path.join(zylosDir, '.claude/settings.json');
+    const key = field === 'model' ? 'model' : 'effortLevel';
+    let text;
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      text = '{}';
+    }
+
+    let settings;
+    try {
+      settings = JSON.parse(text);
+    } catch (error) {
+      // JSON.parse diagnostics can quote settings content, including credentials.
+      throw new Error(`${file}: invalid JSON`, { cause: error });
+    }
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+      throw new Error(`${file}: not a JSON object`);
+    }
+
+    const previous = settings[key];
+    if (previous === value) return { changed: false, previous, file, key };
+    settings[key] = value;
+    // Claude settings may carry credentials in env.
+    writePrivateFile(file, JSON.stringify(settings, null, 2) + '\n');
+    return { changed: true, previous, file, key };
+  },
+});

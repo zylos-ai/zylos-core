@@ -5,7 +5,7 @@ reasoning effort and service tier. Missing fields are unknown. A new, empty or
 unavailable session clears prior runtime facts. Project configuration is exposed
 separately as `configured_model` and `configured_effort`.
 
-`src/lib/codex-models.js` maintains selectable models and their effort capabilities
+`src/lib/runtime/codex/model-catalog.js` maintains selectable models and their effort capabilities
 independently of pricing and client discovery. Its initial entries match the
 platform model catalog available during this change: GPT-6.1-Sol, GPT-6-Astra,
 GPT-6-Sol and GPT-5.6-Sol expose low through ultra; GPT-6-Luna exposes low through

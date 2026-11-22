@@ -602,6 +602,7 @@ test('all-runtime settings retire the single-runtime read and atomically save bo
   assert.deepEqual(Object.keys(all).sort(), ['active', 'runtimes']);
   assert.equal(all.active, 'claude');
   assert.equal(all.runtimes.claude.runtime, 'claude');
+  assert.equal(Object.hasOwn(all.runtimes, 'agy'), false);
   assert.deepEqual(all.runtimes.claude.builtInModels.sort(), Object.keys(DEFAULT_RUNTIME_MODEL_PRICES.claude).sort());
   assert.deepEqual(all.runtimes.codex.builtInModels.sort(), Object.keys(DEFAULT_RUNTIME_MODEL_PRICES.codex).sort());
   const claude = structuredClone(all.runtimes.claude.modelPrices);

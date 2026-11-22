@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { getActionsMeta, handleAction } from '../src/lib/actions.js';
+import { getActionsMeta, handleAction, instanceDefaults } from '../src/lib/actions.js';
 
 async function withCodexHome(fn) {
   const prev = process.env.CODEX_HOME;
@@ -39,6 +39,7 @@ test('getActionsMeta exposes model and effort controls for Codex runtime', () =>
   const meta = getActionsMeta({ runtime: 'codex', codex_new_session_threshold: '75', zylosDir }, {});
 
   assert.equal(meta.runtime, 'codex');
+  assert.equal(meta.catalog_strict, true);
   assert.ok(meta.models.some(model => model.id === 'gpt-6.1-sol'));
   assert.ok(meta.models.some(model => model.id === 'gpt-5.4'));
   assert.deepEqual(meta.efforts_by_model['gpt-5.4'], []);
@@ -97,6 +98,7 @@ test('getActionsMeta keeps Claude model and effort controls for Claude runtime',
   );
 
   assert.equal(meta.runtime, 'claude');
+  assert.equal(meta.catalog_strict, false);
   assert.ok(meta.models.length > 0);
   assert.ok(Object.keys(meta.efforts_by_model).length > 0);
   assert.equal(meta.current_effort, null, 'session effort does not replace an unset configured default');
@@ -414,4 +416,23 @@ test('native single can save idle reclaim minutes while pre-migration remains re
   fs.writeFileSync(file, JSON.stringify({ runtime: 'claude' }));
   assert.equal((await handleAction('set-session-hot-ttl', { minutes: 28 }, { zylosDir })).error, 'multi_session_required');
   assert.equal(getActionsMeta({ runtime: 'claude', zylosDir }).session_hot_ttl.read_only, true);
+});
+
+test('Claude effort validation uses the trimmed default model', async t => {
+  const zylosDir = makeZylosDir();
+  t.after(() => fs.rmSync(zylosDir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(zylosDir, '.claude'));
+  const file = path.join(zylosDir, '.claude/settings.json');
+  const original = '{"model": " claude-haiku-4-5 "}';
+  fs.writeFileSync(file, original);
+  const { handleAction: dispatch } = await import('../src/lib/actions.js?trimmed-default-model');
+  const config = { runtime: 'claude', zylosDir };
+  const result = await dispatch('switch-effort', { runtime: 'claude', effort: 'high' }, config);
+  assert.equal(result.error, 'invalid_effort');
+  assert.deepEqual(result.messageParams, { values: '' });
+  const meta = getActionsMeta(config);
+  assert.equal(meta.current_model, 'claude-haiku-4-5');
+  assert.ok(!meta.models.some(model => model.id === meta.current_model), 'the custom model stays outside the catalog');
+  assert.equal(instanceDefaults('claude', zylosDir).model, 'claude-haiku-4-5');
+  assert.equal(fs.readFileSync(file, 'utf8'), original);
 });

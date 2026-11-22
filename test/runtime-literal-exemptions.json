@@ -91,16 +91,6 @@
   },
   {
     "file": "skills/dashboard/src/index.js",
-    "text": "const defaultModel = runtime === 'claude' ? readClaudeSettings().model : runtime === 'codex' ? readCodexRootString('model', config.zylosDir) : null;",
-    "reason": "else-fallback: Preserves the Dashboard native default lookup branches and fallback."
-  },
-  {
-    "file": "skills/dashboard/src/index.js",
-    "text": "const defaultEffort = runtime === 'claude' ? readClaudeSettings().effortLevel : runtime === 'codex' ? readCodexRootString('model_reasoning_effort', config.zylosDir) : null;",
-    "reason": "else-fallback: Preserves the Dashboard native default lookup branches and fallback."
-  },
-  {
-    "file": "skills/dashboard/src/index.js",
     "text": "return Object.keys(DEFAULT_RUNTIME_MODEL_PRICES[runtime === 'codex' ? 'codex' : 'claude'] || {});",
     "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
   },
@@ -173,101 +163,6 @@
     "file": "skills/dashboard/src/index.js",
     "text": "codex: { ...(config.runtimeServiceTierModelPrices?.codex || {}), priority: patch.priorityModelPrices } };",
     "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "const claude = runtime === 'claude';",
-    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "if (runtime === 'claude') {",
-    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "const codexModels = runtime === 'codex' ? getCodexModels() : [];",
-    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "const models = runtime === 'claude'",
-    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "const efforts_by_model = runtime === 'claude'",
-    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "const settings = runtime === 'claude' ? readSettings(zylosDir) : {};",
-    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "const codexModel = runtime === 'codex' ? nativeModels.codex : null;",
-    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "const codexEffort = runtime === 'codex' ? readCodexRootString('model_reasoning_effort', zylosDir) : null;",
-    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "const currentCodexModel = runtime === 'codex'",
-    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "if (runtime === 'codex') {",
-    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "const currentModel = runtime === 'claude' ? nativeModels.claude : currentCodexModel;",
-    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "current_effort: runtime === 'claude'",
-    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
-  },
-  {
-    "file": "skills/dashboard/src/lib/chat/activity.js",
-    "text": "if (event.runtime === 'codex') {",
-    "reason": "else-fallback: Preserves interpretation of the existing Claude and Codex activity vocabularies."
-  },
-  {
-    "file": "skills/dashboard/src/lib/chat/activity.js",
-    "text": "else if (event.type === 'subagent_start' && agentOf(event) && event.runtime !== 'codex') {",
-    "reason": "else-fallback: Preserves interpretation of the existing Claude and Codex activity vocabularies."
-  },
-  {
-    "file": "skills/dashboard/src/lib/chat/activity.js",
-    "text": "if (event.runtime === 'codex' ? event.type !== 'tool_call' : event.type !== 'pre_tool_use') return false;",
-    "reason": "else-fallback: Preserves interpretation of the existing Claude and Codex activity vocabularies."
-  },
-  {
-    "file": "skills/dashboard/src/lib/chat/activity.js",
-    "text": "if (event.runtime !== 'codex') return !CLAUDE_AGENT_TOOLS.has(tool) && !!meta.tool_use_id;",
-    "reason": "else-fallback: Preserves interpretation of the existing Claude and Codex activity vocabularies."
-  },
-  {
-    "file": "skills/dashboard/src/lib/chat/activity.js",
-    "text": "if (event.runtime === 'codex' && ['pre_tool_use', 'post_tool_use', 'post_tool_failure'].includes(event.type)) continue;",
-    "reason": "else-fallback: Preserves interpretation of the existing Claude and Codex activity vocabularies."
-  },
-  {
-    "file": "skills/dashboard/src/lib/chat/activity.js",
-    "text": "if (event.runtime !== 'codex' && ['tool_call', 'tool_result'].includes(event.type)) continue;",
-    "reason": "else-fallback: Preserves interpretation of the existing Claude and Codex activity vocabularies."
-  },
-  {
-    "file": "skills/dashboard/src/lib/chat/activity.js",
-    "text": "if (event.runtime === 'codex' && typeof meta.resumes_cell === 'string') {",
-    "reason": "else-fallback: Preserves interpretation of the existing Claude and Codex activity vocabularies."
   },
   {
     "file": "skills/dashboard/src/lib/collectors/codex-rollout-collector.js",

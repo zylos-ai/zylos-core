@@ -7,7 +7,7 @@ import { hooks } from './hooks.js';
 import { instructions } from './instructions.js';
 import { input } from './input.js';
 import { sessionSwitch } from './switch.js';
-import { prepare, preAccept, checkAutonomous, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags } from './launch.js';
+import { modelConfig, prepare, preAccept, checkAutonomous, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags } from './launch.js';
 import { install, probeVersion } from './install.js';
 import { UNSUPPORTED } from '../contract.js';
 import { createIdentity } from '../shared/identity.js';
@@ -38,7 +38,7 @@ export default Object.freeze({
   }),
   auth,
   health,
-  launch: Object.freeze({ prepare, preAccept, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags, checkAutonomous }),
+  launch: Object.freeze({ modelConfig, prepare, preAccept, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags, checkAutonomous }),
   instructions,
   input,
   busy,

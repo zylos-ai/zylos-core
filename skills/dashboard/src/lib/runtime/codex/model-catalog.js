@@ -1,3 +1,5 @@
+import { UNSUPPORTED } from '../contract.js';
+
 // Maintained independently of client discovery caches and pricing tables.
 const EXTENDED_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -22,3 +24,15 @@ export function getCodexModels() {
 export function codexEffortsForModel(id) {
   return [...(CODEX_MODELS.find(model => model.id === id)?.efforts || [])];
 }
+
+export default Object.freeze({
+  models() {
+    return getCodexModels().map(({ id, display_name }) => ({ id, display_name }));
+  },
+  effortsFor(id) {
+    const efforts = codexEffortsForModel(id);
+    return efforts.length ? efforts : null;
+  },
+  defaultEfforts: UNSUPPORTED,
+  strict: true,
+});

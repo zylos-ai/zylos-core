@@ -150,6 +150,22 @@ test('steps carry plain labels only: never a summarized command line or the word
   assert.equal(result.steps[0].end - result.steps[0].start, 1000);
 });
 
+test('Antigravity hook commands appear as generic tool steps', async t => {
+  const f = fixture(t, { now: at(2) });
+  f.message(1, 0);
+  f.deliver(1, 0.2);
+  f.event('user_prompt_submit', 0.4, { runtime: 'agy' });
+  f.event('pre_tool_use', 1, {
+    runtime: 'agy',
+    meta: { tool_name: 'run_command', tool_use_id: 'command-1' },
+  });
+  const { steps } = await read(f);
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0].kind, 'tool');
+  assert.equal(steps[0].status, 'running');
+  assert.deepEqual(steps[0].label, { key: 'tool' });
+});
+
 test('a tool call an automatic restart cut off is interrupted, not failed: same run, from the restart to 10 s after it', async t => {
   const f = fixture(t, { now: at(40) });
   f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.4);
