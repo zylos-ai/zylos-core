@@ -340,6 +340,7 @@ let fleetCursors = [null];
 let fleetRequest = null;
 let fleetPaging = false;
 let fleetRefreshPending = false;
+let latestFleetPush = null;
 
 function renderFleet() {
   const container = $('#agent-fleet-root');
@@ -1080,11 +1081,13 @@ async function readFleetPage(target) {
     const cursor = fleetCursors[target - 1];
     if (cursor) params.set('cursor', cursor);
     try {
+      const pushAtStart = latestFleetPush;
       const page = await requestAgentJson(`/api/fleet?${params}`);
       if (target > 1 && page.items.length === 0) { target--; continue; }
       fleetPage = target;
       fleetCursors.length = target;
-      return page;
+      // A push that arrived during this read owns the newer fleet totals.
+      return latestFleetPush === pushAtStart ? page : { ...page, ...latestFleetPush };
     } catch (error) {
       if (!cursor || error.code !== 'invalid_cursor') throw error;
       target = 1;
@@ -1684,6 +1687,7 @@ function applySse(name, data) {
   } else if (name === 'groups') {
     void workbench?.refresh?.(data);
   } else if (name === 'fleet') {
+    latestFleetPush = { summary: data.summary, updated_at: data.updated_at };
     if (state.fleetModeInitialized) syncLiveFleetMode(data.summary);
     refreshPushedFleet();
     if (!document.hidden && activeTabName() === 'settings' && settingsPage?.sections.fleet.hidden === false && !machineReads) {
