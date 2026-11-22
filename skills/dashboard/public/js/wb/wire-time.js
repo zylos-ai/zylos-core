@@ -60,7 +60,7 @@ const ACTIVITY = [
   ...beneath('header.presence', GROUP), ...beneath('working', WORKING),
 ];
 const FLEET_RECORD = [
-  ...ms('rate_limit_7d_recorded_at', 'updated_at', 'last_seen', 'link.sampled_at', 'latency.samples.*.at'),
+  ...ms('rate_limit_7d_recorded_at', 'updated_at', 'last_seen', 'link.sampled_at'),
   ...seconds('group_summary.problems.*.createdAt', 'group_summary.attention.*.until'),
   ...beneath('instance', INSTANCE), ...ms('system_metrics.sampledAt'), ...beneath('groups', ms('readAt')),
   ...beneath('group_summary.rows.*', GROUP),

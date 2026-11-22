@@ -1681,6 +1681,7 @@ test('the Fleet routes page 20 machines, preserve the summary and reject invalid
       assert.equal(page.total, 20);
       assert.equal(page.summary.count, 20);
       assert.equal(page.summary.counts.offline, 19);
+      assert.ok(page.items.every(row => !Object.hasOwn(row, 'latency')));
       assert.equal(page.summary.daily_cost, 0);
       assert.doesNotMatch(JSON.stringify(page), /zylos_ak_secret|read_api_key|read_session_token/);
       cursor = page.nextCursor;

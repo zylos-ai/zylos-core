@@ -703,7 +703,7 @@ Missing/disabled observer history returns 404. Rejected `/observer/stream` upgra
 
 Both Fleet lists accept `limit` (1–100, default 50), `cursor`, `q` (trimmed, case-insensitive name substring, up to 64 characters), and `include=total` (matching row count). A bad parameter returns 400 `invalid_parameter` with `error.param`; an invalid cursor returns 400 `invalid_cursor`; an unavailable source returns 503 `unavailable`. The client starts from page one if a cursor expires after a restart.
 
-`summary` covers the whole fleet even when filters are active. It contains `count`, `counts:{busy,idle,stuck,offline}`, and `daily_cost` and `weekly_cost` (numbers, or null when no machine reports that tier). The Fleet wall reloads its current page after a `fleet` event and plays start/finish cues for machines on that page.
+`summary` covers the whole fleet even when filters are active. It contains `count`, `counts:{busy,idle,stuck,offline}`, and `daily_cost` and `weekly_cost` (numbers, or null when no machine reports that tier). The Fleet wall reloads its current page after a `fleet` event and plays start/finish cues for machines on that page. Wall rows carry the current `link` observation. Probe sample history is returned on the configured-machine list.
 
 Fleet rejects unknown agents with 404, invalid memory path queries with 400 `invalid_memory_path`, and upstream failures with 502/504. Suffix handling depends on the path:
 
