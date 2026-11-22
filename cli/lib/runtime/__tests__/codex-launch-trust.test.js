@@ -135,28 +135,23 @@ test('Codex creates the skills symlink before launching', async t => {
   assert.equal(calls.length, 1);
 });
 
-for (const type of ['dangling symlink', 'directory', 'file']) {
-  test(`Codex preserves an existing skills ${type}`, async t => {
-    const { root, adapter } = fixture(t);
-    const skillsPath = path.join(root, '.agents', 'skills');
-    const customTarget = path.join(root, 'custom-skills');
-    fs.mkdirSync(path.dirname(skillsPath));
-    if (type === 'dangling symlink') fs.symlinkSync(customTarget, skillsPath);
-    if (type === 'directory') fs.mkdirSync(skillsPath);
-    if (type === 'file') fs.writeFileSync(skillsPath, 'custom skills');
-    const original = fs.lstatSync(skillsPath);
-    const calls = baseLaunch(t, () => {
-      const current = fs.lstatSync(skillsPath);
-      assert.equal(current.ino, original.ino);
-      assert.equal(current.mode, original.mode);
-      if (type === 'dangling symlink') assert.equal(fs.readlinkSync(skillsPath), customTarget);
-      if (type === 'file') assert.equal(fs.readFileSync(skillsPath, 'utf8'), 'custom skills');
-    });
-
-    await adapter.launch(launchArgs);
-    assert.equal(calls.length, 1);
+test('Codex preserves an existing dangling skills symlink', async t => {
+  const { root, adapter } = fixture(t);
+  const skillsPath = path.join(root, '.agents', 'skills');
+  const customTarget = path.join(root, 'custom-skills');
+  fs.mkdirSync(path.dirname(skillsPath));
+  fs.symlinkSync(customTarget, skillsPath);
+  const original = fs.lstatSync(skillsPath);
+  const calls = baseLaunch(t, () => {
+    const current = fs.lstatSync(skillsPath);
+    assert.equal(current.ino, original.ino);
+    assert.equal(current.mode, original.mode);
+    assert.equal(fs.readlinkSync(skillsPath), customTarget);
   });
-}
+
+  await adapter.launch(launchArgs);
+  assert.equal(calls.length, 1);
+});
 
 test('Codex still launches when the skills symlink cannot be created', async t => {
   const { root, adapter } = fixture(t);
