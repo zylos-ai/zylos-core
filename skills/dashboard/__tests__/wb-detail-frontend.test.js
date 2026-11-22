@@ -534,6 +534,7 @@ test('timeline run rows, events and messages hide run ids and raw codes in plain
 
 test('mixed timeline reveals older messages only as event coverage grows', async () => {
   const document = createDocument(), root = document.createElement('div');
+  const firstPage = deferred();
   const event = (id, millis) => ({ id, event_seq: id, event_type: 'session_start', timestamp: new Date(millis).toISOString() });
   const loader = createTimelineLoader({ now: () => 9000, request: async path => {
     const url = new URL(path, 'http://fixture');
@@ -542,7 +543,7 @@ test('mixed timeline reveals older messages only as event coverage grows', async
     const cursor = url.searchParams.get('cursor');
     if (cursor === 'end') return timelinePage([event(1, 2000)]);
     if (cursor === 'middle') return timelinePage([event(2, 3000)], 'end');
-    return timelinePage([event(3, 5000)], 'middle');
+    return firstPage.promise;
   } });
   const visible = () => {
     renderTimeline(root, loader, { document, t, level: 'technical' });
@@ -550,7 +551,12 @@ test('mixed timeline reveals older messages only as event coverage grows', async
       .map(node => allNodes(node).find(child => child.tagName === 'TIME').title);
   };
   try {
-    await loader.open('a', 'r');
+    const opened = loader.open('a', 'r');
+    await tick();
+    assert.equal(loader.state.messages.get('r').length, 4, 'messages arrived before the first event page');
+    assert.deepEqual(visible(), [], 'an intermediate redraw does not flash the entire message history');
+    firstPage.resolve(timelinePage([event(3, 5000)], 'middle'));
+    await opened;
     assert.deepEqual(visible(), [7000, 5000].map(at => new Date(at).toISOString()));
     await loader.loadEarlierEvents('r');
     assert.deepEqual(visible(), [7000, 5000, 3000].map(at => new Date(at).toISOString()));
@@ -1494,23 +1500,40 @@ test('subagent initial read paginates its typed stream and later snapshots consu
   f.controller.destroy();
 });
 
-test('subagent pages keep the greater id when the same sequence straddles a page', async () => {
+test('subagent pages break sequence ties by id and replace stale state after an expired cursor', async () => {
   const current = row('a'), calls = [];
+  let restarted = false;
   const event = (id, event_type) => ({ id, event_type, run_id: 'run-a', event_seq: 20, agent_id: 'worker' });
   const f = detailFixture(async path => {
     const url = new URL(path, 'http://fixture');
     if (url.searchParams.get('filter') !== 'subagents') return response(defaultRead(path));
     const cursor = url.searchParams.get('cursor');
     calls.push(cursor);
+    if (restarted) {
+      if (cursor === 'newest') {
+        assert.equal(url.searchParams.get('direction'), 'after');
+        return response({ error: { code: 'invalid_cursor', message: 'Dashboard restarted' } }, 400);
+      }
+      assert.equal(cursor, null);
+      assert.equal(url.searchParams.has('direction'), false);
+      return response(timelinePage([{ ...event('replacement', 'subagent_start'), agent_id: 'fresh' }], null, 'fresh-cursor'));
+    }
     if (cursor === 'middle') return response(timelinePage([event('entry-a', 'subagent_start')], 'oldest'));
     if (cursor === 'oldest') return response(timelinePage([{ ...event('other', 'subagent_start'), event_seq: 19, agent_id: 'other' }]));
     return response(timelinePage([event('entry-b', 'subagent_stop')], 'middle'));
   });
   try {
-    await f.controller.open(current, { rows: [current], listKnown: true });
+    const snapshot = { rows: [current], listKnown: true };
+    await f.controller.open(current, snapshot);
     assert.deepEqual(calls, [null, 'middle', 'oldest']);
     assert.deepEqual(activeSubagents(f.controller.state.currentEvents, 'run-a').map(item => item.id), ['other']);
     assert.equal(f.controller.state.currentEvents.find(item => item.agent_id === 'worker').id, 'entry-b');
+    restarted = true;
+    calls.length = 0;
+    await f.controller.updateSnapshot(snapshot);
+    assert.deepEqual(calls, ['newest', null]);
+    assert.deepEqual(f.controller.state.currentEvents.map(item => item.id), ['replacement']);
+    assert.equal(f.controller.state.error, null);
   } finally { f.controller.destroy(); }
 });
 

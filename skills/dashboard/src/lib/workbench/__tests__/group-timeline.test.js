@@ -12,6 +12,7 @@ import { readTimelineEvents } from '../timeline-events.js';
 const query = values => new URLSearchParams(values);
 const group = 'telegram:fixture';
 
+// Private Store fixture: run for event keyset, filters and run count changes; skip rendering-only changes.
 test('group timelines seek in both directions and suppress restart exits before paging', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'timeline-'));
   const store = new Store(path.join(root, 'dashboard.db'));
@@ -33,6 +34,7 @@ test('group timelines seek in both directions and suppress restart exits before 
   assert.deepEqual(firstEvents.items.map(row => [row.id, row.interrupted]), [['interrupted', true]]);
   assert.deepEqual((await read({ runId: 'run-a', cursor: firstEvents.nextCursor })).items.map(row => row.id), ['restart']);
   await assert.rejects(read({ runId: 'run-a', filter: 'tools', cursor: firstEvents.nextCursor }), { code: 'invalid_cursor' });
+  await assert.rejects(read({ direction: 'after' }), { statusCode: 400, code: 'invalid_cursor' });
   const tools = await read({ runId: 'run-a', filter: 'tools', limit: 1 });
   assert.deepEqual(tools.items.map(row => [row.id, row.interrupted]), [['interrupted', true]]);
   assert.equal(tools.nextCursor, null);
@@ -47,8 +49,25 @@ test('group timelines seek in both directions and suppress restart exits before 
   const empty = await read({ runId: 'run-a', direction: 'after', cursor: appended.afterCursor });
   assert.deepEqual(empty.items, []);
   assert.equal(empty.afterCursor, appended.afterCursor);
+
+  insert('notice', 'user_prompt_submit', 8);
+  insert('other-crash', 'crash_detected', 9, 'run-b');
+  insert('other-failure', 'post_tool_failure', 9, 'run-b');
+  const readFlags = async runId => (await read({ runId })).items.map(row => [row.id, row.interrupted]);
+  assert.deepEqual((await readFlags('run-a')).at(-1), ['notice', undefined]);
+  assert.deepEqual(await readFlags('run-b'), [['run-b', undefined], ['other-crash', undefined], ['other-failure', undefined]]);
+  assert.equal((await runs(group, query())).items.find(row => row.runId === 'run-b').n, 3);
+
+  store.db.prepare("UPDATE runtime_events SET event_seq = (SELECT event_seq FROM runtime_events WHERE id = 'other-crash') WHERE id = 'other-failure'").run();
+  const latestTie = await read({ runId: 'run-b', limit: 1 });
+  assert.deepEqual(latestTie.items.map(row => row.id), ['other-failure']);
+  const earlierTie = await read({ runId: 'run-b', limit: 1, cursor: latestTie.nextCursor });
+  assert.deepEqual(earlierTie.items.map(row => row.id), ['other-crash']);
+  const laterTie = await read({ runId: 'run-b', limit: 1, direction: 'after', cursor: earlierTie.afterCursor });
+  assert.deepEqual(laterTie.items.map(row => row.id), ['other-failure']);
 });
 
+// Private C4 fixture: run for message paging or projection changes; skip rendering-only changes.
 test('group message pages project only metadata and preserve a polling position', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'timeline-c4-'));
   const reader = new C4Reader(root);

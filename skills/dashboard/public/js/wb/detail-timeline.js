@@ -16,7 +16,7 @@ export const isInvalidCursor = error => (error.body?.error?.code ?? error.code) 
 
 async function settleReads(reads) {
   const results = await Promise.allSettled(reads);
-  const failure = results.find(result => result.status === 'rejected' && result.reason.name !== 'AbortError');
+  const failure = results.find(result => result.status === 'rejected');
   if (failure) throw failure.reason;
 }
 
