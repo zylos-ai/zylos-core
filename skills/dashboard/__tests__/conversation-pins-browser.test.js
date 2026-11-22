@@ -8,6 +8,14 @@ import { ChatChangeObserver } from '../src/lib/chat/change-observer.js';
 import { handleChatStream } from '../src/lib/chat/stream.js';
 import { SseHub } from '../src/lib/sse.js';
 
+// Boundary: real chat HTTP and SQLite for pin replacement, access and pagination.
+// Chromium exercises message-only list reordering and cross-client SSE updates at 1280px and 390px.
+// Run for changes to pin storage/migration, chat list or write contracts, pin invalidation, or
+// browser list ordering and refresh. Unrelated runtime or presentation changes may skip this opt-in.
+// The official runner and sandbox prove private HOME/ZYLOS_DIR/PM2_HOME, a short TMPDIR,
+// a private tmux socket and fixture-only database paths before allocation. Browser, contexts,
+// HTTP, SSE, and databases are cleaned up on success, failure or timeout.
+
 const listPath = '/api/chat/conversations';
 const putPins = (fixture, ids, options) => fixture.request('/api/chat/pins', {
   method: 'PUT', body: { ids }, ...options,
