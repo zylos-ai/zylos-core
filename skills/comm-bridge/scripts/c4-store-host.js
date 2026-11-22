@@ -8,6 +8,8 @@ export function hostFunctions({ read, write, snapshot, get, all, run, seconds, k
   const hostOf = (c, group) => get(c, 'SELECT target_group FROM session_hosts WHERE source_group=?', group)?.target_group ?? null;
   const effectiveGroup = (c, group) => group !== 'origin' && enabled() ? hostOf(c, group) ?? group : group;
 
+  const allowlist = c => all(c, 'SELECT channel FROM session_host_allowlist ORDER BY channel').map(row => row.channel);
+
   return {
     effectiveGroup,
     api: {
@@ -43,8 +45,24 @@ export function hostFunctions({ read, write, snapshot, get, all, run, seconds, k
         all(c, 'SELECT DISTINCT component_name FROM channel_namespaces ORDER BY component_name').map(row => row.component_name)),
       listSessionHosts: () => snapshot(c => ({
         relationships: all(c, 'SELECT * FROM session_hosts ORDER BY source_group'),
-        allowlist: all(c, 'SELECT channel FROM session_host_allowlist ORDER BY channel').map(row => row.channel),
+        allowlist: allowlist(c),
       })),
+      getSessionHostAllowlist: () => read(allowlist),
+      listSessionHostsPage: ({ q, after, limit, total }) => snapshot(c => {
+        const search = q ? ' WHERE (host_group_matches(source_group, ?) OR host_group_matches(target_group, ?))' : '';
+        const values = q ? [q.toLowerCase(), q.toLowerCase()] : [];
+        if (q) c.function('host_group_matches', (group, term) => Number(group.toLowerCase().includes(term)));
+        const boundary = after === null ? '' : `${search ? ' AND' : ' WHERE'} source_group > ?`;
+        const rows = all(c, `SELECT source_group, target_group, attached_by, attached_at
+          FROM session_hosts${search}${boundary} ORDER BY source_group LIMIT ?`,
+          ...values, ...(after === null ? [] : [after]), limit + 1);
+        return {
+          items: rows.slice(0, limit),
+          more: rows.length > limit,
+          ...(total ? { total: get(c, `SELECT COUNT(*) AS total FROM session_hosts${search}`, ...values).total } : {}),
+          allowlist: allowlist(c),
+        };
+      }),
       setSessionHostAllowlist: (channel, allowed) => write(c => {
         if (typeof channel !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(channel) || channel.includes('..')) {
           throw dataError('INVALID_ARGS', 'Expected a channel name.');

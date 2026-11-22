@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
-import { buildAgentFleetView, fleetSelfFromSnapshot, handleFleetClick, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+import { buildAgentFleetView as buildAgentFleetViewPage, fleetSelfFromSnapshot, handleFleetClick, renderAgentFleetHtml as renderAgentFleetHtmlPage } from '../public/js/agent-fleet.js';
+import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
+
+const buildAgentFleetView = (payload, options) => buildAgentFleetViewPage(fleetPageFixture(payload), options);
+const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
 
 // Exercise the real renderer with API-shaped inputs; no server or live state.
 function summary(extra = {}) {

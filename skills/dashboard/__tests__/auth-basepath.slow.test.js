@@ -712,7 +712,7 @@ test('/api/fleet self record includes cost tiers from DB (#174)', { timeout: TES
     const resp = await fetch(`${origin}/api/fleet`, { headers: { Cookie: await signIn(origin, 'secret') } });
     assert.equal(resp.status, 200);
     const body = await resp.json();
-    const self = body.agents.find(a => a.self === true);
+    const self = body.items.find(a => a.self === true);
     assert.ok(self, 'self record must exist');
     assert.equal(typeof self.daily_cost, 'number');
     assert.ok(self.daily_cost > 0, `daily_cost should be positive, got ${self.daily_cost}`);
@@ -1650,35 +1650,62 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
   }
 });
 
-test('/api/fleet exposes safe records without registry secrets', { timeout: TEST_TIMEOUT_MS }, async () => {
+test('the Fleet routes page 20 machines, preserve the summary and reject invalid queries', { timeout: TEST_TIMEOUT_MS }, async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  const names = Array.from({ length: 19 }, (_, i) => `remote-${String(i + 1).padStart(2, '0')}`);
   writeConfig(zylosDir, 'secret', {
-    fleet: {
-      agents: [
-        {
-          name: 'Remote',
-          base_url: 'https://remote.example.test/dashboard',
-          read_api_key: 'zylos_ak_secret'
-        }
-      ]
-    }
+    agent: { name: 'local' },
+    fleet: { agents: [...names].reverse().map(name => ({
+      name, base_url: 'http://127.0.0.1:1/dashboard', read_api_key: 'zylos_ak_secret',
+    })) },
   });
-
   const { origin, server } = await makeServerWithDir(zylosDir);
   try {
-    const resp = await fetch(`${origin}/api/fleet`, { headers: { Cookie: await signIn(origin, 'secret') } });
-    assert.equal(resp.status, 200);
-    const body = await resp.json();
-    // Self record is always injected first, followed by external agents.
-    assert.equal(body.count, 2);
-    assert.equal(body.agents[0].self, true);
-    assert.equal(body.agents[1].self, false);
-    assert.equal(body.agents[1].name, 'Remote');
-    assert.equal(body.agents[1].health_reason, 'not_polled');
-    const serialized = JSON.stringify(body);
-    assert.equal(serialized.includes('zylos_ak_secret'), false);
-    assert.equal(serialized.includes('read_api_key'), false);
-    assert.equal(serialized.includes('read_session_token'), false);
+    const headers = { Cookie: await signIn(origin, 'secret') };
+    async function get(path, status = 200) {
+      const res = await fetch(origin + path, { headers });
+      assert.equal(res.status, status, path);
+      return res.json();
+    }
+    const wall = '/api/fleet', settings = wall + '/agents';
+    const observed = [];
+    let cursor = null;
+    for (const size of [8, 8, 4]) {
+      const params = new URLSearchParams({ limit: '8', include: 'total' });
+      if (cursor) params.set('cursor', cursor);
+      const page = await get(wall + '?' + params);
+      assert.equal(page.items.length, size);
+      assert.equal(page.total, 20);
+      assert.equal(page.summary.count, 20);
+      assert.equal(page.summary.counts.offline, 19);
+      assert.equal(page.summary.daily_cost, 0);
+      assert.doesNotMatch(JSON.stringify(page), /zylos_ak_secret|read_api_key|read_session_token/);
+      cursor = page.nextCursor;
+      observed.push(...page.items.map(agent => agent.name));
+    }
+    assert.equal(cursor, null);
+    assert.deepEqual(observed, [...names, 'local']);
+    const exact = await get(wall + '?name=remote-19&include=total');
+    assert.equal(exact.total, 1);
+    assert.equal(exact.items[0].access, 'read');
+    assert.equal((await get(wall + '?name=remote')).items.length, 0);
+    const first = await get(settings + '?limit=8&include=total');
+    const next = await get(settings + '?limit=8&cursor=' + encodeURIComponent(first.nextCursor));
+    assert.deepEqual(first.self, { name: 'local' });
+    assert.equal(first.total, names.length);
+    assert.equal(Object.hasOwn(next, 'total'), false);
+    assert.deepEqual([...first.items, ...next.items].map(row => row.name), names.slice(0, 16));
+    assert.equal(next.items[0].connection.kind, 'pending');
+    assert.deepEqual((await get(settings + '?q=%20REMOTE-19%20')).items.map(row => row.name), ['remote-19']);
+    for (const route of [wall, settings]) {
+      for (const [search, param] of [['extra=1', 'extra'], ['limit=1&limit=2', 'limit'], ['limit=0', 'limit']]) {
+        const result = await get(route + '?' + search, 400);
+        assert.equal(result.error.code, 'invalid_parameter');
+        assert.equal(result.error.param, param);
+      }
+      assert.equal((await get(route + '?cursor=bad', 400)).error.code, 'invalid_cursor');
+    }
+    assert.equal((await get(wall + '?cursor=' + encodeURIComponent(first.nextCursor), 400)).error.code, 'invalid_cursor');
   } finally {
     await closeServer(server);
     fs.rmSync(zylosDir, { recursive: true, force: true });
@@ -1803,9 +1830,9 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
     assert.equal(list.status, 200);
     const listBody = await list.json();
     assert.equal(listBody.self.name, 'Local');
-    assert.equal(listBody.agents[0].name, 'Remote');
-    assert.equal(listBody.agents[0].key_masked, 'zylos_ak_...1234');
-    assert.equal(listBody.agents[0].access, 'read');
+    assert.equal(listBody.items[0].name, 'Remote');
+    assert.equal(listBody.items[0].key_masked, 'zylos_ak_...1234');
+    assert.equal(listBody.items[0].access, 'read');
     assert.equal(JSON.stringify(listBody).includes('supersecret'), false);
 
     let fleetBody = null;
@@ -1815,11 +1842,11 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
       });
       assert.equal(fleet.status, 200);
       fleetBody = await fleet.json();
-      if (fleetBody.agents.find(a => a.name === 'Remote')?.health_reason === 'ok') break;
+      if (fleetBody.items.find(a => a.name === 'Remote')?.health_reason === 'ok') break;
       await sleep(25);
     }
-    assert.equal(fleetBody.agents.some(a => a.name === 'Remote'), true, 'hot-added agent should appear without restart');
-    const remoteRecord = fleetBody.agents.find(a => a.name === 'Remote');
+    assert.equal(fleetBody.items.some(a => a.name === 'Remote'), true, 'hot-added agent should appear without restart');
+    const remoteRecord = fleetBody.items.find(a => a.name === 'Remote');
     for (const field of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(remoteRecord, field), false);
     assert.equal(remoteRequests.some(route => /^\/api\/groups\/origin(?:[/?]|$)/.test(route)), false, 'Fleet never fetches Origin detail or another Origin resource');
     assert.equal(JSON.stringify(fleetBody).includes('zylos_ak_'), false);
@@ -1841,7 +1868,7 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
     });
     assert.equal(del.status, 200);
     const delBody = await del.json();
-    assert.equal(delBody.agents.length, 0);
+    assert.deepEqual(delBody, { ok: true });
 
     const configPath = path.join(zylosDir, 'components', 'dashboard', 'config.json');
     const saved = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -2094,7 +2121,7 @@ test('group thresholds follow actual session models while Fleet omits Origin ses
     assert.equal((await stateResponse.json()).rotationThreshold, expected);
     const fleetResponse = await fetch(running.origin + '/api/fleet', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
     assert.equal(fleetResponse.status, 200);
-    const self = (await fleetResponse.json()).agents.find(agent => agent.self);
+    const self = (await fleetResponse.json()).items.find(agent => agent.self);
     assertNoSessionFields(self);
   }
   fs.writeFileSync(path.join(root, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
@@ -2114,7 +2141,7 @@ test('group thresholds follow actual session models while Fleet omits Origin ses
     const stateResponse = await fetch(running.origin + '/api/groups/origin?include=', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
     assert.equal((await stateResponse.json()).rotationThreshold, expected);
     const fleetResponse = await fetch(running.origin + '/api/fleet', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
-    assertNoSessionFields((await fleetResponse.json()).agents.find(agent => agent.self));
+    assertNoSessionFields((await fleetResponse.json()).items.find(agent => agent.self));
   }
 });
 

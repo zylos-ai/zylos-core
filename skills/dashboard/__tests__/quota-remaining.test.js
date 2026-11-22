@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, instanceStrip } from '../public/js/wb/instance-strip.js';
-import { fleetSelfFromSnapshot, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+import { fleetSelfFromSnapshot, renderAgentFleetHtml as renderAgentFleetHtmlPage } from '../public/js/agent-fleet.js';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js';
+import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
+
+const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
 
 const fleet = { agents: [{ name: 'local', self: true, state: 'IDLE' }] };
 const pack = locale => JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));

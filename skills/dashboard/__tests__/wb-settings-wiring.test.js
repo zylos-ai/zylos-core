@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import { confirmedRunner, keyActionRequest, keyStillListed, wireSettingsConfirmations } from '../public/js/wb/settings-wiring.js';
 import { createSettingsLoader } from '../public/js/wb/settings.js';
 import { createActionRunner } from '../public/js/wb/action-runner.js';
-import { fleetPageOptions, renderFleetPage } from '../public/js/agent-fleet.js';
+import { fleetPageOptions, renderFleetPage as renderFleetPagePage } from '../public/js/agent-fleet.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
+import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
+
+const renderFleetPage = (container, payload, options) => renderFleetPagePage(container, fleetPageFixture(payload), options);
 
 const t = (key, params = {}) => key + (Object.keys(params).length ? ':' + JSON.stringify(params) : '');
 

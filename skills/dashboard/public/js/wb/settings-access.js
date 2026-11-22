@@ -61,24 +61,12 @@ export function renderCreatedKey(panel, created, { document = panel.ownerDocumen
   acts.append(copy, done); panel.append(title, code, acts);
 }
 
-/** Connection state of a remote machine, from the fleet poller's record for it. */
-export function remoteStatus(record) {
-  if (!record) return { kind: 'unknown' };
-  const reason = String(record.health_reason || '').toLowerCase();
-  if (reason === 'not_polled') return { kind: 'pending' };
-  if (reason === 'auth_failed') return { kind: 'auth' };
-  if (reason === 'version_unsupported') return { kind: 'version' };
-  if (record.pulse_rate === 0 || ['unreachable', 'timeout', 'conn_refused', 'bad_payload', 'offline'].includes(reason) || record.link?.quality === 'down') return { kind: 'down', reason: reason || record.link?.reason || null };
-  return { kind: 'ok', latency: Number.isFinite(record.link?.latency_ms) ? Math.round(record.link.latency_ms) : null };
-}
-
 /** Configured remote machines: name, address, connection state, technical latency bars and remove. */
-export function renderRemoteAgents(root, agents = [], { records = [], document = root.ownerDocument, t = key => key, technical = false, latency, onRemove = () => {} } = {}) {
+export function renderRemoteAgents(root, agents = [], { document = root.ownerDocument, t = key => key, technical = false, latency, onRemove = () => {} } = {}) {
   if (!agents.length) { root.replaceChildren(element(document, 'p', t('fleet_manage.empty'), 'wb-note')); return; }
   root.replaceChildren(...agents.map(agent => {
-    const record = records.find(item => item.name === agent.name), status = remoteStatus(record);
-    // The search looks in the machine's name and address.
-    const row = element(document, 'div', undefined, 'wb-agent-row'); row.dataset.agent = agent.name; row.dataset.search = `${agent.name} ${agent.base_url || ''}`;
+    const status = agent.connection;
+    const row = element(document, 'div', undefined, 'wb-agent-row'); row.dataset.agent = agent.name;
     const name = element(document, 'b', agent.name); name.title = agent.key_masked ? `${agent.key_masked} · ${agent.access || 'read'}` : '';
     const url = element(document, 'span', agent.base_url || '', 'wb-agent-url wb-mono'); url.title = agent.base_url || '';
     const state = element(document, 'span', undefined, 'wb-agent-st' + (['auth', 'down', 'version'].includes(status.kind) ? ' bad' : ''));
@@ -86,7 +74,7 @@ export function renderRemoteAgents(root, agents = [], { records = [], document =
     if (status.kind === 'ok') state.append(element(document, 'span', undefined, 'wb-hdot'), element(document, 'span', [t('wb.settings.fleet.reachable'), access, status.latency == null ? null : status.latency + 'ms'].filter(Boolean).join(' · ')));
     else if (status.kind === 'pending' || status.kind === 'unknown') state.append(icon(document, 'clock', 'xs'), element(document, 'span', t('wb.settings.fleet.' + status.kind) + ' · ' + access));
     else state.append(icon(document, 'alert', 'xs'), element(document, 'span', t('wb.settings.fleet.' + status.kind)));
-    if (technical && record?.latency?.samples?.length && latency) { const chart = latency(state, record.latency.samples); chart.dataset.settingsLatency = ''; }
+    if (technical && agent.latency?.samples?.length && latency) { const chart = latency(state, agent.latency.samples); chart.dataset.settingsLatency = ''; }
     const remove = element(document, 'button', t('wb.settings.fleet.remove'), 'wb-btn wb-btn-sm wb-btn-danger-text fleet-agent-remove'); remove.type = 'button';
     remove.addEventListener('click', () => onRemove(agent.name));
     row.append(icon(document, 'server', 'xs'), name, url, state, remove);

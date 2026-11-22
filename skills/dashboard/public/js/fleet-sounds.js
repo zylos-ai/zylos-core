@@ -1,4 +1,4 @@
-import { stateMood } from './agent-fleet.js';
+import { stateMood } from './fleet-status.js';
 
 const STORAGE_KEY = 'fleet-sounds-muted';
 const WORKING_MOODS = new Set(['busy']);
@@ -210,7 +210,7 @@ export function createFleetSounds({ button, labels, mediaDevices, doc } = {}) {
   }
 
   function handleFleet(fleet) {
-    const { moods, started, finished } = computeFleetTransitions(prevMoods, fleet?.agents);
+    const { moods, started, finished } = computeFleetTransitions(prevMoods, fleet?.items);
     prevMoods = moods;
     if (muted) return;
     if (started.length > 0) playStart();

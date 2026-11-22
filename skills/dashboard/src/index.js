@@ -58,6 +58,9 @@ import { EventLoopMonitor } from './lib/event-loop-monitor.js';
 import { SseHub } from './lib/sse.js';
 import { FleetPoller, stateToFleetRecord, fleetStateFromObjects } from './lib/fleet-poller.js';
 import { buildSafeFleetPayload } from './lib/fleet-payload.js';
+import { compareFleetNames, fleetPage, fleetSummary, pageFleetRows } from './lib/fleet-list.js';
+import { remoteStatus } from '../public/js/fleet-status.js';
+import { listErrorBody, listFailure, parseListQuery } from './lib/list-query.js';
 import { FleetProxy } from './lib/fleet-proxy.js';
 import { createObserverContainment } from './lib/observer-containment.js';
 import { ObserverCoordinator } from './lib/observer-coordinator.js';
@@ -92,7 +95,6 @@ import { hostSeries } from './lib/workbench/host-series.js';
 import { createNamingRequest } from './lib/workbench/naming-request.js';
 import { createGroupSnapshot } from './lib/workbench/group-snapshot.js';
 import { createScheduleRead, scheduleReadResponse } from './lib/workbench/schedule-read.js';
-import { listErrorBody } from './lib/list-query.js';
 import { apiKeyPayload, apiKeysPage } from './lib/api-key-list.js';
 import { createScheduleWrite } from './lib/workbench/schedule-write.js';
 import { createScheduleTz } from './lib/workbench/schedule-tz.js';
@@ -464,14 +466,9 @@ function buildFullFleetPayload(remoteFleet = fleetPoller.getFleet(), buildState)
 function broadcastFleet(remoteFleet, buildState) {
   if (sse.clients.size === 0) return;
   try {
-    const { payload, redacted } = buildFullFleetPayload(remoteFleet, buildState);
-    sse.broadcast('fleet', payload);
-    if (redacted) process.stderr.write('[fleet] SSE broadcast redacted: fleet_secret_leak_guard\n');
+    const agents = [{ ...buildSelfFleetRecord(buildState), self: true }, ...remoteFleet.agents];
+    sse.broadcast('fleet', { summary: fleetSummary(agents), updated_at: remoteFleet.updated_at });
   } catch (err) {
-    if (err?.code === 'fleet_secret_leak_guard') {
-      process.stderr.write('[fleet] SSE broadcast skipped: fleet_secret_leak_guard (redaction insufficient)\n');
-      return;
-    }
     process.stderr.write(`[fleet] SSE broadcast skipped: ${err.message}\n`);
   }
 }
@@ -527,16 +524,30 @@ function currentFleetAgents() {
   return Array.isArray(config.fleet?.agents) ? config.fleet.agents : [];
 }
 
-function fleetAgentsPayload() {
+function fleetAgentsPage(query) {
+  const term = query.q?.toLowerCase();
+  const agents = currentFleetAgents().filter(agent => !term || agent.name.toLowerCase().includes(term));
+  const page = pageFleetRows(agents, query, agent => agent.name, compareFleetNames);
   return {
+    ...page,
     self: { name: config.agent?.name || '' },
-    agents: currentFleetAgents().map(agent => ({
-      name: agent.name,
-      base_url: agent.base_url,
-      key_masked: maskApiKey(agent.read_api_key),
-      access: fleetPoller.getAgentAccess?.(agent.name) || 'read'
-    }))
+    items: page.items.map(agent => {
+      const record = fleetPoller.getAgentRecord(agent.name);
+      return {
+        name: agent.name,
+        base_url: agent.base_url,
+        key_masked: maskApiKey(agent.read_api_key),
+        access: fleetPoller.getAgentAccess(agent.name),
+        connection: remoteStatus(record),
+        latency: record?.latency ?? { samples: [] },
+      };
+    }),
   };
+}
+
+function fleetListFailure(res, error) {
+  const failure = error.statusCode === 400 ? error : listFailure(503, 'unavailable', 'Fleet data is unavailable');
+  sendJson(res, failure.statusCode, listErrorBody(failure));
 }
 
 function validateAgentName(name, { allowCurrentSelf = false, currentName = null } = {}) {
@@ -612,9 +623,12 @@ async function probeFleetAgent(baseUrl, readApiKey) {
   }
 }
 
-async function handleFleetAgents(req, res) {
+async function handleFleetAgents(req, res, url) {
   if (req.method === 'GET') {
-    sendJson(res, 200, fleetAgentsPayload());
+    try {
+      const query = parseListQuery('fleet-agents', url.searchParams, { q: true, include: ['total'] });
+      sendJson(res, 200, fleetAgentsPage(query));
+    } catch (error) { fleetListFailure(res, error); }
     return;
   }
   if (req.method !== 'POST') {
@@ -733,7 +747,7 @@ async function handleFleetAgentDelete(req, res, pathname) {
       fleet.agents = fleet.agents.filter(a => a.name !== name);
     });
     fleetPoller.removeAgent(name);
-    sendJson(res, 200, { ok: true, ...fleetAgentsPayload() });
+    sendJson(res, 200, { ok: true });
   } catch (err) {
     process.stderr.write(`[fleet-config] Failed to delete fleet agent: ${err.message}\n`);
     sendJson(res, 500, { error: 'failed_to_save_config' });
@@ -1002,13 +1016,14 @@ async function handleApi(req, res, pathname, url) {
   }
   if (pathname === '/api/fleet') {
     try {
+      const query = parseListQuery('fleet', url.searchParams, {
+        filters: { name: value => value.length ? value : undefined }, q: true, include: ['total'],
+      });
       // Remote records arrive through the existing poller/SSE lifecycle. A slow
       // or unreachable remote must not delay a local Fleet response.
       await refreshDashboardState({ fresh: true });
-      sendJson(res, 200, buildFullFleetPayload().payload);
-    } catch (err) {
-      sendJson(res, 500, { error: err.code || err.message });
-    }
+      sendJson(res, 200, fleetPage(buildFullFleetPayload().payload, query));
+    } catch (error) { fleetListFailure(res, error); }
     return true;
   }
 
@@ -1482,7 +1497,7 @@ export function createServer() {
     }
 
     if (pathname === '/api/fleet/agents') {
-      await handleFleetAgents(req, res);
+      await handleFleetAgents(req, res, url);
       return;
     }
 

@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FleetPoller, stateToFleetRecord } from '../src/lib/fleet-poller.js';
-import { buildAgentFleetView, fleetSelfFromSnapshot, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+import { buildAgentFleetView as buildAgentFleetViewPage, fleetSelfFromSnapshot, renderAgentFleetHtml as renderAgentFleetHtmlPage } from '../public/js/agent-fleet.js';
+import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
+
+const buildAgentFleetView = (payload, options) => buildAgentFleetViewPage(fleetPageFixture(payload), options);
+const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
 
 // Real conversion and rendering modules, in-memory inputs only; no HTTP,
 // process, configuration or database resource is opened.
