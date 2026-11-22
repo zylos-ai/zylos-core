@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendHtml, sendJson, sendCommandJson, serveStatic } from '../../src/lib/http.js';
 import { GROUP, GROUP_FILE, LONG_FILE, workbenchAnswer } from '../fixtures/workbench-browser-api.js';
+import { keyPage } from '../fixtures/key-pages.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const PAGES = ['/', '/index.html', '/memory', '/schedule', '/usage', '/settings'];
@@ -42,7 +43,7 @@ export async function startPage(sandbox) {
       }
       if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (url.pathname.startsWith('/api/')) {
-        if (offlineHold && url.pathname === '/api/groups/offline' && !url.searchParams.has('cursor')) { offlineHold.started(); await offlineHold.promise; }
+        if (offlineHold && url.pathname === '/api/groups' && url.searchParams.get('side') === 'offline' && !url.searchParams.has('cursor')) { offlineHold.started(); await offlineHold.promise; }
         if (req.method === 'GET') reads.set(url.pathname, (reads.get(url.pathname) ?? 0) + 1);
         const value = req.method === 'GET' ? workbenchAnswer(url, now) : undefined;
         if (value === undefined) unserved.add(`${req.method} ${url.pathname}`);
@@ -264,12 +265,13 @@ export async function runWorkbenchBrowser(t, sandbox) {
     for (const [width, height] of [[390, 844], [1280, 800]]) {
       const phone = width < 761;
       const { page, context, errors, shot } = await open(width, height, '/settings');
-      const created = [];
-      await context.route('**/api/keys', route => {
-        if (route.request().method() === 'GET') return route.fulfill({ json: { keys } });
+      const created = [], listed = [...keys];
+      await context.route(url => url.pathname.endsWith('/api/keys'), route => {
+        if (route.request().method() === 'GET') return route.fulfill({ json: keyPage(listed, new URL(route.request().url())) });
         created.push(route.request().postDataJSON());
         const key = { name: 'new-key', scope: 'read', status: 'active', created_at: '2026-11-20T02:00:00Z', last_used_at: null };
-        return route.fulfill({ json: { keys: [...keys, key], key, plaintext_key: 'zk_browser_case_only' } });
+        listed.unshift(key);
+        return route.fulfill({ json: { ok: true, key, plaintext_key: 'zk_browser_case_only' } });
       });
       await context.route('**/api/fleet/agents', route => route.request().method() === 'GET'
         ? route.fulfill({ json: { self: { name: 'browser-case' }, agents: [{ name: 'lab', base_url: 'https://lab.example', access: 'read' }] } }) : route.fallback());
@@ -1180,13 +1182,13 @@ export async function runWorkbenchBrowser(t, sandbox) {
           problems: [{ sessionGroup: target, displayName: 'Locate target', reason: 'auth_failed' }] } },
         { name: 'spark', state: 'IDLE', access: 'admin' }], updated_at: new Date().toISOString(),
     } }));
-    await page.route(url => url.pathname === '/api/groups/offline', route => {
+    await page.route(url => url.pathname === '/api/groups' && url.searchParams.get('side') === 'offline', route => {
       const url = new URL(route.request().url());
       offlineReads.push(url.search);
       const index = url.searchParams.has('cursor') ? Number(url.searchParams.get('cursor')) : 0;
-      const original = workbenchAnswer(new URL('http://fixture/api/groups/offline'), Date.now());
+      const original = workbenchAnswer(new URL('http://fixture/api/groups?side=offline'), Date.now());
       return route.fulfill({ json: { ...original,
-        rows: original.rows.map(row => index === 0 ? row : { ...row, id: `archived-${index}`, displayName: `Archived ${index}` }),
+        items: original.items.map(row => index === 0 ? row : { ...row, id: `archived-${index}`, displayName: `Archived ${index}` }),
         nextCursor: index < 2 ? String(index + 1) : null,
       } });
     });
@@ -1214,7 +1216,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       await locate(GROUP);
       const before = offlineReads.length;
       await locate(offline);
-      assert.deepEqual(offlineReads.slice(before), [''], 'returning to offline reads only its first page, not the previous three');
+      assert.deepEqual(offlineReads.slice(before), ['?side=offline'], 'returning to offline reads only its first page, not the previous three');
       assert.deepEqual(errors, []);
     } finally { await context.close(); }
   });

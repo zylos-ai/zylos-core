@@ -54,7 +54,7 @@ await window.page.open();window.ready=true;</script></html>`;
       assert.ok(calls.length < 100, 'bounded API request log');
       calls.push({ path: url.pathname, query: url.search, method: req.method, at: Date.now() - started });
       if (url.pathname === '/api/instance') return json(res, { session_mode: { sessionMode: 'multi' }, runtimeHealth: {} });
-      if (url.pathname === '/api/chat/conversations') return json(res, { items: [conversation()], nextCursor: null });
+      if (url.pathname === '/api/conversations') return json(res, { items: [conversation()], nextCursor: null });
       if (url.pathname.endsWith('/send')) {
         sendCount++; sendAt = Date.now();
         req.resume();
@@ -70,8 +70,8 @@ await window.page.open();window.ready=true;</script></html>`;
       }
       if (url.pathname.endsWith('/status')) return json(res, { items: [{ id: 1, status: Date.now() - sendAt >= 4500 ? 'delivered' : 'pending' }] });
       if (url.pathname.endsWith('/questions')) return json(res, { items: [], nextCursor: null });
-      if (url.pathname === '/api/chat/uploads/config') return json(res, { enabled: false });
-      if (/^\/api\/chat\/conversations\/[^/]+$/.test(url.pathname)) return json(res, { conversation: conversation(), conversationId: conversation().id, stored: sent, deliveryState: sent ? 'pending' : undefined });
+      if (url.pathname === '/api/conversations/g:browser/uploads/config') return json(res, { enabled: false });
+      if (/^\/api\/conversations\/[^/]+$/.test(url.pathname)) return json(res, { conversation: conversation(), conversationId: conversation().id, stored: sent, deliveryState: sent ? 'pending' : undefined });
       return json(res, { error: 'fixture_unknown_endpoint' }, 404);
     }
     if (url.pathname === '/') { res.writeHead(200, { 'content-type': 'text/html', 'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'" }); return res.end(html); }

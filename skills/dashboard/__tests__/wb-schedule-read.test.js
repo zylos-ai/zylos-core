@@ -370,10 +370,10 @@ test('a group whose last message came from the scheduler is labelled with the ta
   assert.equal(rows.get('lark:oc_1').text, 'Review ready');
   assert.deepEqual(rows.get('lark:oc_1').source, { kind: 'channel' });
   const api = createGroupsApi({ workbench: snapshot });
-  const found = (await api.search('scheduler:old')).rows.find(row => row.id === 'scheduler:old');
-  assert.equal(found.side, 'offline', 'search finds an older group without a running session');
-  assert.deepEqual(Object.keys(found).sort(), ['channel', 'displayName', 'flags', 'id', 'lastActivityAt', 'side']);
-  const detail = await api.detail(found.id, { include: [] });
+  const found = (await api.list(new URLSearchParams('q=scheduler:old'))).items.find(row => row.id === 'scheduler:old');
+  assert.equal(Object.hasOwn(found, 'state'), false, 'search finds an older group without a running session');
+  assert.deepEqual(Object.keys(found).sort(), ['channel', 'displayName', 'flags', 'id', 'lastActivityAt', 'modelOverridden', 'runtimeOverridden']);
+  const detail = await api.detail(found.id);
   assert.equal(detail.preview.text, 'watch-dispatched-cards', 'detail names the task for the older group');
   assert.deepEqual(detail.preview.source, { kind: 'scheduled_task' });
   assert.equal(JSON.stringify(found).includes(named.id), false, 'search does not expose the scheduler task id');

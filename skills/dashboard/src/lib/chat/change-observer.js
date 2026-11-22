@@ -31,7 +31,9 @@ export class ChatChangeObserver {
     this.timer = null;
     this.version = null;
     this.names = null;
-    this.nameVersion = null;
+    this.pins = new Map();
+    this.reads = null;
+    this.metadataVersion = null;
     this.closed = false;
   }
 
@@ -103,26 +105,37 @@ export class ChatChangeObserver {
       return;
     }
     this._recover(version);
-    let namesChanged = false;
-    const namesDb = this.history.conversations?.db;
-    if (namesDb) {
-      // data_version sees the CLI's connection; total_changes sees this service's
-      // manual writes. Only a changed name projection emits a dirty hint.
-      const nameVersion = `${namesDb.pragma('data_version', { simple: true })}:${namesDb.prepare('SELECT total_changes() AS n').get().n}`;
-      if (nameVersion !== this.nameVersion) {
-        const nextNames = JSON.stringify(namesDb.prepare(`SELECT session_group, display_name FROM group_display_names
+    let namesChanged = false, readsChanged = false;
+    const pinsChanged = new Set();
+    const metadataDb = this.history.conversations?.db;
+    if (metadataDb) {
+      // data_version sees other connections; total_changes sees this service's
+      // writes. Only changed conversation metadata emits a dirty hint.
+      const metadataVersion = `${metadataDb.pragma('data_version', { simple: true })}:${metadataDb.prepare('SELECT total_changes() AS n').get().n}`;
+      if (metadataVersion !== this.metadataVersion) {
+        const nextNames = JSON.stringify(metadataDb.prepare(`SELECT session_group, display_name FROM group_display_names
           UNION ALL SELECT 'draft:' || local_id, display_name FROM chat_conversations WHERE state<>'active'
           ORDER BY 1`).all());
         namesChanged = this.names !== null && this.names !== nextNames;
         this.names = nextNames;
-        this.nameVersion = nameVersion;
+        for (const tab of ['mine', 'external']) {
+          const nextPins = JSON.stringify(this.history.pinIds(tab));
+          if (this.pins.has(tab) && this.pins.get(tab) !== nextPins) pinsChanged.add(tab);
+          this.pins.set(tab, nextPins);
+        }
+        const nextReads = JSON.stringify(this.history.readPositions());
+        readsChanged = this.reads !== null && this.reads !== nextReads;
+        this.reads = nextReads;
+        this.metadataVersion = metadataVersion;
       }
     }
-    const changed = !this.version || this.version.version !== version.version || namesChanged;
+    const changed = !this.version || this.version.version !== version.version;
     const snapshots = new Map();
     for (const record of [...this.subscriptions]) {
       if (this.closed || !this.subscriptions.has(record)) continue;
-      if (!changed && record.snapshot) continue;
+      const metadataChanged = namesChanged || pinsChanged.has(record.options.tab)
+        || (readsChanged && record.options.tab === 'mine');
+      if (!changed && !metadataChanged && record.snapshot) continue;
       try {
         record.generation = version.generation;
         const previous = record.snapshot;
@@ -133,7 +146,7 @@ export class ChatChangeObserver {
         record.snapshot = next;
         if (!previous) this._send(record, 'chat_ready');
         else {
-          if (namesChanged || next.listChanged || previous.latestId !== next.latestId) this._send(record, 'chat_messages_changed');
+          if (metadataChanged || next.listChanged || previous.latestId !== next.latestId) this._send(record, 'chat_messages_changed');
           if (this.subscriptions.has(record) && JSON.stringify(previous.delivery) !== JSON.stringify(next.delivery)) this._send(record, 'chat_delivery_changed');
         }
       } catch {

@@ -86,7 +86,7 @@ test('chat requires credentials even when the config still sets auth.enabled to 
 // permission; run for proxy write changes, skip presentation-only changes.
 test('proxy cookie writes require exact origin before upstream while API admin may write', async t => {
   const f = await chatHttpFixture(t, { chat: { allowRemote: true } });
-  const writes = chatRoutes.filter(route => route.method === 'POST');
+  const writes = chatRoutes.filter(route => route.method !== 'GET');
   for (const origin of [null, false, 'http://127.0.0.1:1']) for (const route of writes) {
     const result = await f.request(route, { fleet: true, origin, contentType: 'text/plain' });
     assert.equal(result.status, 403);
@@ -105,7 +105,7 @@ test('proxy cookie writes require exact origin before upstream while API admin m
 // methods; run for auth/proxy route changes. Private fixture resources only.
 test('proxy protects chat prefix for every method and retains explicit write allowlist', async t => {
   const f = await chatHttpFixture(t, { chat: { allowRemote: true } });
-  const paths = ['/api/chat/conversations', '/api/chat/conversations/', '/api/chat/future'];
+  const paths = ['/api/conversations', '/api/conversations/', '/api/conversations/future/action'];
   for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) for (const path of paths) {
     const result = await f.request({ method, path }, { fleet: true, identity: 'read' });
     assert.equal(result.status, 403, `${method} ${path}`);
@@ -139,7 +139,7 @@ test('chat content and terminal history require admin at the local and Fleet des
     ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(name => [name, process.env[name]]))),
   'network=loopback only; DB/tmux/PM2=none');
   const f = await chatHttpFixture(t, { chat: { allowRemote: true } }, { withHistory: true });
-  const routes = ['/api/chat/conversations', '/api/chat/conversations/local-chat/messages',
+  const routes = ['/api/conversations', '/api/conversations/local-chat/messages',
     '/api/observer/history/sessions', '/api/observer/history/entries?session=session',
     '/api/observer/history/content?session=session&entry=o:0&field=body',
     '/api/observer/history/search?session=session&q=PRIVATE'];

@@ -7,7 +7,7 @@ import { element, icon } from './plain-text.js';
 import { asDate } from './conversation-time.js';
 import { formatZoned } from './instance-zone.js';
 import { channelIcon, channelIcons } from './board.js';
-import { createConversationState, isOriginConversation } from './conversation-state.js';
+import { createConversationState, isOriginConversation, isOwnChatMessage } from './conversation-state.js';
 import { messageState, receiptState } from './chat-delivery-state.js';
 import { renderQuestion } from './chat-questions.js';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js';
@@ -76,7 +76,7 @@ export function mountConversationPage({
   let destroyed = false,
     currentSnapshot,
     selectedKey = null,
-    unread = 0,
+    timelineRevision = null,
     maxSeenId = null,
     renaming = false,
     creationPending = false;
@@ -86,6 +86,7 @@ export function mountConversationPage({
   // The live activity area (created on first use) and the clock tick that keeps its running times current.
   let liveArea = null, liveItem = null;
   let settleTimer = null;
+  let searchTimer = null, readTimer = null, readCandidate = null, reading = false, attemptedRead = 0;
   let activityTimer = null,
     followAfterGesture = false,
     growthDuringGesture = 0,
@@ -189,7 +190,7 @@ export function mountConversationPage({
     }
   });
   const uploadScope = s => s.canWrite ? { instance: draftScope()?.instance ?? String(typeof identity === 'function' ? identity() : identity ?? 'local'),
-    conversationId: s.selectedId, uploadsUrl: endpoint(`/api/chat/conversations/${encodeURIComponent(s.selectedId)}/uploads`) } : null;
+    conversationId: s.selectedId, uploadsUrl: endpoint(`/api/conversations/${encodeURIComponent(s.selectedId)}/uploads`) } : null;
   const nameOf = (row, external = false) => row?.displayName ?? row?.display_name
     ?? (external ? row?.sessionGroup ?? row?.session_group : null) ?? t('chat.unnamed');
   const channelOf = row => row?.channel ?? (row?.sessionGroup ?? row?.session_group ?? '').split(':')[0] ?? '';
@@ -280,14 +281,32 @@ export function mountConversationPage({
   }, 'plus', 'wb-btn wb-btn-primary conversation-create');
   const externalSection = node('div', undefined, 'conversation-external-section');
   externalSection.append(icon(document, 'lock'), node('span', t('chat.page.externalSection')));
+  const searchInput = node('input', undefined, 'wb-input conversation-search');
+  searchInput.type = 'search';
+  searchInput.autocomplete = 'off';
+  searchInput.addEventListener('input', () => {
+    clearSearchTimer();
+    searchTimer = view.setTimeout(() => {
+      searchTimer = null;
+      list.scrollTop = 0;
+      void state.setSearch(searchInput.value);
+    }, 300);
+  });
+  const newConversations = action('chat.page.newConversations', () => {
+    list.scrollTop = 0;
+    return state.refreshList();
+  }, undefined, 'wb-btn conversation-list-update');
   const list = node('div', undefined, 'conversation-items');
+  list.addEventListener('scroll', () => {
+    if (opened && list.clientHeight > 0 && list.scrollHeight - list.scrollTop - list.clientHeight <= 24) {
+      void state.loadMore();
+    }
+  }, { passive: true });
   const listNotice = node('p', undefined, 'chat-notice conversation-list-notice');
   const deletionNotice = node('p', undefined, 'chat-notice conversation-deletion-notice');
   deletionNotice.setAttribute('role', 'status');
   deletionNotice.hidden = true;
-  const more = action('loadMore', () => state.loadMore());
-  more.classList.add('conversation-load-more');
-  sidebar.append(listToolbar, create, externalSection, list, deletionNotice, listNotice, more);
+  sidebar.append(listToolbar, create, externalSection, searchInput, newConversations, list, deletionNotice, listNotice);
   const detail = node('section', undefined, 'conversation-detail');
   detail.setAttribute('aria-label', t('chat.history'));
   const header = node('header', undefined, 'conversation-header');
@@ -382,13 +401,10 @@ export function mountConversationPage({
   const gapLoad = action('chat.page.loadGap', () => state.loadGap());
   gap.append(gapLabel, gapLoad);
   const messageList = node('div', undefined, 'conversation-message-list');
+  const unreadDivider = node('div', undefined, 'conversation-unread-divider');
   const historyNotice = node('p', undefined, 'chat-notice conversation-history-notice');
   stream.append(historyStart, gap, historyNotice, messageList);
-  const latest = action('chat.page.newMessages', () => {
-    stream.scrollTop = stream.scrollHeight;
-    unread = 0;
-    updateUnread();
-  }, 'in', 'wb-btn conversation-new-messages');
+  const latest = action('chat.page.newMessages', () => state.jumpToLatest(), 'chev', 'wb-btn conversation-new-messages');
   latest.dataset.action = 'latest';
   history.append(stream, latest);
   const composer = node('form', undefined, 'conversation-composer chat-composer');
@@ -706,8 +722,8 @@ export function mountConversationPage({
     }
     if (!destroyed && selectedKey === selected && state.snapshot().receipt?.stored === true) {
       stream.scrollTop = stream.scrollHeight;
-      unread = 0;
       updateUnread();
+      reportVisibleRead();
     }
     // Only when nothing else took the focus meanwhile (the disabled editor leaves it on the page body).
     const focusFree = !document.activeElement || document.activeElement === document.body || document.activeElement === input;
@@ -737,13 +753,64 @@ export function mountConversationPage({
       document.documentElement.dataset.conversationFocus = String(focus);
     }
     if (!focus) closeConversationMenu(false);
+    reportVisibleRead();
   }
-  function updateUnread() {
-    latest.hidden = !unread;
-    const title = countLabel(t, 'chat.page.newMessages', unread, {}).replace('{count}', String(unread));
-    text(latest.label, title);
-    latest.setAttribute('aria-label', title);
+  function clearSearchTimer() {
+    if (searchTimer !== null) view?.clearTimeout(searchTimer);
+    searchTimer = null;
   }
+  const atBottom = () => stream.scrollHeight - stream.scrollTop - stream.clientHeight <= 2;
+  function updateUnread(s = currentSnapshot) {
+    const count = s?.tab === 'mine' ? s.unreadCount || 0 : 0;
+    const displayCount = count >= 100 ? '99+' : String(count);
+    const loadedUnread = count ? s.messages.filter(row => row.id > s.readUpTo && !isOwnChatMessage(row)).length : 0;
+    latest.hidden = !s?.historyLoaded || atBottom() && (!s.positionAtUnread || count <= loadedUnread);
+    latest.label.hidden = !count;
+    text(latest.label, displayCount);
+    latest.setAttribute('aria-label', count
+      ? countLabel(t, 'chat.page.newMessages', count, {}).replace('{count}', displayCount)
+      : t('chat.history'));
+  }
+  function visibleReadPosition() {
+    const s = currentSnapshot;
+    if (!opened || page.hidden || s?.tab !== 'mine' || !s.historyLoaded || s.blocked
+        || !Number.isSafeInteger(s.unreadCount) || document.visibilityState === 'hidden'
+        || document.hasFocus?.() === false || !stream.clientHeight) return null;
+    const bounds = stream.getBoundingClientRect();
+    for (let index = s.messages.length - 1; index >= 0; index--) {
+      const row = s.messages[index];
+      if (row.id <= Math.max(s.readUpTo, attemptedRead)) break;
+      const bottom = messages.get(String(row.id))?.node.getBoundingClientRect().bottom;
+      if (bottom > bounds.top && bottom <= bounds.bottom && !isOwnChatMessage(row)) return row.id;
+    }
+    return null;
+  }
+  function cancelReadTimer() {
+    if (readTimer !== null) view?.clearTimeout(readTimer);
+    readTimer = null;
+    readCandidate = null;
+  }
+  function reportVisibleRead() {
+    if (reading) return;
+    const upTo = visibleReadPosition();
+    if (upTo === readCandidate) return;
+    cancelReadTimer();
+    if (!upTo) return;
+    readCandidate = upTo;
+    readTimer = view.setTimeout(async () => {
+      readTimer = null;
+      readCandidate = null;
+      if (visibleReadPosition() !== upTo) return;
+      attemptedRead = upTo;
+      reading = true;
+      try { await state.markRead(upTo); }
+      finally { reading = false; reportVisibleRead(); }
+    }, 700);
+  }
+  const readVisibilityChanged = () => { attemptedRead = currentSnapshot?.readUpTo ?? 0; reportVisibleRead(); };
+  document.addEventListener?.('visibilitychange', readVisibilityChanged);
+  view?.addEventListener('focus', readVisibilityChanged);
+  view?.addEventListener('blur', cancelReadTimer);
   function maybeLoadOlder(underfilled = false) {
     const s = state.snapshot();
     if (destroyed || !opened || page.hidden || document.hidden || document.visibilityState === 'hidden'
@@ -753,10 +820,8 @@ export function mountConversationPage({
     void state.loadOlder();
   }
   stream.addEventListener('scroll', () => {
-    if (stream.scrollHeight - stream.scrollTop - stream.clientHeight <= 2) {
-      unread = 0;
-      updateUnread();
-    }
+    updateUnread();
+    reportVisibleRead();
     maybeLoadOlder();
   }, {
     passive: true
@@ -874,8 +939,8 @@ export function mountConversationPage({
       if (destroyed) return;
       if (followAfterGesture && stream.scrollHeight - stream.scrollTop - stream.clientHeight <= growthDuringGesture + 2) {
         stream.scrollTop = stream.scrollHeight;
-        unread = 0;
         updateUnread();
+        reportVisibleRead();
       } else if (shiftDuringGesture) {
         stream.scrollTop += shiftDuringGesture;
       }
@@ -1316,7 +1381,6 @@ export function mountConversationPage({
     const previousHeight = stream.scrollHeight;
     const previousClientHeight = stream.clientHeight;
     const pinned = previousHeight - oldTop - previousClientHeight <= 2;
-    const near = previousHeight - oldTop - previousClientHeight < previousClientHeight;
     const anchorNode = [...messageList.children].find(el => el.dataset.messageId && el.getBoundingClientRect().bottom > bounds.top && el.getBoundingClientRect().top < bounds.bottom);
     const anchor = anchorNode ? {
       node: anchorNode
@@ -1327,7 +1391,6 @@ export function mountConversationPage({
       previousHeight,
       previousClientHeight,
       pinned,
-      near,
       anchor,
       anchorTop
     };
@@ -1344,6 +1407,37 @@ export function mountConversationPage({
     else if (before.anchor?.node.isConnected) stream.scrollTop = before.oldTop + before.anchor.node.getBoundingClientRect().top - before.anchorTop;
     scheduleFit();
   }
+  function bindPin(button, id) {
+    let pointer = null, suppressClick = false;
+    button.addEventListener('click', () => {
+      if (!suppressClick) void state.togglePin(id);
+      suppressClick = false;
+    });
+    button.addEventListener('pointerdown', event => {
+      suppressClick = false;
+      if (event.button !== 0 || !button.parentNode.dataset.pinId || button.disabled) return;
+      pointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
+      button.setPointerCapture?.(event.pointerId);
+    });
+    button.addEventListener('pointerup', event => {
+      if (pointer?.id !== event.pointerId) return;
+      const distance = Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y);
+      pointer = null;
+      if (distance < 6) return;
+      suppressClick = true;
+      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-pin-id]');
+      if (target?.dataset.pinId && target.dataset.pinId !== id) void state.reorderPin(id, target.dataset.pinId);
+    });
+    button.addEventListener('pointercancel', () => { pointer = null; });
+    button.addEventListener('keydown', event => {
+      if (!button.parentNode.dataset.pinId || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+      const pinned = currentSnapshot.items.filter(row => Number.isInteger(row.pinOrder));
+      const index = pinned.findIndex(row => row.id === id) + (event.key === 'ArrowUp' ? -1 : 1);
+      if (!pinned[index]) return;
+      event.preventDefault();
+      void state.reorderPin(id, pinned[index].id);
+    });
+  }
   function reconcileMessages(s, switched, before) {
     instanceTimeZone = s.tz ?? null;
     const {
@@ -1351,7 +1445,6 @@ export function mountConversationPage({
       previousHeight,
       previousClientHeight,
       pinned,
-      near,
       anchor,
       anchorTop
     } = before;
@@ -1393,6 +1486,7 @@ export function mountConversationPage({
         }
         patchMessage(record, row, s);
       }
+      if (id === String(s.unreadDividerId)) ordered.push(unreadDivider);
       ordered.push(record.node);
     }
     disposeMissingMessages(messages, ids);
@@ -1406,25 +1500,21 @@ export function mountConversationPage({
     }
     positionChildren(messageList, ordered);
     for (const record of messages.values()) record.resource?.mount?.();
-    const follow = switched || !maxSeenId && s.messages.length || added && near && !s.gap
+    const openedTimeline = s.historyLoaded && s.timelineRevision !== timelineRevision;
+    const follow = switched || openedTimeline || !maxSeenId && s.messages.length || added && pinned && !s.gap
       || pinned && (stream.scrollHeight !== previousHeight || stream.clientHeight !== previousClientHeight);
-    if (holdScroll(follow, stream.scrollHeight - previousHeight, anchorShift(anchor?.node, anchorTop))) {
-      if (follow) unread = 0;
-    } else if (follow) {
-      stream.scrollTop = stream.scrollHeight;
-      unread = 0;
-    } else if (anchor?.node.isConnected && anchorTop !== undefined) {
-      stream.scrollTop = oldTop + anchor.node.getBoundingClientRect().top - anchorTop;
-    } else {
-      stream.scrollTop = oldTop;
+    if (openedTimeline) timelineRevision = s.timelineRevision;
+    if (openedTimeline && s.positionAtUnread && s.unreadDividerId !== null && unreadDivider.isConnected) {
+      stream.scrollTop += unreadDivider.getBoundingClientRect().top - stream.getBoundingClientRect().top - 12;
+    } else if (!holdScroll(follow, stream.scrollHeight - previousHeight, anchorShift(anchor?.node, anchorTop))) {
+      if (follow) stream.scrollTop = stream.scrollHeight;
+      else if (anchor?.node.isConnected && anchorTop !== undefined) {
+        stream.scrollTop = oldTop + anchor.node.getBoundingClientRect().top - anchorTop;
+      } else stream.scrollTop = oldTop;
     }
-    if (!switched && added && (!near || s.gap)) {
-      unread += added;
-    }
-    if (s.messages.length) {
-      maxSeenId = String(s.messages[s.messages.length - 1].id);
-    }
-    updateUnread();
+    if (s.messages.length) maxSeenId = String(s.messages[s.messages.length - 1].id);
+    updateUnread(s);
+    reportVisibleRead();
   }
   const serverNow = s => Date.now() + (s?.activity?.offset ?? 0);
   function liveOptions(s) {
@@ -1560,6 +1650,10 @@ export function mountConversationPage({
     stream.setAttribute('aria-label', t('chat.history'));
     input.setAttribute('aria-label', t('chat.input'));
     renameInput.setAttribute('aria-label', t('chat.name'));
+    searchInput.placeholder = t('chat.page.searchNames');
+    searchInput.setAttribute('aria-label', searchInput.placeholder);
+    if (searchTimer === null && document.activeElement !== searchInput && searchInput.value !== s.search) searchInput.value = s.search;
+    text(unreadDivider, t('chat.page.unreadDivider'));
     if (s.blocked) {
       closeCopyMenu();
       leaveTextSelection();
@@ -1575,7 +1669,6 @@ export function mountConversationPage({
       days.clear();
       selectedKey = null;
       maxSeenId = null;
-      unread = 0;
       // Only a fallback: the host hides the tab and returns to the overview.
       text(blockedTitle, t('chat.remoteDisabled'));
       root.replaceChildren(blockedNotice);
@@ -1592,9 +1685,11 @@ export function mountConversationPage({
       leaveTextSelection();
       closeConversationMenu(false);
       selectedKey = key;
+      cancelReadTimer();
+      attemptedRead = 0;
+      timelineRevision = null;
       annotations.hide();
       locateNotice = null;
-      unread = 0;
       maxSeenId = null;
       renaming = false;
       renameForm.hidden = true;
@@ -1645,7 +1740,9 @@ export function mountConversationPage({
           draft = node('span', t('chat.draft'), 'conversation-draft'),
           time = node('time', undefined, 'conversation-list-time');
         const preview = node('span', undefined, 'chat-preview');
-        top.append(name, pinned, channel, draft, time);
+        const unreadDot = node('span', undefined, 'conversation-unread-dot');
+        unreadDot.setAttribute('aria-hidden', 'true');
+        top.append(name, pinned, channel, draft, time, unreadDot);
         body.append(top, preview);
         button.append(symbol, body);
         button.addEventListener('click', event => {
@@ -1655,6 +1752,11 @@ export function mountConversationPage({
           autoSelectPending = false;
           void state.select(item.id);
         });
+        const pin = node('button', undefined, 'wb-icon-btn conversation-pin-action');
+        pin.type = 'button';
+        pin.dataset.action = 'pin';
+        pin.append(icon(document, 'pin'));
+        bindPin(pin, item.id);
         const remove = action('chat.delete.button', () => removeConversation(item), 'trash', 'wb-icon-btn conversation-delete');
         // The phone's revealed button reads the short word; its accessible name stays the full action.
         const short = node('span', t('chat.delete.short'), 'conversation-delete-short');
@@ -1662,10 +1764,10 @@ export function mountConversationPage({
         remove.append(short);
         const notice = node('span', undefined, 'conversation-delete-status');
         notice.setAttribute('role', 'status');
-        wrapper.append(button, remove, notice);
+        wrapper.append(button, pin, remove, notice);
         swipe.attach(wrapper);
         row = {
-          wrapper, remove, short, notice,
+          wrapper, remove, short, notice, pin, unreadDot,
           button,
           name,
           channel,
@@ -1695,10 +1797,19 @@ export function mountConversationPage({
       row.channel.hidden = s.tab === 'mine' || !itemChannel;
       text(row.channel, channelLabel(itemChannel));
       text(row.name, nameOf(item));
-      const pinned = s.tab === 'mine' && isOriginConversation(item.id);
-      row.button.dataset.origin = String(pinned);
-      row.pinned.hidden = !pinned;
+      const origin = s.tab === 'mine' && isOriginConversation(item.id);
+      const pinned = Number.isInteger(item.pinOrder);
+      row.button.dataset.origin = String(origin);
+      row.pinned.hidden = !origin;
       text(row.pinned, t('chat.page.pinned'));
+      row.pin.hidden = origin || item.id.startsWith('d:');
+      row.pin.disabled = s.savingPins;
+      row.pin.setAttribute('aria-pressed', String(pinned));
+      row.pin.setAttribute('aria-label', t('chat.page.pinned') + ': ' + nameOf(item));
+      row.pin.title = t('chat.page.pinned');
+      if (pinned && !s.search) row.wrapper.dataset.pinId = item.id;
+      else delete row.wrapper.dataset.pinId;
+      row.unreadDot.hidden = s.tab !== 'mine' || item.unread !== true;
       const preview = item.preview || t(item.draft ? 'chat.page.blankPreview' : 'chat.page.noMessages');
       let previewPrefix = '';
       if (item.preview && item.previewDirection === 'in') {
@@ -1725,10 +1836,12 @@ export function mountConversationPage({
       }
     }
     positionChildren(list, ordered);
-    more.hidden = !s.nextCursor;
-    more.disabled = !!s.loading;
+    newConversations.hidden = !s.listUpdates;
+    text(newConversations.label, countLabel(t, 'chat.page.newConversations', s.listUpdates, {}).replace('{count}', String(s.listUpdates)));
+    newConversations.setAttribute('aria-label', newConversations.label.textContent);
     listNotice.hidden = !!s.items.length && !s.loading;
-    text(listNotice, t(s.loading ? 'chat.loading' : s.tab === 'mine' ? 'chat.page.emptyMine' : 'chat.page.emptyExternal'));
+    text(listNotice, t(s.loading ? 'chat.loading' : s.search ? 'wb.list.noMatch'
+      : s.tab === 'mine' ? 'chat.page.emptyMine' : 'chat.page.emptyExternal'));
     const completionText = [];
     if (deletionResult?.retainedMessages > 0 && deletionResult.groupDataRetained === true) {
       completionText.push(countLabel(t, 'chat.delete.retained', deletionResult.retainedMessages));
@@ -1833,7 +1946,7 @@ export function mountConversationPage({
       quoteBarClose.setAttribute('aria-label', t('chat.quote.cancel'));
       quoteBarClose.disabled = !quotable(s);
     }
-    const outgoing = s.pending?.content ?? composeContent({ text: s.input, annotations: s.annotations, timeZone: s.tz });
+    const outgoing = s.pending?.content ?? composeContent({ text: s.input, annotations: s.annotations, timeZone: s.tz, t });
     const outgoingBytes = contentBytes(storedContent(outgoing, s.pending ? s.pending.quote : quote?.id ?? null));
     const tooLarge = outgoingBytes > MAX_CONTENT_BYTES;
     const composeMessages = [
@@ -1958,6 +2071,8 @@ export function mountConversationPage({
       leaveTextSelection();
       autoSelectPending = false;
       opened = false;
+      clearSearchTimer();
+      cancelReadTimer();
       deletion.invalidate();
       deletionResult = null;
       groupSide?.close({ focus: false });
@@ -1978,6 +2093,11 @@ export function mountConversationPage({
       groupSide?.destroy();
       quickConfig?.destroy();
       destroyed = true;
+      clearSearchTimer();
+      cancelReadTimer();
+      document.removeEventListener?.('visibilitychange', readVisibilityChanged);
+      view?.removeEventListener('focus', readVisibilityChanged);
+      view?.removeEventListener('blur', cancelReadTimer);
       uploadTray.destroy();
       for (const resource of trayResources.values()) resource.destroy();
       trayResources.clear();

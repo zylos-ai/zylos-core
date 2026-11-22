@@ -1519,7 +1519,7 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(app, /fetch\(api\('\/api\/fleet\/agents'\), \{ cache: 'no-store' \}\)/);
   assert.match(app, /fetch\(api\('\/api\/fleet\/agents\/test'\), \{/);
   assert.match(app, /fetch\(api\('\/api\/instance\/name'\), \{/);
-  assert.match(app, /fetch\(api\('\/api\/keys'\), \{ cache: 'no-store' \}\)/);
+  assert.match(app, /fetch\(api\(`\/api\/keys\?\$\{params\}`\), \{ cache: 'no-store' \}\)/);
   assert.match(app, /fetch\(api\('\/api\/keys'\), \{/);
   // Which request each key action makes is decided by keyActionRequest (wb-settings-wiring tests); the app sends it as built,
   // to this machine's own keys (no agentPath).
@@ -1543,9 +1543,10 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(app, /function renderCreatedApiKey\(createdKey\)/);
   assert.match(app, /fleetManageModal\._createdKey = createdKey \|\| null/);
   // What a key request sends and shows is decided in settings-wiring (wb-settings-wiring tests); the app only hands it the page.
-  assert.match(app, /renderKeys: renderApiKeys, renderCreated: renderCreatedApiKey, createdKey: \(\) => fleetManageModal\?\._createdKey \?\? null,/);
+  assert.match(app, /reload: \(\) => keyList\?\.refresh\(\), renderCreated: renderCreatedApiKey, createdKey: \(\) => fleetManageModal\?\._createdKey \?\? null,/);
   assert.match(app, /function purgeRevokedApiKeys\(\)/);
-  assert.match(app, /renderKeyTable\(fleetManageModal\.querySelector\('#api-key-list'\), keys/);
+  assert.match(app, /const root = fleetManageModal\.querySelector\('#api-key-list'\);/);
+  assert.match(app, /else settingsWiring\(\)\.renderKeyTable\(root, keys\);/);
   assert.match(app, /replace_created_key_confirm/);
   // Destructive key and machine actions confirm in the dashboard's own dialog, never the browser prompt.
   assert.doesNotMatch(app, /window\.confirm/);
@@ -1789,8 +1790,8 @@ test('Observer recovery status survives refresh and exposes cleanup without view
   for (const status of cases) await t.test(JSON.stringify(status), async () => {
     const h = observerUiHarness();
     h.setFetch((url) => {
-      assert.ok(String(url).endsWith('/status') || String(url).endsWith('/groups/running'), 'recovery may refresh groups but must not request a lease or enable/install');
-      return Promise.resolve(observerResponse(String(url).endsWith('/groups/running') ? { rows: [] } : status));
+      assert.ok(String(url).endsWith('/status') || String(url).endsWith('/groups?side=running'), 'recovery may refresh groups but must not request a lease or enable/install');
+      return Promise.resolve(observerResponse(String(url).endsWith('/groups?side=running') ? { rows: [] } : status));
     });
     await h.context.refreshObserverStatus();
     assert.equal(h.settings['#observer-settings-state'].textContent, 'observer.state_recovery');
@@ -2095,7 +2096,7 @@ function workbenchHarness(context, read, options = {}) {
   context.mock.method(globalThis, 'setTimeout', (handler, delay) => { const id = ++nextTimer; timeouts.set(id, { handler, delay }); return id; });
   context.mock.method(globalThis, 'clearTimeout', id => timeouts.delete(id));
   const makeSnapshot = workbenchSnapshot;
-  const fallback = path => path.endsWith('/api/instance') ? { session_mode: { sessionMode: 'multi' } } : path.includes('/api/groups/running') ? makeSnapshot() :
+  const fallback = path => path.endsWith('/api/instance') ? { session_mode: { sessionMode: 'multi' } } : path.includes('/api/groups?side=running') ? makeSnapshot() :
     path.includes('/api/groups/activity') ? { start: 0, cellSeconds: 60, groups: { a: { cells: Array(60).fill('none'), inbound: [] } } } : {};
   const mounted = mountWorkbench({ document, window, storage: saved, t: options.t ?? (key => key),
     identity: () => owner, endpoint: path => owner === 'local' ? path : '/fleet/' + owner + path,
@@ -2106,7 +2107,10 @@ function workbenchHarness(context, read, options = {}) {
       options.onRequest?.(path, requestOptions);
       calls.push(path);
       const value = read ? await read(path, fallback) : fallback(path);
-      return value?.json ? value : { ok: true, json: async () => value };
+      if (value?.json) return value;
+      const url = new URL(path, 'http://fixture.invalid');
+      const data = url.pathname.endsWith('/api/groups') && value?.rows ? { ...value, items: value.rows } : value;
+      return { ok: true, json: async () => data };
     } });
   const stop = () => mounted.destroy();
   context.after(stop);
@@ -2137,8 +2141,8 @@ test('workbench shell detail changes redraw without network and activity range p
 test('workbench requests activity for loaded rows in batches and adds the next offline page', async context => {
   const rows = Array.from({ length: 101 }, (_, i) => ({ id: 'offline:' + i, flags: {} }));
   const h = workbenchHarness(context, (path, fallback) => {
-    if (path === '/api/groups/offline') return { rows, nextCursor: 'more' };
-    if (path === '/api/groups/offline?cursor=more') return { rows: [{ id: 'offline:next', flags: {} }] };
+    if (path === '/api/groups?side=offline') return { rows, nextCursor: 'more' };
+    if (path === '/api/groups?side=offline&cursor=more') return { rows: [{ id: 'offline:next', flags: {} }] };
     if (path.startsWith('/api/groups/activity?')) {
       const ids = new URLSearchParams(path.split('?')[1]).get('ids').split(',');
       return { start: 0, cellSeconds: 60, groups: Object.fromEntries(ids.map(id => [id, { cells: ['idle'], inbound: [] }])) };
@@ -2162,6 +2166,84 @@ test('workbench requests activity for loaded rows in batches and adds the next o
   }
 });
 
+test('an inbound message updates the group in place until the new-message notice is activated', async context => {
+  const first = '2026-04-10T12:02:00.000Z', previous = '2026-04-10T12:01:00.000Z', received = '2026-04-10T12:03:00.000Z';
+  const row = (id, lastActivityAt, message, kind = 'idle') => ({
+    id, lastActivityAt, state: { kind }, currentAction: { message, receivedAt: lastActivityAt },
+  });
+  const a = row('a', first, 'Previous newest'), c = row('c', previous, 'Previous message');
+  let items = [a, c];
+  let groupDetail = { ...c, state: { kind: 'offline' } };
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (path === '/api/groups?side=running') return { items, nextCursor: null, listKnown: true };
+    if (path === '/api/groups/c') return groupDetail;
+    return fallback(path);
+  }, {
+    t: (key, vars) => key === 'wb.groups.newMessages' ? `${vars.n} groups have new messages`
+      : key === 'wb.groups.newMessagesOne' ? `${vars.n} group has new messages`
+      : key === 'wb.board.lastReceived' ? vars.text : key,
+  });
+  await wbTick(); await wbTick();
+  const board = h.nodes.get('#wb-board');
+  const notice = h.nodes.get('#tab-overview').querySelectorAll('.wb-board-refresh')[0];
+  const order = () => board.children.map(node => node.dataset.group);
+  assert.deepEqual(order(), ['a', 'c']);
+  assert.equal(notice.hidden, true);
+
+  items = [row('c', received, 'New group message', 'working'), a];
+  await h.poll(5000); await wbTick();
+  assert.deepEqual(order(), ['a', 'c']);
+  assert.ok(board.children[1].textContent.includes('New group message'));
+  assert.ok(board.children[1].textContent.includes('wb.state.working'));
+  assert.equal(notice.hidden, false);
+  assert.equal(notice.textContent, '1 group has new messages');
+
+  notice.dispatch('click'); await wbTick(); await wbTick();
+  assert.deepEqual(order(), ['c', 'a']);
+  assert.equal(notice.hidden, true);
+
+  const newA = row('a', '2026-04-10T12:04:00.000Z', 'Newer group message');
+  items = [newA, items[0]];
+  await h.poll(5000); await wbTick();
+  assert.deepEqual(order(), ['c', 'a']);
+  assert.equal(notice.hidden, false);
+  h.navigate(false);
+  h.navigate(true);
+  await wbTick(); await wbTick();
+  assert.deepEqual(order(), ['a', 'c']);
+  assert.equal(notice.hidden, true);
+
+  items = [newA];
+  await h.poll(5000); await wbTick();
+  assert.deepEqual(order(), ['a', 'c']);
+  assert.ok(board.children[1].textContent.includes('wb.state.offline'));
+  groupDetail = { ok: false, status: 404, json: async () => ({ error: { code: 'not_found' } }) };
+  await h.poll(5000); await wbTick();
+  assert.deepEqual(order(), ['a']);
+});
+
+test('running groups request the next page only on demand and recover a stale cursor', async context => {
+  let restarted = false;
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (path === '/api/groups?side=running') {
+      return { items: [{ id: restarted ? 'new-first' : 'first', state: { kind: 'idle' } }], nextCursor: restarted ? null : 'old' };
+    }
+    if (path === '/api/groups?side=running&cursor=old') {
+      restarted = true;
+      return { ok: false, status: 400, json: async () => ({ error: { code: 'invalid_cursor' } }) };
+    }
+    return fallback(path);
+  });
+  await wbTick(); await wbTick();
+  const board = h.nodes.get('#wb-board');
+  assert.equal(board.children[0].dataset.group, 'first');
+  assert.equal(h.calls.some(path => path.includes('cursor=old')), false);
+  board.children.at(-1).dispatch('click'); await wbTick(); await wbTick();
+  assert.equal(board.children[0].dataset.group, 'new-first');
+  assert.equal(h.calls.filter(path => path.includes('cursor=old')).length, 1);
+  assert.equal(h.calls.filter(path => path === '/api/groups?side=running').length, 2);
+});
+
 // Independent board reads: run for groups/cost refresh wiring changes; skip unrelated UI/server work.
 // Real mounted modules use the injected DOM/fetch/timers above, with no live I/O and lifecycle cleanup.
 test('workbench shell renders groups while cost is pending and fills cost independently', { timeout: 5000 }, async context => {
@@ -2176,11 +2258,11 @@ test('workbench shell renders groups while cost is pending and fills cost indepe
   assert.doesNotMatch(h.nodes.get('#wb-attention').textContent, /wb.readFailed/);
   await h.poll(5000); await wbTick();
   assert.equal(h.calls.filter(path => path.includes('/usage/summary')).length, 1, 'cost polling shares its pending request');
-  assert.equal(h.calls.filter(path => path.endsWith('/api/groups/running')).length, 2, 'groups keep polling while cost is pending');
-  const groupReads = h.calls.filter(path => path.endsWith('/api/groups/running')).length;
+  assert.equal(h.calls.filter(path => path.endsWith('/api/groups?side=running')).length, 2, 'groups keep polling while cost is pending');
+  const groupReads = h.calls.filter(path => path.endsWith('/api/groups?side=running')).length;
   cost.resolve({ today: { cost: 1.5 } }); await wbTick(); await wbTick();
   assert.match(costText(), /\$1\.50/, 'a late cost response redraws without waiting for another groups poll');
-  assert.equal(h.calls.filter(path => path.endsWith('/api/groups/running')).length, groupReads);
+  assert.equal(h.calls.filter(path => path.endsWith('/api/groups?side=running')).length, groupReads);
   assert.equal(wbName(board.children[0]), 'A');
 });
 // Run for optional cost error handling; skip unrelated UI/server work. Injected lifecycle only.
@@ -2207,14 +2289,14 @@ test('workbench shell clears a previously shown cost when a later cost read fail
 test('workbench shell invalidates pending groups and cost when the viewed owner changes', { timeout: 5000 }, async context => {
   const oldGroups = wbDeferred(), oldCost = wbDeferred(), newCost = wbDeferred();
   const h = workbenchHarness(context, (path, fallback) => {
-    if (path === '/api/groups/running') return oldGroups.promise;
+    if (path === '/api/groups?side=running') return oldGroups.promise;
     if (path === '/api/usage/summary') return oldCost.promise;
     if (path.includes('/usage/summary')) return newCost.promise;
     return fallback(path);
   });
   context.after(async () => { h.stop(); oldGroups.resolve(workbenchSnapshot()); oldCost.resolve({}); newCost.resolve({}); await wbTick(); });
   await wbTick(); h.setOwner('Other'); h.mutate(); await wbTick(); await wbTick();
-  assert.ok(h.calls.includes('/fleet/Other/api/groups/running'), 'new owner starts groups without waiting for the old owner');
+  assert.ok(h.calls.includes('/fleet/Other/api/groups?side=running'), 'new owner starts groups without waiting for the old owner');
   assert.ok(h.calls.includes('/fleet/Other/api/usage/summary'), 'new owner starts cost without waiting for the old owner');
   const board = h.nodes.get('#wb-board'), instance = h.nodes.get('#wb-instance');
   assert.equal(wbName(board.children[0]), 'A');
@@ -2231,14 +2313,14 @@ test('workbench shell invalidates pending groups and cost when the viewed owner 
 test('workbench shell stops both pending board reads before disposal completions', { timeout: 5000 }, async context => {
   const groups = wbDeferred(), cost = wbDeferred(); let pending = false;
   const h = workbenchHarness(context, (path, fallback) => {
-    if (pending && path.endsWith('/api/groups/running')) return groups.promise;
+    if (pending && path.endsWith('/api/groups?side=running')) return groups.promise;
     if (pending && path.includes('/usage/summary')) return cost.promise;
     return fallback(path);
   });
   context.after(async () => { h.stop(); groups.resolve(workbenchSnapshot()); cost.resolve({}); await wbTick(); });
   await wbTick(); await wbTick(); pending = true;
   const refresh = h.poll(5000); await wbTick();
-  assert.equal(h.calls.filter(path => path.endsWith('/api/groups/running')).length, 2);
+  assert.equal(h.calls.filter(path => path.endsWith('/api/groups?side=running')).length, 2);
   assert.equal(h.calls.filter(path => path.includes('/usage/summary')).length, 2);
   const board = h.nodes.get('#wb-board'), instance = h.nodes.get('#wb-instance');
   const row = board.children[0], expense = instance.children.find(node => node.classList.contains('wb-cost'));
@@ -2269,8 +2351,8 @@ test('workbench shell polls only a visible overview', async context => {
 test('workbench shell refreshes search row state from the newest snapshot without changing membership', async context => {
   let kind = 'idle';
   const h = workbenchHarness(context, (path, fallback) => {
-    if (path.includes('/search?')) return { rows: [workbenchSnapshot('idle').rows[0], workbenchSnapshot('not_running', 'historical').rows[0]] };
-    if (path.endsWith('/api/groups/running')) return { ...fallback(path), rows: [workbenchSnapshot(kind).rows[0], workbenchSnapshot('idle', 'unmatched').rows[0]] };
+    if (path.includes('/api/groups?q=')) return { rows: [workbenchSnapshot(kind).rows[0], workbenchSnapshot('not_running', 'historical').rows[0]] };
+    if (path.endsWith('/api/groups?side=running')) return { ...fallback(path), rows: [workbenchSnapshot(kind).rows[0], workbenchSnapshot('idle', 'unmatched').rows[0]] };
     return fallback(path);
   });
   await wbTick(); await wbTick();
@@ -2284,20 +2366,20 @@ test('workbench shell refreshes search row state from the newest snapshot withou
 // Agent identity boundary after JSON decoding: run for request/identity changes; skip server-only changes. Uses the isolated fake lifecycle above.
 test('workbench shell discards an agent response whose JSON finishes after the viewed agent changes', async context => {
   const json = wbDeferred(); let jsonStarted = false;
-  const h = workbenchHarness(context, (path, fallback) => path === '/api/groups/running'
+  const h = workbenchHarness(context, (path, fallback) => path === '/api/groups?side=running'
     ? { ok: true, json: () => { jsonStarted = true; return json.promise; } } : fallback(path));
   await wbTick(); assert.equal(jsonStarted, true);
   h.setOwner('Other'); json.resolve(h.makeSnapshot('busy', 'previous-agent')); await wbTick(); await wbTick();
   assert.equal(h.nodes.get('#wb-board').textContent.includes('PREVIOUS-AGENT'), false);
   await h.poll(5000); await wbTick();
   assert.equal(wbName(h.nodes.get('#wb-board').children[0]), 'A');
-  assert.ok(h.calls.includes('/fleet/Other/api/groups/running'));
+  assert.ok(h.calls.includes('/fleet/Other/api/groups?side=running'));
 });
 // Initial read-failure boundary: run for shell/attention changes; skip server-only
 // changes. Uses real mounted product code and the isolated fake lifecycle above.
 test('workbench shell shows an initial snapshot read failure only in the board', async context => {
   const h = workbenchHarness(context, (path, fallback) => {
-    if (path.endsWith('/api/groups/running')) throw Error('offline');
+    if (path.endsWith('/api/groups?side=running')) throw Error('offline');
     return fallback(path);
   });
   await wbTick(); await wbTick();
@@ -2312,7 +2394,7 @@ test('workbench shell shows an initial snapshot read failure only in the board',
 test('workbench shell retains and redraws old rows after a snapshot read failure', async context => {
   let failed = false;
   const h = workbenchHarness(context, (path, fallback) => {
-    if (failed && path.endsWith('/api/groups/running')) throw Error('offline');
+    if (failed && path.endsWith('/api/groups?side=running')) throw Error('offline');
     return fallback(path);
   });
   await wbTick(); await wbTick(); const board = h.nodes.get('#wb-board');
@@ -2336,9 +2418,9 @@ test('workbench shell samples session mode on mount and every minute independent
   const h = workbenchHarness(context); await wbTick(); await wbTick();
   const modeReads = () => h.calls.filter(path => path === '/api/instance').length;
   assert.equal(modeReads(), 1);
-  const beforeGroups = h.calls.filter(path => path === '/api/groups/running').length;
+  const beforeGroups = h.calls.filter(path => path === '/api/groups?side=running').length;
   for (let index = 0; index < 3; index++) { await h.poll(5000); await wbTick(); }
-  assert.equal(modeReads(), 1); assert.equal(h.calls.filter(path => path === '/api/groups/running').length, beforeGroups + 3);
+  assert.equal(modeReads(), 1); assert.equal(h.calls.filter(path => path === '/api/groups?side=running').length, beforeGroups + 3);
   await h.poll(60000); await wbTick(); assert.equal(modeReads(), 2);
   h.document.visibilityState = 'hidden'; await h.poll(60000); assert.equal(modeReads(), 2);
   h.stop(); assert.equal(h.intervals.size, 0);
@@ -2370,7 +2452,7 @@ test('workbench shell removes the transition hint after a session mode read fail
 });
 // Same-agent navigation boundary: run for identity/navigation changes; skip server-only changes. Uses the isolated fake lifecycle above.
 test('workbench shell navigation preserves the current agent snapshot and search', async context => {
-  const h = workbenchHarness(context, (path, fallback) => path.includes('/search?') ? { rows: [workbenchSnapshot('idle').rows[0]] } : fallback(path));
+  const h = workbenchHarness(context, (path, fallback) => path.includes('/api/groups?q=') ? { rows: [workbenchSnapshot('idle').rows[0]] } : fallback(path));
   await wbTick(); await wbTick();
   const search = h.nodes.get('#wb-search'); search.value = 'a'; search.dispatch('input'); await h.debounce();
   const board = h.nodes.get('#wb-board'), before = board.textContent;
@@ -2603,7 +2685,7 @@ test('workbench shell words automatic naming for the only session in single mode
 test('the workbench drawer offers observation for every group', async context => {
   const live = (sessionGroup, extra = {}) => ({ sessionGroup, name: { displayName: sessionGroup }, state: { kind: 'busy' }, presence: 'running', live: { runId: 'run-' + sessionGroup, sessionId: 's' }, ...extra });
   const h = workbenchHarness(context, (path, fallback) => {
-    if (path.endsWith('/api/groups/running')) return { mode: 'multi', view: 'multi', rows: [live('origin', { origin: true }), live('telegram:a')], instance: { pool: { used: 2 } } };
+    if (path.endsWith('/api/groups?side=running')) return { mode: 'multi', view: 'multi', rows: [live('origin', { origin: true }), live('telegram:a')], instance: { pool: { used: 2 } } };
     if (path.includes('/runs')) return { runs: [], totalRuns: 0, totalEvents: 0, unattributed: 0 };
     if (path.includes('/backlog')) return { count: 0, firstAt: null, syncing: false };
     if (path.startsWith('/api/groups/origin/events')) return { events: [] };
@@ -2623,7 +2705,7 @@ test('the workbench drawer offers observation for every group', async context =>
 test('workbench group location focuses its row and ignores a refresh from an abandoned machine', async context => {
   let held;
   const h = workbenchHarness(context, (path, fallback) =>
-    path.endsWith('/api/groups/running') && held ? held.promise : fallback(path));
+    path.endsWith('/api/groups?side=running') && held ? held.promise : fallback(path));
   await wbTick(); await wbTick();
   const board = h.nodes.get('#wb-board');
   let focusReads = 0, scrolls = 0;
@@ -2651,7 +2733,7 @@ test('workbench group location focuses its row and ignores a refresh from an aba
 test('workbench programmatic opening waits for its machine list and cancels after a machine switch', async context => {
   const held = wbDeferred(), key = 'lark:private-address';
   const h = workbenchHarness(context, (path, fallback) =>
-    path.endsWith('/api/groups/running') ? held.promise : fallback(path));
+    path.endsWith('/api/groups?side=running') ? held.promise : fallback(path));
   await wbTick();
   const opening = h.openGroup(key);
   await wbTick();
@@ -2670,7 +2752,7 @@ test('workbench programmatic opening uses fresh names and ignores failed or aban
     const key = 'lark:private-address', replacementKey = 'telegram:new-selection';
     let listReads = 0;
     const h = workbenchHarness(testContext, (path, fallback) => {
-      if (path.endsWith('/api/groups/running')) return [background, held, replacementList][listReads++].promise;
+      if (path.endsWith('/api/groups?side=running')) return [background, held, replacementList][listReads++].promise;
       if (path.includes('/runs')) return { runs: [], totalRuns: 0, totalEvents: 0, unattributed: 0 };
       if (path.includes('/backlog')) return { count: 0, firstAt: null, syncing: false };
       if (path.includes('/api/groups/origin/events')) return { events: [] };
@@ -2799,7 +2881,7 @@ test('hidden documents keep conversation initialization enabled', () => {
 
 // Keyboard boundary: run for shell key handling changes; uses the injected harness above.
 test('workbench shell moves between board rows with j/k and leaves typing alone', async context => {
-  const h = workbenchHarness(context, (path, fallback) => path === '/api/groups/running'
+  const h = workbenchHarness(context, (path, fallback) => path === '/api/groups?side=running'
     ? { ...fallback(path), rows: [workbenchSnapshot('idle', 'a').rows[0], workbenchSnapshot('busy', 'b').rows[0]] } : fallback(path));
   await wbTick(); await wbTick();
   const key = h.listeners.get('keydown'), rows = h.nodes.get('#wb-board').children;
@@ -2855,17 +2937,17 @@ test('group count pushes refresh rows without reading instance or counts again',
   h.calls.length = 0;
   await h.refresh({ mode: 'multi', running: { total: 1, states: { idle: 1 } }, offline: { total: 42 }, pool: { used: 1, capacity: 4 } });
   await wbTick();
-  assert.deepEqual(h.calls, ['/api/groups/running']);
+  assert.deepEqual(h.calls, ['/api/groups?side=running']);
   assert.equal(wbName(h.nodes.get('#wb-board').children[0]), 'A');
   h.applyInstance({ default_runtime: 'codex' });
-  assert.deepEqual(h.calls, ['/api/groups/running'], 'instance pushes redraw without additional reads');
+  assert.deepEqual(h.calls, ['/api/groups?side=running'], 'instance pushes redraw without additional reads');
 });
 
 test('locating an offline group finds its row beyond the first offline page', async context => {
   const selected = { sessionGroup: 'telegram:later', name: { displayName: 'Later conversation' }, state: { kind: 'offline' } };
   const h = workbenchHarness(context, (path, fallback) => {
-    if (path === '/api/groups/telegram%3Alater?include=') return selected;
-    if (path === '/api/groups/offline') return { rows: [{ id: 'telegram:first', displayName: 'First conversation', channel: 'telegram', flags: {}, lastActivityAt: null }], nextCursor: 'second' };
+    if (path === '/api/groups/telegram%3Alater') return selected;
+    if (path === '/api/groups?side=offline') return { rows: [{ id: 'telegram:first', displayName: 'First conversation', channel: 'telegram', flags: {}, lastActivityAt: null }], nextCursor: 'second' };
     return fallback(path);
   });
   await wbTick(); await wbTick();
@@ -2882,14 +2964,14 @@ test('locating an offline group finds its row beyond the first offline page', as
   sides.children[1].dispatch('click'); await wbTick(); await wbTick();
   assert.equal(board.children[0].dataset.group, 'telegram:first', 'clicking the current offline side clears the located one-row view');
   assert.equal(wbName(board.children[0]), 'First conversation');
-  assert.ok(h.calls.includes('/api/groups/telegram%3Alater?include='), 'locating a group does not request raw/config extras');
+  assert.ok(h.calls.includes('/api/groups/telegram%3Alater'), 'locating a group does not request raw/config extras');
 });
 
 test('a late offline locate cannot switch the side after a newer group selection', async context => {
   const late = wbDeferred();
   const h = workbenchHarness(context, (path, fallback) => {
-    if (path === '/api/groups/telegram%3Aold?include=') return late.promise;
-    if (path === '/api/groups/a?include=') return workbenchSnapshot().rows[0];
+    if (path === '/api/groups/telegram%3Aold') return late.promise;
+    if (path === '/api/groups/a') return workbenchSnapshot().rows[0];
     return fallback(path);
   });
   await wbTick(); await wbTick();
@@ -2899,6 +2981,6 @@ test('a late offline locate cannot switch the side after a newer group selection
   await h.locateGroup('a');
   late.resolve({ sessionGroup: 'telegram:old', state: { kind: 'offline' } });
   await first; await wbTick();
-  assert.equal(h.calls.some(path => path === '/api/groups/offline'), false);
+  assert.equal(h.calls.some(path => path === '/api/groups?side=offline'), false);
   assert.equal(h.nodes.get('#wb-board').children[0].dataset.group, 'a');
 });

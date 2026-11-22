@@ -1,11 +1,11 @@
-import { readGroupSnapshot } from './group-data.js';
+import { groupSnapshot } from './group-data.js';
 import { createGroupDetail } from './detail.js';
 import { boardController } from './board.js';
 import { element, icon } from './plain-text.js';
 
 /**
  * The overview's group detail, opened as a side panel on another page. It is the same component; the panel reads
- * the group list itself (the overview's snapshot endpoint, refreshed like the board), so it works when the
+ * the selected group and instance summaries, so it works when the
  * overview has never been opened. Esc closes it; the caller decides where the focus goes back to, and hides it
  * through `onClose({ hide })` so that it can keep the page's reading position across the layout change.
  */
@@ -36,16 +36,13 @@ export function createGroupSide({ document, t = key => key, fetch = globalThis.f
     fetch: (path, options) => fetch(endpoint(path), options), identity, writable, detail, isVisible: visible,
     onConfigSaved, onMemory, onObserve, observable, onConversation, showLastReceived: false, onClose: closed });
   const controller = boardController({ visible,
-    fetchSnapshot: async () => ({ snapshot: await readGroupSnapshot(read) }),
+    fetchSnapshot: async () => {
+      const [instance, counts] = await Promise.all([read('/api/instance'), read('/api/groups/counts')]);
+      return groupSnapshot(instance, counts, { rows: [] });
+    },
     onSnapshot: value => {
-      snapshot = value.snapshot;
-      if (!groupDetail.state.row) return;
-      // The detail opens before the first read (or after one that failed) without the list; once the list arrives,
-      // show the listed row, or the group as not running when the list is known and it is not on it.
-      const listed = snapshot.rows?.some(row => row.sessionGroup === key);
-      const firstKnown = snapshot.listKnown && !groupDetail.state.snapshot?.listKnown;
-      if (groupDetail.state.historical && (listed || firstKnown)) void openDetail();
-      else void groupDetail.updateSnapshot(snapshot);
+      snapshot = value;
+      if (groupDetail.state.row) void groupDetail.updateSnapshot(snapshot);
     },
     onError: () => {},
   });
@@ -91,7 +88,7 @@ export function createGroupSide({ document, t = key => key, fetch = globalThis.f
     element: aside,
     get open() { return !aside.hidden; },
     get group() { return key; },
-    /** Shows the panel synchronously (so a caller can measure the layout around it), then reads the group list. */
+    /** Shows the panel synchronously (so a caller can measure the layout around it), then reads the selected group and instance summaries. */
     async show(sessionGroup, { tab = 'overview' } = {}) {
       if (stopped) return;
       if (!aside.hidden && key === sessionGroup) {
@@ -106,7 +103,7 @@ export function createGroupSide({ document, t = key => key, fetch = globalThis.f
       aside.hidden = false;
       label();
       aside.focus?.();
-      // The group shows at once, as after a failed first read, and becomes the listed row when the list arrives.
+      // The group shows at once, as after a failed first read, and receives the instance summary when it arrives.
       const opened = openDetail();
       await controller.refresh();
       if (gen !== generation || stopped) return;

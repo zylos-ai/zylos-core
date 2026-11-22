@@ -1,5 +1,6 @@
 import { validKey } from './display-names.js';
 import { sendJson } from '../http.js';
+import { listErrorBody } from '../list-query.js';
 
 // Group observation reads own validation, including membership of historical names.
 export function workbenchGroupDetailKey(encoded) {
@@ -21,6 +22,6 @@ export function workbenchFailure(res, error) {
     return;
   }
   const status = error.statusCode ?? 500;
-  sendJson(res, status, { ok: false, error: { code: status === 500 ? 'internal_error' : error.code,
-    message: status === 500 ? 'Request failed' : error.message } });
+  sendJson(res, status, listErrorBody(status === 500
+    ? { code: 'internal_error', message: 'Request failed' } : error));
 }

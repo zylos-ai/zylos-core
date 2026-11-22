@@ -50,7 +50,7 @@ function render(t, options = {}) {
 
 test('attachment routes encode both identities and require available same-conversation metadata', () => {
   const context = { conversationId: 'g:A/ B', endpoint: path => '/dash/fleet/A%20B' + path };
-  assert.equal(chatAttachmentURL(record({ id: 'opaque/ value' }), context), '/dash/fleet/A%20B/api/chat/conversations/g%3AA%2F%20B/attachments/opaque%2F%20value');
+  assert.equal(chatAttachmentURL(record({ id: 'opaque/ value' }), context), '/dash/fleet/A%20B/api/conversations/g%3AA%2F%20B/attachments/opaque%2F%20value');
   for (const attachment of [record({ available: false }), record({ available: undefined }), record({ id: '' }), record({ external: true })]) assert.equal(chatAttachmentURL(attachment, context), null);
   assert.equal(chatAttachmentURL(record(), { ...context, external: true }), null);
   assert.equal(chatAttachmentURL(record(), {}), null);
@@ -70,7 +70,7 @@ test('image reserves dimensions and retries only after a click while reporting l
   const f = render(t), img = f.node.querySelector('img'), frame = f.node.querySelector('.chat-attachment-image-frame');
   assert.equal(frame.style.aspectRatio, '4 / 3'); assert.equal(img.width, 640); assert.equal(img.height, 480);
   assert.equal(img.src, undefined); f.mount(); f.mount();
-  assert.equal(f.sources.length, 1); assert.match(img.src, /^\/dash\/fleet\/remote\/api\/chat/);
+  assert.equal(f.sources.length, 1); assert.match(img.src, /^\/dash\/fleet\/remote\/api\/conversations/);
   img.dispatch('error');
   assert.equal(img.hidden, true); assert.equal(frame.dataset.state, 'failed');
   const retry = f.node.querySelector('[data-action="retryAttachment"]'); assert.equal(retry.hidden, false);

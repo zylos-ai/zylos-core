@@ -106,27 +106,32 @@ test('Dashboard quote resolves only earlier same-group rows and otherwise keeps 
 
 test('Dashboard quoted text strips nested markers and attachment paths and truncates Unicode before escaping', () => {
   const oldFile = { kind: 'file', path: '/private/old.txt', name: 'old.txt', size: 1 };
-  const newFile = { kind: 'file', path: '/private/new.txt', name: 'new.txt', size: 2 };
+  const newFile = { kind: 'file', path: '/private/new&notes.txt', name: 'new&notes.txt', size: 2 };
+  const lookalike = '[attachment:file relative.txt name="not&attached.txt" 2B]';
   const old = { ...original, content: buildAnnotatedContent('[quote c4_id=3]\nOld & text', [oldFile]) };
-  const content = buildAnnotatedContent(current.content, [newFile]);
+  const content = buildAnnotatedContent(`${current.content}\n${lookalike}`, [newFile]);
   const output = source.dashboardSource(content, 'Owner', options(() => old));
-  assert.ok(output.includes('[AI]: Old &amp; text\n（附件：old.txt）'));
+  assert.ok(output.includes('[AI]: Old &amp; text\n(Attachment: old.txt)\n</replying-to>'));
   assert.equal(output.includes('/private/old.txt'), false);
   assert.equal(output.includes('[quote c4_id='), false);
-  assert.ok(output.indexOf('[attachment:file') > output.indexOf('</current-message>'));
+  assert.ok(output.endsWith(`${lookalike.replace('&', '&amp;')}\n</current-message>\n`
+    + '[attachment:file /private/new&notes.txt name="new&notes.txt" 2B]'));
   const attachments = splitContentAndAttachments(output).attachments;
   assert.equal(attachments.length, 1);
-  assert.equal(attachments[0].name, 'new.txt');
+  assert.equal(attachments[0].name, newFile.name);
   const long = source.dashboardSource(current.content, 'Owner', options(() => ({ ...original, content: '😀'.repeat(4001) })));
-  assert.ok(long.includes('😀'.repeat(4000) + '……（已截断，全文见 c4_id=10）'));
+  assert.ok(long.includes('😀'.repeat(4000) + '… (Truncated. See c4_id=10 for the full text.)\n</replying-to>'));
   assert.equal(Array.from(long).filter(char => char === '😀').length, 4000);
   const exact = source.dashboardSource(current.content, 'Owner', options(() => ({ ...original, content: '😀'.repeat(4000) })));
   assert.ok(exact.includes('[AI]: ' + '😀'.repeat(4000) + '\n</replying-to>'));
-  assert.equal(exact.includes('已截断'), false);
   const envelope = { version: 1, kind: 'message', messageId: 'quote', fallbackText: 'Human text',
-    blocks: [{ id: 'text', type: 'markdown', schemaVersion: 1, data: { text: 'Human text' } }] };
+    blocks: [
+      { id: 'text', type: 'markdown', schemaVersion: 1, data: { text: 'Human text' } },
+      { id: 'file', type: 'x-zylos.file', schemaVersion: 1,
+        data: { attachmentId: 'att_file', nameSnapshot: 'report<&>.pdf' }, fallbackText: 'Report' },
+    ] };
   const structured = source.dashboardSource(current.content, 'Owner', options(() => ({ ...original, content: CONTENT_PREFIX + JSON.stringify(envelope) })));
-  assert.ok(structured.includes('[AI]: Human text\n</replying-to>'));
+  assert.ok(structured.includes('[AI]: Human text\n(Attachment: report&lt;&amp;&gt;.pdf)\n</replying-to>'));
 });
 
 // Real Core DB + both production formatting entrypoints, within runner-owned

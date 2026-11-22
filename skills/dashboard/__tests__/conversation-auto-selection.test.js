@@ -62,7 +62,7 @@ function fixture(t, { width = 1440, mode = 'multi' } = {}) {
   const response = body => ({ ok: true, status: 200, json: async () => body });
   page = mountConversationPage({ root, document, storage: null, identity: () => identity,
     local: () => true, confirm: async () => true, fetch: async (url, options) => {
-      if (url.startsWith('/api/chat/conversations?')) {
+      if (url.startsWith('/api/conversations?')) {
         assert.ok(lists.length < 8, 'list request log is bounded');
         const held = deferred(); lists.push(held); return held.promise.then(response);
       }
@@ -103,10 +103,17 @@ for (const order of ['initial-first', 'quiet-first']) {
   });
 }
 
-test('desktop waits through an empty initial list for the first populated list', { timeout: 2000 }, async t => {
+test('desktop shows newly discovered conversations after opening the refresh notice', { timeout: 2000 }, async t => {
   const f = fixture(t), opening = f.page.open(); await flush(); await f.resolveList(0, []); await opening;
   assert.deepEqual(f.selected(), []); await f.attach(); await f.dirty();
-  await f.resolveList(1); assert.deepEqual(f.selected(), ['g:AA']); assert.ok(f.detailReads.length >= 1); assert.ok(f.detailReads.every(id => id === 'g:AA'));
+  await f.resolveList(1);
+  assert.deepEqual(f.selected(), []);
+  const notice = allNodes(f.root).find(node => node.dataset.action === 'page.newConversations');
+  assert.equal(notice.hidden, false);
+  notice.dispatch('click'); await flush();
+  await f.resolveList(2);
+  assert.deepEqual(f.selected(), ['g:AA']);
+  assert.ok(f.detailReads.length >= 1 && f.detailReads.every(id => id === 'g:AA'));
 });
 
 test('a manually selected conversation survives later list refreshes', { timeout: 2000 }, async t => {

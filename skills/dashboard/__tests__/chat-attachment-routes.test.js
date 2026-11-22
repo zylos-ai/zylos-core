@@ -80,7 +80,7 @@ async function fixture(t) {
     await new Promise(resolve => server.close(resolve));
     await attachments.close(); store.close(); db.close(); fs.rmSync(root, { recursive: true, force: true });
   });
-  const route = `/api/chat/conversations/${encodeURIComponent(draft.id)}`;
+  const route = `/api/conversations/${encodeURIComponent(draft.id)}`;
   const request = (suffix, { identity = 'cookie', headers = {}, ...options } = {}) => fetch(base + route + suffix,
     { ...options, signal: AbortSignal.timeout(10000), headers: { origin: base, 'x-fixture-identity': identity, ...headers } });
   const form = (bytes = Buffer.from('hello'), name = 'report.txt', type = 'text/plain') => {
@@ -216,7 +216,7 @@ test('upload and config gate authentication, remote access, mode and registered 
 test('Origin uploads work in both modes and remotely only with the switch on and an admin key', async t => {
   const f = await fixture(t);
   ensureOriginConversation(f.store.db);
-  const origin = `/api/chat/conversations/${encodeURIComponent(ORIGIN_CONVERSATION_ID)}/uploads`;
+  const origin = `/api/conversations/${encodeURIComponent(ORIGIN_CONVERSATION_ID)}/uploads`;
   const upload = (identity, headers) => fetch(f.base + origin, { method: 'POST', body: f.form(), signal: AbortSignal.timeout(10000),
     headers: { origin: f.base, 'x-fixture-identity': identity, ...headers } });
   for (const mode of ['single', 'multi']) {

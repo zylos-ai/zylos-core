@@ -35,9 +35,9 @@ function externalPage(t) {
   const lists = [];
   const translate = (key, params = {}) => Object.entries(params).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, value ?? ''), translations[key] ?? key);
   const page = mountConversationPage({ root, document, groupLinks: {}, t: translate, fetch: async path => {
-    if (path.startsWith('/api/chat/conversations?')) lists.push(path);
+    if (path.startsWith('/api/conversations?')) lists.push(path);
     const body = path === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
-      : path.startsWith('/api/chat/conversations?') ? { items: path.includes('tab=external') ? [row(NAMED, 2), row(PLAIN, 1)] : [], nextCursor: null }
+      : path.startsWith('/api/conversations?') ? { items: path.includes('tab=external') ? [row(NAMED, 2), row(PLAIN, 1)] : [], nextCursor: null }
       : path.includes('/messages?') ? { items: [], afterCursor: 'after', nextCursor: null }
       : { items: [], nextCursor: null };
     return { ok: true, status: 200, json: async () => body };

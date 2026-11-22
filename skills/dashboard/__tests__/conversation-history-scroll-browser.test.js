@@ -23,7 +23,7 @@ test('conversation history loads older messages while preserving the reading pos
         '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Private browser' } },
         '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
         '/api/groups/counts': { mode: f.readMode(), running: { total: 0, states: {}, flags: {} }, offline: { total: 0 }, pool: {} },
-        '/api/groups/running': { rows: [], listKnown: true }, '/api/instance/runtime-options': { actions: [] },
+        '/api/groups': { items: [], listKnown: true }, '/api/instance/runtime-options': { actions: [] },
       };
       sendJson(res, 200, values[url.pathname] || {}); return true;
     } });
@@ -39,6 +39,10 @@ test('conversation history loads older messages while preserving the reading pos
       }
       for (let n = 2; n <= count; n++) lastId = fixture.c4.insertConversation('in', tab === 'mine' ? 'dashboard' : 'telegram', localId,
         `${kind} message ${n} — A visible message used to check stable reading position.`, { groupName: localId }).id;
+      if (tab === 'mine') {
+        const read = await fixture.request(`/api/conversations/${encodeURIComponent(id)}/read`, { method: 'PUT', body: { upTo: lastId } });
+        assert.equal(read.status, 200, read.text);
+      }
       groups[`${tab}:${kind}`] = { id, count, lastId };
     }
     fixture.db.prepare('UPDATE conversations SET timestamp=?').run('2000-01-01 08:00:00');
@@ -63,10 +67,10 @@ test('conversation history loads older messages while preserving the reading pos
       const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'zh-CN', timezoneId: 'UTC' });
       sandbox.addCleanup(() => { release?.(); return close(context); });
       await context.route('**/*', route => route.request().url().startsWith(fixture.base + '/') ? route.continue() : route.abort());
-      await context.route('**/api/chat/conversations/**', async route => {
+      await context.route('**/api/conversations/**', async route => {
         const url = new URL(route.request().url());
-        const selected = decodeURIComponent(url.pathname.split('/')[4]) === target.id;
-        const history = selected && url.pathname.endsWith('/messages');
+        const selected = decodeURIComponent(url.pathname.split('/')[3]) === target.id;
+        const history = selected && url.pathname.endsWith('/messages') && url.searchParams.get('limit') !== '1';
         const older = history && url.searchParams.get('direction') === 'before' && url.searchParams.has('cursor');
         if (selected && url.pathname.endsWith('/status')) metrics.statuses++;
         if (history) { assert.ok(requests.length < 40, 'bounded history request capture'); requests.push({ direction: url.searchParams.get('direction'), cursor: url.searchParams.has('cursor'), limit: url.searchParams.get('limit') }); }

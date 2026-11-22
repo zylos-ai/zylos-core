@@ -42,8 +42,8 @@ export async function runRuntimeAttachments({ api, sandbox, root, scenario, conf
       check(response.ok, `Native attachment HTTP ${method} ${route}: ${response.status}`);
       return result;
     };
-    const draft = (await json('/api/chat/drafts', 'POST', { displayName: `${runtime} attachment chain` })).conversation;
-    let route = `/api/chat/conversations/${encodeURIComponent(draft.id)}`;
+    const draft = (await json('/api/conversations/drafts', 'POST', { displayName: `${runtime} attachment chain` })).conversation;
+    let route = `/api/conversations/${encodeURIComponent(draft.id)}`;
     const contents = [png, Buffer.from(`private native ${runtime} attachment ${crypto.randomUUID()}\n`)];
     const uploads = [];
     for (const [index, bytes] of contents.entries()) {
@@ -72,7 +72,7 @@ export async function runRuntimeAttachments({ api, sandbox, root, scenario, conf
       check(annotationCount === (phase === 'original' ? uploads.length : 0), 'Only the original native trigger carries attachment annotations');
       triggers.push({ phase, id: trigger.id, attachmentAnnotations: annotationCount });
       if (phase === 'original') originalTrigger = trigger;
-      route = `/api/chat/conversations/${encodeURIComponent(sent.conversationId)}`;
+      route = `/api/conversations/${encodeURIComponent(sent.conversationId)}`;
       current = api.conversations.get(draft.localId);
       coreDb.setSessionRuntimeConfig({ sessionGroup: current.sessionGroup, runtime });
       const expected = `FIXTURE_ATTACHMENT_ACK:${phase}:${digest(contents[0])}:${digest(contents[1])}`;

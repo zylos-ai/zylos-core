@@ -41,14 +41,14 @@ const post = body => ({ method: 'POST', body });
 
 const attachmentCase = (name, operation) => registerIntegrationCase(`attachment integration: ${name}`, operation);
 const attachmentDigest = bytes => createHash('sha256').update(bytes).digest('hex');
-const attachmentRoute = id => `/api/chat/conversations/${encodeURIComponent(id)}`;
+const attachmentRoute = id => `/api/conversations/${encodeURIComponent(id)}`;
 async function uploadAttachment(api, route, bytes = Buffer.from('private attachment bytes'), { name = 'report.txt', mime = 'text/plain', ...options } = {}) {
   const body = new FormData(); body.append('file', new Blob([bytes], { type: mime }), name);
   const response = await api.rawRequest(route + '/uploads', { method: 'POST', body, ...options });
   return { status: response.status, body: await response.json() };
 }
 async function attachmentDraft(api) {
-  const result = await api.request('/api/chat/drafts', post({}));
+  const result = await api.request('/api/conversations/drafts', post({}));
   assert.equal(result.status, 201);
   return { draft: result.body.conversation, route: attachmentRoute(result.body.conversation.id) };
 }
@@ -104,7 +104,7 @@ registerIntegrationCase('HTTP conversation, channel question and conditional ans
       () => a.request(first.route + '/answers', { ...post(body), identity: 'read' }),
       () => a.request(first.route + '/answers', post({ ...body, sessionGroup: second.receipt.conversationId })),
       () => b.request(first.route + '/answers', post(body)),
-      () => a.request(`/api/chat/conversations/g:74673A65787465726E616C/send`, post({ content: 'forged' })),
+      () => a.request(`/api/conversations/g:74673A65787465726E616C/send`, post({ content: 'forged' })),
     ]) assert.ok((await request()).status >= 400);
     assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answers').get().n, 0);
     const answered = await a.request(first.route + '/answers', post(body));
@@ -395,29 +395,27 @@ registerIntegrationCase('group resources precede details and preserve include an
   // Seed an existing import without changing the current C4 write grammar.
   api.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run(historical, imported.id);
   api.db.prepare('UPDATE group_heads SET session_group=? WHERE session_group=?').run(historical, imported.session_group);
-  for (const path of ['/api/groups/runtime-overrides', '/api/groups/runtime-overrides?q=private']) {
-    const result = await api.request(path);
-    assert.equal(result.status, 200, path);
-    assert.equal(result.body.runtime.length, 0);
-  }
+  const result = await api.request('/api/groups?q=private');
+  assert.equal(result.status, 200);
+  assert.equal(result.body.items.length, 0);
   // The naming resource only accepts the POST that sends its prompt; a read is never parsed as a group detail.
   const naming = await api.request('/api/groups/naming-prompt');
   assert.equal(naming.status, 404);
   assert.deepEqual(naming.body, { ok: false, error: { code: 'not_found', message: 'not_found' } });
   const group = '/api/groups/' + encodeURIComponent('dashboard:' + active.draft.localId);
-  const compact = await api.request(group + '?include=');
+  const compact = await api.request(group);
   assert.equal(compact.status, 200);
   assert.equal(Object.hasOwn(compact.body, 'raw'), false);
   assert.equal(Object.hasOwn(compact.body, 'config'), false);
   const invalid = await api.request(group + '?include=unknown');
-  assert.equal(invalid.status, 400); assert.equal(invalid.body.error.code, 'INVALID_INCLUDE');
-  const missing = await api.request('/api/groups/dashboard%3Amissing?include=');
-  assert.equal(missing.status, 404); assert.equal(missing.body.error.code, 'GROUP_NOT_FOUND');
-  const historicalDetail = await api.request('/api/groups/' + encodeURIComponent(historical) + '?include=');
+  assert.equal(invalid.status, 400); assert.equal(invalid.body.error.code, 'invalid_parameter');
+  const missing = await api.request('/api/groups/dashboard%3Amissing');
+  assert.equal(missing.status, 404); assert.equal(missing.body.error.code, 'not_found');
+  const historicalDetail = await api.request('/api/groups/' + encodeURIComponent(historical));
   assert.equal(historicalDetail.status, 200); assert.equal(historicalDetail.body.id, historical);
-  const unknownHistorical = await api.request('/api/groups/' + encodeURIComponent('telegram:未导入群') + '?include=');
+  const unknownHistorical = await api.request('/api/groups/' + encodeURIComponent('telegram:未导入群'));
   assert.equal(unknownHistorical.status, 400); assert.equal(unknownHistorical.body.error.code, 'SESSION_GROUP_INVALID');
-  const malformed = await api.request('/api/groups/%ZZ?include=');
+  const malformed = await api.request('/api/groups/%ZZ');
   assert.equal(malformed.status, 400); assert.equal(malformed.body.error.code, 'SESSION_GROUP_INVALID');
 });
 
@@ -432,35 +430,35 @@ registerIntegrationCase('remote chat off, on and off enforces both direct and pr
     const fakeCredential = 'sk-' + 'fixturesecret'.repeat(3);
     await remote.request(active.route + '/send', post({ content: `safe ${fakeCredential} ${'public '.repeat(30)}` }));
     const q = remote.question(); await remote.addOutbound(active.draft.localId, questionContent(q));
-    const reads = ['/api/chat/conversations?tab=mine', active.route, active.route + '/messages?tab=mine', active.route + '/status?tab=mine&ids=1', active.route + '/questions'];
-    const writes = [ ['/api/chat/drafts', {}], [active.route + '/send', { content: 'remote new text' }], [active.route + '/answers', remote.answer(q, 'remote-answer')] ];
+    const reads = ['/api/conversations?tab=mine', active.route, active.route + '/messages?tab=mine', active.route + '/status?tab=mine&ids=1', active.route + '/questions'];
+    const writes = [ ['/api/conversations/drafts', {}], [active.route + '/send', { content: 'remote new text' }], [active.route + '/answers', remote.answer(q, 'remote-answer')] ];
     for (const allowRemote of [false, true, false]) {
       const set = await remote.request('/api/settings/chat', { method: 'PUT', body: { chat_allow_remote: allowRemote } });
       assert.equal(set.status, 200); assert.equal(remote.config.chat.allowRemote, allowRemote);
       if (allowRemote) for (const fleet of [false, true]) {
         const client = fleet ? local : remote;
         const options = { identity: 'admin', ...(fleet ? { fleet: true } : {}) };
-        const draft = await client.request('/api/chat/drafts', { ...options, ...post({ displayName: 'remote authorized' }) });
+        const draft = await client.request('/api/conversations/drafts', { ...options, ...post({ displayName: 'remote authorized' }) });
         assert.equal(draft.status, 201);
-        const first = await client.request(`/api/chat/conversations/${encodeURIComponent(draft.body.conversation.id)}/send`, {
+        const first = await client.request(`/api/conversations/${encodeURIComponent(draft.body.conversation.id)}/send`, {
           ...options, ...post({ content: `authorized remote ${fleet ? 'proxy' : 'direct'}` }) });
         assert.equal(first.status, 200); assert.equal(first.body.stored, true);
         const question = remote.question();
         await remote.addOutbound(draft.body.conversation.localId, questionContent(question));
-        const answered = await client.request(`/api/chat/conversations/${encodeURIComponent(first.body.conversationId)}/answers`, {
+        const answered = await client.request(`/api/conversations/${encodeURIComponent(first.body.conversationId)}/answers`, {
           ...options, ...post(remote.answer(question, `authorized-${fleet ? 'proxy' : 'direct'}`)) });
         assert.equal(answered.status, 200); assert.equal(answered.body.delivery.stored, true);
       }
       for (const identity of ['read', 'admin']) for (const fleet of [false, true]) {
         const client = fleet ? local : remote;
         const options = { identity, ...(fleet ? { fleet: true } : {}) };
-        const overview = await client.request('/api/groups/offline', options);
+        const overview = await client.request('/api/groups?side=offline', options);
         assert.equal(overview.status, 200);
-        const running = await client.request('/api/groups/running', options);
+        const running = await client.request('/api/groups?side=running', options);
         assert.equal(running.status, 200);
-        const row = [...overview.body.rows, ...running.body.rows].find(item => item.id === 'dashboard:' + active.draft.localId);
+        const row = [...overview.body.items, ...running.body.items].find(item => item.id === 'dashboard:' + active.draft.localId);
         assert.ok(row); assert.equal(row.flags.queued.count, 2);
-        const detail = await client.request('/api/groups/' + encodeURIComponent(row.id) + '?include=', options);
+        const detail = await client.request('/api/groups/' + encodeURIComponent(row.id), options);
         assert.equal(detail.status, 200); assert.ok(detail.body.state);
         assert.equal(detail.body.queue.pending.count, 2);
         assert.ok(detail.body.preview.text.length <= 80); assert.ok(detail.body.preview.text.includes('[REDACTED]'));
@@ -469,8 +467,8 @@ registerIntegrationCase('remote chat off, on and off enforces both direct and pr
         assert.ok(!running.text.includes(fakeCredential));
         const summary = await client.request('/api/groups/counts', options);
         assert.equal(summary.status, 200); assert.ok(summary.body.running);
-        const search = await client.request('/api/groups/search?q=' + active.draft.localId, options);
-        assert.equal(search.status, 200); assert.equal(search.body.rows.length, 1);
+        const search = await client.request('/api/groups?q=' + active.draft.localId, options);
+        assert.equal(search.status, 200); assert.equal(search.body.items.length, 1);
         assert.ok(!search.text.includes(fakeCredential));
         const activity = await client.request('/api/groups/activity?range=60m&ids=' + encodeURIComponent(row.id), options);
         assert.equal(activity.status, 200); assert.ok(activity.body.groups[row.id]);
@@ -519,17 +517,17 @@ registerIntegrationCase('native single switch retains both history tabs and reje
   const transition = await a.switchToSingle();
   assert.equal(transition.target_mode, 'single');
   for (const tab of ['mine', 'external']) {
-    const page = await a.request(`/api/chat/conversations?tab=${tab}`);
+    const page = await a.request(`/api/conversations?tab=${tab}`);
     assert.equal(page.status, 200);
     // "My conversations" always starts with the pinned Origin conversation.
     const ids = page.body.items.map(item => item.id);
     if (tab === 'mine') assert.deepEqual(ids, [ORIGIN_CONVERSATION_ID, active.receipt.conversationId]);
     else assert.equal(ids.length, 1);
-    const messages = await a.request(`/api/chat/conversations/${encodeURIComponent(ids.at(-1))}/messages?tab=${tab}`);
+    const messages = await a.request(`/api/conversations/${encodeURIComponent(ids.at(-1))}/messages?tab=${tab}`);
     assert.equal(messages.status, 200); assert.ok(messages.body.items.length >= 1);
   }
   const before = a.counts.receive;
-  for (const [route, body] of [ ['/api/chat/drafts', {}], [active.route + '/send', { content: 'single prohibited' }], [active.route + '/answers', a.answer(q)] ]) {
+  for (const [route, body] of [ ['/api/conversations/drafts', {}], [active.route + '/send', { content: 'single prohibited' }], [active.route + '/answers', a.answer(q)] ]) {
     assert.equal((await a.request(route, post(body))).status, 403);
   }
   assert.equal(a.counts.receive, before);
@@ -538,14 +536,19 @@ registerIntegrationCase('native single switch retains both history tabs and reje
 });
 
 // Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
-registerIntegrationCase('after the native switch to single the Origin page shows internal rows under origin but its list preview does not', async (t, sandbox) => {
+registerIntegrationCase('after the native switch to single Origin advances read on send and shows relays only in history', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox);
   const x = await a.createConversation('started in multi');
   const xGroup = `${x.receipt.namespace}:${x.draft.localId}`;
   await a.switchToSingle();
   assert.equal(a.readMode(), 'single');
-  const originRoute = `/api/chat/conversations/${encodeURIComponent(ORIGIN_CONVERSATION_ID)}`;
-  assert.equal((await a.request(`${originRoute}/send`, post({ content: 'owner asks Origin' }))).status, 200);
+  const originRoute = `/api/conversations/${encodeURIComponent(ORIGIN_CONVERSATION_ID)}`;
+  const send = await a.request(`${originRoute}/send`, post({ content: 'owner asks Origin' }));
+  assert.equal(send.status, 200, send.text);
+  assert.equal(send.body.stored, true);
+  assert.equal(send.body.conversationId, ORIGIN_CONVERSATION_ID);
+  assert.equal(a.db.prepare('SELECT session_group FROM conversations WHERE id=?').get(send.body.messageId).session_group, 'origin');
+  assert.equal(a.history.readPosition(ORIGIN_CONVERSATION_ID), send.body.messageId);
   const reply = a.addOutbound('origin', 'Origin answers the owner');
   // Core's own internal-message insert, as `c4-send internal origin` stores it.
   const relay = a.c4.insertInternalMessage(xGroup, 'origin', 'relay from X to Origin');
@@ -556,12 +559,12 @@ registerIntegrationCase('after the native switch to single the Origin page shows
   assert.deepEqual(internal.map(row => [row.id, row.direction, row.internal?.peerSessionGroup, row.internal?.content]),
     [[relay.inRow.id, 'in', xGroup, 'relay from X to Origin']]);
   assert.equal(page.body.items.at(-1).id, relay.inRow.id, 'the internal row is the newest row on the Origin page');
-  const list = await a.request('/api/chat/conversations?tab=mine');
+  const list = await a.request('/api/conversations?tab=mine');
   assert.equal(list.status, 200);
   const [origin] = list.body.items;
   assert.equal(origin.id, ORIGIN_CONVERSATION_ID);
-  assert.equal(origin.preview, 'Origin answers the owner', 'the list preview skips the internal row');
-  assert.equal(origin.count, 2, 'the summary counts no internal rows');
+  assert.equal(origin.preview, 'Origin answers the owner', 'the list preview skips the later relay');
+  assert.equal(Object.hasOwn(origin, 'count'), false);
   assert.ok(reply.id < relay.inRow.id);
 });
 

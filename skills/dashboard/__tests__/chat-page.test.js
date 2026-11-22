@@ -24,7 +24,7 @@ function fixture(testContext, { mode = 'multi', tab = 'mine', denied = false, ro
   const fetch = async (path, options) => {
     calls.push({ path, options });
     if (failedMessageId && path.includes(encodeURIComponent(failedMessageId) + '/messages?')) return { ok: false, status: 503, json: async () => ({ ok: false, error: { code: 'chat_history_unavailable', message: 'chat_history_unavailable' } }) };
-    if (listFailed && path.startsWith('/api/chat/conversations?')) return { ok: false, status: 502, json: async () => ({ ok: false, error: { code: 'chat_history_unavailable', message: 'chat_history_unavailable' } }) };
+    if (listFailed && path.startsWith('/api/conversations?')) return { ok: false, status: 502, json: async () => ({ ok: false, error: { code: 'chat_history_unavailable', message: 'chat_history_unavailable' } }) };
     if (pendingMessage && path.includes('/messages')) { const pending = pendingMessage; pendingMessage = null; return pending.promise; }
     if (path.endsWith('/send') && malformedStatus) return { ok: malformedStatus < 400, status: malformedStatus, json: async () => { throw new SyntaxError('invalid JSON'); } };
     let body = path.includes('/api/instance') ? { session_mode: { sessionMode: mode } }
@@ -32,8 +32,8 @@ function fixture(testContext, { mode = 'multi', tab = 'mine', denied = false, ro
       : path.includes('/status') ? { items: rows }
       : /conversations\/[^/]+$/.test(path) ? { draft, stored: false, deliveryState: null, retryAllowed: true, preserveInput: false, pendingContent: null, error: null, ...receipt, conversation: { id: draft ? 'd:local' : 'g:AA', state: draft ? 'draft' : 'active', displayName: 'Example', pendingContent: receipt.pendingContent ?? null } }
       : { items: [{ id: draft ? 'd:local' : 'g:AA', display_name: 'Example', draft }, ...(secondGroup ? [{ id: 'g:BB', display_name: 'Second group', draft: false }] : [])], nextCursor: null };
-    if (isDenied && path.includes('/api/chat/')) body = { ok: false, error: { code: 'remote_chat_disabled', message: 'remote_chat_disabled' } };
-    const forbidden = isDenied && path.includes('/api/chat/');
+    if (isDenied && path.includes('/api/conversations')) body = { ok: false, error: { code: 'remote_chat_disabled', message: 'remote_chat_disabled' } };
+    const forbidden = isDenied && path.includes('/api/conversations');
     return { ok: !forbidden, status: forbidden ? 403 : 200, json: async () => body };
   };
   const refusals = [];
@@ -87,7 +87,7 @@ test('single mode keeps history and disabled creation and sending visible', asyn
 test('external tab has history but no write controls', async testContext => {
   const f = fixture(testContext); await f.page.open(); f.button('external').dispatch('click'); await tick(); await f.select();
   assert.equal(f.button('create'), undefined); assert.equal(f.button('send'), undefined);
-  assert.equal(allNodes(f.root).filter(node => node.tagName === 'INPUT' || node.tagName === 'TEXTAREA').length, 0);
+  assert.deepEqual(allNodes(f.root).filter(node => node.tagName === 'INPUT' || node.tagName === 'TEXTAREA').map(node => node.type), ['search']);
   assert.ok(f.calls.some(call => call.path.includes('tab=external')));
   f.page.destroy();
 });

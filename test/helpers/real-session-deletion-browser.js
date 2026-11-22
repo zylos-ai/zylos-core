@@ -108,14 +108,14 @@ export async function runRealSessionDeletionBrowser(t) {
         const url = new URL(req.url, 'http://127.0.0.1');
         if (url.pathname.endsWith('/deletion') || req.method === 'DELETE') requests.push({ method: req.method, pathname: url.pathname });
         if (await deletion(req, res, url)) return;
-        if (url.pathname === '/api/chat/conversations') {
+        if (url.pathname === '/api/conversations') {
           const value = conversations.findByGroup(group);
           sendJson(res, 200, { items: value ? [{ ...value, stamp: Date.now() }] : [], nextCursor: null, tz: 'UTC', deletionAllowed: true }); return;
         }
-        if (/^\/api\/chat\/conversations\/[^/]+$/.test(url.pathname)) {
+        if (/^\/api\/conversations\/[^/]+$/.test(url.pathname)) {
           sendJson(res, 200, { conversation: conversations.findByGroup(group), stored: true }); return;
         }
-        if (/^\/api\/chat\/conversations\/[^/]+\/(?:messages|questions|activity|status)$/.test(url.pathname)) {
+        if (/^\/api\/conversations\/[^/]+\/(?:messages|questions|activity|status)$/.test(url.pathname)) {
           sendJson(res, 200, { items: [], rounds: [], nextCursor: null, afterCursor: null, tz: 'UTC' }); return;
         }
         if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }

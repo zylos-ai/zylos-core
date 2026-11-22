@@ -33,7 +33,7 @@ for (const width of [1280, 390]) test(`one click opens an unnamed draft at ${wid
     if (options?.method === 'POST') {
       writes.push(JSON.parse(options.body)); await pending; created = true; body = { conversation: draft };
     } else body = url === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
-      : url.startsWith('/api/chat/conversations?') ? { items: created ? [draft] : [], nextCursor: null }
+      : url.startsWith('/api/conversations?') ? { items: created ? [draft] : [], nextCursor: null }
       : /\/conversations\/[^/?]+$/.test(url) ? { conversation: draft }
       : { items: [], nextCursor: null };
     return { ok: true, status: 200, json: async () => body };

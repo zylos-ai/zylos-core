@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import * as childProcess from 'node:child_process';
 import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { AuthGate, hashApiKey } from '../../src/lib/auth.js';
-import { C4Reader } from '../../src/lib/c4-reader.js';
+import { C4Reader, prepareLatestReceived, receivedMessage } from '../../src/lib/c4-reader.js';
 import { EventLoopMonitor } from '../../src/lib/event-loop-monitor.js';
 import { VersionChecker } from '../../src/lib/version-checker.js';
 import { createGroupBacklog } from '../../src/lib/workbench/group-backlog.js';
@@ -33,12 +33,20 @@ export async function setupMemoryHttp(t) {
   fs.writeFileSync(path.join(dashboardDir, 'config.json'), JSON.stringify({ auth: { enabled: true, password: 'fixture-password' } }));
   fs.mkdirSync(path.join(root, 'comm-bridge'));
   const c4 = new Database(path.join(root, 'comm-bridge/c4.db'));
-  c4.exec('CREATE TABLE conversations(id INTEGER PRIMARY KEY, session_group TEXT, direction TEXT, channel TEXT, timestamp TEXT, content TEXT)');
-  const put = c4.prepare('INSERT INTO conversations VALUES(?,?,?,?,?,?)');
+  // The columns and tables Core's unsummarized calculation reads, beside the legacy rows (with no group) the single view lists.
+  c4.exec(`CREATE TABLE conversations(id INTEGER PRIMARY KEY, session_group TEXT, direction TEXT, channel TEXT, timestamp TEXT, content TEXT, status TEXT DEFAULT 'delivered');
+    CREATE TABLE checkpoints(id INTEGER PRIMARY KEY, session_group TEXT, end_conversation_id INTEGER, no_content INTEGER DEFAULT 0);
+    CREATE TABLE mode_transitions(phase TEXT)`);
+  const put = c4.prepare('INSERT INTO conversations(id,session_group,direction,channel,timestamp,content) VALUES(?,?,?,?,?,?)');
   put.run(1, null, 'in', 'telegram', '2026-10-01 12:00:00', 'private single body');
   put.run(2, 'origin', 'out', 'telegram', '2026-10-01 12:00:00', 'private Origin body');
   put.run(3, null, 'out', 'internal', '2026-10-01 12:00:00', 'private internal body');
   put.run(4, 'telegram:a', 'in', 'telegram', '2026-10-01 12:00:00', 'private ordinary body');
+  put.run(5, 'origin', 'out', 'telegram', '2026-10-01 12:30:00', 'private Origin reply');
+  put.run(6, 'telegram:dm-1001', 'in', 'telegram', '2026-10-01 13:00:00', 'private group body');
+  // Origin's Sync marker: only a group with one asks sync-lock.js whether its Sync is held.
+  fs.mkdirSync(path.join(root, 'activity-monitor/session-groups/origin'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'activity-monitor/session-groups/origin/sync.lock'), '{}');
   let clock = 1800000000000;
   let engine, auth, reader, server, view = 'multi', snapshotReads = 0, cachedSnapshot = null;
   const calls = [], restarts = [], versionCalls = [];
@@ -92,10 +100,6 @@ export async function setupMemoryHttp(t) {
       const cutoff = Number(args[args.indexOf('--active-since') + 1]);
       return { stdout: JSON.stringify({ ok: true, data: { groups: groups.filter(row => row.lastActivityAt >= cutoff), hasOlder: false } }) };
     }
-    if (args[0] === path.join(root, '.claude/skills/comm-bridge/scripts/c4-db.js') && args[1] === 'unsummarized') {
-      const global = !args.includes('--group');
-      return { stdout: JSON.stringify({ ok: true, data: { count: global ? 3 : 7, firstAt: 100 } }) };
-    }
     if (args[0] === path.join(root, '.claude/skills/comm-bridge/scripts/c4-db.js') && args[1] === 'origin-sync') {
       return { stdout: JSON.stringify({ ok: true, data: { total: 60, groups: [
         { sessionGroup: 'telegram:a', count: 60, firstAt: '2026-10-01 12:00:00', pendingCheckpoints: 2, firstCheckpointAt: '2026-10-01 11:00:00' },
@@ -137,6 +141,7 @@ export async function setupMemoryHttp(t) {
     AuthGate: class extends AuthGate { constructor(...args) { super(...args); auth = this; } },
   } });
   t.mock.module('../../src/lib/c4-reader.js', { namedExports: {
+    prepareLatestReceived, receivedMessage,
     C4Reader: class extends C4Reader { constructor(...args) { super(...args); reader = this; } },
   } });
   const snapshot = () => ({ view, rows: [{ sessionGroup: view === 'single' ? null : 'origin',
@@ -152,7 +157,7 @@ export async function setupMemoryHttp(t) {
     loadCoreModule: async name => {
       if (['runtime/descriptors.js', 'runtime/index.js', 'runtime/contract.js'].includes(name)) return import(new URL(`../../../../cli/lib/${name}`, import.meta.url));
       if (name === 'config.js') return { ZYLOS_DIR: root, readSessionMode: () => ({ mode: 'multi' }) };
-      if (['model-rotation-thresholds.js', 'session-usage-reader.js', 'session-hot-ttl.js', 'config-store.js', 'config-lock.js', 'private-file.js', 'pm2.js'].includes(name)) {
+      if (['model-rotation-thresholds.js', 'session-usage-reader.js', 'session-hot-ttl.js', 'config-store.js', 'config-lock.js', 'private-file.js', 'pm2.js', 'session-group-paths.js'].includes(name)) {
         return import(new URL(`../../../../cli/lib/${name}`, import.meta.url));
       }
       if (name === 'am-sock-client.js') return {
@@ -182,5 +187,5 @@ export async function setupMemoryHttp(t) {
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 
-  return { root, engine, request, calls, versionCalls, snapshotReads: () => snapshotReads };
+  return { root, engine, request, calls, versionCalls, snapshotReads: () => snapshotReads, advance: ms => { clock += ms; } };
 }

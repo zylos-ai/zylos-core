@@ -154,8 +154,9 @@ export class ChatAnswers {
         return { answer: projectAnswer(previous), created: false };
       }
       if (question.status !== 'paused') throw fail('chat_question_not_paused', 409);
+      // Match the historical prefix length so answers at the fallback limit still fit.
       const content = CONTENT_PREFIX + JSON.stringify(answerEnvelope(question, action,
-        `回答了 interruptId=${question.interrupt_id}（问题：${question.question_summary}）：${readableAnswer(action, envelope.blocks[0])}`));
+        `Re interruptId=${question.interrupt_id} (Q:${question.question_summary}): ${readableAnswer(action, envelope.blocks[0])}`));
       if (parseC4Content(content).kind !== 'envelope') throw fail('invalid_chat_answer');
       const changed = this.db.prepare("UPDATE chat_questions SET status='answered' WHERE c4_id=? AND status='paused'").run(question.c4_id);
       if (changed.changes !== 1) throw fail('chat_question_not_paused', 409);

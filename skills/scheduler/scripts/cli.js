@@ -362,7 +362,7 @@ function cmdDone(taskId, options) {
   const task = tasks[0];
 
   if (options.json) return success({ task, alreadyCompleted: true, reason: 'DELIVERY_COMPLETES_AUTOMATICALLY' });
-  console.log(`任务送达时已自动结束，无需 done：${task.id}`);
+  console.log(`Task ${task.id} completes automatically on delivery and does not require done.`);
 
 }
 

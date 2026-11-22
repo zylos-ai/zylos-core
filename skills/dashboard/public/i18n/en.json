@@ -324,6 +324,7 @@
   "observer.history.search": "Search",
   "observer.history.internal": "Show internal records",
   "observer.history.older": "Load earlier",
+  "observer.history.more_sessions": "Load more sessions",
   "observer.history.latest": "Back to latest",
   "observer.history.search_placeholder": "Search this session",
   "observer.history.loading": "Loading history…",

@@ -115,7 +115,7 @@ test('failed external outbound history renders its text without a page error',
           '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Private browser' } },
           '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
           '/api/groups/counts': { mode: f.readMode(), running: { total: 0, states: {}, flags: {} }, offline: { total: 0 }, pool: {} },
-          '/api/groups/running': { rows: [], listKnown: true }, '/api/instance/runtime-options': { actions: [] },
+          '/api/groups': { items: [], nextCursor: null, listKnown: true }, '/api/instance/runtime-options': { actions: [] },
         };
         sendJson(res, 200, values[url.pathname] || {}); return true;
       } });
@@ -136,7 +136,7 @@ test('failed external outbound history renders its text without a page error',
       const id = 'g:' + Buffer.from(outbound.session_group).toString('hex').toUpperCase();
       await page.locator(`#wb-chat .conversation-list-item[data-conversation-id="${id}"]`).click();
       await page.locator(`#wb-chat [data-message-id="${outbound.id}"]`).waitFor();
-      const history = await fixture.request(`/api/chat/conversations/${encodeURIComponent(id)}/messages?tab=external`);
+      const history = await fixture.request(`/api/conversations/${encodeURIComponent(id)}/messages?tab=external`);
       assert.equal(history.body.items.find(row => row.id === outbound.id).deliveryState, 'pending_reconciliation');
       assert.equal(await page.locator(`#wb-chat [data-message-id="${outbound.id}"] .chat-message-status`).isVisible(), false);
       assert.match(await page.locator('#wb-chat').innerText(), /Reply could not be sent/);

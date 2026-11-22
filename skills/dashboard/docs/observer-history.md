@@ -57,16 +57,21 @@ All four endpoints require the existing Observer admin authentication:
 
 | GET route under `/api/observer/history/` | Parameters |
 | --- | --- |
-| `sessions` | None |
-| `entries` | `session`, one of `before` / `after` / `around`, `limit` (1–200), `internal=1` |
-| `content` | `session`, `entry`, `field`, `offset` |
-| `search` | `session`, `q` (2–200 characters), `before`, `limit` (1–200) |
+| `sessions` | `session_group` (default Origin), `limit` (1–100, default 50), `cursor` |
+| `entries` | `session_group`, required `session`, `limit` (1–100, default 50), `cursor`, `direction=before\|after` (default before), `internal=true\|false` (default false), first-page `anchor` |
+| `content` | `session_group`, `session`, `entry`, `field`, `offset` |
+| `search` | `session_group`, `session`, `q` (2–200 characters), `before`, `limit` (1–200), `internal=1` |
 
 Session IDs are resolved server-side; clients cannot request arbitrary file paths.
-Entry cursors identify indexed line offsets, with a block suffix where needed.
+Both lists return `items` and a signed `nextCursor`, or null when exhausted.
+Entries start at the newest page unless opened at an `anchor`. They also return
+a signed `afterCursor` even at the tail. Read forward with `direction=after`
+until a page contains fewer than `limit` items, then reuse the returned position
+to poll for subsequent changes. See the [HTTP API reference](api.md#terminal-observer-and-history)
+for scope binding and error details.
 Responses are `no-store`. Text offsets/totals use JavaScript string units, measured
 after redaction; chunks are limited to 256 KiB UTF-8 and never split a Unicode
-scalar. `next: null` marks the final chunk. Polling returns new `entries` plus
+scalar. `next: null` marks the final chunk. Polling returns new `items` plus
 `updates` for older tool entries whose results arrived later. Deferred content
 responses include an `expandedEntry` descriptor for newly discovered fields and
 attachments.

@@ -12,7 +12,7 @@ registerHooks({
     return next(specifier, context);
   },
 });
-const { confirmedRunner, keyActionRequest, wireSettingsConfirmations } = await import('../public/js/wb/settings-wiring.js');
+const { confirmedRunner, keyActionRequest, keyStillListed, wireSettingsConfirmations } = await import('../public/js/wb/settings-wiring.js');
 const { createSettingsLoader } = await import('../public/js/wb/settings.js');
 const { fleetPageOptions, renderFleetPage } = await import('../public/js/agent-fleet.js');
 
@@ -39,11 +39,11 @@ function page({ answer = true } = {}) {
 }
 
 // The page side of key requests: records each request as method and path, answers `answer`, and records what it shows.
-function keyRequests(sent, { answer = { ok: true, data: { keys: [] } }, created = null } = {}) {
-  const shown = { keys: [], created: [], status: [], busy: [] };
+function keyRequests(sent, { answer = { ok: true, data: {} }, created = null } = {}) {
+  const shown = { reloads: 0, created: [], status: [], busy: [] };
   const keyPage = {
     request: async (method, path) => { sent.push([method, path]); return typeof answer === 'function' ? answer(method, path) : answer; },
-    renderKeys: data => shown.keys.push(data), renderCreated: key => { shown.created.push(key); created = key; }, createdKey: () => created,
+    reload: () => { shown.reloads++; }, renderCreated: key => { shown.created.push(key); created = key; }, createdKey: () => created,
     status: (text, kind) => shown.status.push([text, kind]), busy: on => shown.busy.push(on), errorText: (code, fallback) => code ?? fallback,
   };
   return Object.assign(keyPage, { shown });
@@ -51,24 +51,23 @@ function keyRequests(sent, { answer = { ok: true, data: { keys: [] } }, created 
 
 const meta = runtime => ({ runtime, current_model: 'one', current_effort: 'high', models: [{ id: 'one' }, { id: 'two' }], efforts_by_model: { one: ['high'], two: ['low', 'minimal'] } });
 const defaultsValue = () => ({
-  snapshot: { listKnown: true, baselineRuntime: 'claude', instance: { runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'ok' } } }, overrides: { runtime: [], model: [] }, rows: [] },
-  page: { runtimeTotal: 1 }, metadata: { claude: meta('claude'), codex: meta('codex') },
+  instance: { default_runtime: 'claude', runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'ok' } } },
+  metadata: { claude: meta('claude'), codex: meta('codex') },
+  groups: [],
 });
 
 function readDefaults(value) {
   return async path => {
-    if (path === '/api/instance') return { ...value.snapshot.instance, default_runtime: value.snapshot.baselineRuntime };
-    if (path === '/api/groups/counts') return { listKnown: true };
-    if (path === '/api/groups/running') return { listKnown: true, rows: value.snapshot.rows };
-    if (path === '/api/groups/runtime-overrides') return value.page;
-    if (path.startsWith('/api/groups/')) {
-      const sessionGroup = decodeURIComponent(path.slice('/api/groups/'.length).split('?')[0]);
-      const row = value.snapshot.rows.find(item => item.sessionGroup === sessionGroup);
-      assert.ok(row, sessionGroup);
-      return { runtimeOverridden: false, modelOverridden: false, ...row };
+    const url = new URL(path, 'http://fixture');
+    if (url.pathname === '/api/instance') return value.instance;
+    if (url.pathname === '/api/groups') {
+      const runtime = url.searchParams.get('runtime');
+      const groups = url.searchParams.get('runtimeOverridden') === 'true' ? []
+        : value.groups.filter(row => runtime == null || row.runtime === runtime);
+      return { listKnown: value.listKnown ?? true, items: groups.slice(0, Number(url.searchParams.get('limit'))),
+        total: groups.length, nextCursor: null };
     }
-    const runtime = new URL(path, 'http://fixture').searchParams.get('runtime');
-    return value.metadata[runtime] ?? {};
+    return value.metadata[url.searchParams.get('runtime')] ?? {};
   };
 }
 
@@ -124,13 +123,13 @@ test('each key action sends its own request after the table confirms it', async 
 
 test('rotating a key shows the new key once, with the name the server gave it', async () => {
   const p = page(), sent = [];
-  const keyPage = keyRequests(sent, { answer: { ok: true, data: { keys: [{ name: 'ops' }], key: { name: 'ops' }, plaintext_key: 'zdk_new' } } });
+  const keyPage = keyRequests(sent, { answer: { ok: true, data: { key: { name: 'ops' }, plaintext_key: 'zdk_new' } } });
   const root = node(p.document, 'div');
   wired(p, { keyPage }).renderKeyTable(root, [{ name: 'ops', scope: 'admin', status: 'active' }]);
   await root.querySelector('.api-key-rotate').dispatch('click');
   assert.deepEqual(sent, [['POST', '/api/keys/ops/rotate']]);
   assert.deepEqual(keyPage.shown.created, [{ name: 'ops', plaintext_key: 'zdk_new' }], 'the new key is shown');
-  assert.deepEqual(keyPage.shown.keys, [{ keys: [{ name: 'ops' }], key: { name: 'ops' }, plaintext_key: 'zdk_new' }], 'the list is redrawn from the answer');
+  assert.equal(keyPage.shown.reloads, 1, 'the page shown is read again from the server');
   assert.deepEqual(keyPage.shown.status.at(-1), ['fleet_manage.key_rotated_status', 'success']);
   assert.deepEqual(keyPage.shown.busy, [true, false]);
 });
@@ -159,7 +158,7 @@ test('revoking the key that is shown hides it; a refused request shows why and c
   const other = node(p.document, 'div');
   wired(p, { keyPage: refused }).renderKeyTable(other, [{ name: 'ops', scope: 'admin', status: 'active' }]);
   await other.querySelector('.api-key-rotate').dispatch('click');
-  assert.deepEqual(refused.shown.keys, []); assert.deepEqual(refused.shown.created, []);
+  assert.equal(refused.shown.reloads, 0); assert.deepEqual(refused.shown.created, []);
   assert.deepEqual(refused.shown.status.at(-1), ['must_revoke_first', 'error']);
   assert.deepEqual(refused.shown.busy, [true, false]);
 });
@@ -173,6 +172,15 @@ test('revoking a different key keeps the new key that is shown once', async () =
   assert.deepEqual(sent, [['DELETE', '/api/keys/ops']], 'the other key is revoked');
   assert.deepEqual(keyPage.shown.created, [], 'the shown key is not hidden');
   assert.deepEqual(keyPage.createdKey(), { name: 'ci', plaintext_key: 'zdk_ci' });
+});
+
+test('after clearing revoked keys, the key shown once counts as gone only when its exact name is no longer listed', async () => {
+  const pages = { null: { items: [{ name: 'ci-old' }, { name: 'ci-older' }], nextCursor: 'next' }, next: { items: [{ name: 'ci' }], nextCursor: null } };
+  const asked = [];
+  const readPage = async query => { asked.push(query); return pages[query.cursor]; };
+  assert.equal(await keyStillListed(readPage, 'ci'), true, 'found on the second page of the name search');
+  assert.deepEqual(asked, [{ q: 'ci', cursor: null, limit: 100 }, { q: 'ci', cursor: 'next', limit: 100 }]);
+  assert.equal(await keyStillListed(async () => ({ items: [{ name: 'ci-old' }], nextCursor: null }), 'ci'), false, 'a longer name is not the key');
 });
 
 test('key requests: revoking keeps the key, deleting removes it for good, rotating shows the new key once', () => {
@@ -209,7 +217,7 @@ test('cancelling the model save sends nothing', async () => {
   const wiring = wired(p, { runner: recordingRunner(sent) });
   const root = node(p.document, 'div');
   const value = defaultsValue();
-  value.snapshot.rows = [{ sessionGroup: 'origin', target: { runtime: 'claude' }, presence: 'running' }];
+  value.groups = [{ id: 'origin', runtime: 'claude' }];
   wiring.renderDefaults(root, value, readDefaults(value));
   const model = root.querySelector('#settings-model-claude'); model.value = 'two'; await model.dispatch('change');
   await root.querySelector('#settings-save-models').dispatch('click');
@@ -222,7 +230,7 @@ test('switching the default engine asks once and names the remote machine it act
   const wiring = wired(p, { runner: recordingRunner(sent), remoteTarget: () => 'lab' });
   const root = node(p.document, 'div');
   const value = defaultsValue();
-  value.snapshot.rows = [{ sessionGroup: 'origin', target: { runtime: 'claude' }, presence: 'running' }];
+  value.groups = [{ id: 'origin', runtime: 'claude' }];
   wiring.renderDefaults(root, value, readDefaults(value));
   await root.querySelector('#settings-use-codex').dispatch('click');
   await root.querySelector('#settings-save-runtime').dispatch('click');
@@ -243,8 +251,7 @@ test('default engine and model confirmations include a session that started afte
   const loader = createSettingsLoader({ read, onLoad: settings => { panel = wiring.renderDefaults(root, settings, read); } });
   await loader.open();
   try {
-    value.snapshot.rows.push({ sessionGroup: 'chat:late', name: { displayName: 'Started after opening' },
-      target: { runtime: 'claude' }, presence: 'running' });
+    value.groups.push({ id: 'chat:late', displayName: 'Started after opening', runtime: 'claude' });
     await root.querySelector('#settings-use-codex').dispatch('click');
     await root.querySelector('#settings-save-runtime').dispatch('click');
     const model = root.querySelector('#settings-model-claude');
@@ -254,6 +261,19 @@ test('default engine and model confirmations include a session that started afte
     assert.ok(p.dialogs.every(dialog => dialog.danger && dialog.body.includes('Started after opening')));
     assert.deepEqual(sent, []);
   } finally { panel.destroy(); }
+});
+
+test('unknown model follower provenance asks with the existing unavailable-list text', async () => {
+  const p = page({ answer: false }), root = node(p.document, 'div'), sent = [];
+  const value = defaultsValue();
+  value.listKnown = false;
+  wired(p, { runner: recordingRunner(sent) }).renderDefaults(root, value, readDefaults(value));
+  const model = root.querySelector('#settings-model-claude'); model.value = 'two'; await model.dispatch('change');
+  await root.querySelector('#settings-save-models').dispatch('click');
+  assert.equal(p.dialogs.length, 1);
+  assert.equal(p.dialogs[0].danger, true);
+  assert.match(p.dialogs[0].body, /wb\.settings\.cannotList/);
+  assert.deepEqual(sent, []);
 });
 
 test('idle reclaim uses the session card mount and the existing confirmed remote action path', async () => {

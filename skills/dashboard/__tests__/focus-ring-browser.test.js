@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
 import { startPage } from './helpers/workbench-browser.js';
 import { startPage as startConversationPage } from './helpers/mobile-conversation-browser.js';
+import { backlogAnswer } from './fixtures/workbench-browser-api.js';
 
 // Boundary: shipped pages, CSS and the real search boxes over private loopback APIs; the memory backlog read is
 // answered with enough groups for the group filter to show, and the overview's charts get the preinstalled Chart.js. Run for changes to the search box (.wb-search) or
@@ -25,7 +26,7 @@ function backlog() {
   const groups = Array.from({ length: 14 }, (_, index) => ({ sessionGroup: `telegram:${9000 + index}`,
     displayName: `Group ${index + 1}`, c4: { componentName: 'telegram' }, count: 20 - index, firstAt: null,
     aged: false, syncing: false, threshold: 15 }));
-  return { groups, hasOlder: false, budgets: { limits: {}, warnings: {} } };
+  return { groups, budgets: { limits: {}, warnings: {} } };
 }
 
 test('a search box shows one focus ring, drawn by the box, while typing',
@@ -49,7 +50,7 @@ test('a search box shows one focus ring, drawn by the box, while typing',
           sandbox.addCleanup(() => context.close());
           try {
             await context.route('**/*', request => request.request().url().startsWith(base + '/') ? request.continue() : request.abort());
-            await context.route(base + '/api/memory/backlog*', request => request.fulfill({ json: backlog() }));
+            await context.route(base + '/api/memory/backlog*', request => request.fulfill({ json: backlogAnswer(backlog(), new URL(request.request().url())) }));
             await context.route(base + '/_assets/vendor/chart.umd.js', request => request.fulfill({ path: chartAsset, contentType: 'text/javascript' }));
             await context.addInitScript(value => {
               if (window.top !== window) return; // The overview's sandboxed preview frame has no storage.
@@ -145,7 +146,7 @@ test('a button, or the message box around it, shows one focus ring',
         sandbox.addCleanup(() => context.close());
         await context.route('**/*', request => request.request().url().startsWith(base + '/') ? request.continue() : request.abort());
         await context.route(base + '/_assets/vendor/chart.umd.js', request => request.fulfill({ path: chartAsset, contentType: 'text/javascript' }));
-        await context.route(base + '/api/chat/conversations/*/messages*', async request => {
+        await context.route(base + '/api/conversations/*/messages*', async request => {
           const answer = await (await request.fetch()).json();
           const reply = answer.items?.find(item => item.direction === 'out');
           if (reply) reply.attachments = [{ id: 'plan', name: '方案资料.pdf', kind: 'file', available: true, size: 84 }];

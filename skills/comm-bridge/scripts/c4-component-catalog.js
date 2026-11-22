@@ -43,14 +43,14 @@ export const COMPONENT_CATALOG = [
       "version": 1,
       "kind": "message",
       "messageId": "markdown_message",
-      "fallbackText": "部署已完成：3 个服务都在运行，没有报错。",
+      "fallbackText": "Deployment is complete. All 3 services are running without errors.",
       "blocks": [
         {
           "id": "text",
           "type": "markdown",
           "schemaVersion": 1,
           "data": {
-            "text": "部署已完成：**3 个服务**都在运行，没有报错。"
+            "text": "Deployment is complete. All **3 services** are running without errors."
           }
         }
       ]
@@ -67,7 +67,7 @@ export const COMPONENT_CATALOG = [
       "version": 1,
       "kind": "message",
       "messageId": "chart_message",
-      "fallbackText": "近两天用量：11-01 为 1，11-02 暂无数据。",
+      "fallbackText": "Usage was 1 on Nov 1. Data for Nov 2 is unavailable.",
       "blocks": [
         {
           "id": "chart",
@@ -78,7 +78,7 @@ export const COMPONENT_CATALOG = [
             "series": [
               {
                 "key": "usage",
-                "label": "用量",
+                "label": "Usage",
                 "points": [
                   {
                     "x": "2026-11-01",
@@ -92,7 +92,7 @@ export const COMPONENT_CATALOG = [
               }
             ]
           },
-          "fallbackText": "用量图：首日1，次日未知"
+          "fallbackText": "Usage chart: 1 on day one, unavailable on day two."
         }
       ]
     }
@@ -108,7 +108,7 @@ export const COMPONENT_CATALOG = [
       "version": 1,
       "kind": "message",
       "messageId": "breakdown_message",
-      "fallbackText": "构成：甲 2（40%），乙 3（60%），共 5。",
+      "fallbackText": "Breakdown: A accounts for 2 (40%) and B for 3 (60%), for a total of 5.",
       "blocks": [
         {
           "id": "parts",
@@ -118,17 +118,17 @@ export const COMPONENT_CATALOG = [
             "parts": [
               {
                 "key": "a",
-                "label": "甲",
+                "label": "A",
                 "value": 2
               },
               {
                 "key": "b",
-                "label": "乙",
+                "label": "B",
                 "value": 3
               }
             ]
           },
-          "fallbackText": "甲2，乙3"
+          "fallbackText": "A: 2, B: 3"
         }
       ]
     }
@@ -144,7 +144,7 @@ export const COMPONENT_CATALOG = [
       "version": 1,
       "kind": "message",
       "messageId": "category_message",
-      "fallbackText": "分类对比：甲为 0，乙暂无数据。",
+      "fallbackText": "Category A is 0. Data for category B is unavailable.",
       "blocks": [
         {
           "id": "categories",
@@ -154,17 +154,17 @@ export const COMPONENT_CATALOG = [
             "points": [
               {
                 "key": "a",
-                "label": "甲",
+                "label": "A",
                 "value": 0
               },
               {
                 "key": "b",
-                "label": "乙",
+                "label": "B",
                 "value": null
               }
             ]
           },
-          "fallbackText": "甲0，乙未知"
+          "fallbackText": "A: 0, B: unavailable"
         }
       ]
     }
@@ -180,22 +180,22 @@ export const COMPONENT_CATALOG = [
       "version": 1,
       "kind": "message",
       "messageId": "single_question",
-      "fallbackText": "选一个方案；等待用户回答。",
+      "fallbackText": "Choose a plan. Waiting for the user to answer.",
       "blocks": [
         {
           "id": "question",
           "type": "choice",
           "schemaVersion": 1,
           "data": {
-            "prompt": "选一个方案",
+            "prompt": "Choose a plan",
             "options": [
               {
                 "id": "a",
-                "label": "方案甲"
+                "label": "Plan A"
               },
               {
                 "id": "b",
-                "label": "方案乙"
+                "label": "Plan B"
               }
             ],
             "action": {
@@ -203,11 +203,11 @@ export const COMPONENT_CATALOG = [
               "target": "clarification.answer"
             }
           },
-          "fallbackText": "选一个方案"
+          "fallbackText": "Choose a plan"
         }
       ],
       "interruptId": "interrupt_single_question",
-      "questionSummary": "选一个方案",
+      "questionSummary": "Choose a plan",
       "interrupt": {
         "blockId": "question",
         "reason": "input_required"
@@ -225,14 +225,14 @@ export const COMPONENT_CATALOG = [
       "version": 1,
       "kind": "message",
       "messageId": "confirmation_question",
-      "fallbackText": "确认执行？；等待用户回答。",
+      "fallbackText": "Proceed? Waiting for the user to answer.",
       "blocks": [
         {
           "id": "question",
           "type": "confirmation",
           "schemaVersion": 1,
           "data": {
-            "title": "确认执行？",
+            "title": "Proceed?",
             "severity": "destructive",
             "action": {
               "type": "confirmation.respond",
@@ -240,11 +240,11 @@ export const COMPONENT_CATALOG = [
               "requiresConfirmation": true
             }
           },
-          "fallbackText": "确认执行？"
+          "fallbackText": "Proceed?"
         }
       ],
       "interruptId": "interrupt_confirmation_question",
-      "questionSummary": "确认执行？",
+      "questionSummary": "Proceed?",
       "interrupt": {
         "blockId": "question",
         "reason": "confirmation"
@@ -262,41 +262,41 @@ export const COMPONENT_CATALOG = [
       "version": 1,
       "kind": "message",
       "messageId": "form_question",
-      "fallbackText": "登记信息；等待用户回答。",
+      "fallbackText": "Enter the details. Waiting for the user to answer.",
       "blocks": [
         {
           "id": "question",
           "type": "form_intent",
           "schemaVersion": 1,
           "data": {
-            "title": "登记信息",
+            "title": "Enter the details",
             "fields": [
               {
                 "key": "name",
-                "label": "名字",
+                "label": "Name",
                 "type": "text",
                 "required": true,
                 "maxLength": 20
               },
               {
                 "key": "count",
-                "label": "数量",
+                "label": "Quantity",
                 "type": "integer",
                 "min": 1,
                 "max": 5
               },
               {
                 "key": "tags",
-                "label": "标签",
+                "label": "Tags",
                 "type": "multi_select",
                 "options": [
                   {
                     "id": "a",
-                    "label": "甲"
+                    "label": "A"
                   },
                   {
                     "id": "b",
-                    "label": "乙"
+                    "label": "B"
                   }
                 ]
               }
@@ -306,11 +306,11 @@ export const COMPONENT_CATALOG = [
               "target": "information.submit"
             }
           },
-          "fallbackText": "登记信息"
+          "fallbackText": "Enter the details"
         }
       ],
       "interruptId": "interrupt_form_question",
-      "questionSummary": "登记信息",
+      "questionSummary": "Enter the details",
       "interrupt": {
         "blockId": "question",
         "reason": "input_required"
@@ -424,14 +424,14 @@ COMPONENT_CATALOG.push({ type: 'form_intent', schemaVersion: 2, dataSchema: 'for
   useWhen: 'Use when the user needs to provide multiple related fields and later questions depend on earlier answers. Ask only for needed information; use a short Markdown question for a single simple detail.',
   description: 'A conditional form. Field activeWhen uses scalar eq/in or present:true; hidden upstream values are missing downstream. Submit only active keys.',
   example: { version: 1, kind: 'message', messageId: 'conditional_form_question',
-    fallbackText: '登记主体信息；等待用户回答。', blocks: [{ id: 'question', type: 'form_intent', schemaVersion: 2,
-      data: { title: '登记主体信息', fields: [
-        { key: 'customer_type', label: '主体类型', type: 'single_select', required: true,
-          options: [{ id: 'person', label: '个人' }, { id: 'company', label: '企业' }] },
-        { key: 'company_name', label: '公司名称', type: 'text', required: true,
+    fallbackText: 'Enter customer details. Waiting for the user to answer.', blocks: [{ id: 'question', type: 'form_intent', schemaVersion: 2,
+      data: { title: 'Enter customer details', fields: [
+        { key: 'customer_type', label: 'Customer type', type: 'single_select', required: true,
+          options: [{ id: 'person', label: 'Individual' }, { id: 'company', label: 'Company' }] },
+        { key: 'company_name', label: 'Company name', type: 'text', required: true,
           activeWhen: { field: 'customer_type', eq: 'company' } },
-      ], action: { type: 'form.submit', target: 'information.submit' } }, fallbackText: '登记主体信息' }],
-    interruptId: 'interrupt_conditional_form_question', questionSummary: '登记主体信息',
+      ], action: { type: 'form.submit', target: 'information.submit' } }, fallbackText: 'Enter customer details' }],
+    interruptId: 'interrupt_conditional_form_question', questionSummary: 'Enter customer details',
     interrupt: { blockId: 'question', reason: 'input_required' } },
 });
 

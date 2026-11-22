@@ -82,10 +82,10 @@ test('proxied writes and sensitive reads require admin while status reads accept
   t.after(() => clearInterval(gate._cleanupTimer));
   const routes = [
     { method: 'GET', path: '/api/memory/backlog' },
-    { method: 'GET', path: '/api/chat/conversations' },
-    ...['messages', 'status', 'questions'].map(kind => ({ method: 'GET', path: `/api/chat/conversations/local-chat/${kind}` })),
+    { method: 'GET', path: '/api/conversations' },
+    ...['messages', 'status', 'questions'].map(kind => ({ method: 'GET', path: `/api/conversations/local-chat/${kind}` })),
     ...['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].flatMap(method =>
-      ['/api/chat/conversations/', '/api/chat/future'].map(path => ({ method, path }))),
+      ['/api/conversations/', '/api/conversations/future'].map(path => ({ method, path }))),
     ...workbenchWriteRoutes,
   ];
   for (const route of routes) {
@@ -93,7 +93,7 @@ test('proxied writes and sensitive reads require admin while status reads accept
     const response = { status: null, body: null, setHeader() {}, writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
     const request = () => ({ method: route.method, url: url.pathname, headers: { authorization: `Bearer ${token}` } });
     scope = 'read';
-    const adminRequired = !['GET', 'HEAD', 'OPTIONS'].includes(route.method) || route.path.startsWith('/api/chat/');
+    const adminRequired = !['GET', 'HEAD', 'OPTIONS'].includes(route.method) || route.path.startsWith('/api/conversations');
     assert.equal(await gate.handle(request(), response, url), adminRequired);
     if (adminRequired) {
       assert.equal(response.status, 403);

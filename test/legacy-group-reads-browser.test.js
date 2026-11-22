@@ -241,10 +241,10 @@ test('catalog-backed Chinese, hyphen and percent groups load real details and ti
     }
   }
   const memory = await request('/api/memory/backlog', { identity: 'cookie' });
-  const percentMemory = memory.groups.find(row => row.sessionGroup === 'tg:有%号');
+  const percentMemory = memory.items.find(row => row.sessionGroup === 'tg:有%号');
   assert.equal(percentMemory.count, 1); assert.equal(percentMemory.aged, false);
   assert.equal(percentMemory.syncing, null); assert.equal(percentMemory.reason, 'backlog_failed');
-  const currentMemory = memory.groups.find(row => row.sessionGroup === 'tg:current');
+  const currentMemory = memory.items.find(row => row.sessionGroup === 'tg:current');
   assert.equal(currentMemory.count, 1); assert.equal(currentMemory.aged, true);
   assert.equal(currentMemory.syncing, false);
   assert.equal(actionCalls.length, 0, 'all historical writes stopped before action execution');
@@ -296,7 +296,7 @@ test('catalog-backed Chinese, hyphen and percent groups load real details and ti
   for (const group of groups) for (const suffix of ['', '/events', '/runs', '/messages', '/backlog', '/usage', '/restarts/11111111-1111-4111-8111-111111111111']) {
     const hiddenDetail = suffix === '' || suffix.startsWith('/restarts/');
     const answer = await request('/api/groups/' + encodeURIComponent(group) + suffix, { expected: hiddenDetail ? 404 : 200 });
-    if (hiddenDetail) assert.equal(answer.error.code, 'GROUP_NOT_FOUND');
+    if (hiddenDetail) assert.equal(answer.error.code, 'not_found');
   }
   if (evidence) fs.writeFileSync(path.join(evidence, 'legacy-read-observations.json'), JSON.stringify(records, null, 2));
 });

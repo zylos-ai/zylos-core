@@ -53,8 +53,19 @@ async function pages(createEngine, sessionCount) {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${server.address().port}/api/observer/history/entries`;
     const responses = await Promise.all([...data.sessions.keys()].map(async session => {
-      const response = await fetch(`${base}?session=${session}&internal=1&limit=200`);
-      return { session, status: response.status, body: await response.json() };
+      const params = new URLSearchParams({ session, internal: 'true', limit: '100' });
+      const response = await fetch(`${base}?${params}`);
+      assert.equal(response.status, 200);
+      const latest = await response.json();
+      assert.equal(latest.items.length, 100);
+      assert.ok(latest.nextCursor);
+      params.set('cursor', latest.nextCursor);
+      const continuation = await fetch(`${base}?${params}`);
+      assert.equal(continuation.status, 200);
+      const older = await continuation.json();
+      assert.equal(older.items.length, 100);
+      assert.equal(older.nextCursor, null);
+      return { session, items: [...older.items, ...latest.items] };
     }));
     return { ...data, responses };
   } finally {
@@ -66,15 +77,14 @@ async function pages(createEngine, sessionCount) {
 
 // Exact content checks distinguish successful redaction from fail-closed masking.
 function assertComplete(result) {
-  for (const { session, status, body } of result.responses) {
-    assert.equal(status, 200);
-    assert.equal(body.entries.length, 200);
-    assert.equal(body.entries.filter(entry => entry.kind === 'internal').length, 100);
-    assert.equal(JSON.stringify(body).includes(UNAVAILABLE), false, `${session}: all fields remain available`);
-    for (const secret of result.secrets) assert.equal(JSON.stringify(body).includes(secret), false);
+  for (const { session, items } of result.responses) {
+    assert.equal(items.length, 200);
+    assert.equal(items.filter(entry => entry.kind === 'internal').length, 100);
+    assert.equal(JSON.stringify(items).includes(UNAVAILABLE), false, `${session}: all fields remain available`);
+    for (const secret of result.secrets) assert.equal(JSON.stringify(items).includes(secret), false);
     const originals = result.sessions.get(session);
     for (let i = 0; i < originals.length; i++) {
-      const original = originals[i], actual = body.entries[i];
+      const original = originals[i], actual = items[i];
       assert.equal(actual.id, original.id);
       assert.equal(actual.kind, original.kind);
       assert.equal(actual.summary, original.summary);
@@ -92,11 +102,11 @@ function assertComplete(result) {
   }
 }
 
-test('HTTP internal=1&limit=200 returns every field with the production redactor', async () => {
+test('two history pages return every field with the production redactor', async () => {
   assertComplete(await pages(createRedactor, 1));
 });
 
-test('four concurrent cold HTTP pages of 200 entries remain complete and redacted', async () => {
+test('four concurrent cold history sessions remain complete and redacted across pages', async () => {
   // Distinct sessions and values prevent a warmed cache from hiding queue pressure.
   assertComplete(await pages(createRedactor, 4));
 });

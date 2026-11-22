@@ -140,13 +140,13 @@ test('real Dashboard observes three groups for 10s without if-shell; real delive
         return response.json();
       };
       const verify = async () => {
-        const running = await request('/api/groups/running');
-        assert.equal(running.rows.length, 3, JSON.stringify(running));
+        const running = await request('/api/groups?side=running');
+        assert.equal(running.items.length, 3, JSON.stringify(running));
         for (const [index, group] of groups.entries()) {
-          const row = running.rows.find(row => row.id === group);
+          const row = running.items.find(row => row.id === group);
           assert.ok(row, group);
           assert.equal(row.state.kind, 'idle', JSON.stringify(row.state));
-          const detail = await request(`/api/groups/${encodeURIComponent(group)}?include=`);
+          const detail = await request(`/api/groups/${encodeURIComponent(group)}${group === 'origin' ? '?include=' : ''}`);
           assert.equal(detail.contextPct, 21 + index, JSON.stringify(detail));
           assert.equal(await page.locator(`.wb-row[data-group="${group}"] .wb-context`).textContent(), String(21 + index));
           assert.match(await page.locator(`.wb-row[data-group="${group}"] .wb-state`).innerText(), /idle/i);

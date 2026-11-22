@@ -22,7 +22,7 @@ test('conversation list previews distinguish received and sent external messages
         '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Private browser' } },
         '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
         '/api/groups/counts': { mode: f.readMode(), running: { total: 0, states: {}, flags: {} }, offline: { total: 0 }, pool: {} },
-        '/api/groups/running': { rows: [], listKnown: true }, '/api/instance/runtime-options': { actions: [] },
+        '/api/groups': { items: [], listKnown: true }, '/api/instance/runtime-options': { actions: [] },
       };
       sendJson(res, 200, values[url.pathname] || {}); return true;
     } });

@@ -41,6 +41,9 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
   t.mock.method(globalThis, 'setInterval', (...args) => { const timer = interval(...args); timers.add(timer); return timer; });
   t.mock.method(EventLoopMonitor.prototype, 'start', function () { return this; });
   t.mock.method(VersionChecker.prototype, 'start', () => {});
+  t.mock.module('../skills/dashboard/src/lib/installed-versions.js', { namedExports: {
+    createInstalledVersionReader: () => async () => ({ zylos: '1.0.0-beta.16' }),
+  } });
   const realGet = https.get;
   https.get = () => {
     const request = Object.assign(new EventEmitter(), { destroy() {}, end() {} });

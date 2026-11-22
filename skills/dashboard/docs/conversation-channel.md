@@ -59,10 +59,10 @@ both conversations and the terminal observer
 
 | Request | Body | Result |
 | --- | --- | --- |
-| `POST /api/chat/drafts` | `{displayName?}` | `201 {conversation}` |
-| `GET /api/chat/conversations/:id` | none | Receipt and registered conversation; reconciles an uncertain first send by reading its Core head |
-| `PATCH /api/chat/conversations/:id` | `{displayName}` | `{conversation}` |
-| `POST /api/chat/conversations/:id/send` | `{content, retry?}` | Receipt based on the authoritative inbound row, when available |
+| `POST /api/conversations/drafts` | `{displayName?}` | `201 {conversation}` |
+| `GET /api/conversations/:id` | none | Receipt and registered conversation; reconciles an uncertain first send by reading its Core head |
+| `PATCH /api/conversations/:id` | `{displayName}` | `{conversation}` |
+| `POST /api/conversations/:id/send` | `{content, retry?}` | Receipt based on the authoritative inbound row, when available |
 
 Use returned IDs as opaque route segments and URL-encode them. The draft ID
 `d:<localId>` identifies the initial send permanently. Repeating that request
@@ -127,7 +127,7 @@ naming and message submission; question answers and UI actions have separate con
 
 ## Questions, answers and delivery recovery
 
-`GET /api/chat/conversations/:id/questions?limit=50&cursor=…` returns a bounded
+`GET /api/conversations/:id/questions?limit=50&cursor=…` returns a bounded
 `items` page with `nextCursor`, ordered by `interruptId`; the cursor is the
 last returned interrupt ID when more rows remain. Each item has only `c4Id`
 (a decimal string), `messageId`, `interruptId`, `questionSummary`,
@@ -148,7 +148,7 @@ as startup recovery. A confirmed delivery with a saved C4 ID reads that row's
 status directly; it does not rescan the group's messages or replace its saved
 commit evidence with a lookup error. Opening a group never resends an answer.
 
-`POST /api/chat/conversations/:id/answers` accepts
+`POST /api/conversations/:id/answers` accepts
 `{interruptId, action, retry?: boolean}`. `action` is the shared protocol's
 ActionRequest, including its stable `id`. No caller-supplied summary, channel,
 namespace, endpoint or target group is accepted. The server uses the original

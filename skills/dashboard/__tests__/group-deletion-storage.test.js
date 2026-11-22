@@ -9,6 +9,7 @@ import * as c4Schema from '../../comm-bridge/scripts/c4-schema.js';
 import { createStore } from '../../comm-bridge/scripts/c4-v2-store.js';
 import { Store } from '../src/lib/store.js';
 import { createGroupDeletionStorage } from '../src/lib/group-deletion-storage.js';
+import { ChatHistory } from '../src/lib/chat/history.js';
 import { ChatConversations } from '../src/lib/chat/conversations.js';
 import { ChatAttachments } from '../src/lib/chat/attachments.js';
 import { UsageTranscripts } from '../src/lib/collectors/usage-transcripts.js';
@@ -932,7 +933,7 @@ test('recreated groups are registered only by authorized send or attachment writ
     req._authContext = req.headers.cookie ? { kind: 'cookie', scope: 'admin', principalId: 'owner' } : null;
     return req._authContext;
   } };
-  const id = groupId(group), route = `/api/chat/conversations/${encodeURIComponent(id)}`;
+  const id = groupId(group), route = `/api/conversations/${encodeURIComponent(id)}`;
   const invoke = async (handler, pathname, method, headers = {}, body = {}) => {
     const req = Readable.from(method === 'GET' ? [] : [Buffer.from(JSON.stringify(body))]);
     Object.assign(req, { method, headers });
@@ -986,4 +987,31 @@ test('attachment tree preflight failure preserves every file and its database re
   assert.equal(fs.readFileSync(path.join(target, 'first'), 'utf8'), 'owned first');
   assert.equal(fs.readFileSync(path.join(blocked, 'entry'), 'utf8'), 'blocked contents');
   assert.equal(f.store.db.prepare("SELECT COUNT(*) n FROM chat_attachments WHERE id='preflight'").get().n, 1);
+});
+
+test('group deletion removes read state and both tab pins while preserving another conversation', async t => {
+  const f = fixture(t);
+  const group = 'dashboard:pinned', kept = 'dashboard:kept';
+  const messageId = f.message(group);
+  f.message(kept);
+  const reader = new Database(f.c4Db.name, { readonly: true });
+  t.after(() => reader.close());
+  const history = new ChatHistory({ c4Reader: { _open: () => reader }, conversations: f.conversations });
+  history.replacePins([groupId(group), groupId(kept)]);
+  history.markRead(groupId(group), messageId);
+  // A persisted pin in the other tab can survive a change in group ownership.
+  f.store.db.prepare("INSERT INTO chat_pins(tab,conversation_id,position) VALUES ('external',?,0)").run(groupId(group));
+  const { service } = stoppedService(t, f, stage => {
+    if (stage === 'stopped') assert.throws(() => history.replacePins([groupId(group)]), { code: 'invalid_chat_pin' });
+  });
+  const target = { sessionGroup: group };
+  const preview = await service.preview(target);
+  assert.deepEqual([preview.messages, preview.attachments, preview.files], [1, 0, 0]);
+  const result = await service.delete(target, await confirmation(service, target, 'delete-pinned'));
+  assert.equal(result.pending, false);
+  assert.deepEqual(f.store.db.prepare('SELECT conversation_id FROM chat_pins').pluck().all(), [groupId(kept)]);
+  assert.equal(f.store.db.prepare('SELECT 1 FROM chat_read_positions WHERE conversation_id=?').get(groupId(group)), undefined);
+  assert.deepEqual(history.list().items.map(row => [row.id, row.pinOrder]), [
+    ['g:6F726967696E', undefined], [groupId(kept), 0],
+  ]);
 });

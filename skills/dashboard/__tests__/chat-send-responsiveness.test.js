@@ -111,14 +111,14 @@ test('stalled status notice leaves health and another conversation responsive wi
       assert.ok(cookie);
       const headers = { cookie, origin, 'content-type': 'application/json' };
       const draft = async displayName => {
-        const response = await fetch(`${origin}/api/chat/drafts`, { method: 'POST', headers,
+        const response = await fetch(`${origin}/api/conversations/drafts`, { method: 'POST', headers,
           body: JSON.stringify({ displayName }), signal });
         assert.equal(response.status, 201);
         return (await response.json()).conversation.id;
       };
       const target = await draft('Send target'), other = await draft('Other conversation');
       let settled = false;
-      const sending = fetch(`${origin}/api/chat/conversations/${target}/send`, { method: 'POST', headers,
+      const sending = fetch(`${origin}/api/conversations/${target}/send`, { method: 'POST', headers,
         body: JSON.stringify({ content: 'Keep the committed error receipt.' }), signal })
         .then(async response => ({ status: response.status, body: await response.json() }))
         .finally(() => { settled = true; });
@@ -135,7 +135,7 @@ test('stalled status notice leaves health and another conversation responsive wi
         assert.equal(actual[key], expected);
       }
       assert.equal(settled, false, 'Send must still wait for the notice child');
-      await Promise.all(['/api/health', `/api/chat/conversations/${other}`].map(async route => {
+      await Promise.all(['/api/health', `/api/conversations/${other}`].map(async route => {
         const started = performance.now();
         const response = await fetch(origin + route, { headers, signal: AbortSignal.any([signal, AbortSignal.timeout(800)]) });
         assert.equal(response.status, 200); await response.json();

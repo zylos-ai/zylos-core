@@ -46,7 +46,7 @@ const createGroupConfig = options => productGroupConfig({ ...options, request: a
   const value = await options.request(path, requestOptions);
   return !requestOptions?.method && !path.includes('/runtime-options') && !value?.config ? { config: value } : value;
 } });
-const isGroupDetail = path => /^\/api\/groups\/[^/?]+(?:\?include=)?$/.test(path);
+const isGroupDetail = path => /^\/api\/groups\/[^/?]+(?:\?include=[^&]*)?$/.test(path);
 const emptyRuns = { runs: [], totalEvents: 17, totalRuns: 5, unattributed: 0 };
 function detailFixture(fetch, options = {}) {
   const document = createDocument(), root = document.createElement('aside'), timers = [];
@@ -384,10 +384,10 @@ test('the stored message is read once when its fold opens and stays with that pr
   await f.controller.open(current, { rows: [current], listKnown: true });
   const fold = () => allNodes(f.root).find(node => node.classList?.contains('wb-now-raw'));
   const reads = () => calls.filter(path => isGroupDetail(path));
-  assert.deepEqual(reads(), ['/api/groups/review-bot%3Aa'], 'the consolidated detail includes the original message');
+  assert.deepEqual(reads(), ['/api/groups/review-bot%3Aa?include=raw'], 'the consolidated detail includes the original message');
   fold().open = true; fold().dispatch('toggle');
   await tick(); await tick();
-  assert.deepEqual(reads(), ['/api/groups/review-bot%3Aa']);
+  assert.deepEqual(reads(), ['/api/groups/review-bot%3Aa?include=raw']);
   assert.equal(allNodes(fold()).find(node => node.tagName?.toLowerCase() === 'pre').textContent, stored);
   fold().dispatch('toggle');
   await f.controller.updateSnapshot({ rows: [current], listKnown: true });
@@ -655,7 +655,7 @@ test('automatic naming failures read as one plain sentence in either language, w
   const words = Object.fromEntries(['zh', 'en'].map(language =>
     [language, JSON.parse(readFileSync(new URL(`../public/i18n/wb.${language}.json`, import.meta.url), 'utf8'))]));
   // What Core can answer when the command itself breaks: the whole command line, the prompt and a Node stack.
-  const command = 'Command failed: /usr/bin/node /z/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content 请给 Dashboard 里还没有名字的会话组起个名字 --no-ack-suffix --json\n'
+  const command = 'Command failed: /usr/bin/node /z/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content Name the unnamed conversation groups in Dashboard. --no-ack-suffix --json\n'
     + "Error: Cannot find module '/z/.claude/skills/comm-bridge/scripts/c4-control.js'\n    at Function._resolveFilename (node:internal/modules/cjs/loader:1225:15)";
   const answers = [
     [{ ok: false, sessionGroup: 'origin', error: { code: 'CONTROL_TARGET_REQUIRED', message: 'A control target is required when configuration cannot be read' } }, undefined, 'failed'],
@@ -2473,7 +2473,7 @@ test('periodic detail refresh skips stored-message and configuration extras with
   const paths = [], current = row('telegram:extras', { preview: { text: 'preview', timestamp: 1, source: { kind: 'channel' } } });
   const f = detailFixture(async path => {
     paths.push(path);
-    if (isGroupDetail(path)) return response({ ...current, ...(path.includes('?include=') ? {} : { raw: 'stored original', config: { runtime: 'claude' } }) });
+    if (isGroupDetail(path)) return response({ ...current, ...(path.endsWith('?include=raw') ? { raw: 'stored original' } : {}) });
     return response(defaultRead(path));
   }, { detail: () => 'technical' });
   tctx.after(() => f.controller.destroy());
@@ -2481,7 +2481,7 @@ test('periodic detail refresh skips stored-message and configuration extras with
   const fold = () => allNodes(f.root).find(node => node.classList.contains('wb-now-raw'));
   fold().open = true; fold().dispatch('toggle'); await tick();
   await f.controller.updateSnapshot({ rows: [current], listKnown: true });
-  assert.deepEqual(paths.filter(isGroupDetail), ['/api/groups/telegram%3Aextras', '/api/groups/telegram%3Aextras?include=']);
+  assert.deepEqual(paths.filter(isGroupDetail), ['/api/groups/telegram%3Aextras?include=raw', '/api/groups/telegram%3Aextras']);
   assert.equal(fold().open, true);
   assert.match(fold().textContent, /stored original/);
 });

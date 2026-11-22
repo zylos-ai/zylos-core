@@ -97,7 +97,7 @@ test('mounted conversation peer links navigate both tabs and retain raw technica
     const u = new URL(path, 'http://fixture');
     const item = u.pathname.includes(encodeURIComponent(external.id)) ? external : mine;
     const body = path === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
-      : u.pathname === '/api/chat/conversations' ? { items: [u.searchParams.get('tab') === 'external' ? external : mine], nextCursor: null }
+      : u.pathname === '/api/conversations' ? { items: [u.searchParams.get('tab') === 'external' ? external : mine], nextCursor: null }
       : u.pathname.endsWith('/messages') ? { items: [item === external ? externalRow : mineRow], nextCursor: null, afterCursor: 'after' }
       : /\/conversations\/[^/]+$/.test(u.pathname) ? { conversation: { ...item, state: 'active' } }
       : { items: [], nextCursor: null };
@@ -154,7 +154,7 @@ function mixedConversation(t, locale) {
     const url = new URL(path, 'http://fixture');
     const item = url.pathname.includes(encodeURIComponent(external.id)) ? external : mine;
     const body = path === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
-      : url.pathname === '/api/chat/conversations' ? { items: [url.searchParams.get('tab') === 'external' ? external : mine], nextCursor: null }
+      : url.pathname === '/api/conversations' ? { items: [url.searchParams.get('tab') === 'external' ? external : mine], nextCursor: null }
       : url.pathname.endsWith('/messages') ? { items: rows, nextCursor: null, afterCursor: 'after' }
       : /\/conversations\/[^/]+$/.test(url.pathname) ? { conversation: { ...item, state: 'active' } }
       : { items: [], nextCursor: null };

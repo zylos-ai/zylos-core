@@ -5,14 +5,16 @@ import { HistoryService } from '../../src/lib/history/history-service.js';
 import { ObserverService } from '../../src/lib/observer-service.js';
 import { FleetProxy } from '../../src/lib/fleet-proxy.js';
 import { sendJson } from '../../src/lib/http.js';
-import { isChatDataRoute, requireChatAccess, requireChatWrite } from '../../src/lib/chat/access.js';
+import { isChatDataRoute, requireChatAccess, requireChatWrite, requireChatWritePreflight } from '../../src/lib/chat/access.js';
 import { handleChatSettings } from '../../src/lib/chat/settings.js';
 
 export const chatRoutes = [
-  ...['/api/chat/conversations', ...['messages', 'status', 'questions'].map(kind => `/api/chat/conversations/local-chat/${kind}`)]
+  ...['/api/conversations', ...['messages', 'status', 'questions'].map(kind => `/api/conversations/local-chat/${kind}`)]
     .map(path => ({ method: 'GET', path })),
-  { method: 'POST', path: '/api/chat/drafts' },
-  ...['send', 'answers'].map(kind => ({ method: 'POST', path: `/api/chat/conversations/local-chat/${kind}` })),
+  { method: 'POST', path: '/api/conversations/drafts' },
+  { method: 'PUT', path: '/api/conversations/pins' },
+  { method: 'PUT', path: '/api/conversations/g%3A64617368626F6172643A6C6F63616C2D63686174/read' },
+  ...['send', 'answers'].map(kind => ({ method: 'POST', path: `/api/conversations/local-chat/${kind}` })),
 ];
 export const tokens = { read: `zylos_st_${'a'.repeat(64)}`, admin: `zylos_st_${'b'.repeat(64)}` };
 const cookie = 'isolated-browser-session';
@@ -59,12 +61,13 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
         if (isHub) { await proxy.handle(req, res, url); return; }
         if (observer && await observer.handle(req, res, url)) return;
         if (await handleChatSettings(req, res, url, { auth, config: settings, onChange: chat => settingsChanges.push(chat) })) return;
-        if (workbench && ['/api/groups/running', '/api/groups/search', '/api/groups/activity'].includes(url.pathname)) {
+        if (workbench && ['/api/groups', '/api/groups/activity'].includes(url.pathname)) {
           sendJson(res, 200, await workbench(url)); return;
         }
         if (isChatDataRoute(req.method, url.pathname)) {
           const denied = req.method === 'GET' ? requireChatAccess(req, auth, settings) :
-            requireChatWrite(req, auth, settings, { mode, draft: url.pathname.endsWith('/drafts'),
+            req.method === 'PUT' ? requireChatWritePreflight(req, auth, settings) :
+              requireChatWrite(req, auth, settings, { mode, draft: url.pathname.endsWith('/drafts'),
               conversation: record, namespace: owner.namespace, localId: owner.localId });
           if (denied) { const { status, ...body } = denied; sendJson(res, status, body); return; }
           counts[req.method === 'GET' ? 'reads' : 'receives']++;

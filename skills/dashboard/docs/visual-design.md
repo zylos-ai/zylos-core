@@ -222,7 +222,7 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Fleet defaults to cards and remembers the selected view in the browser. Both views use eight machines per page and order machines with problems ahead of healthy machines. The summary shows counts and costs across all pages. Online machine names open Overview. Offline names are text and their cards retain Refresh status. At phone widths, list rows pair the machine name with its state and place group count, condition, quota and today's cost directly below. The online row is one link target. Desktop list host metrics appear with Technical details.
 
-[Current] Settings' long lists (session hosting, existing keys, other machines, and the model price table) share one style: the total beside the card title, a search box once there are more than 8 rows, 8 rows a page, 「上一页 / 下一页 · 第 x / y 页」 below while there is more than one page, and 「没有匹配的结果」 when the search finds nothing. Leaving a full page keeps the list's height, so the buttons stay in place on a shorter last page or result. The front end pages the full list; rows off the page stay in place and are only hidden, so values typed in them are still saved ([paged list](../public/js/wb/paged-list.js)).
+[Current] Settings' long lists (session hosting, existing keys, other machines, and the model price table) share one style: the total beside the card title, a search box once there are more than 8 rows, 8 rows a page, 「上一页 / 下一页 · 第 x / y 页」 below while there is more than one page, and 「没有匹配的结果」 when the search finds nothing. Leaving a full page keeps the list's height, so the buttons stay in place on a shorter last page or result. These lists keep rows in the page so values typed in them are still saved. The three group lists in Defaults share the same search, paging, and empty-state controls. Their counts stay visible when folded, and groups are fetched one page at a time when opened ([paged list](../public/js/wb/paged-list.js)).
 
 [Current] Fleet summary labels and diagnostic rows wrap within their cards at desktop and mobile widths, preserving full counts and explanations. Multi-session local cards share Overview's channel send-failure/restart, start-failure, rate-limit and unreadable-data observations. Overview and Fleet unreadable group notices show the display name (or group key) and the localized status-unavailable phrase. Raw reason codes appear only with Technical details enabled and are inserted through text nodes. Channel notices describe the instance and do not link to a group.
 
@@ -248,6 +248,10 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 | Actions | “刷新”“核对投递状态”“刷新状态”“刷新记忆目录”“应用” describe different actions; do not replace them with one word to achieve equal widths |
 
 [Current] When the initial Overview request fails and no data is available, show “数据读取失败” (data read failed) only in the list area, reusing the `wb-attention-item wb-attention-problem` error card and `alert` warning icon, with a text contrast ratio of at least 4.5:1 in both themes. The error card and search-toolbar content share horizontal margins: 16 px on desktop and 12 px on mobile; preserve loading and successful empty states. If a refresh fails after data has been loaded, retain the previous data in the list and report the failure in the top bar. A successful request with no groups shows “暂无活跃组” (no active groups), not a read failure; other issues remain visible in the bar.
+
+[Current] Overview groups keep their displayed order while the page is open. New messages update displayed rows in place. A compact “N groups have new messages” button above the group rows uses the same horizontal margins as the group selector. Opening the list, switching sides, or activating that button reads the first page in the latest order. Both sides load additional rows on demand. The Terminal Observer picker also offers additional running groups on demand, using the standard button alongside the group selector.
+
+[Current, TG topic 5950 msgs 7486, 7540, 7593, 7628, 7817] The conversation sidebar places name search and the new-activity notice above its scrolling rows. Both tabs load more rows at the bottom and offer pin buttons and drag ordering. Search results follow activity order and show the pin icon on pinned rows. A message sent from the open page moves its conversation ahead of ordinary rows without adding to the notice. Other activity updates rows in place. The notice refreshes the list in its current sort order and uses singular and plural wording in English. Unread dots appear in Mine only. The message stream opens at the unread divider when present, and its down arrow jumps directly to the latest page.
 
 [Current] Ordinary conversation push failures reconnect the conversation subscription with backoff. An established stream reconnects directly; only a failure before opening needs an admission-status probe. Only an explicit HTTP 429 admission response opens the ordinary stream while conversation polling continues; the page periodically retries the conversation subscription. Reconnect timers, admission probes and subscription changes retain their lifecycle ownership.
 
@@ -321,3 +325,11 @@ red button, and cancelling sends nothing. A change's result shows in the card
 that made it. Long names wrap and actions move below the text on narrow screens.
 Verify both languages and themes at 1280 px and 390 px, including action labels,
 focus, and the allowlist field with its list open.
+
+### Terminal history
+
+The session selector keeps the server's most-recently-updated order. The
+adjacent Load more sessions button appends the next page without changing the
+selected session. Its frame aligns with the select on desktop; at narrow
+widths it wraps below the select. The timeline starts at its newest page and
+prepends earlier entries without moving the reader's scroll position.

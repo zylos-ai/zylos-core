@@ -269,7 +269,7 @@ test('full mounted page posts an answer, then exposes an enabled explicit retry 
   const retry = visibleNodes(root).find(node => node.dataset.action === 'retryAnswer'); assert.ok(retry); assert.equal(retry.disabled, false);
   retry.dispatch('click'); await tick(); await tick();
   const posts = calls.filter(call => call.path.endsWith('/answers')); assert.equal(posts.length, 2);
-  assert.equal(posts[1].path, '/api/chat/conversations/g%3AAA/answers');
+  assert.equal(posts[1].path, '/api/conversations/g%3AAA/answers');
   const original = JSON.parse(posts[0].options.body), retried = JSON.parse(posts[1].options.body);
   assert.deepEqual(Object.keys(original).sort(), ['action', 'interruptId']); assert.equal(retried.retry, true);
   assert.deepEqual(retried.action, original.action); assert.equal(original.interruptId, base.envelope.interruptId);
@@ -521,7 +521,7 @@ test('mounted single-mode page displays the question but has no answer or retry 
   const f = await mountedQuestions(testContext, { mode: 'single' });
   assert.match(visibleText(f.root), /Proceed\?/);
   assert.equal(allNodes(f.root).some(node => ['confirmAnswer', 'cancelAnswer', 'answerOther', 'retryAnswer'].includes(node.dataset.action)), false);
-  assert.equal(allNodes(f.root).filter(node => ['INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName) && !node.closest('.conversation-create-form')).every(node => node.disabled), true);
+  assert.equal(allNodes(f.root).filter(node => ['INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName) && node.type !== 'search' && !node.closest('.conversation-create-form')).every(node => node.disabled), true);
   assert.equal(f.posts.length, 0); f.page.destroy();
 });
 

@@ -31,9 +31,9 @@ export async function startPage(sandbox, publicDir = currentPublic, messageRows)
     { id: 2, direction: 'out', channel: 'dashboard', content: '改好了，新流程是这样：\n\n1. 推 server 的 tag，流水线自动打包\n2. 测试服先装，冒烟通过再正常升级\n3. 服务端升好后，再发布 App\n\n本地不再编译，也不用再手动传包。\n\n**已验证：** 打包结果与之前的内容一致。\n\n**还没验证：** 真正的流水线发版要等第一次推 tag 才会跑。', timestamp: iso(-2 * 60000), status: 'sent' }];
   const answer = url => {
     const p = url.pathname;
-    if (p === '/api/chat/conversations') return { items: url.searchParams.get('tab') === 'external' ? [conversation(EXT_ID)] : [conversation(ORIGIN_ID), conversation(ID)], nextCursor: null, tz: 'UTC', deletionAllowed: true };
-    if (p.startsWith('/api/chat/conversations/')) {
-      const id = decodeURIComponent(p.split('/')[4]);
+    if (p === '/api/conversations') return { items: url.searchParams.get('tab') === 'external' ? [conversation(EXT_ID)] : [conversation(ORIGIN_ID), conversation(ID)], nextCursor: null, tz: 'UTC', deletionAllowed: true };
+    if (p.startsWith('/api/conversations/')) {
+      const id = decodeURIComponent(p.split('/')[3]);
       if (p.endsWith('/messages')) return { items: messages, nextCursor: null, afterCursor: 'after-2', tz: 'UTC' };
       if (p.endsWith('/activity')) return { now: iso(0), items: [] };
       if (p.endsWith('/status') || p.endsWith('/questions')) return { items: [], nextCursor: null };
@@ -52,7 +52,7 @@ export async function startPage(sandbox, publicDir = currentPublic, messageRows)
     if (p === '/api/fleet/agents') return { self: { name: 'luna' }, agents: [] };
     if (p.startsWith('/api/groups/') && p.endsWith('/runs')) return { runs: [{ runId: 'run-tg', startAt: iso(-20 * 60000), endAt: iso(-30000), n: 2, endReason: 'running' }], totalRuns: 1, totalEvents: 2, unattributed: 0 };
     if (p.startsWith('/api/groups/') && p.endsWith('/messages')) return { messages: [] };
-    if (p === '/api/groups/running' || p === '/api/groups/counts' || /^\/api\/groups\/[^/]+$/.test(p) && !['offline', 'search', 'activity', 'runtime-overrides', 'naming-prompt'].includes(p.split('/').at(-1))) {
+    if (p === '/api/groups' || p === '/api/groups/counts' || /^\/api\/groups\/[^/]+$/.test(p) && !['offline', 'search', 'activity', 'runtime-overrides', 'naming-prompt'].includes(p.split('/').at(-1))) {
       const value = workbenchSnapshot(NOW), row = value.rows.find(item => item.sessionGroup === SAMPLE_GROUP);
       value.mode = sessionMode;
       row.sessionGroup = GROUP; row.name = { displayName: title }; row.state = { kind: scene === 'running' ? 'working' : 'idle' }; row.tools = []; row.flags = {};
@@ -77,10 +77,10 @@ export async function startPage(sandbox, publicDir = currentPublic, messageRows)
         res.write(`event: chat_ready\ndata: ${JSON.stringify(data)}\n\n`); streams.add(res); res.on('close', () => streams.delete(res)); return;
       }
       if (url.pathname.startsWith('/api/')) {
-        if (req.method === 'GET' && url.pathname === '/api/chat/conversations' && listGate) await listGate;
+        if (req.method === 'GET' && url.pathname === '/api/conversations' && listGate) await listGate;
         if (req.method !== 'GET') {
           actions.push({ method: req.method, path: url.pathname });
-          if (req.method === 'PATCH' && url.pathname.startsWith('/api/chat/conversations/')) { sendJson(res, 200, { conversation: conversation(ID) }); return; }
+          if (req.method === 'PATCH' && url.pathname.startsWith('/api/conversations/')) { sendJson(res, 200, { conversation: conversation(ID) }); return; }
           sendJson(res, 200, { ok: true }); return;
         }
         const value = answer(url);
@@ -198,7 +198,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
           // app sync call: late MutationObserver subscriptions update the copies.
           const releaseList = fixture.holdConversationList();
           try {
-            const arrived = page.waitForRequest(request => new URL(request.url()).pathname === '/api/chat/conversations', { timeout: 10_000 });
+            const arrived = page.waitForRequest(request => new URL(request.url()).pathname === '/api/conversations', { timeout: 10_000 });
             const disabled = await page.evaluate(async () => {
               // Click the real source: the mobile proxy's own click handler
               // calls sync(), which would hide a missing observer subscription.
@@ -877,7 +877,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
     const held = new Promise(resolve => { release = resolve; });
     let sendSeen;
     const seen = new Promise(resolve => { sendSeen = resolve; });
-    await page.route('**/api/chat/conversations/*/send', async route => {
+    await page.route('**/api/conversations/*/send', async route => {
       sendSeen();
       await Promise.race([held, new Promise(resolve => { sendTimeout = setTimeout(resolve, 4000); })]);
       await route.fulfill({ status: 200, json: { ok: true } }).catch(() => {});
@@ -903,7 +903,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
       try {
         await select(page);
         assert.equal(await page.locator('.conversation-mobile-retry-hint').isVisible(), false);
-        await page.route('**/api/chat/conversations/*/send', route => route.abort('failed'));
+        await page.route('**/api/conversations/*/send', route => route.abort('failed'));
         await page.locator('.conversation-input').fill('核对未确定的投递');
         await page.locator('.conversation-send').click();
         await page.locator('.conversation-mobile-retry-hint').waitFor({ state: 'visible' });
@@ -911,7 +911,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
         assert.equal(await page.locator('.conversation-compose-hint').isVisible(), false, 'permanent hint stays hidden');
         // A network failure initially locks retry. The existing status check can
         // authorize an explicit retry without clearing the uncertain receipt.
-        await page.route('**/api/chat/conversations/*', route => route.fulfill({ status: 200, json: {
+        await page.route('**/api/conversations/*', route => route.fulfill({ status: 200, json: {
           conversation: { id: ID, sessionGroup: GROUP, channel: 'dashboard', displayName: '发布流程核对' },
           stored: null, retryAllowed: true, preserveInput: true,
         } }));
@@ -946,7 +946,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
       const table = ['| 环境 | 版本 | 状态 | 负责人 | 上次发布 | 备注 |', '|---|---|---|---|---|---|',
         '| 测试服 | 1.0.0-beta.7 | 冒烟通过 | 发布值班 | 11-12 10:30 | 等待正式升级 |',
         '| 正式服 | 1.0.0-beta.6 | 运行中 | 发布值班 | 11-05 09:00 | 本周四升级 |'].join('\n');
-      await page.route('**/api/chat/conversations/*/messages*', route => route.fulfill({ json: { items: [
+      await page.route('**/api/conversations/*/messages*', route => route.fulfill({ json: { items: [
         { id: 3, direction: 'out', channel: 'dashboard', content: '两台服务器的现状：\n\n' + table, timestamp: iso(-60000), status: 'sent' }], nextCursor: null, afterCursor: 'after-3', tz: 'UTC' } }));
       await select(page);
       await page.locator('.conversation-markdown table').waitFor();

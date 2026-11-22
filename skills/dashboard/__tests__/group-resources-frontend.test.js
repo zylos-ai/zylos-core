@@ -23,16 +23,16 @@ test('group page requests running rows and counts separately without fetching of
   const paths = [], instance = { default_runtime: 'codex', session_mode: { sessionMode: 'multi' }, accounts: {}, resources: {} };
   const counts = { readAt: 123, running: { total: 1, states: { working: 1 } }, offline: { total: 50 }, pool: { used: 1, capacity: 3 } };
   const row = { id: 'example', displayName: 'Example', channel: 'telegram', runtime: 'codex', model: 'example', duration: 100, mainAgent: 'working', contextPct: 25, lastActivityAt: 123, state: { kind: 'working' }, flags: { queued: { count: 3 } } };
-  const snapshot = await readGroupSnapshot(async path => { paths.push(path); return path === '/api/instance' ? instance : path === '/api/groups/counts' ? counts : { readAt: 123, rows: [row] }; });
-  assert.deepEqual(paths.sort(), ['/api/groups/counts', '/api/groups/running', '/api/instance']);
+  const snapshot = await readGroupSnapshot(async path => { paths.push(path); return path === '/api/instance' ? instance : path === '/api/groups/counts' ? counts : { readAt: 123, items: [row] }; });
+  assert.deepEqual(paths.sort(), ['/api/groups/counts', '/api/groups?side=running', '/api/instance']);
   assert.equal(snapshot.rows.length, 1); assert.equal(snapshot.rows[0].sessionGroup, row.id ?? row.sessionGroup);
   assert.equal(snapshot.groupCounts.offline.total, 50); assert.equal(snapshot.instance.pool, counts.pool);
 });
 test('offline page keeps its returned cursor and does not request running rows', async () => {
   const paths = [];
-  const snapshot = await readGroupSnapshot(async path => { paths.push(path); return path === '/api/instance' ? {} : path === '/api/groups/counts' ? {} : { rows: [], nextCursor: 'later' }; }, { side: 'offline', cursor: 'earlier' });
-  assert.equal(paths.includes('/api/groups/offline?cursor=earlier'), true);
-  assert.equal(paths.includes('/api/groups/running'), false);
+  const snapshot = await readGroupSnapshot(async path => { paths.push(path); return path === '/api/instance' ? {} : path === '/api/groups/counts' ? {} : { items: [], nextCursor: 'later' }; }, { side: 'offline', cursor: 'earlier' });
+  assert.equal(paths.includes('/api/groups?side=offline&cursor=earlier'), true);
+  assert.equal(paths.includes('/api/groups?side=running'), false);
   assert.equal(snapshot.nextCursor, 'later'); assert.equal(snapshot.hasOlder, true);
 });
 test('working primary state and queued blocked flags are displayed together without main-agent state', () => {
@@ -57,8 +57,8 @@ test('refreshing an offline list rereads the loaded page depth and retains later
     calls.push(path);
     if (path === '/api/instance') return {};
     if (path === '/api/groups/counts') return { listKnown: true };
-    return path.includes('cursor=second') ? { rows: [{ id: 'second', displayName: 'Second', channel: 'dashboard', lastActivityAt: 1, flags: {} }], nextCursor: null }
-      : { listKnown: true, rows: [{ id: 'first', displayName: String(generation), channel: 'dashboard', lastActivityAt: 2, flags: {} }], nextCursor: 'second' };
+    return path.includes('cursor=second') ? { items: [{ id: 'second', displayName: 'Second', channel: 'dashboard', lastActivityAt: 1, flags: {} }], nextCursor: null }
+      : { listKnown: true, items: [{ id: 'first', displayName: String(generation), channel: 'dashboard', lastActivityAt: 2, flags: {} }], nextCursor: 'second' };
   };
   const first = await readGroupSnapshot(read, { side: 'offline', pages: 2 });
   generation++;
@@ -72,8 +72,8 @@ test('pushed counts and the current instance refresh only the group rows', async
   const paths = [], counts = { running: { total: 1 }, offline: { total: 500 }, pool: { used: 1, capacity: 4 } };
   const instance = { default_runtime: 'codex' };
   const row = { id: 'a', displayName: 'A', channel: 'telegram', runtime: 'codex', model: 'example', duration: 100, mainAgent: 'working', contextPct: 25, lastActivityAt: 123, state: { kind: 'working' } };
-  const snapshot = await readGroupSnapshot(async path => { paths.push(path); return { rows: [row] }; }, { counts, instance });
-  assert.deepEqual(paths, ['/api/groups/running']);
+  const snapshot = await readGroupSnapshot(async path => { paths.push(path); return { items: [row] }; }, { counts, instance });
+  assert.deepEqual(paths, ['/api/groups?side=running']);
   assert.equal(snapshot.groupCounts, counts);
   assert.equal(snapshot.rows[0].sessionGroup, row.id ?? row.sessionGroup);
   assert.equal(snapshot.instance.pool, counts.pool);
@@ -124,11 +124,11 @@ test('offline failure attention follows filtered pagination and normalizes only 
   const counts = { offline: { startFailed: 2 } };
   const snapshot = await readGroupSnapshot(async path => {
     paths.push(path);
-    if (path === '/api/groups/running') return { rows: [], listKnown: true };
-    return path.includes('cursor=next') ? { rows: [compactOffline('b', { startFailed: { count: 2 } })], nextCursor: null }
-      : { rows: [compactOffline('a', { startFailed: { count: 1 } })], nextCursor: 'next' };
+    if (path === '/api/groups?side=running') return { items: [], listKnown: true };
+    return path.includes('cursor=next') ? { items: [compactOffline('b', { startFailed: { count: 2 } })], nextCursor: null }
+      : { items: [compactOffline('a', { startFailed: { count: 1 } })], nextCursor: 'next' };
   }, { instance, counts });
-  assert.deepEqual(paths, ['/api/groups/running', '/api/groups/offline?flag=startFailed', '/api/groups/offline?flag=startFailed&cursor=next']);
+  assert.deepEqual(paths, ['/api/groups?side=running', '/api/groups?side=offline&flag=startFailed', '/api/groups?side=offline&flag=startFailed&cursor=next']);
   assert.equal(snapshot.mode, 'single'); assert.deepEqual(snapshot.attention.problems.map(item => item.group), ['a', 'b']);
   assert.equal(snapshot.failedRows[1].name.displayName, 'Offline b');
 });
@@ -136,9 +136,9 @@ test('offline failure attention follows filtered pagination and normalizes only 
 test('optional failure attention read errors preserve the list and report unreadable data', async () => {
   for (const repeatedCursor of [false, true]) {
     const snapshot = await readGroupSnapshot(async path => {
-      if (path === '/api/groups/running') return { rows: [compactRunning('live')], listKnown: false };
+      if (path === '/api/groups?side=running') return { items: [compactRunning('live')], listKnown: false };
       if (!repeatedCursor) throw Error('unreadable');
-      return { rows: [], nextCursor: 'repeat' };
+      return { items: [], nextCursor: 'repeat' };
     }, { instance: {}, counts: { offline: { startFailed: 1 } } });
     assert.equal(snapshot.rows[0].sessionGroup, 'live'); assert.equal(snapshot.listKnown, false);
     assert.deepEqual(snapshot.attention.problems.map(item => item.source), ['offline_start_failed', 'groups']);
@@ -156,7 +156,8 @@ test('resource tooltips distinguish host and container CPU and memory independen
 test('compact current action preserves tool priority, received-message fallback and text safety', () => {
   const document = createDocument(), t = (key, params) => key + (params ? ' ' + JSON.stringify(params) : '');
   const minimal = compactRunning('current');
-  const render = currentAction => renderRow({ ...minimal, sessionGroup: minimal.id, currentAction }, { document, t });
+  const render = (currentAction, lastActivityAt = '2026-11-15T02:00:00Z') =>
+    renderRow({ ...minimal, sessionGroup: minimal.id, lastActivityAt, currentAction }, { document, t });
   const working = render({ tool: 'Bash', message: '<script>latest received', receivedAt: '2026-11-15T01:00:00Z' });
   assert.match(working.children[2].textContent, /wb.tool.Bash.*wb.board.lastIn.*latest received/);
   assert.equal(working.children[2].title, 'Bash');
@@ -166,7 +167,7 @@ test('compact current action preserves tool priority, received-message fallback 
   assert.match(message.children[2].textContent, /wb.board.lastReceived.*<img>received/);
   const timed = render({ tool: null, message: null, receivedAt: '2026-11-15T01:00:00Z' });
   assert.match(timed.children[2].textContent, /wb.board.lastReceivedAt.*time/);
-  assert.equal(render({ tool: null, message: null, receivedAt: null }).children[2].textContent, '');
+  assert.equal(render({ tool: null, message: null, receivedAt: null }, null).children[2].textContent, '');
   assert.equal(working.children[2].children.some(node => node.tagName === 'SCRIPT'), false);
   assert.equal(message.children[2].children.some(node => node.tagName === 'IMG'), false);
 });

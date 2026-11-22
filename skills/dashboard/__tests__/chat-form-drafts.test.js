@@ -126,7 +126,7 @@ test('late target A401 clears A and its hidden-memory callback while B stays int
   store.save(a, { hidden: 'A' }); store.save(b, { hidden: 'B' });
   let respond; const cleared = [];
   const auth = createDraftAuth({ authRoot: root, store, fetch: () => new Promise(resolve => { respond = resolve; }), onClear: value => cleared.push(value) });
-  const pending = auth.fetch('/dashboard/fleet/A/api/chat/questions');
+  const pending = auth.fetch('/dashboard/fleet/A/api/conversations/g:browser/questions');
   respond({ status: 401 }); await pending;
   assert.equal(store.load(a), null);
   assert.equal(store.load(b).hidden, 'B');

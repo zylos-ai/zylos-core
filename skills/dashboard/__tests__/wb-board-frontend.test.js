@@ -348,6 +348,11 @@ test('plain names say direct or group chat from the key, model names are capital
   renderBoard(root, { rows: [standby] }, { document, t, level: 'technical' });
   assert.equal(allNodes(root).find(node => node.classList.contains('wb-current')).textContent, '');
   assert.equal(allNodes(root).find(node => node.classList.contains('wb-model')).textContent, 'Claude · default');
+  const sortAt = '2026-04-10T12:34:00.000Z';
+  renderBoard(root, { rows: [{ ...standby, lastActivityAt: sortAt }] }, { document, t });
+  const parked = allNodes(root).find(node => node.classList.contains('wb-current'));
+  assert.ok(parked.textContent.startsWith('wb.board.standby'));
+  assert.equal(parked.children.find(node => node.tagName === 'TIME').dateTime, sortAt);
 });
 test('an unnamed Dashboard conversation shows as an untitled conversation with its time, never its id', async () => {
   const { unnamedConversation } = await import('../public/js/wb/plain-text.js');

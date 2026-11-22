@@ -42,13 +42,13 @@ async function startPage(sandbox) {
   const conversation = id => ({ id, localId: 'working-browser', sessionGroup: id === OTHER_ID ? OTHER : group(), channel: id === OTHER_ID ? 'telegram' : 'dashboard', state: 'active', origin: id === ORIGIN_ID, displayName: id === OTHER_ID ? '外部会话' : title });
   const answer = url => {
     const p = url.pathname;
-    if (['/api/groups/running', '/api/groups/offline', '/api/groups/counts'].includes(p) || /^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'counts', 'offline'].includes(p.split('/').at(-1)) || p === '/api/instance') { if (p === '/api/groups/' + encodeURIComponent(group())) counts.groups++; return workbenchSnapshotAnswer(url, snapshot(url), NOW); }
-    if (p === '/api/chat/conversations') {
+    if (['/api/groups', '/api/groups/counts'].includes(p) || /^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'counts', 'offline'].includes(p.split('/').at(-1)) || p === '/api/instance') { if (p === '/api/groups/' + encodeURIComponent(group())) counts.groups++; return workbenchSnapshotAnswer(url, snapshot(url), NOW); }
+    if (p === '/api/conversations') {
       const external = url.searchParams.get('tab') === 'external';
       return { items: [{ ...conversation(external ? OTHER_ID : activeId()), session_group: external ? OTHER : group(), display_name: external ? '外部会话' : title }], nextCursor: null, tz: 'UTC' };
     }
-    if (p.startsWith('/api/chat/conversations/')) {
-      const id = decodeURIComponent(p.split('/')[4]);
+    if (p.startsWith('/api/conversations/')) {
+      const id = decodeURIComponent(p.split('/')[3]);
       if (p.endsWith('/messages')) return { items: [{ id: 1, direction: 'in', channel: 'dashboard', content: '请继续整理这份资料', timestamp: iso(NOW - 4 * 60000) }, { id: 2, direction: 'out', channel: 'dashboard', content: '已经整理好了，后台子任务会继续核对。', timestamp: iso(NOW - 2 * 60000) }], nextCursor: null, afterCursor: 'after-2', tz: 'UTC' };
       if (p.endsWith('/activity')) return { now: iso(NOW), items: [] };
       if (p.endsWith('/status') || p.endsWith('/questions')) return { items: [], nextCursor: null };

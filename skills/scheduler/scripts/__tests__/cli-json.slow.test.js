@@ -60,7 +60,9 @@ for (const [type, create] of [ ['one-time', []], ['recurring', ['--cron', '*/30 
       const before = f.row(task.id), history = f.history(task.id);
       const result = f.success(['done', task.id]);assert.equal(result.alreadyCompleted, true);
       assert.equal(result.reason, 'DELIVERY_COMPLETES_AUTOMATICALLY');assert.deepEqual(result.task, before);
-      const text = f.run(['done', task.id]);assert.equal(text.status, 0);assert.match(text.stdout,/任务送达时已自动结束，无需 done/);
+      const text = f.run(['done', task.id]);
+      assert.equal(text.status, 0);
+      assert.equal(text.stdout, `Task ${task.id} completes automatically on delivery and does not require done.\n`);
       assert.deepEqual(f.row(task.id),before);assert.deepEqual(f.history(task.id),history);
     }
   });

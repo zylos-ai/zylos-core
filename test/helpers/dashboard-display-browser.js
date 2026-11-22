@@ -70,8 +70,8 @@ export async function runDashboardDisplayBrowser(t, sandbox) {
             value = structuredClone(value); value.runtime = url.searchParams.get('runtime') || 'claude';
             if (value.runtime === 'claude') Object.assign(value, { current_model: 'haiku', models: [{ id: 'haiku', display_name: 'Haiku' }, { id: 'opus', display_name: 'Opus' }], efforts_by_model: { haiku: [], opus: ['low', 'medium', 'high'] } });
           } else if (url.pathname === '/api/observer/status') value = { state: 'installed', desired: { enabled: true }, agentSize: { cols: 100, rows: 30 } };
-          else if (url.pathname === '/api/observer/history/sessions') value = { current: 'sample', sessions: [{ id: 'sample', kind: 'main', title: 'History sample', startedAt: recorded }] };
-          else if (url.pathname === '/api/observer/history/entries') value = { entries: [{ id: 'entry', kind: 'inbound', ts: recorded, fields: { body: { type: 'text', preview: 'Example history message', total: 23 } } }], updates: [], hasOlder: false };
+          else if (url.pathname === '/api/observer/history/sessions') value = { current: 'sample', items: [{ id: 'sample', kind: 'main', title: 'History sample', updatedAt: recorded }], nextCursor: null };
+          else if (url.pathname === '/api/observer/history/entries') value = { items: [{ id: 'entry', kind: 'inbound', ts: recorded, fields: { body: { type: 'text', preview: 'Example history message', total: 23 } } }], updates: [], nextCursor: null, afterCursor: 'fixture-cursor' };
           else if (url.pathname === '/api/memory/tree') {
             value = structuredClone(value);
             for (const node of value.root.children) if (node.type === 'file') node.size_bytes = ({ 'identity.md': 512, 'references.md': 2048, 'state.md': 2097152 })[node.path] ?? node.size_bytes;

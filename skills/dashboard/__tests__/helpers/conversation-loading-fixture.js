@@ -18,7 +18,7 @@ export function loadingFixture(t, createConversationState, override = () => unde
       const url = new URL(path, 'http://fixture'); calls.push({ path, url, options, at: time });
       const value = override(url, options, time); if (value !== undefined) return value;
       if (path === '/api/instance') return { session_mode: { sessionMode: 'multi' }, runtimeHealth: {} };
-      if (url.pathname === '/api/chat/conversations') return { items: [{ id: 'g:AA', displayName: 'Conversation' }], nextCursor: null };
+      if (url.pathname === '/api/conversations') return { items: [{ id: 'g:AA', displayName: 'Conversation' }], nextCursor: null };
       if (url.pathname.endsWith('/messages')) return { items: url.searchParams.get('direction') === 'before' ? [{ id: 1, direction: 'in', status: 'pending', content: 'first' }] : [], afterCursor: 'after1', nextCursor: null };
       if (url.pathname.endsWith('/questions')) return { items: [], nextCursor: null };
       if (url.pathname.endsWith('/status')) return { items: [] };
