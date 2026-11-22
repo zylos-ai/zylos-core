@@ -1,12 +1,12 @@
 import { sendJson } from '../http.js';
 import { isoTimestamp } from '../wire-time.js';
-import { ClaudeHistory } from './claude-history.js';
-import { CodexHistory } from './codex-history.js';
+import { getDashboardRuntime } from '../runtime/index.js';
+import { UNSUPPORTED } from '../runtime/contract.js';
 import { createHistoryScope } from './history-scope.js';
 import { createRedactor } from '../redaction/engine.js';
 import { loadCoreModule } from '../core-modules.js';
 
-const { DEFAULT_RUNTIME } = await loadCoreModule('runtime/descriptors.js');
+const { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
 
 // Transcript readers exist only for these runtimes. Other runtimes have no
 // imported history yet and must never inherit another runtime's file reader.
@@ -14,7 +14,10 @@ class EmptyHistory {
   paths = new Map();
   async listSessions() { return { current: null, sessions: [] }; }
 }
-const parserForRuntime = runtime => runtime === 'claude' ? ClaudeHistory : runtime === 'codex' ? CodexHistory : EmptyHistory;
+const parsers = new Map((await Promise.all(SUPPORTED_RUNTIMES.map(getDashboardRuntime)))
+  .filter(runtime => runtime.history !== UNSUPPORTED)
+  .map(runtime => [runtime.id, runtime.history]));
+const parserForRuntime = runtime => parsers.get(runtime) ?? EmptyHistory;
 
 const PREVIEW = 2000;
 const CHUNK_BYTES = 256 * 1024;

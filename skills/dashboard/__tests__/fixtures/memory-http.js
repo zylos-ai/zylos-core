@@ -6,7 +6,6 @@ import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import * as childProcess from 'node:child_process';
 import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
-import { StateEngine } from '../../src/lib/state-engine.js';
 import { AuthGate, hashApiKey } from '../../src/lib/auth.js';
 import { C4Reader } from '../../src/lib/c4-reader.js';
 import { EventLoopMonitor } from '../../src/lib/event-loop-monitor.js';
@@ -128,6 +127,8 @@ export async function setupMemoryHttp(t) {
     execFileSync: (file, args) => { assert.deepEqual(args, ['--version']); return '1.0.0'; },
     spawn: () => assert.fail('HTTP fixture must not spawn a process'),
   } });
+  // StateEngine now loads the Core runtimes, which capture the subprocess transport at import.
+  const { StateEngine } = await import('../../src/lib/state-engine.js');
   t.mock.module('../../src/lib/state-engine.js', { namedExports: {
     StateEngine: class extends StateEngine { constructor(...args) { super(...args); engine = this; } },
   } });

@@ -1,0 +1,9 @@
+{
+  "program": "Claude Code",
+  "version": "2.1.327",
+  "recordedAt": "2026-11-20T17:44:02Z",
+  "how": "Reused the main-agent assistant record from the isolated Claude Code recording under cli/lib/runtime/__tests__/samples/claude/busy. The reviewer recorded it on Linux as the dedicated zylos-test OS user with a temporary HOME and private tmux socket during a real tool-free turn.",
+  "files": {
+    "transcript.jsonl": "Kept only the assistant record type, timestamp, event UUID, model, role, and billing usage fields. Omitted queue and tool-result records, conversation text, paths, session and provider identifiers, and unrelated metadata. All retained values are unchanged."
+  }
+}

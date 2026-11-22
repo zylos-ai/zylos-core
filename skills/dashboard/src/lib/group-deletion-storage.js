@@ -5,12 +5,18 @@ import { Store } from './store.js';
 import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { inspectDatabase, TARGET_SCHEMA_VERSION } from './schema.js';
 import { loadConfig } from './config.js';
-import { ConversationCollector } from './collectors/conversation-collector.js';
-import { CodexRolloutCollector } from './collectors/codex-rollout-collector.js';
+import { loadCoreModule } from './core-modules.js';
+import { getDashboardRuntime } from './runtime/index.js';
+import { UNSUPPORTED } from './runtime/contract.js';
 import { ChatAttachments } from './chat/attachments.js';
 import { parseSessionGroup, validateGroupName } from '../../../comm-bridge/scripts/c4-session-group.js';
 import { ownedPath as resolveOwnedPath } from '../../../comm-bridge/scripts/owned-path.js';
 import { removeOwnedTree } from '../../../comm-bridge/scripts/remove-owned-tree.js';
+
+const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
+const usageRuntimes = await Promise.all(runtimesWith('usage').map(getDashboardRuntime));
+const pricing = Object.fromEntries(usageRuntimes.map(runtime => [runtime.id, runtime.pricing]));
+const collectors = new Map(usageRuntimes.map(runtime => [runtime.id, runtime.collector]));
 
 const fail = (code, status = 409) => Object.assign(new Error(code), { code, status });
 const validSession = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
@@ -86,32 +92,22 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
       namespace: dashboard ? parsed.namespace : null, draft: false };
   }
   const mappings = group => db ? db.prepare('SELECT * FROM usage_transcripts WHERE session_group=? ORDER BY parent_path IS NOT NULL, transcript_path').all(group) : [];
+  const ownership = { homeDir, tmpdir, uid, mappings, ownedPath, below, fail };
+  function ownedFiles(row, sharedSession) {
+    const collector = collectors.get(row.runtime);
+    if (!collector || !validSession(row.session_id) || !path.isAbsolute(row.transcript_path)) {
+      throw fail('group_delete_path_unavailable');
+    }
+    return collector.ownedFiles(row, { ...ownership, sharedSession });
+  }
   function transcriptFile(row) {
-    if (!validSession(row.session_id) || !path.isAbsolute(row.transcript_path)) throw fail('group_delete_path_unavailable');
-    const root = path.join(homeDir, row.runtime === 'claude' ? '.claude/projects' : '.codex/sessions');
-    const file = ownedPath(row.transcript_path, root);
-    if (row.runtime === 'claude') {
-      if (row.parent_path) {
-        const parent = mappings(row.session_group).find(item => item.transcript_path === row.parent_path && item.session_id === row.session_id);
-        if (!parent || !below(file, path.join(path.dirname(parent.transcript_path), row.session_id, 'subagents'))) throw fail('group_delete_path_unavailable');
-      } else if (path.basename(file) !== `${row.session_id}.jsonl`) throw fail('group_delete_path_unavailable');
-    } else if (row.runtime !== 'codex' || !/^rollout-[^/]+\.jsonl$/.test(path.basename(file))) throw fail('group_delete_path_unavailable');
-    return file;
+    return ownedFiles(row, () => true)[0][0];
   }
   function runtimeTargets(rows) {
     const targets = [];
     const sharedSession = sid => !!db.prepare('SELECT 1 FROM usage_transcripts WHERE session_id=? AND session_group IS NOT ? LIMIT 1')
       .get(sid, rows[0]?.session_group);
-    for (const row of rows) {
-      const file = transcriptFile(row);
-      targets.push([file, path.join(homeDir, row.runtime === 'claude' ? '.claude/projects' : '.codex/sessions')]);
-      if (row.runtime === 'claude' && !row.parent_path) {
-        targets.push([path.join(path.dirname(file), row.session_id), path.join(homeDir, '.claude/projects')],
-          [path.join(tmpdir, `claude-${uid}`, path.basename(path.dirname(file)), row.session_id), path.join(tmpdir, `claude-${uid}`)]);
-        if (!sharedSession(row.session_id)) targets.push(
-          [path.join(homeDir, '.claude/session-env', row.session_id), path.join(homeDir, '.claude/session-env')]);
-      }
-    }
+    for (const row of rows) targets.push(...ownedFiles(row, sharedSession));
     for (const sid of new Set(rows.map(row => row.session_id))) {
       if (!sharedSession(sid)) targets.push([path.join(tmpdir, `zylos-shard-spill-${uid}`, sid), path.join(tmpdir, `zylos-shard-spill-${uid}`)]);
     }
@@ -160,21 +156,13 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
     if (!processExited) throw fail('group_delete_usage_pending');
     if (!db) return { transcripts: 0 };
     if (target.hasRetainedMessages === true || retainedMessages(target).length) return { transcripts: 0 };
-    const config = { ...loadConfig({ zylosDir }), homeDir, zylosDir };
-    const claude = new ConversationCollector(store, config), codex = new CodexRolloutCollector(store, config);
-    const rows = mappings(sessionGroup);
-    // The known mapped main also owns its bounded subagent directory. Discover
-    // it before finalizing so a just-written child cannot be removed unbilled.
-    for (const row of rows) {
-      if (row.runtime !== 'claude' || row.parent_path) continue;
-      transcriptFile(row);
-      const directory = path.join(path.dirname(row.transcript_path), row.session_id, 'subagents');
-      let names;
-      try { names = fs.readdirSync(ownedPath(directory, path.join(homeDir, '.claude/projects'))); }
-      catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-      for (const name of names) if (name.endsWith('.jsonl')) {
-        withinBudget();
-        store.insertUsageTranscript({ ...row, transcript_path: path.join(directory, name), parent_path: row.transcript_path, byte_offset: 0 }, new Date().toISOString());
+    const config = { ...loadConfig({ zylosDir, pricing }), homeDir, zylosDir };
+    const instances = new Map(usageRuntimes.map(({ id, collector }) => [id, collector.create(store, config)]));
+    // Discover bounded subagent files before finalizing so they cannot be removed unbilled.
+    for (const row of mappings(sessionGroup)) {
+      const collector = collectors.get(row.runtime);
+      if (collector && collector.discoverChildren !== UNSUPPORTED) {
+        collector.discoverChildren(row, { ...ownership, transcriptFile, store, withinBudget });
       }
     }
     let completed = 0;
@@ -183,25 +171,9 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
       let identity;
       try { identity = fs.statSync(file); }
       catch (error) { if (error.code === 'ENOENT' && row.status === 'finished') continue; throw fail('group_delete_usage_pending'); }
-      let offset = row.byte_offset;
       try {
-        if (row.runtime === 'claude') {
-          claude._offsets.set(file, offset);
-          claude._seenUuids.clear();
-          claude._collectFile(file, { sessionId: row.session_id, group: sessionGroup, runId: row.run_id,
-            agentId: row.parent_path ? path.basename(file, '.jsonl').replace(/^agent-/, '') : null,
-            usageOnly: Boolean(row.parent_path), origin: false });
-          offset = claude._offsets.get(file);
-          claude._offsets.delete(file);
-        } else {
-          while (offset < identity.size) {
-            withinBudget();
-            codex.collectMapping({ ...row, isOriginCurrent: false });
-            const next = store.getCodexRolloutCursor(file)?.byte_offset ?? 0;
-            if (next <= offset) throw fail('group_delete_usage_pending');
-            offset = next;
-          }
-        }
+        const offset = collectors.get(row.runtime).flush(instances.get(row.runtime), row, file, identity,
+          { ...ownership, store, withinBudget, sessionGroup });
         withinBudget();
         const current = fs.statSync(file);
         if (current.dev !== identity.dev || current.ino !== identity.ino || current.size !== identity.size || offset !== current.size) throw fail('group_delete_usage_pending');

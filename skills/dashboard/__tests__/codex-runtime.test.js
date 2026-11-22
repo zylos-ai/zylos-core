@@ -6,8 +6,10 @@ import path from 'node:path';
 import test from 'node:test';
 import { Store } from '../src/lib/store.js';
 import { Sanitizer } from '../src/lib/sanitizer.js';
-import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
-import { DEFAULT_CODEX_MODEL_PRICES, DEFAULT_CODEX_PRIORITY_MODEL_PRICES } from '../src/lib/config.js';
+import { CodexRolloutCollector } from '../src/lib/runtime/codex/collector.js';
+import { getDashboardRuntime } from '../src/lib/runtime/index.js';
+
+const { pricing: codexPricing, collector: codexCollector } = await getDashboardRuntime('codex');
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'codex-runtime-test-'));
@@ -55,7 +57,7 @@ test('Codex collection visits every supplied mapping and preserves group attribu
     return written;
   } };
   for (const mapping of mappings) store.insertUsageTranscript({ ...mapping, runtime: 'codex' }, new Date().toISOString());
-  const collector = new CodexRolloutCollector(store, { runtimeModelPrices: { codex: DEFAULT_CODEX_MODEL_PRICES } }, { transcripts });
+  const collector = new CodexRolloutCollector(store, { runtimeModelPrices: { codex: codexPricing.defaultModelPrices } }, { transcripts });
   await collector.collect();
   const usage = usageEvents(store);
   assert.equal(usage.length, 2);
@@ -198,9 +200,9 @@ test('CodexRolloutCollector ingests rollout fixture metrics from hook-derived pa
   });
 
   const collector = new CodexRolloutCollector(store, {
-    modelPrices: {
+    runtimeModelPrices: { codex: {
       'gpt-5.3-codex': { input: 2, output: 8, cacheRead: 0.5, cacheCreation: 2 }
-    }
+    } }
   });
 
   const written = collectMapping(collector);
@@ -324,9 +326,9 @@ test('CodexRolloutCollector bounds each collect pass by complete lines', () => {
   });
 
   const collector = new CodexRolloutCollector(store, {
-    modelPrices: {
+    runtimeModelPrices: { codex: {
       'gpt-5.3-codex': { input: 2, output: 8, cacheRead: 0.5, cacheCreation: 2 }
-    },
+    } },
     codexRolloutMaxLinesPerCollect: 2
   });
 
@@ -393,9 +395,9 @@ test('CodexRolloutCollector deduplicates metrics when rollout cursor is replayed
   });
 
   const collector = new CodexRolloutCollector(store, {
-    modelPrices: {
+    runtimeModelPrices: { codex: {
       'gpt-5.3-codex': { input: 2, output: 8, cacheRead: 0.5, cacheCreation: 2 }
-    }
+    } }
   });
   const liveMetrics = [];
   collector._onMetric = (metric) => liveMetrics.push(metric);
@@ -454,10 +456,8 @@ test('Project distribution uses canonical total input without double-counting Co
     confidence: 'actual'
   });
 
-  const distribution = store.getProjectDistribution({
-    since: '2026-05-23T00:00:00.000Z',
-    until: '2026-05-23T02:00:00.000Z'
-  });
+  const bounds = { since: '2026-05-23T00:00:00.000Z', until: '2026-05-23T02:00:00.000Z' };
+  const distribution = store.getProjectDistribution({ ...bounds, toolWeights: codexCollector.projectWeights(store, bounds) });
 
   assert.equal(distribution.totalTokens, 12800);
   assert.equal(distribution.totalOutput, 800);
@@ -512,10 +512,8 @@ test('Project distribution falls back to Codex rollout project signals', () => {
     confidence: 'actual'
   });
 
-  const distribution = store.getProjectDistribution({
-    since: '2026-05-23T00:00:00.000Z',
-    until: '2026-05-23T02:00:00.000Z'
-  });
+  const bounds = { since: '2026-05-23T00:00:00.000Z', until: '2026-05-23T02:00:00.000Z' };
+  const distribution = store.getProjectDistribution({ ...bounds, toolWeights: codexCollector.projectWeights(store, bounds) });
 
   assert.equal(distribution.totalTokens, 12800);
   assert.equal(distribution.items.length, 1);
@@ -639,7 +637,7 @@ test('CodexRolloutCollector computes cost from default Codex runtime prices', ()
   });
 
   const collector = new CodexRolloutCollector(store, {
-    runtimeModelPrices: { codex: DEFAULT_CODEX_MODEL_PRICES }
+    runtimeModelPrices: { codex: codexPricing.defaultModelPrices }
   });
   collectMapping(collector);
 
@@ -1195,8 +1193,8 @@ test('CodexRolloutCollector computes cost from Codex priority prices when fast t
   });
 
   const collector = new CodexRolloutCollector(store, {
-    runtimeModelPrices: { codex: DEFAULT_CODEX_MODEL_PRICES },
-    runtimeServiceTierModelPrices: { codex: { priority: DEFAULT_CODEX_PRIORITY_MODEL_PRICES } }
+    runtimeModelPrices: { codex: codexPricing.defaultModelPrices },
+    runtimeServiceTierModelPrices: { codex: { priority: codexPricing.serviceTiers.priority } }
   });
   collectMapping(collector);
 

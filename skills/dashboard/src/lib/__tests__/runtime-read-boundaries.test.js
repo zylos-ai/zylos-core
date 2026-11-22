@@ -6,7 +6,9 @@ import path from 'node:path';
 import { Store } from '../store.js';
 import { HistoryService } from '../history/history-service.js';
 import { createHistoryScope } from '../history/history-scope.js';
-import { claudeProjectSlug } from '../claude-project-path.js';
+import { loadCoreModule as loadTranscriptCore } from '../core-modules.js';
+const { getRuntime: getTranscriptRuntime } = await loadTranscriptCore('runtime/index.js');
+const { transcript: claudeTranscript } = (await getTranscriptRuntime('claude')).usage;
 
 // Local files, private SQLite and in-process HTTP handlers only. The official
 // runner isolates HOME/ZYLOS_DIR before imports. No server, tmux, PM2 or network.
@@ -51,7 +53,7 @@ const redactor = { async redact(text) { return { text, count: 0, kinds: [] }; } 
 
 for (const scoped of [false, true]) test(`AGY ${scoped ? 'group override' : 'instance'} history does not expose Claude files`, async t => {
   const { root } = fixture(t);
-  const project = path.join(os.homedir(), '.claude/projects', claudeProjectSlug(root));
+  const project = claudeTranscript.projectDir({ home: os.homedir(), zylosDir: root });
   fs.mkdirSync(project, { recursive: true });
   t.after(() => fs.rmSync(project, { recursive: true, force: true }));
   fs.writeFileSync(path.join(project, 'claude-session.jsonl'), JSON.stringify({ type: 'assistant',

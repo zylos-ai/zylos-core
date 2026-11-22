@@ -85,11 +85,12 @@ export function readyProcessFields(trigger, { readInfo = readProcessInfo } = {})
 }
 
 /** Runtime of a child process, from its process name or transcript location. */
-export function childRuntimeOf(trigger, transcriptPath) {
+export function childRuntimeOf(trigger, transcriptPath, markers = []) {
   const name = processName(trigger?.comm);
   if (usageRuntimes.includes(name)) return name;
   const location = typeof transcriptPath === 'string' ? transcriptPath.replaceAll('\\', '/') : '';
-  if (location.includes('/.codex/')) return 'codex';
-  if (location.includes('/.claude/')) return 'claude';
+  for (const [id, marker] of markers) {
+    if (location.includes(marker)) return id;
+  }
   return null;
 }

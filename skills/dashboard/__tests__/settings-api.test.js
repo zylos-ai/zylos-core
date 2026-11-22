@@ -30,15 +30,18 @@ async function readSettings(server) {
   const all = await response.json();
   return all.runtimes[all.active];
 }
-import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
+import { CodexRolloutCollector } from '../src/lib/runtime/codex/collector.js';
 import {
-  DEFAULT_CODEX_MODEL_PRICES,
-  DEFAULT_CODEX_PRIORITY_MODEL_PRICES,
-  DEFAULT_RUNTIME_MODEL_PRICES,
   loadConfig,
   fastModeMultiplierForRuntime,
   modelPricesForRuntime
 } from '../src/lib/config.js';
+import { UNSUPPORTED } from '../src/lib/runtime/contract.js';
+import { getDashboardRuntime } from '../src/lib/runtime/index.js';
+
+const { pricing: claudePricing } = await getDashboardRuntime('claude');
+const { pricing: codexPricing } = await getDashboardRuntime('codex');
+const pricing = { claude: claudePricing, codex: codexPricing };
 
 function makeTmpConfig() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-test-'));
@@ -205,7 +208,7 @@ test('settings validation: rejects missing built-in model', () => {
 });
 
 test('settings validation: uses Codex built-ins for Codex runtime', () => {
-  const prices = { ...DEFAULT_CODEX_MODEL_PRICES };
+  const prices = { ...codexPricing.defaultModelPrices };
   delete prices['gpt-5.5'];
   const errors = validateModelPrices(prices, 'codex');
   assert.ok(errors.some(e => e.includes('gpt-5.5')));
@@ -214,7 +217,7 @@ test('settings validation: uses Codex built-ins for Codex runtime', () => {
 
 test('settings validation: accepts valid prices', () => {
   const prices = {
-    ...DEFAULT_RUNTIME_MODEL_PRICES.claude,
+    ...claudePricing.defaultModelPrices,
     'claude-fable-5-1': { input: 10, output: 50, cacheRead: 0.25, cacheCreation: 20 },
     'claude-fable-5': { input: 10, output: 50, cacheRead: 1.00, cacheCreation: 20 },
     'claude-opus-5': { input: 5, output: 25, cacheRead: 0.50, cacheCreation: 10 },
@@ -271,32 +274,20 @@ test('loadConfig separates Claude and Codex model price tables', () => {
       }
     }
   }, () => {
-    const config = loadConfig();
+    const config = loadConfig({ pricing });
     assert.equal(config.modelPrices['claude-opus-4'].input, 9);
     assert.equal(config.runtimeModelPrices.codex['gpt-5.5'].input, 4);
-    assert.equal(config.runtimeModelPrices.codex['gpt-5.3-codex'].input, DEFAULT_CODEX_MODEL_PRICES['gpt-5.3-codex'].input);
-    assert.equal(config.runtimeModelPrices.codex['gpt-5.4'].input, DEFAULT_CODEX_MODEL_PRICES['gpt-5.4'].input);
-    assert.equal(modelPricesForRuntime(config, 'claude')['gpt-5.5'], undefined);
-    assert.equal(modelPricesForRuntime(config, 'codex')['claude-opus-4'], undefined);
+    assert.equal(config.runtimeModelPrices.codex['gpt-5.3-codex'].input, codexPricing.defaultModelPrices['gpt-5.3-codex'].input);
+    assert.equal(config.runtimeModelPrices.codex['gpt-5.4'].input, codexPricing.defaultModelPrices['gpt-5.4'].input);
+    assert.equal(modelPricesForRuntime(config, claudePricing)['gpt-5.5'], undefined);
+    assert.equal(modelPricesForRuntime(config, codexPricing)['claude-opus-4'], undefined);
   });
 });
 
-test('pricing helpers preserve the Claude fallback for other runtime values', () => {
-  const legacyPrices = { legacy: { input: 1 } };
-  const claudePrices = { claude: { input: 2 } };
-  const config = {
-    runtime: 'agy', modelPrices: legacyPrices, fastModeMultiplier: 6,
-    runtimeModelPrices: { claude: claudePrices, codex: { codex: { input: 3 } } },
-    runtimeFastModeMultipliers: { claude: 8, codex: 2 },
-  };
-  for (const runtime of ['agy', '', 'unknown', null, undefined]) {
-    assert.equal(modelPricesForRuntime(config, runtime), claudePrices);
-    assert.equal(fastModeMultiplierForRuntime(config, runtime), 8);
-    assert.equal(fastModeMultiplierForRuntime(config, runtime, { fastModeMultiplier: 4 }), 8);
-    assert.equal(fastModeMultiplierForRuntime({ ...config, configuredRuntimeFastModeMultipliers: {} }, runtime,
-      { fastModeMultiplier: 4 }), 4);
-    assert.equal(modelPricesForRuntime({ modelPrices: legacyPrices }, runtime), legacyPrices);
-    assert.equal(fastModeMultiplierForRuntime({ fastModeMultiplier: 6 }, runtime), 6);
+test('pricing helpers reject unsupported pricing', () => {
+  for (const prices of [UNSUPPORTED, null, undefined]) {
+    assert.throws(() => modelPricesForRuntime({}, prices), { code: 'PRICING_UNSUPPORTED' });
+    assert.throws(() => fastModeMultiplierForRuntime({}, prices), { code: 'PRICING_UNSUPPORTED' });
   }
 });
 
@@ -310,10 +301,10 @@ test('loadConfig keeps Codex priority prices separate from standard prices', () 
       }
     }
   }, () => {
-    const config = loadConfig();
-    assert.equal(modelPricesForRuntime(config, 'codex')['gpt-5.5'].input, DEFAULT_CODEX_MODEL_PRICES['gpt-5.5'].input);
-    assert.equal(modelPricesForRuntime(config, 'codex', 'priority')['gpt-5.5'].input, 13);
-    assert.equal(modelPricesForRuntime(config, 'codex', 'fast')['gpt-5.4'].input, DEFAULT_CODEX_PRIORITY_MODEL_PRICES['gpt-5.4'].input);
+    const config = loadConfig({ pricing });
+    assert.equal(modelPricesForRuntime(config, codexPricing)['gpt-5.5'].input, codexPricing.defaultModelPrices['gpt-5.5'].input);
+    assert.equal(modelPricesForRuntime(config, codexPricing, 'priority')['gpt-5.5'].input, 13);
+    assert.equal(modelPricesForRuntime(config, codexPricing, 'fast')['gpt-5.4'].input, codexPricing.serviceTiers.priority['gpt-5.4'].input);
   });
 });
 
@@ -321,7 +312,7 @@ test('loadConfig keeps fast mode multiplier scoped to Claude runtime', () => {
   withTmpZylosConfig({
     fastModeMultiplier: 8
   }, () => {
-    const config = loadConfig();
+    const config = loadConfig({ pricing });
     assert.equal(config.fastModeMultiplier, 8);
     assert.equal(config.runtimeFastModeMultipliers.claude, 8);
     assert.equal(config.runtimeFastModeMultipliers.codex, undefined);
@@ -333,7 +324,7 @@ test('loadConfig prefers runtime fast mode multipliers over legacy field', () =>
     fastModeMultiplier: 8,
     runtimeFastModeMultipliers: { claude: 5 }
   }, () => {
-    const config = loadConfig();
+    const config = loadConfig({ pricing });
     assert.equal(config.fastModeMultiplier, 5);
     assert.equal(config.runtimeFastModeMultipliers.claude, 5);
     assert.equal(config.runtimeFastModeMultipliers.codex, undefined);
@@ -346,9 +337,9 @@ test('loadConfig migrates legacy modelPrices into Claude prices only', () => {
       'claude-opus-4': { input: 11, output: 25, cacheRead: 0.50, cacheCreation: 10 }
     }
   }, () => {
-    const config = loadConfig();
+    const config = loadConfig({ pricing });
     assert.equal(config.runtimeModelPrices.claude['claude-opus-4'].input, 11);
-    assert.equal(config.runtimeModelPrices.codex['gpt-5.5'].input, DEFAULT_CODEX_MODEL_PRICES['gpt-5.5'].input);
+    assert.equal(config.runtimeModelPrices.codex['gpt-5.5'].input, codexPricing.defaultModelPrices['gpt-5.5'].input);
     assert.equal(config.runtimeModelPrices.codex['claude-opus-4'], undefined);
   });
 });
@@ -369,7 +360,7 @@ test('all-runtime settings expose Codex fast mode as priority service tier', asy
     assert.equal(body.fastMode.serviceTier, 'priority');
     assert.equal(body.fastMode.multiplier, null);
     assert.equal(body.fastModeMultiplier, null);
-    assert.equal(body.priorityModelPrices['gpt-5.5'].input, DEFAULT_CODEX_PRIORITY_MODEL_PRICES['gpt-5.5'].input);
+    assert.equal(body.priorityModelPrices['gpt-5.5'].input, codexPricing.serviceTiers.priority['gpt-5.5'].input);
     assert.ok(body.builtInPriorityModels.includes('gpt-5.5'));
   } finally {
     await server.close();
@@ -450,7 +441,7 @@ test('PUT /api/settings/pricing stores fast mode multiplier under Claude runtime
 // ─── Validation helpers (extracted from server logic for testability) ───
 
 function builtInModelsForRuntime(runtime = 'claude') {
-  return Object.keys(DEFAULT_RUNTIME_MODEL_PRICES[runtime === 'codex' ? 'codex' : 'claude'] || {});
+  return Object.keys(pricing[runtime]?.defaultModelPrices || {});
 }
 
 function validateModelPrices(modelPrices, runtime = 'claude') {
@@ -570,7 +561,7 @@ test('ordinary Settings save preserves custom prefixes without broadening built-
   function reload() {
     const previous = process.env.ZYLOS_DIR;
     process.env.ZYLOS_DIR = server.dir;
-    try { return loadConfig(); } finally {
+    try { return loadConfig({ pricing }); } finally {
       if (previous === undefined) delete process.env.ZYLOS_DIR;
       else process.env.ZYLOS_DIR = previous;
     }
@@ -603,8 +594,8 @@ test('all-runtime settings retire the single-runtime read and atomically save bo
   assert.equal(all.active, 'claude');
   assert.equal(all.runtimes.claude.runtime, 'claude');
   assert.equal(Object.hasOwn(all.runtimes, 'agy'), false);
-  assert.deepEqual(all.runtimes.claude.builtInModels.sort(), Object.keys(DEFAULT_RUNTIME_MODEL_PRICES.claude).sort());
-  assert.deepEqual(all.runtimes.codex.builtInModels.sort(), Object.keys(DEFAULT_RUNTIME_MODEL_PRICES.codex).sort());
+  assert.deepEqual(all.runtimes.claude.builtInModels.sort(), Object.keys(claudePricing.defaultModelPrices).sort());
+  assert.deepEqual(all.runtimes.codex.builtInModels.sort(), Object.keys(codexPricing.defaultModelPrices).sort());
   const claude = structuredClone(all.runtimes.claude.modelPrices);
   const codex = structuredClone(all.runtimes.codex.modelPrices);
   claude['claude-opus-4'].input = 11;

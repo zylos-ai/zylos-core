@@ -1,0 +1,9 @@
+{
+  "program": "Codex CLI",
+  "version": "codex-cli 0.169.1",
+  "recordedAt": "2026-11-21T14:00:24.550Z",
+  "how": "Reused the native Codex CLI records under cli/lib/runtime/__tests__/samples/codex/usage. The reviewer recorded one real codex exec turn as the dedicated zylos-test OS user with temporary HOME and CODEX_HOME and TZ=Asia/Singapore, using a synthetic prompt requesting a one-word reply.",
+  "files": {
+    "rollout-native.jsonl": "Kept turn_context with its model and the following token_count with its usage info. Omitted the turn identifier and account rate limits. All retained values are unchanged."
+  }
+}

@@ -1,7 +1,14 @@
+import path from 'node:path';
 import { UNSUPPORTED } from '../contract.js';
 import { readCodexSampleForIdentity, readRecordedCodexSample } from './rollout.js';
 
 export const usage = Object.freeze({
+  transcript: Object.freeze({
+    root({ home }) { return path.join(home, '.codex', 'sessions'); },
+    projectDir: UNSUPPORTED,
+    isTranscriptFile(file) { return /^rollout-[^/]+\.jsonl$/.test(path.basename(file)); },
+    pathMarker: '/.codex/',
+  }),
   accountQuota: Object.freeze({
     readLiveSample({ sessionGroup, identity, env }) {
       const found = readCodexSampleForIdentity({ sessionGroup, identity, env, account: true });

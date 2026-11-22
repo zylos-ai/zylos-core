@@ -1,4 +1,9 @@
 import { restartEffect } from '../../../public/js/wb/timeline-rows.js';
+import { loadCoreModule } from '../core-modules.js';
+
+const { getRuntime, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/index.js');
+const exitsProcess = new Map(await Promise.all(SUPPORTED_RUNTIMES.map(async id =>
+  [id, (await getRuntime(id)).switch.exitsProcess === true])));
 
 /** Read run segments from imported events without changing their attribution. */
 export function createRuns({ store, getSnapshot = async () => ({ rows: [] }) } = {}) {
@@ -43,7 +48,7 @@ export function createRuns({ store, getSnapshot = async () => ({ rows: [] }) } =
         if (event.event_type === 'reclaim_done') return metadata?.reason ?? 'reclaim';
         if (event.event_type === 'crash_detected') return 'crash';
         if (event.event_type === 'manual_restart_done') return 'manual_restart';
-        if (event.runtime === 'codex' && !metadata?.oldSessionId) return 'rotate';
+        if (exitsProcess.get(event.runtime) === true && !metadata?.oldSessionId) return 'rotate';
       }
       return 'unknown';
     };

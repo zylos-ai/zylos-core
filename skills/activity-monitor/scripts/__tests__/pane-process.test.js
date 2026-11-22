@@ -10,6 +10,7 @@ import {
   PANE_PROCESS_FILE, belongsToPane, readPaneProcess, writePaneProcess,
 } from '../../../../cli/lib/runtime/pane-process.js';
 import { childRuntimeOf, classifyHookProcess, readyProcessFields } from '../pane-process.js';
+import { getRuntime, runtimesWith } from '../../../../cli/lib/runtime/index.js';
 
 function runDir(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-process-'));
@@ -205,11 +206,13 @@ test('READY process fields name the publisher and its parent', async t => {
   assert.equal('runtimeParentStart' in readyProcessFields({ pid: 3, ppid: 2, start: '1' }, { readInfo: () => null }), false);
 });
 
-test('a child runtime is named by its process or its transcript location', () => {
+test('a child runtime is named by its process or its transcript location', async () => {
+  const markers = await Promise.all(runtimesWith('usage').map(async id =>
+    [id, (await getRuntime(id)).usage.transcript.pathMarker]));
   assert.equal(childRuntimeOf({ comm: 'claude' }, null), 'claude');
   assert.equal(childRuntimeOf({ comm: 'codex.exe' }, null), 'codex');
-  assert.equal(childRuntimeOf({ comm: 'node' }, '/home/a/.codex/sessions/2026/x.jsonl'), 'codex');
-  assert.equal(childRuntimeOf({ comm: 'node' }, 'C:\\Users\\a\\.claude\\projects\\p\\s.jsonl'), 'claude');
+  assert.equal(childRuntimeOf({ comm: 'node' }, '/home/a/.codex/sessions/2026/x.jsonl', markers), 'codex');
+  assert.equal(childRuntimeOf({ comm: 'node' }, 'C:\\Users\\a\\.claude\\projects\\p\\s.jsonl', markers), 'claude');
   assert.equal(childRuntimeOf({ comm: 'agy' }, null), null);
-  assert.equal(childRuntimeOf({ comm: 'node' }, '/tmp/s.jsonl'), null);
+  assert.equal(childRuntimeOf({ comm: 'node' }, '/tmp/s.jsonl', markers), null);
 });

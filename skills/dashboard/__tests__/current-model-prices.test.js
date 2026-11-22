@@ -3,14 +3,19 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { loadConfig, modelPricesForRuntime, DEFAULT_CODEX_MODEL_PRICES, DEFAULT_CODEX_PRIORITY_MODEL_PRICES, DEFAULT_CLAUDE_MODEL_PRICES } from '../src/lib/config.js';
-import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
-import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
+import { loadConfig, modelPricesForRuntime } from '../src/lib/config.js';
+import { CodexRolloutCollector } from '../src/lib/runtime/codex/collector.js';
+import { ConversationCollector } from '../src/lib/runtime/claude/collector.js';
 import { Store } from '../src/lib/store.js';
+import { getDashboardRuntime } from '../src/lib/runtime/index.js';
+
+const { pricing: claudePricing } = await getDashboardRuntime('claude');
+const { pricing: codexPricing } = await getDashboardRuntime('codex');
+const pricing = { claude: claudePricing, codex: codexPricing };
 
 const defaults = {
-  runtimeModelPrices: { codex: DEFAULT_CODEX_MODEL_PRICES, claude: DEFAULT_CLAUDE_MODEL_PRICES },
-  runtimeServiceTierModelPrices: { codex: { priority: DEFAULT_CODEX_PRIORITY_MODEL_PRICES } }
+  runtimeModelPrices: { codex: codexPricing.defaultModelPrices, claude: claudePricing.defaultModelPrices },
+  runtimeServiceTierModelPrices: { codex: { priority: codexPricing.serviceTiers.priority } }
 };
 function closeTo(actual, expected) { assert.ok(Math.abs(actual - expected) < 1e-10, `${actual} != ${expected}`); }
 function withConfig(value, fn) {
@@ -21,7 +26,7 @@ function withConfig(value, fn) {
     fs.mkdirSync(path.join(dir, 'components/dashboard'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'components/dashboard/config.json'), JSON.stringify(value));
   }
-  try { fn(loadConfig()); } finally {
+  try { fn(loadConfig({ pricing })); } finally {
     if (prev === undefined) delete process.env.ZYLOS_DIR; else process.env.ZYLOS_DIR = prev;
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -132,12 +137,12 @@ test('saved custom price tables still receive GPT-6.2 and GPT-6.1 Terra default 
   const legacy = ids => Object.fromEntries(Object.entries(ids).filter(([id]) => !added.has(id)));
   const custom = { input: 1, output: 1, cacheRead: 1, cacheCreation: 1 };
   withConfig({
-    runtimeModelPrices: { codex: { ...legacy(DEFAULT_CODEX_MODEL_PRICES), 'gpt-6-astra': custom } },
-    runtimeServiceTierModelPrices: { codex: { priority: { ...legacy(DEFAULT_CODEX_PRIORITY_MODEL_PRICES), 'gpt-6-astra': custom } } }
+    runtimeModelPrices: { codex: { ...legacy(codexPricing.defaultModelPrices), 'gpt-6-astra': custom } },
+    runtimeServiceTierModelPrices: { codex: { priority: { ...legacy(codexPricing.serviceTiers.priority), 'gpt-6-astra': custom } } }
   }, config => {
     for (const tier of ['standard', 'priority']) {
-      const table = modelPricesForRuntime(config, 'codex', tier);
-      const defaultsForTier = tier === 'priority' ? DEFAULT_CODEX_PRIORITY_MODEL_PRICES : DEFAULT_CODEX_MODEL_PRICES;
+      const table = modelPricesForRuntime(config, codexPricing, tier);
+      const defaultsForTier = tier === 'priority' ? codexPricing.serviceTiers.priority : codexPricing.defaultModelPrices;
       assert.deepEqual(table['gpt-6.2-sol'], defaultsForTier['gpt-6.2-sol']);
       assert.deepEqual(table['gpt-6.2-astra'], defaultsForTier['gpt-6.2-astra']);
       assert.deepEqual(table['gpt-6.1-terra'], defaultsForTier['gpt-6.1-terra']);
@@ -193,12 +198,12 @@ test('cumulative-only fallback does not infer a request context tier', t => {
 test('exact override wins independent of insertion order; only dated snapshots inherit', () => {
   const custom = { input: 9, output: 8, cacheRead: 7, cacheCreation: 6 };
   const collector = new CodexRolloutCollector({}, { runtimeModelPrices: { codex: {
-    'gpt-5': DEFAULT_CODEX_MODEL_PRICES['gpt-5'], ...DEFAULT_CODEX_MODEL_PRICES,
+    'gpt-5': codexPricing.defaultModelPrices['gpt-5'], ...codexPricing.defaultModelPrices,
     'gpt-5.6-sol-2026-07-09': custom
   } } });
   assert.equal(collector._resolveModelPrice('gpt-5.6-sol-2026-07-09'), custom);
-  assert.equal(collector._resolveModelPrice('gpt-5.6-sol'), DEFAULT_CODEX_MODEL_PRICES['gpt-5.6-sol']);
-  assert.equal(collector._resolveModelPrice('gpt-6-astra-2026-09-10'), DEFAULT_CODEX_MODEL_PRICES['gpt-6-astra']);
+  assert.equal(collector._resolveModelPrice('gpt-5.6-sol'), codexPricing.defaultModelPrices['gpt-5.6-sol']);
+  assert.equal(collector._resolveModelPrice('gpt-6-astra-2026-09-10'), codexPricing.defaultModelPrices['gpt-6-astra']);
   for (const model of ['gpt-5.7', 'gpt-5.6-sol-next', 'gpt-6-astra-pro', 'gpt-5.6-terra2']) {
     assert.equal(collector._resolveModelPrice(model), null);
   }
@@ -279,10 +284,10 @@ test('Claude Opus 5.5 uses its own prices instead of the Opus 5 prefix', () => {
   const collector = new ConversationCollector({}, defaults);
   for (const model of ['claude-opus-5-5', 'claude-opus-5-5[1m]']) {
     const price = collector._resolveModelPrice(model);
-    assert.equal(price, DEFAULT_CLAUDE_MODEL_PRICES['claude-opus-5-5']);
+    assert.equal(price, claudePricing.defaultModelPrices['claude-opus-5-5']);
     closeTo(collector._calculateCost({ input_tokens: 1000000, output_tokens: 1000000 }, price, 'standard'), 24);
     closeTo(collector._calculateCost({ input_tokens: 1000000, output_tokens: 1000000 }, price, 'fast'), 48);
     closeTo(collector._calculateCost({ cache_read_input_tokens: 1000000 }, price, 'standard'), 0.2);
   }
-  assert.equal(collector._resolveModelPrice('claude-opus-5[1m]'), DEFAULT_CLAUDE_MODEL_PRICES['claude-opus-5']);
+  assert.equal(collector._resolveModelPrice('claude-opus-5[1m]'), claudePricing.defaultModelPrices['claude-opus-5']);
 });

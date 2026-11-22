@@ -5,9 +5,9 @@ import path from 'node:path';
 import test from 'node:test';
 import { Store } from '../src/lib/store.js';
 import { Sanitizer } from '../src/lib/sanitizer.js';
-import { codexToolOutputFailed } from '../src/lib/codex-tool-outcome.js';
-import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
-import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
+import { codexToolOutputFailed } from '../src/lib/runtime/codex/tool-outcome.js';
+import { CodexRolloutCollector } from '../src/lib/runtime/codex/collector.js';
+import { ConversationCollector } from '../src/lib/runtime/claude/collector.js';
 import { groupMainTranscript } from '../src/lib/collectors/usage-transcripts.js';
 import { recordGroupInterrupt } from '../src/lib/chat/activity.js';
 

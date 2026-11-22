@@ -55,6 +55,20 @@ for (const id of SUPPORTED_RUNTIMES) {
     }
     if (noticeRules !== UNSUPPORTED) assert.ok(Array.isArray(noticeRules));
     const { usage } = runtime;
+    const transcript = usage === UNSUPPORTED ? UNSUPPORTED : usage.transcript;
+    assert.equal(transcript !== UNSUPPORTED, runtimesWith('usage').includes(id),
+      'usage in the registry must agree with usage.transcript');
+    if (transcript !== UNSUPPORTED) {
+      assert.ok(Object.isFrozen(transcript));
+      for (const [member, type] of Object.entries({
+        root: 'function', projectDir: 'function', isTranscriptFile: 'function', pathMarker: 'string',
+      })) {
+        assert.ok(Object.hasOwn(transcript, member), `missing member usage.transcript.${member}`);
+        if (member === 'root' || transcript[member] !== UNSUPPORTED) {
+          assert.equal(typeof transcript[member], type, `usage.transcript.${member}`);
+        }
+      }
+    }
     const accountQuota = usage === UNSUPPORTED ? UNSUPPORTED : usage.accountQuota;
     assert.equal(accountQuota !== UNSUPPORTED, runtimesWith('accountQuota', 'supported').includes(id),
       'accountQuota in the registry must agree with usage.accountQuota');
