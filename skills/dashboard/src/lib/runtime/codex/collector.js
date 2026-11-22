@@ -1,4 +1,6 @@
-import path from 'node:path';
+// This module awaits the Core runtime factory at module scope.
+// The corresponding runtime implementations must not statically import it.
+
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { loadCoreModule } from '../../core-modules.js';

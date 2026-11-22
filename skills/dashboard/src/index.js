@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// This module awaits the Core and Dashboard runtime factories at module scope.
+// The corresponding runtime implementations must not statically import it.
+
 import { createInstalledVersionReader } from './lib/installed-versions.js';
 import { CoreState } from './lib/core-state.js';
 import { createSessionObservations } from './lib/session-observations.js';

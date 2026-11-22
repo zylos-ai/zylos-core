@@ -1,3 +1,6 @@
+// This module awaits the Dashboard runtime factory at module scope.
+// The corresponding runtime implementations must not statically import it.
+
 import { sendJson } from '../http.js';
 import { isoTimestamp } from '../wire-time.js';
 import { getDashboardRuntime } from '../runtime/index.js';
@@ -14,7 +17,8 @@ class EmptyHistory {
   paths = new Map();
   async listSessions() { return { current: null, sessions: [] }; }
 }
-const parsers = new Map((await Promise.all(SUPPORTED_RUNTIMES.map(id => getDashboardRuntime(id))))
+const dashboardRuntimes = await Promise.all(SUPPORTED_RUNTIMES.map(id => getDashboardRuntime(id)));
+const parsers = new Map(dashboardRuntimes
   .filter(runtime => runtime.history !== UNSUPPORTED)
   .map(runtime => [runtime.id, runtime.history]));
 const parserForRuntime = runtime => parsers.get(runtime) ?? EmptyHistory;

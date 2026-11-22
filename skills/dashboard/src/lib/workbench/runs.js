@@ -1,3 +1,6 @@
+// This module awaits the Core runtime factory at module scope.
+// The corresponding runtime implementations must not statically import it.
+
 import { restartEffect } from '../../../public/js/wb/timeline-rows.js';
 import { loadCoreModule } from '../core-modules.js';
 

@@ -1,3 +1,6 @@
+// This module awaits the Dashboard runtime factory at module scope.
+// The corresponding runtime implementations must not statically import it.
+
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

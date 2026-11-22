@@ -1,3 +1,6 @@
+// This module awaits the Core runtime factory at module scope.
+// The corresponding runtime implementations must not statically import it.
+
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -6,7 +9,7 @@ import { UNSUPPORTED } from '../contract.js';
 import pricing from './pricing.js';
 import { fastModeMultiplierForRuntime, modelPricesForRuntime } from '../../config.js';
 import { Sanitizer } from '../../sanitizer.js';
-import { UsageTranscripts, groupMainTranscript, childTranscript } from '../../collectors/usage-transcripts.js';
+import { INACTIVE_MS, UsageTranscripts, groupMainTranscript, childTranscript } from '../../collectors/usage-transcripts.js';
 import { sameSourceFile } from '../../source-file-identity.js';
 
 const { getRuntime } = await loadCoreModule('runtime/index.js');
@@ -556,8 +559,6 @@ export class ConversationCollector {
     if (this._stopTimer) { clearTimeout(this._stopTimer); this._stopTimer = null; }
   }
 }
-
-const INACTIVE_MS = 30 * 60_000;
 
 function discover({ store, config, insert, at }) {
   let mains = store.mainTranscripts('claude');

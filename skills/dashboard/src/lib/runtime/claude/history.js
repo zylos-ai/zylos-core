@@ -1,3 +1,6 @@
+// This module awaits the Core runtime factory at module scope.
+// The corresponding runtime implementations must not statically import it.
+
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';

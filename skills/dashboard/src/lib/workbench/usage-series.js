@@ -1,3 +1,6 @@
+// This module awaits the Dashboard runtime factory at module scope.
+// The corresponding runtime implementations must not statically import it.
+
 import { loadCoreModule } from '../core-modules.js';
 import { getDashboardRuntime } from '../runtime/index.js';
 import { UNSUPPORTED } from '../runtime/contract.js';

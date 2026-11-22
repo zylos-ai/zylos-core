@@ -7,7 +7,7 @@ import { loadCoreModule } from '../core-modules.js';
 const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
 
 const DAY = 86400000;
-const INACTIVE_MS = 30 * 60000;
+export const INACTIVE_MS = 30 * 60000;
 // Healthy snapshots reuse existing identity/lifecycle signals between refreshes.
 const SNAPSHOT_FALLBACK_MS = 10 * 60000;
 // Persisted lifecycle signals still work when Origin is asleep and costKey is

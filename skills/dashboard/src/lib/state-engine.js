@@ -1,3 +1,6 @@
+// This module awaits the Core and Dashboard runtime factories at module scope.
+// The corresponding runtime implementations must not statically import it.
+
 import path from 'node:path';
 import { loadCoreModule } from './core-modules.js';
 
@@ -5,8 +8,8 @@ import { getDashboardRuntime } from './runtime/index.js';
 import { UNSUPPORTED } from './runtime/contract.js';
 
 const { DEFAULT_RUNTIME, getRuntime, SUPPORTED_RUNTIMES, runtimesWith } = await loadCoreModule('runtime/index.js');
-const usageCollectors = new Map((await Promise.all(runtimesWith('usage').map(id => getDashboardRuntime(id))))
-  .map(runtime => [runtime.id, runtime.collector]));
+const usageRuntimes = await Promise.all(runtimesWith('usage').map(id => getDashboardRuntime(id)));
+const usageCollectors = new Map(usageRuntimes.map(runtime => [runtime.id, runtime.collector]));
 const sessionIdEnvs = (await Promise.all(SUPPORTED_RUNTIMES.map(id => getRuntime(id))))
   .map(runtime => runtime.hooks.sessionIdEnv)
   .filter(name => name !== UNSUPPORTED);
