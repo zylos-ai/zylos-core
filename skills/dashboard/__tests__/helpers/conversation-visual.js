@@ -584,8 +584,14 @@ export async function runConversationVisual(t, sandbox) {
   await screenshot('external-read-only');
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator('#wb-chat .conversation-back').click();
-  const loadMoreBox = await page.locator('#wb-chat [data-action="loadMore"]').boundingBox();
-  assert.ok(loadMoreBox && loadMoreBox.height >= 40, 'load more has a 40px phone height');
+  const externalRows = page.locator('#wb-chat [data-conversation-id]');
+  assert.equal(await externalRows.count(), 50);
+  await page.locator('#wb-chat .conversation-items').evaluate(list => {
+    list.scrollTop = list.scrollHeight;
+    list.dispatchEvent(new Event('scroll'));
+  });
+  await page.waitForFunction(() => document.querySelectorAll('#wb-chat [data-conversation-id]').length > 50);
+  assert.equal(await page.locator('#wb-chat [data-action="loadMore"]').count(), 0);
   await page.setViewportSize({ width: 1440, height: 900 });
   fixture.setProxy(fixture);
   const allowRemote = async value => {

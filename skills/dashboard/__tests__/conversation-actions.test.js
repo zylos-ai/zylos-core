@@ -116,6 +116,35 @@ test('canonical draft conflict keeps text for a deliberate later send', async ()
   await state.open(); await state.select('d:A'); state.setInput('different text'); await state.send();
   assert.equal(state.snapshot().selectedId,'g:B'); assert.equal(state.snapshot().retryRequired,false); assert.equal(state.snapshot().input,'different text'); state.destroy();
 });
+test('a quiet list read before the send receipt does not hide the promoted draft', async () => {
+  const receipt = pending(), detailsStarted = pending(), details = pending();
+  const draft = { id: 'd:A', state: 'draft', draft: true };
+  const canonical = { id: 'g:AA', state: 'active', display_name: 'Named draft' };
+  let committed = false;
+  const { state } = fixture((requestPath, options) => {
+    if (requestPath.startsWith('/api/conversations?')) return { items: committed ? [canonical] : [draft] };
+    if (options?.method === 'POST') return receipt.promise;
+    if (requestPath === '/api/conversations/g%3AAA') {
+      detailsStarted.resolve();
+      return details.promise;
+    }
+  });
+  await state.open();
+  await state.select(draft.id);
+  state.setInput('first message');
+  const sending = state.send();
+  committed = true;
+  await catchUpConversation(state);
+  assert.equal(state.snapshot().listUpdates, 1, 'the list sees the canonical row before the send receipt arrives');
+  receipt.resolve({ stored: true, conversationId: canonical.id, messageId: 1 });
+  await detailsStarted.promise;
+  const { selectedId, items, listUpdates } = state.snapshot();
+  details.resolve({ conversation: canonical });
+  await sending;
+  assert.equal(selectedId, canonical.id);
+  assert.deepEqual(items.map(row => row.id), [canonical.id]);
+  assert.equal(listUpdates, 0);
+});
 test('inflight send can settle while closed without being resent on reopen', async () => {
   const wait=pending(); const {state,calls}=fixture((path,options)=>options?.method==='POST'?wait.promise:undefined);
   await state.open(); await state.select('g:A'); state.setInput('text'); const send=state.send(); state.close();

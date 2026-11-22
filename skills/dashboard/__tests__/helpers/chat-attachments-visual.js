@@ -72,6 +72,9 @@ export async function runAttachmentVisual(t, sandbox) {
   scenes.older.imageRow = fixture.addAgent(scenes.older.draft.localId, { version: 1, kind: 'message', messageId: 'older-media-message',
     fallbackText: '更早图片', blocks: [mediaBlock('older', olderImage, 'image')] });
   for (let index = 0; index < 70; index++) scenes.older.visibleRow = fixture.addOutbound(scenes.older.draft.localId, `更早的历史讨论 ${index + 1}：保留历史阅读位置。`).id;
+  // Start this older-history scene at the latest page with the fixture's history already read.
+  const readOlder = await fixture.request(scenes.older.route + '/read', { method: 'PUT', body: { upTo: scenes.older.visibleRow } });
+  assert.equal(readOlder.status, 200, readOlder.text);
   const external = fixture.c4.insertConversation('in', 'telegram', 'media-external',
     '原渠道资料\n[attachment:image /private/original/photo.png name="原渠道截图.png" 120 KB]\n[MEDIA:/private/original/legacy.png]', { groupName: 'media-external' });
   const externalId = 'g:' + Buffer.from(external.session_group).toString('hex').toUpperCase();

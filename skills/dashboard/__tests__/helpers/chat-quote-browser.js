@@ -62,6 +62,8 @@ export async function runQuoteAnnotateBrowser(t, sandbox, { widths = [1280, 390]
   const internal = fixture.c4.insertInternalMessage(groupWith('另一个对话的草稿不应串过来。'), groupWith('我们讨论一下灰度发布。'), '内部协调：发布窗口定在周四晚上。').inRow;
   const quotesInternal = fixture.c4.insertConversation('in', 'dashboard', localId, `[quote c4_id=${internal.id}]\n周四晚上谁值班？`, { groupName: localId });
   const reply = fixture.addOutbound(localId, '建议第一批放 2 台，观察 30 分钟再放到全部 4 台。');
+  const read = await fixture.request(mine.route + '/read', { method: 'PUT', body: { upTo: reply.id } });
+  assert.equal(read.status, 200, read.text);
 
   const { chromium } = await import(pathToFileURL(modulePath));
   console.info('Quote browser private targets:', JSON.stringify(sandbox.assertIsolation()), 'model/PM2/tmux unused');

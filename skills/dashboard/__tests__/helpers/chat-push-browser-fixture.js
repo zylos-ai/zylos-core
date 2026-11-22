@@ -9,10 +9,12 @@ import { Store } from '../../src/lib/store.js';
 import { AuthGate } from '../../src/lib/auth.js';
 import { C4Reader } from '../../src/lib/c4-reader.js';
 import { ChatHistory } from '../../src/lib/chat/history.js';
+import { ChatConversations } from '../../src/lib/chat/conversations.js';
 import { ChatChangeObserver } from '../../src/lib/chat/change-observer.js';
 import { SseHub } from '../../src/lib/sse.js';
 import { handleChatStream } from '../../src/lib/chat/stream.js';
 import { handleChatHistory } from '../../src/lib/chat/history-routes.js';
+import { handleChatConversations } from '../../src/lib/chat/write-routes.js';
 import { requireChatAccess } from '../../src/lib/chat/access.js';
 import { migrateSchema } from '../../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../../comm-bridge/scripts/c4-migrations-v2.js';
@@ -21,6 +23,7 @@ import { CONTENT_PREFIX } from '../../../comm-bridge/scripts/c4-content-schema.j
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const schemaFile = fileURLToPath(new URL('../../../comm-bridge/scripts/c4-content-schema.js', import.meta.url));
 const group = 'dash-browser:push', conversationId = 'g:' + Buffer.from(group).toString('hex').toUpperCase();
+const readPath = '/api/conversations/' + encodeURIComponent(conversationId) + '/read';
 const protocol = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/c4-content-protocol.json', import.meta.url)));
 const envelope = structuredClone(protocol.valid.find(row => row.envelope?.blocks?.some(block => block.type === 'form_intent')).envelope);
 envelope.messageId = 'private-browser-form'; envelope.interruptId = 'private-browser-interrupt';
@@ -34,7 +37,9 @@ export async function createChatPushBrowserFixture(sandbox, { legacyHub = null }
   migrateSchema(writer, { isNew: true }); migrateToV2(writer); writer.pragma('journal_mode = WAL');
   writer.prepare('INSERT INTO channel_namespaces VALUES (?,?)').run('dash-browser', 'dashboard');
   const store = sandbox.openDatabase(sandbox.paths.dashboardDb, filename => new Store(filename));
-  const reader = new C4Reader(sandbox.paths.zylos), history = new ChatHistory({ c4Reader: reader });
+  const reader = new C4Reader(sandbox.paths.zylos);
+  const conversations = new ChatConversations({ store });
+  const history = new ChatHistory({ c4Reader: reader, conversations });
   const hub = new (legacyHub || SseHub)(1000), observer = new ChatChangeObserver({ c4Reader: reader, history });
   const config = { auth: { enabled: true, password: 'scrypt:private-browser-fixture' }, chat: { allowRemote: false } };
   const cookie = crypto.randomBytes(32).toString('hex');
@@ -90,7 +95,12 @@ await page.openGroup(${JSON.stringify(group)},{channel:'dashboard'});window.read
       }
       if (url.pathname.startsWith('/api/')) {
         if (requests.length >= 300) return json(res, { error: 'fixture_request_limit' }, 503);
-        requests.push({ path: url.pathname, query: url.search, method: req.method, page: req.headers['x-fixture-page'] ?? null, at: Date.now() });
+        const request = { path: url.pathname, query: url.search, method: req.method, page: req.headers['x-fixture-page'] ?? null, at: Date.now() };
+        requests.push(request);
+        if (req.method === 'PUT' && url.pathname === readPath) {
+          res.once('finish', () => { request.status = res.statusCode; });
+          if (await handleChatConversations(req, res, url, { auth, config, history })) return;
+        }
         if (url.pathname === '/api/stream' && !streamsAllowed) return json(res, { error: 'private_stream_outage' }, streamFailureStatus);
         if (url.pathname === '/api/stream' && legacyHub) {
           const denied = requireChatAccess(req, auth, config);
@@ -128,7 +138,7 @@ await page.openGroup(${JSON.stringify(group)},{channel:'dashboard'});window.read
     } catch (error) { json(res, { error: error.code || 'fixture_error' }, error.statusCode || 500); }
   });
   const origin = await sandbox.startHttp(server);
-  return { origin, writer, reader, history, hub, observer, requests, events, group, conversationId, pendingId,
+  return { origin, writer, reader, history, hub, observer, requests, events, group, conversationId, pendingId, readPath,
     deliverAndReply(label = 'New AI reply / 新 AI 回复') {
       let id;
       writer.transaction(() => { writer.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(pendingId); id = add(label); })();

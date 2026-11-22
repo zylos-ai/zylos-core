@@ -1427,8 +1427,14 @@ export function createConversationState({
       else current.pending = null;
       if (result.error) current.error = result.error;
       const canonical = result.conversationId || id;
-      // A committed draft becomes this canonical conversation; keep quiet list merges from retaining its old row.
-      if (result.stored === true && id.startsWith('d:') && canonical !== id) items = items.filter(row => row.id !== id);
+      // The user already sees this draft. Promote its row in place before any
+      // overlapping list read can classify the canonical ID as new activity.
+      if (result.stored === true && id.startsWith('d:') && canonical !== id && tab === currentTab
+          && items.some(row => row.id === id)) {
+        listUpdates.delete(canonical);
+        if (items.some(row => row.id === canonical)) items = items.filter(row => row.id !== id);
+        else items = items.map(row => row.id === id ? { ...row, id: canonical, draft: false, state: 'active' } : row);
+      }
       cells.set(`${currentTab}:${canonical}`, current);
       moveCompose(current, canonical);
       persistCompose(current);
