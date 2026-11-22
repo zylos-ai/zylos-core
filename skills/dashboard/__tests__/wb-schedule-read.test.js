@@ -557,6 +557,10 @@ test('every status pages in section order with signed cursors while counts, time
   const done = await walk({ status: 'completed' });
   assert.deepEqual(done.map(page => page.items.length), [50, 50, 20]);
   assert.deepEqual(done.flatMap(page => page.items.map(task => task.id)), expected.filter(row => row.status === 'completed').map(row => row.id));
+  // When the rows fill the last page exactly, that page has no next cursor, so no empty "Load more" is offered.
+  const exact = await walk({ status: 'completed', limit: '60' });
+  assert.deepEqual(exact.map(page => page.items.length), [60, 60]);
+  assert.equal(exact.at(-1).nextCursor, null);
 
   // q matches the name only, case-insensitively and with literal %, _ and Unicode.
   assert.equal((await list(reader, { q: 'BodyOnlyWord' })).items.length, 0);

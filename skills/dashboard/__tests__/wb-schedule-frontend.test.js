@@ -645,13 +645,17 @@ test('every status loads in batches of the server order and a refused cursor rel
   assert.equal(listRows(h).length, 50);
   assert.ok(h.calls.at(-1).path.includes('status=enabled'));
   // The Dashboard restarts: the next page's cursor is refused and the page silently reloads from the first page.
+  // A loaded task was deleted meanwhile, so the reload replaces the loaded rows instead of keeping them.
+  assert.ok(listRows(h).some(node => /Active 3(?!\d)/.test(node.textContent)));
+  rows.splice(rows.findIndex(row => row.id === 'active-3'), 1);
   server.epoch = 2;
   const reads = h.reads();
   buttons(h.root, '加载更多')[0].dispatch('click');
   await tick();
   assert.equal(h.reads(), reads + 3, 'refused cursor, then the first page and the next page again');
   assert.equal(h.calls.at(-2).path.includes('cursor='), false);
-  assert.equal(listRows(h).length, 60);
+  assert.equal(listRows(h).length, 59);
+  assert.equal(listRows(h).some(node => /Active 3(?!\d)/.test(node.textContent)), false, 'a task deleted before the reload is not shown');
   assert.equal(textOf(h.root).includes('数据读取失败'), false);
 });
 
