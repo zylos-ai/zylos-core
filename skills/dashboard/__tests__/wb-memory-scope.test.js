@@ -433,6 +433,20 @@ test('stale backlog requests cannot populate a different instance or a destroyed
   const next = deferred(), g = fixture({ request: () => next.promise });
   const stopped = g.controller.load(); g.controller.destroy(); next.resolve({ groups: [] }); await stopped;
   assert.equal(g.root.children.length, 0);
+  // The same for the file list: instance a's root read answers, and its groups read fails, only after switching to b.
+  let viewed = 'a'; const held = deferred(), heldGroups = deferred(), bServer = entriesServer(memoryFiles());
+  const entries = Object.assign(path => viewed !== 'a' ? bServer(path) : path.includes('dir=session-groups') ? heldGroups.promise : held.promise,
+    { reads: bServer.reads, refuse: bServer.refuse });
+  const h = fixture({ identity: () => viewed, entries });
+  await settled();
+  viewed = 'b'; h.controller.render(); await settled();
+  held.resolve(memoryEntriesPage([file('A-ONLY.md')], new URL('/api/memory/entries', 'http://dashboard')));
+  heldGroups.reject(Object.assign(new Error('unavailable'), { code: 'unavailable' })); await settled();
+  h.controller.render();
+  assert.deepEqual(h.paths(), ['identity.md', 'references.md', 'state.md'], "only b's rows");
+  assert.equal(h.heads().length, 3, "b's folders and group are kept");
+  assert.doesNotMatch(h.listRoot.textContent, /memory.error_generic/, "a's failed read shows no error on b");
+  h.controller.destroy();
 });
 
 test('unknown save result reads disk once and compares returned text without resubmitting', async () => {
@@ -788,14 +802,27 @@ test('opening a folder or group reads its first page, folding all closes them, a
 
 test('a list past its first page loads more without repeats, and a refused cursor reads the first page again silently', async () => {
   const files = [...memoryFiles(), ...Array.from({ length: 120 }, (_, index) => file(`session-groups/telegram:dm-1001/sessions/d${String(index).padStart(3, '0')}.md`))];
-  const f = fixture({ files });
+  // A file saved between two reads comes back on the next page: the server's second page repeats one of the first.
+  const server = entriesServer(files);
+  let firstRow = null, repeated = false;
+  const entries = Object.assign(async path => {
+    const page = await server(path);
+    if (!new URL(path, 'http://dashboard').searchParams.get('dir')?.endsWith('/sessions')) return page;
+    if (!path.includes('cursor=')) { firstRow ??= page.items[0]; return page; }
+    if (repeated) return page;
+    repeated = true;
+    return { ...page, items: [firstRow, ...page.items] };
+  }, { reads: server.reads, refuse: server.refuse });
+  const f = fixture({ files, entries });
   await settled();
   f.controller.selectGroup('telegram:dm-1001'); await settled();
   nodesOfClass(f.listRoot, 'wb-memory-dir-h')[0].dispatch('click'); await settled();
   const sessions = () => f.paths().filter(path => path.includes('/sessions/'));
   assert.equal(sessions().length, 50);
   nodesOfClass(f.listRoot, 'wb-memory-more')[0].dispatch('click'); await settled();
-  assert.equal(sessions().length, 100);
+  assert.equal(repeated, true);
+  assert.equal(sessions().length, 100, 'the repeated path is shown once');
+  assert.equal(new Set(sessions()).size, 100);
   f.entries.refuse();
   nodesOfClass(f.listRoot, 'wb-memory-more')[0].dispatch('click'); await settled();
   assert.equal(sessions().length, 50, 'the first page again');

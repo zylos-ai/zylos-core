@@ -294,7 +294,7 @@ test('memory backlog reads accept read scope while file writes require admin', a
 // HTTP integration covers route/auth dispatch, private SQLite display names and
 // the shared backlog reader. Run for route/metadata changes; skip UI-only work.
 // setupMemoryHttp owns isolated resources and registers bounded teardown.
-test('the backlog list, group details and the memory tree read one backlog, and without C4 only the groups level is unavailable', { timeout: 15000 }, async t => {
+test('the backlog list, group details and the memory entries group badges read one backlog, and without C4 only the groups level is unavailable', { timeout: 15000 }, async t => {
   const { root, engine, request, calls, versionCalls, snapshotReads, advance } = await setupMemoryHttp(t);
   const lockCalls = () => calls.filter(call => call.args[0].endsWith('/sync-lock.js')).map(call => call.args.slice(1));
   const snapshotBefore = snapshotReads();
