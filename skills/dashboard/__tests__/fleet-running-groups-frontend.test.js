@@ -2,6 +2,7 @@ import { registerHooks } from 'node:module';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
+import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
 
 const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
 const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
@@ -11,7 +12,9 @@ registerHooks({
     return next(specifier, context);
   },
 });
-const { buildAgentFleetView, fleetSelfFromSnapshot, handleFleetClick, renderAgentFleetHtml } = await import('../public/js/agent-fleet.js');
+const { buildAgentFleetView: buildAgentFleetViewPage, fleetSelfFromSnapshot, handleFleetClick, renderAgentFleetHtml: renderAgentFleetHtmlPage } = await import('../public/js/agent-fleet.js');
+const buildAgentFleetView = (payload, options) => buildAgentFleetViewPage(fleetPageFixture(payload), options);
+const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
 
 // Exercise the real renderer with API-shaped inputs; no server or live state.
 function summary(extra = {}) {

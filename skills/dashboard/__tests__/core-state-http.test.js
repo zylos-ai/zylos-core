@@ -33,7 +33,8 @@ test('state APIs await a fresh observation before answering idle requests', { ti
   const dashboardDir = path.join(install.zylosDir, 'components/dashboard');
   fs.mkdirSync(dashboardDir, { recursive: true });
   fs.writeFileSync(path.join(dashboardDir, 'config.json'), JSON.stringify({ auth: { enabled: true, password: 'secret' } }));
-  let sample = 0, nextRead, releaseRead, releaseActive, snapshotClock = Date.now();
+  const observationClock = Date.now();
+  let sample = 0, nextRead, releaseRead, releaseActive, snapshotClock = observationClock;
   const observation = value => ({ identity: { present: true, ready: true, runtime: 'codex', runId: `run-${value}`, sessionId: `session-${value}` },
     status: { valid: true, reason: null, value: { state: 'idle' } },
     usage: { valid: true, value: { model: `model-${value}`, contextUsage: { used: value, ceiling: 100 } } } });
@@ -51,7 +52,7 @@ test('state APIs await a fresh observation before answering idle requests', { ti
     return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
   };
   t.mock.module('../src/lib/session-observations.js', { namedExports: {
-    createSessionObservations: options => createSessionObservations({ ...options, loadCoreModule: loadFixtureCore }),
+    createSessionObservations: options => createSessionObservations({ ...options, loadCoreModule: loadFixtureCore, now: () => observationClock }),
   } });
   const snapshotObservations = {
     reader: { readAccountUsage: async () => null },
@@ -117,7 +118,8 @@ test('state APIs await a fresh observation before answering idle requests', { ti
   const options = await runtimeOptions.json();
   for (const key of ['running_model', 'running_effort']) assert.equal(Object.hasOwn(options, key), false);
   assert.equal(sample, beforeOptions, 'runtime options do not collect Origin observations');
-  for (const route of ['/api/fleet', '/api/instance', '/api/stream']) {
+  // Prime the observation cache via /api/instance before testing a Fleet read without SSE.
+  for (const route of ['/api/instance', '/api/fleet', '/api/stream']) {
     const before = sample; snapshotClock += 2100;
     let entered, release;
     const began = new Promise(resolve => { entered = resolve; });
@@ -134,7 +136,8 @@ test('state APIs await a fresh observation before answering idle requests', { ti
       const response = await pending;
       assert.equal(response.status, 200);
       const expected = before + 1;
-      assert.equal(sample, expected, 'one shared refresh per request');
+      assert.equal(sample, expected,
+        route === '/api/fleet' ? 'Fleet forces a new observation without SSE despite a warm cache' : 'one shared refresh per request');
       if (route === '/api/stream') {
         const reader = response.body.getReader();
         let frames = '';
@@ -151,11 +154,20 @@ test('state APIs await a fresh observation before answering idle requests', { ti
         assert.equal(Object.hasOwn(instance, 'runtime_info'), false, 'observed model belongs to group detail');
         assert.equal(Object.hasOwn(instance, 'poolCapacityRecord'), false);
         assert.deepEqual(Object.keys(instance.versions).sort(), ['agy', 'claude', 'codex', 'zylos']);
+        const fleetResponse = await fetch(origin + '/api/fleet', { headers: { cookie }, signal: t.signal });
+        assert.equal(fleetResponse.status, 200);
+        assert.ok((await fleetResponse.json()).items.some(item => item.self));
+        assert.equal(sample, expected, 'Fleet reuses the warm observation while SSE is connected');
         await reader.cancel();
       } else {
         const body = await response.json();
-        if (route === '/api/fleet') for (const field of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(body.agents[0], field), false, 'Fleet omits Origin session metadata');
-        else {
+        if (route === '/api/fleet') {
+          const self = body.items.find(item => item.self);
+          assert.ok(self, 'Fleet includes the local machine');
+          for (const field of ['model', 'effort', 'context_pct', 'new_session_threshold']) {
+            assert.equal(Object.hasOwn(self, field), false, 'Fleet omits Origin session metadata');
+          }
+        } else {
           assert.equal(body.session_mode.sessionMode, 'single');
           assert.equal(Object.hasOwn(body, 'runtime_info'), false);
           assert.equal(Object.hasOwn(body, 'poolCapacityRecord'), false);

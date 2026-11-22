@@ -5,6 +5,7 @@ import fs from 'node:fs';
 
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js';
+import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
 
 const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
 const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
@@ -15,7 +16,8 @@ registerHooks({
   },
 });
 const { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, instanceStrip } = await import('../public/js/wb/instance-strip.js');
-const { fleetSelfFromSnapshot, renderAgentFleetHtml } = await import('../public/js/agent-fleet.js');
+const { fleetSelfFromSnapshot, renderAgentFleetHtml: renderAgentFleetHtmlPage } = await import('../public/js/agent-fleet.js');
+const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
 
 const fleet = { agents: [{ name: 'local', self: true, state: 'IDLE' }] };
 const pack = locale => JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));

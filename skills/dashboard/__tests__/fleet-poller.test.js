@@ -1,3 +1,4 @@
+import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import test from 'node:test';
@@ -1626,8 +1627,8 @@ test('Fleet shows older null and newer unreadable remote modes as unknown and ke
     assert.equal(record.state, state, String(sessionMode));
     assert.equal(record.session_mode, sessionMode === 'single' ? 'single' : null, String(sessionMode));
     const fleet = { agents: [record] };
-    assert.equal(buildAgentFleetView(fleet).tiles[0].sessionMode, record.session_mode);
-    assert.match(renderAgentFleetHtml(fleet), new RegExp(`wb-mode-tag">${label}<`), String(sessionMode));
+    assert.equal(buildAgentFleetView(fleetPageFixture(fleet)).tiles[0].sessionMode, record.session_mode);
+    assert.match(renderAgentFleetHtml(fleetPageFixture(fleet)), new RegExp(`wb-mode-tag">${label}<`), String(sessionMode));
   }
   for (const mode of [null, 'unreadable']) assert.equal(fleetSelfFromSnapshot({ mode }).mode, null);
 });

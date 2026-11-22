@@ -991,7 +991,7 @@
   "wb.settings.fleet.addHint": "名称 1–32 位字母、数字、下划线、点或短横线。密钥由对方在它自己的「API 密钥」里创建。",
   "wb.settings.fleet.auth": "认证失败：密钥被吊销或填错",
   "wb.settings.fleet.count": "共 {count} 台",
-  "wb.settings.fleet.search": "搜机器名或地址",
+  "wb.settings.fleet.search": "搜机器名",
   "wb.settings.fleet.down": "不可达",
   "wb.settings.fleet.keyPlaceholder": "对方给的 API 密钥",
   "wb.settings.fleet.pending": "等待第一次探测",

@@ -4,6 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { chatEnabled, createChatSandbox } from '../skills/dashboard/__tests__/helpers/chat-integration-harness.js';
+import { fleetPageFixture, fleetSettingsPageFixture } from '../skills/dashboard/__tests__/helpers/fleet-page-fixture.js';
 import { startPage } from '../skills/dashboard/__tests__/helpers/workbench-browser.js';
 
 function fleetFixture() {
@@ -70,9 +71,9 @@ test('Fleet list persists, pages and links the same machines as cards across des
           page.on('pageerror', failure => { error ??= failure; });
           let fleetReads = 0;
           let payload = fixture;
-          await page.route('**/api/fleet', route => {
+          await page.route(url => url.pathname === '/api/fleet', route => {
             fleetReads += 1;
-            return route.fulfill({ json: payload });
+            return route.fulfill({ json: fleetPageFixture(payload, new URL(route.request().url()).search) });
           });
           try {
             await page.goto(base + '/');
@@ -95,7 +96,7 @@ test('Fleet list persists, pages and links the same machines as cards across des
             const refresh = offlineCard.getByRole('button', { name: 'Refresh status' });
             assert.equal(await refresh.count(), 1);
             const previousReads = fleetReads;
-            await Promise.all([page.waitForResponse(response => response.url().endsWith('/api/fleet')), refresh.click()]);
+            await Promise.all([page.waitForResponse(response => new URL(response.url()).pathname === '/api/fleet'), refresh.click()]);
             assert.ok(fleetReads > previousReads);
             assert.equal(await page.getByRole('button', { name: /^(Open|Settings)$/ }).and(page.locator('#agent-fleet-root button')).count(), 0);
 
@@ -124,6 +125,7 @@ test('Fleet list persists, pages and links the same machines as cards across des
             assert.match(await pagination.innerText(), /1–8 \/ 11 machines/);
             assert.equal(await pagination.getByRole('button', { name: 'Previous page' }).isDisabled(), true);
             await pagination.getByRole('button', { name: 'Next page' }).click();
+            await rows.filter({ hasText: 'Node 09' }).waitFor();
             assert.deepEqual(await names(rows), lastPage);
             assert.match(await pagination.innerText(), /9–11 \/ 11 machines/);
             assert.equal(await pagination.getByRole('button', { name: 'Next page' }).isDisabled(), true);
@@ -133,17 +135,17 @@ test('Fleet list persists, pages and links the same machines as cards across des
             if (!mobile) {
               // Attention makes machines sort earlier. Fill the first page before giving Node 09 its own notice.
               await pagination.getByRole('button', { name: 'Previous page' }).click();
+              await cards.filter({ hasText: 'Node 11' }).waitFor();
               payload = structuredClone(fixture);
               for (const agent of payload.agents.slice(1, 8)) agent.supervisor_paused = true;
               Object.assign(payload.agents[8], { session_mode: 'multi', group_summary: { ...payload.agents[9].group_summary,
                 attention: [{ kind: 'data_unreadable', group: 'node-09-group', displayName: 'Node 09 diagnostic' }],
               } });
-              await Promise.all([page.waitForResponse(response => response.url().endsWith('/api/fleet')), refresh.click()]);
+              await Promise.all([page.waitForResponse(response => new URL(response.url()).pathname === '/api/fleet'), refresh.click()]);
               await page.mouse.move(0, 0);
               await cards.locator('[data-supervisor-paused]').first().waitFor();
               await pagination.getByRole('button', { name: 'Next page' }).click();
-              assert.match(await cards.filter({ has: page.getByRole('link', { name: 'Node 09', exact: true }) })
-                .locator('[data-fleet-attention]').innerText(), /Node 09 diagnostic/);
+              await cards.filter({ has: page.getByRole('link', { name: 'Node 09', exact: true }) }).locator('[data-fleet-attention]').getByText(/Node 09 diagnostic/).waitFor();
               payload = fixture;
             }
             await listMode.click();
@@ -215,3 +217,200 @@ test('Fleet list persists, pages and links the same machines as cards across des
     assert.ok([...sandbox.servers].every(server => !server.listening));
     assert.deepEqual(sandbox.counts, { db: 0, http: 1, runtime: 0 });
   });
+
+test('Fleet reloads the visible page and settings page the configured machines', {
+  skip: !chatEnabled(), timeout: 120_000,
+}, async t => {
+  const sandbox = createChatSandbox(t);
+  await sandbox.runCase(async () => {
+    const { base } = await startPage(sandbox);
+    const { chromium } = await import(pathToFileURL(process.env.ZYLOS_CHAT_BROWSER_MODULE));
+    const browser = await chromium.launch({ executablePath: process.env.ZYLOS_CHAT_BROWSER_BIN, headless: true, env: sandbox.env,
+      args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
+    sandbox.addCleanup(() => browser.close());
+    const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
+    if (evidence) fs.mkdirSync(evidence, { recursive: true });
+    const payload = fleetFixture();
+    for (let i = 12; i <= 20; i++) payload.agents.push({ ...payload.agents[1], name: 'Node ' + i, access: i === 19 ? 'admin' : 'read' });
+    const next = '[data-fleet-page="1"]', previous = '[data-fleet-page="-1"]';
+
+    for (const width of [1280, 390]) for (const locale of ['en', 'zh']) for (const theme of ['light', 'dark']) {
+      const mobile = width === 390;
+      const context = await browser.newContext({ viewport: { width, height: 900 }, isMobile: mobile, hasTouch: mobile });
+      sandbox.addCleanup(() => context.close());
+      try {
+        await context.route('**/*', route => route.request().url().startsWith(base + '/') ? route.continue() : route.abort());
+        await context.route('**/_assets/vendor/chart.umd.js', route => route.fulfill({ path: process.env.ZYLOS_CHAT_CHART_ASSET, contentType: 'text/javascript' }));
+        await context.addInitScript(({ locale, theme }) => {
+          if (window.top !== window) return;
+          localStorage.setItem('zylos-dashboard-theme', theme);
+          localStorage.setItem('zylos-dashboard-locale', locale);
+          window.EventSource = class extends EventTarget {
+            constructor() { super(); window.fleetTestStream = this; }
+            close() {}
+          };
+        }, { locale, theme });
+        const page = await context.newPage(), errors = [], writes = [], reads = [];
+        page.setDefaultTimeout(6000);
+        page.on('pageerror', error => errors.push(error.message));
+        const functional = width === 1280 && locale === 'en' && theme === 'light';
+        const data = structuredClone(payload);
+        let visible = functional ? [data.agents[0]] : data.agents;
+        let expire = false, holdFleet = false;
+        const heldRead = Promise.withResolvers(), releaseRead = Promise.withResolvers();
+        const machines = Array.from({ length: 20 }, (_, i) => ({
+          name: `worker-${String(i + 1).padStart(2, '0')}`, base_url: 'https://fixture.example',
+          key_masked: '...1234', access: i % 2 ? 'admin' : 'read',
+          connection: i === 2 ? { kind: 'auth' } : { kind: 'ok', latency: 20 + i },
+          latency: { samples: [{ ms: 20 + i, at: new Date().toISOString() }] },
+        }));
+        await page.route(url => url.pathname === '/api/fleet', async route => {
+          const url = new URL(route.request().url());
+          reads.push(url);
+          if (expire && url.searchParams.has('cursor')) {
+            expire = false;
+            return route.fulfill({ status: 400, json: { ok: false, error: { code: 'invalid_cursor', message: 'fixture restart' } } });
+          }
+          const json = fleetPageFixture({ ...data, agents: visible }, url.search);
+          if (holdFleet) {
+            holdFleet = false;
+            heldRead.resolve();
+            await releaseRead.promise;
+          }
+          await route.fulfill({ json });
+        });
+        await page.route(url => /^\/api\/fleet\/agents(?:\/.*)?$/.test(url.pathname), async route => {
+          const request = route.request(), url = new URL(request.url());
+          if (request.method() === 'GET') {
+            return route.fulfill({ json: fleetSettingsPageFixture(machines, url.search, 'Node 01') });
+          }
+          if (request.method() === 'POST') {
+            const body = request.postDataJSON();
+            writes.push(body.name);
+            machines.unshift({ ...body, access: 'read', connection: { kind: 'ok', latency: 36 } });
+            return route.fulfill({ json: { ok: true, agent: { name: body.name } } });
+          }
+          assert.equal(request.method(), 'DELETE');
+          const name = decodeURIComponent(url.pathname.split('/').at(-1));
+          writes.push(name);
+          machines.splice(machines.findIndex(machine => machine.name === name), 1);
+          return route.fulfill({ json: { ok: true } });
+        });
+
+        await page.goto(base + '/');
+        const root = page.locator('#agent-fleet-root'), cards = root.locator('.wb-f-card');
+        const waitForCard = name => root.locator(`.wb-f-card[data-agent="${name}"]`).waitFor();
+        const names = () => cards.evaluateAll(nodes => nodes.map(node => node.dataset.agent));
+        const push = async () => {
+          const { summary, updated_at } = fleetPageFixture({ ...data, agents: visible });
+          await page.evaluate(({ summary, updated_at }) =>
+            window.fleetTestStream.dispatchEvent(new MessageEvent('fleet', { data: JSON.stringify({ summary, updated_at }) })),
+          { summary, updated_at });
+        };
+        if (functional) {
+          await page.waitForFunction(() => document.querySelector('.agent-fleet')?.dataset.fleetCount === '1');
+          assert.equal(await page.locator('#fleet-view').isVisible(), false);
+          holdFleet = true;
+          const reload = page.reload();
+          try {
+            await heldRead.promise;
+            visible = data.agents.slice(0, 2);
+            await push();
+          } finally { releaseRead.resolve(); }
+          await reload;
+          await waitForCard('Node 02');
+          visible = data.agents;
+          await push();
+        }
+        await waitForCard('Node 11');
+        assert.equal(await cards.count(), 8);
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+        if (evidence) await root.screenshot({ path: path.join(evidence, `fleet-wall-${width}-${locale}-${theme}.png`) });
+        if (functional) {
+          const all = await names();
+          await root.locator(next).click();
+          await waitForCard('Node 08');
+          assert.equal(await cards.count(), 8);
+          all.push(...await names());
+          await root.locator(next).click();
+          await waitForCard('Node 19');
+          assert.equal(await cards.count(), 4);
+          all.push(...await names());
+          assert.equal(new Set(all).size, 20);
+          await page.mouse.move(0, 0);
+          visible = data.agents.slice(0, 16);
+          await push();
+          await waitForCard('Node 08');
+          assert.equal(await cards.count(), 8);
+          assert.equal(await root.locator(previous).isEnabled(), true);
+          assert.equal(await root.locator(next).isDisabled(), true);
+          visible = data.agents;
+          await push();
+          await root.locator(next + ':enabled').waitFor();
+          await page.waitForFunction(() => !document.querySelector('#agent-fleet-root').matches(':hover'));
+          const changed = data.agents.find(agent => agent.name === 'Node 08');
+          changed.state = 'OFFLINE'; changed.pulse_rate = 0;
+          const read = page.waitForResponse(response => {
+            const url = new URL(response.url());
+            return url.pathname === '/api/fleet' && url.searchParams.has('cursor');
+          });
+          await push();
+          const refreshed = await (await read).json();
+          assert.ok(!refreshed.items.some(item => item.name === 'Node 08'), JSON.stringify({
+            cursor: reads.at(-1)?.searchParams.has('cursor'), items: refreshed.items.map(item => [item.name, item.state]),
+          }));
+          await root.locator('.wb-f-card[data-agent="Node 08"]').waitFor({ state: 'detached' });
+          await root.locator(previous).click();
+          await waitForCard('Node 08');
+          assert.equal(await root.locator('.wb-f-card[data-agent="Node 08"]').getAttribute('data-state'), 'offline');
+          await root.locator(next).click();
+          await waitForCard('Node 09');
+          await page.mouse.move(0, 0);
+          expire = true;
+          await push();
+          await waitForCard('Node 08');
+          assert.equal(await root.locator(previous).isDisabled(), true);
+          assert.equal(expire, false);
+          assert.ok(reads.filter(url => !url.searchParams.has('name')).every(url => url.searchParams.get('limit') === '8'));
+        }
+
+        await page.goto(base + '/settings');
+        await page.locator('[data-settings-section="fleet"]').click();
+        const settings = page.locator('#settings-section-fleet');
+        await settings.locator('[data-agent="worker-01"]').waitFor();
+        assert.equal(await settings.locator('.wb-agent-row').count(), 8);
+        assert.match(await settings.locator('[data-agent="worker-01"]').innerText(), /20ms/);
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+        const search = settings.locator('input[type=search]');
+        assert.equal(await search.getAttribute('placeholder'), locale === 'en' ? 'Search machine names' : '搜机器名');
+        if (evidence) {
+          const screenshot = path.join(evidence, `fleet-settings-${width}-${locale}-${theme}.png`);
+          if (mobile) {
+            await search.scrollIntoViewIfNeeded();
+            await page.screenshot({ path: screenshot });
+          } else await settings.screenshot({ path: screenshot });
+        }
+        if (functional) {
+          await settings.locator('.wb-plist-next').click();
+          await settings.locator('[data-agent="worker-09"]').waitFor();
+          assert.match(await settings.locator('[data-agent="worker-09"]').innerText(), /28ms/);
+          await settings.locator('#fleet-add-open').click();
+          await settings.locator('#fleet-add-name').fill('aaa-new');
+          await settings.locator('#fleet-add-url').fill('https://fixture.example');
+          await settings.locator('#fleet-add-key').fill('fixture-key');
+          await settings.locator('#fleet-add-save').click();
+          const added = settings.locator('[data-agent="aaa-new"]');
+          await added.waitFor();
+          await added.locator('.fleet-agent-remove').click();
+          await page.locator('.wb-modal[role="alertdialog"] .wb-modal-acts button').last().click();
+          await added.waitFor({ state: 'detached' });
+          assert.deepEqual(writes, ['aaa-new', 'aaa-new']);
+          await settings.locator('[data-agent="worker-01"]').waitFor();
+        }
+        assert.deepEqual(errors, []);
+      } finally {
+        await context.close();
+      }
+    }
+  }, { timeoutMs: 110_000 });
+});

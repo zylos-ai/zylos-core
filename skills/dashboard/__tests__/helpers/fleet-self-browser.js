@@ -1,3 +1,4 @@
+import { fleetPageFixture } from './fleet-page-fixture.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -53,7 +54,7 @@ export async function runFleetSelfBrowser(t, sandbox) {
       });
       const page = await context.newPage();
       page.setDefaultTimeout(10_000);
-      await page.route('**/api/fleet', route => route.fulfill({ json: fleet }));
+      await page.route(url => url.pathname === '/api/fleet', route => route.fulfill({ json: fleetPageFixture(fleet, new URL(route.request().url()).search) }));
       await page.goto(base + '/');
       const label = page.locator('#agent-fleet-root .wb-f-card[data-self="true"] [data-mood="unknown"]');
       await label.waitFor();
@@ -97,7 +98,7 @@ export async function runFleetSelfBrowser(t, sandbox) {
           page.on('console', message => { if (message.type() === 'error' && !message.text().includes('net::ERR_FAILED') && errors.length < 5) errors.push(message.text()); });
           await page.route('**/api/**', async route => {
             const url = new URL(route.request().url());
-            if (url.pathname === '/api/fleet') return route.fulfill({ json: fleet });
+            if (url.pathname === '/api/fleet') return route.fulfill({ json: fleetPageFixture(fleet, url.search) });
             const answer = workbenchSnapshotAnswer(url, snapshot, now);
             if (answer !== undefined) return route.fulfill({ json: answer });
             return route.fallback();

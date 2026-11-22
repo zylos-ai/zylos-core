@@ -6,6 +6,7 @@ import { fleetGroupSummary, sanitizeFleetGroupSummary } from '../skills/dashboar
 import { setInstanceZone, instanceZoneReady, formatZoned } from '../skills/dashboard/public/js/wb/instance-zone.js';
 import { FleetPoller } from '../skills/dashboard/src/lib/fleet-poller.js';
 import { objectResponse } from '../skills/dashboard/__tests__/fixtures/fleet-object-api.js';
+import { fleetPageFixture } from '../skills/dashboard/__tests__/helpers/fleet-page-fixture.js';
 
 const browserDescriptors = new URL('../skills/dashboard/public/runtime-descriptors.js', import.meta.url).pathname;
 const sourceDescriptors = new URL('../cli/lib/runtime/descriptors.js', import.meta.url).href;
@@ -15,7 +16,8 @@ registerHooks({
     return next(specifier, context);
   },
 });
-const { renderFleetAttention, renderAgentFleetHtml } = await import('../skills/dashboard/public/js/agent-fleet.js');
+const { renderFleetAttention, renderAgentFleetHtml: renderAgentFleetHtmlPage } = await import('../skills/dashboard/public/js/agent-fleet.js');
+const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
 
 // In-memory product projections and fake HTTP responses only. Run when changing
 // Fleet attention contracts/rendering/polling; unrelated channel adapters may skip.

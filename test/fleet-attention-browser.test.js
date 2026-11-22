@@ -35,7 +35,7 @@ test('Fleet diagnostics wrap and remain literal across desktop/mobile and themes
               { kind: 'rate_limited', runtime: 'codex' },
               { kind: 'data_unreadable', group: 'ops', reasonCode: '<img src=x onerror=alert(1)>' + 'very-long-reason-'.repeat(12) },
             ];
-            const fleet = { agents: [{ name: 'Local', self: true, state: 'IDLE', session_mode: 'multi',
+            const fleet = { items: [{ name: 'Local', self: true, state: 'IDLE', session_mode: 'multi',
               group_summary: { running: 5, listKnown: true, counts: { busy: 2, idle: 1, no_response: 1, unknown: 1 }, problems: [], problemCount: 0, attention } }] },
               options = { t: (key, values = {}) => (pack[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? '')) };
             renderAgentFleet(document.querySelector('#root'), fleet, options);
@@ -113,7 +113,7 @@ test('failed external outbound history renders its text without a page error',
         if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return true; }
         const values = {
           '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Private browser' } },
-          '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
+          '/api/fleet': { items: [], nextCursor: null, summary: { count: 0 } }, '/api/health': { status: 'ok' },
           '/api/groups/counts': { mode: f.readMode(), running: { total: 0, states: {}, flags: {} }, offline: { total: 0 }, pool: {} },
           '/api/groups': { items: [], nextCursor: null, listKnown: true }, '/api/instance/runtime-options': { actions: [] },
         };

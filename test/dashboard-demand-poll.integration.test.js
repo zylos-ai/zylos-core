@@ -68,11 +68,11 @@ test('Dashboard observation follows browser demand with real isolated tmux', {
     assert.equal(commands().length, 0, `Unwatched tmux calls: ${JSON.stringify(commands())}`);
     t.diagnostic('Three online groups, no browser for 35 seconds: zero Dashboard tmux clients');
     const instance = await read('/api/instance'); assert(instance.session_mode);
-    const fleet = await read('/api/fleet'); assert.equal(fleet.agents.find(agent => agent.self).state, 'IDLE');
+    const fleet = await read('/api/fleet'); assert.equal(fleet.items.find(agent => agent.self).state, 'IDLE');
     originState = 'busy'; writeStatus('origin', 'busy'); await delay(2100);
-    assert.equal((await read('/api/fleet')).agents.find(agent => agent.self).state, 'BUSY', 'Fleet stays fresh without browser subscription');
+    assert.equal((await read('/api/fleet')).items.find(agent => agent.self).state, 'BUSY', 'Fleet stays fresh without browser subscription');
     originState = 'idle'; writeStatus('origin', 'idle'); await delay(2100);
-    assert.equal((await read('/api/fleet')).agents.find(agent => agent.self).state, 'IDLE');
+    assert.equal((await read('/api/fleet')).items.find(agent => agent.self).state, 'IDLE');
     const health = await read('/api/health'); assert.equal(JSON.stringify(health.source ?? {}).includes('statusline'), false);
     let controller;
     s.addCleanup(() => controller?.abort());

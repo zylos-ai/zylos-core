@@ -1,3 +1,4 @@
+import { fleetPageFixture } from '../../skills/dashboard/__tests__/helpers/fleet-page-fixture.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -52,8 +53,8 @@ export async function runUnreadableAttentionBrowser(sandbox) {
             group_summary: { running: 1, listKnown: true, counts: { busy: 0, idle: 1, waiting: 0, unknown: 0, error: 0, no_response: 0 }, problems: [], problemCount: 0,
               attention: self ? [{ kind: 'data_unreadable', group: 'origin', displayName: 'Operations room',
                 reasonCode: 'identity_mismatch' }] : [] } }, { self, access: 'admin', nowMs: now });
-          return route.fulfill({ json: { agents: [record('browser-case', true), record('remote-case', false)],
-            updated_at: new Date(now).toISOString() } });
+          return route.fulfill({ json: fleetPageFixture({ agents: [record('browser-case', true), record('remote-case', false)],
+            updated_at: new Date(now).toISOString() }, url.search) });
         }
         if (url.pathname === '/api/groups') {
           const data = workbenchAnswer(url, now);

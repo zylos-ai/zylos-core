@@ -52,7 +52,7 @@ export async function createAttachmentApiFixture(t, sandbox, { prototypeSource }
     if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return true; }
     const values = {
       '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: '隔离浏览器' } },
-      '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
+      '/api/fleet': { items: [], nextCursor: null, summary: { count: 0 } }, '/api/health': { status: 'ok' },
       '/api/settings/pricing': { active: 'claude', runtimes: { claude: { modelPrices: {}, builtInModels: [], fastMode: {} }, codex: { modelPrices: {}, builtInModels: [], priorityModelPrices: {}, builtInPriorityModels: [] } } },
       '/api/usage/pricing': { models: [] } };
     sendJson(res, 200, values[url.pathname] || {}); return true;

@@ -1,3 +1,4 @@
+import { fleetPageFixture } from './fleet-page-fixture.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -173,10 +174,10 @@ export async function runFleetPageBrowser(sandbox) {
     await context.route('**/*', route => {
       const url = new URL(route.request().url());
       if (url.origin !== base) return route.abort();
-      if (url.pathname === '/api/fleet') return route.fulfill({ json: { agents: [
+      if (url.pathname === '/api/fleet') return route.fulfill({ json: fleetPageFixture({ agents: [
         { name: 'local', self: true, state: 'IDLE', daily_cost: 1.25, weekly_cost: 8, pulse_rate: 1 },
         { name: 'remote', state: 'BUSY', daily_cost: 0.4, weekly_cost: 2, rate_limit_7d_pct: 35, pulse_rate: 1 }
-      ] } });
+      ] }, url.search) });
       return route.continue();
     });
     const page = await context.newPage();

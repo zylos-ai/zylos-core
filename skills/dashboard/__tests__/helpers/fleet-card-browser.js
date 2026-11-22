@@ -1,3 +1,4 @@
+import { fleetPageFixture } from './fleet-page-fixture.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -47,7 +48,7 @@ export async function runFleetCardBrowser(t, sandbox) {
         });
         page.setDefaultTimeout(10_000);
         page.on('pageerror', error => errors.push(error.message));
-        await page.route('**/api/fleet', route => route.fulfill({ json: fleet }));
+        await page.route(url => url.pathname === '/api/fleet', route => route.fulfill({ json: fleetPageFixture(fleet, new URL(route.request().url()).search) }));
         await page.goto(base + '/');
         const busy = page.locator('.wb-f-card[data-agent="Busy remote"]');
         await busy.waitFor();

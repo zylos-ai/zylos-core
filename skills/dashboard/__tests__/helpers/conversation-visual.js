@@ -24,7 +24,7 @@ export async function runConversationVisual(t, sandbox) {
     if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return true; }
     const values = {
       '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Isolated browser' } },
-      '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
+      '/api/fleet': { items: [], nextCursor: null, summary: { count: 0 } }, '/api/health': { status: 'ok' },
     };
     sendJson(res, 200, values[url.pathname] || {}); return true;
   } });

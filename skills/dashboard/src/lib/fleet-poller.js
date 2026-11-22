@@ -612,6 +612,11 @@ export class FleetPoller {
     return true;
   }
 
+  getAgentRecord(name) {
+    const agent = this.agents.find(candidate => candidate.name === name);
+    return agent ? this._recordWithLink(agent) : null;
+  }
+
   getAgentAccess(agentName) {
     const cached = this.tokens.get(agentName);
     return cached?.scope === 'admin' ? 'admin' : 'read';
@@ -672,6 +677,7 @@ export class FleetPoller {
     if (!record) return null;
     return sanitizeRecord({
       ...record,
+      access: this.getAgentAccess(agent.name),
       link: this._deriveLink(agent, record),
       latency: { samples: (this.latency.get(agent.name)?.samples || []).map(sample => ({
         at: nowIso(sample.sampledAtMs), ms: sample.latencyMs,

@@ -1,3 +1,4 @@
+import { fleetPageFixture } from '../../skills/dashboard/__tests__/helpers/fleet-page-fixture.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -63,8 +64,8 @@ export async function runDashboardDisplayBrowser(t, sandbox) {
             fleetRequests++;
             const group_summary = { running: 2, listKnown: true, counts: { busy: 1, idle: 1, unknown: 0 }, problems: [], problemCount: 0,
               attention: [{ kind: 'rate_limited', runtime: 'codex', until }] };
-            value = { agents: [{ name: 'primary', self: true, state: 'IDLE', session_mode: 'multi', access: 'admin', group_summary },
-              { name: 'peer', self: false, state: 'IDLE', session_mode: 'multi', access: 'read', group_summary }], updated_at: new Date(now).toISOString() };
+            value = fleetPageFixture({ agents: [{ name: 'primary', self: true, state: 'IDLE', session_mode: 'multi', access: 'admin', group_summary },
+              { name: 'peer', self: false, state: 'IDLE', session_mode: 'multi', access: 'read', group_summary }], updated_at: new Date(now).toISOString() }, url.search);
           } else if (url.pathname === '/api/settings/timezone') value = { tz: 'Asia/Singapore', writable: true, restart_status: 'known', restart_services: [] };
           else if (url.pathname === '/api/instance/runtime-options') {
             value = structuredClone(value); value.runtime = url.searchParams.get('runtime') || 'claude';
