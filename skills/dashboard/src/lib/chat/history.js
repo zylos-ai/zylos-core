@@ -12,7 +12,7 @@ import { prepareLatestReceived, receivedMessage } from '../c4-reader.js';
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const shown = (groups, channels) => `c.direction IN ('in','out') AND c.session_group NOT IN (${groups})
   AND c.channel <> '' AND c.channel NOT IN (${channels})`;
-// List membership requires a visible ordinary message, but timeline previews can include relays.
+// Relays can affect receive time and appear in history; list previews use ordinary messages.
 // The `origin` group is shown only through the Origin conversation's range.
 const visible = shown("'origin','*'", "'void','internal','system','scheduler','control'");
 const messageVisible = shown("'origin','*'", "'void','system','scheduler','control'");
@@ -218,11 +218,10 @@ export class ChatHistory {
           WHERE ${memberOfTab} ORDER BY c.id DESC LIMIT 1`);
         const first = db.prepare(`SELECT c.timestamp FROM ${groupIndex} WHERE ${memberOfTab} ORDER BY c.id LIMIT 1`);
         const belongsToTab = db.prepare(`SELECT ${tabGroupScope(tab, '@group')}`).pluck();
-        const latest = db.prepare(`SELECT c.id,c.content,c.direction,c.channel,c.endpoint_id FROM ${groupIndex}
-          WHERE c.session_group=? AND ${messageVisible}
-          AND ((${listScope(tab)}) OR c.channel='internal') ORDER BY c.id DESC LIMIT 1`);
-        const originLatest = tab === 'mine' && db.prepare(`SELECT c.id,c.content,c.direction,c.channel,c.endpoint_id FROM ${groupIndex}
-          WHERE c.session_group=? AND ${originMessageVisible} ORDER BY c.id DESC LIMIT 1`);
+        const latest = db.prepare(`SELECT c.id,c.content,c.direction,c.channel FROM ${groupIndex}
+          WHERE ${memberOfTab} ORDER BY c.id DESC LIMIT 1`);
+        const originLatest = tab === 'mine' && db.prepare(`SELECT c.id,c.content,c.direction,c.channel FROM ${groupIndex}
+          WHERE c.session_group=? AND ${originVisible} ORDER BY c.id DESC LIMIT 1`);
         const originFirst = tab === 'mine' && db.prepare(`SELECT c.timestamp FROM ${groupIndex}
           WHERE c.session_group=? AND ${originVisible} ORDER BY c.id LIMIT 1`);
         const rows = [], pinned = [];
@@ -261,10 +260,9 @@ export class ChatHistory {
         const items = [...pinned, ...rows.slice(0, slots)].map(row => {
           if (row.draft) return row;
           const message = (row.origin ? originLatest : latest).get(row.session_group);
-          const content = message?.channel === 'internal' ? internalContent(message) : previewContent(message);
           return { ...row, previewDirection: message?.direction ?? null,
-            preview: conversationPreview(content, { external: tab === 'external' || row.origin
-              && !['dashboard', 'internal'].includes(message?.channel), locale }),
+            preview: conversationPreview(previewContent(message), { external: tab === 'external' || row.origin
+              && message?.channel !== 'dashboard', locale }),
             ...(tab === 'mine' ? { unread: this.hasUnread(row.id, this._messageRange(tab, row.id, this._range(tab, row.id))) } : {}) };
         });
         const last = rows[slots - 1];

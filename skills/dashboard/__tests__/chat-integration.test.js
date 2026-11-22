@@ -538,14 +538,19 @@ registerIntegrationCase('native single switch retains both history tabs and reje
 });
 
 // Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
-registerIntegrationCase('after the native switch to single the Origin page and list preview include the latest internal message', async (t, sandbox) => {
+registerIntegrationCase('after the native switch to single Origin advances read on send and shows relays only in history', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox);
   const x = await a.createConversation('started in multi');
   const xGroup = `${x.receipt.namespace}:${x.draft.localId}`;
   await a.switchToSingle();
   assert.equal(a.readMode(), 'single');
   const originRoute = `/api/conversations/${encodeURIComponent(ORIGIN_CONVERSATION_ID)}`;
-  assert.equal((await a.request(`${originRoute}/send`, post({ content: 'owner asks Origin' }))).status, 200);
+  const send = await a.request(`${originRoute}/send`, post({ content: 'owner asks Origin' }));
+  assert.equal(send.status, 200, send.text);
+  assert.equal(send.body.stored, true);
+  assert.equal(send.body.conversationId, ORIGIN_CONVERSATION_ID);
+  assert.equal(a.db.prepare('SELECT session_group FROM conversations WHERE id=?').get(send.body.messageId).session_group, 'origin');
+  assert.equal(a.history.readPosition(ORIGIN_CONVERSATION_ID), send.body.messageId);
   const reply = a.addOutbound('origin', 'Origin answers the owner');
   // Core's own internal-message insert, as `c4-send internal origin` stores it.
   const relay = a.c4.insertInternalMessage(xGroup, 'origin', 'relay from X to Origin');
@@ -560,7 +565,7 @@ registerIntegrationCase('after the native switch to single the Origin page and l
   assert.equal(list.status, 200);
   const [origin] = list.body.items;
   assert.equal(origin.id, ORIGIN_CONVERSATION_ID);
-  assert.equal(origin.preview, 'relay from X to Origin', 'the list preview follows the timeline');
+  assert.equal(origin.preview, 'Origin answers the owner', 'the list preview skips the later relay');
   assert.equal(Object.hasOwn(origin, 'count'), false);
   assert.ok(reply.id < relay.inRow.id);
 });

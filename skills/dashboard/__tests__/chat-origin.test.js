@@ -150,7 +150,7 @@ test('Origin messages show Dashboard and internal rows both ways but not system,
   assert.equal(items[1].deliveryState, 'stored');
   const [origin] = f.history.list({ tab: 'mine' }).items;
   assert.equal(Object.hasOwn(origin, 'count'), false);
-  assert.equal(origin.preview, 'relayed back', 'the preview follows the latest visible timeline entry');
+  assert.equal(origin.preview, 'system alert', 'the preview stays on the latest non-internal row');
   assert.deepEqual(f.history.status(ORIGIN_CONVERSATION_ID, { ids: [shown[0]] }).items.map(row => row.deliveryState), ['delivered']);
 });
 
@@ -265,7 +265,7 @@ test('an internal message to origin from another session appears in the Origin c
   const items = f.history.messages(ORIGIN_CONVERSATION_ID).items;
   assert.deepEqual(items.map(row => [row.direction, row.channel, row.internal?.peerSessionGroup, row.internal?.content]),
     [['in', 'internal', group, 'please tell the owner in Origin']]);
-  assert.equal(f.history.list({ tab: 'mine' }).items[0].preview, 'please tell the owner in Origin');
+  assert.equal(f.history.list({ tab: 'mine' }).items[0].preview, '', 'a relay alone does not provide a list preview');
 });
 
 // In single mode Core records the rows of every conversation and external chat

@@ -808,7 +808,8 @@ test('fleet proxy rejects unsafe API methods before reaching upstream', async ()
   }
 });
 
-test('fleet proxy forwards SSE and whitelisted action POSTs with body', async () => {
+test('fleet proxy forwards SSE and whitelisted writes with their bodies', async () => {
+  const readPath = '/api/conversations/g%3A6162/read';
   let sseAuth = null;
   let actionAuth = null;
   let actionBody = null;
@@ -820,7 +821,7 @@ test('fleet proxy forwards SSE and whitelisted action POSTs with body', async ()
       res.end('event: instance\ndata: {"ok":true}\n\n');
       return;
     }
-    if (req.url.startsWith('/api/instance/actions/')) {
+    if (req.url.startsWith('/api/instance/actions/') || req.method === 'PUT' && req.url === readPath) {
       actionAuth = req.headers.authorization;
       actionContentType = req.headers['content-type'];
       req.setEncoding('utf8');
@@ -861,6 +862,16 @@ test('fleet proxy forwards SSE and whitelisted action POSTs with body', async ()
     assert.equal(actionAuth, 'Bearer zylos_st_secret');
     assert.equal(actionContentType, 'application/json');
     assert.equal(actionBody, '{"runtime":"codex"}');
+
+    actionBody = null;
+    const read = await fetch(`${hub.origin}/fleet/Remote${readPath}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ upTo: 42 }),
+    });
+    assert.equal(read.status, 200);
+    assert.deepEqual(await read.json(), { ok: true });
+    assert.equal(actionBody, '{"upTo":42}');
   } finally {
     await hub.close();
     await remote.close();

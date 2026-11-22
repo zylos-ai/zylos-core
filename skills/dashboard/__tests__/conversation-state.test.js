@@ -2097,18 +2097,24 @@ test('a continuing send retains the accelerated deadline installed when sending 
   assert.equal(f.reads().at(-1).time, started + 4000);
 });
 
-test('internal rows appear in list previews and stay out of delivery status', async t => {
+test('internal rows advance list time and stay out of previews and delivery status', async t => {
   const external = { id: 1, channel: 'dashboard', direction: 'in', status: 'pending', content: 'External preview', timestamp: '2026-01-01T00:00:00Z' };
   const internal = { id: 2, channel: 'internal', direction: 'in', status: 'pending', content: 'Internal secret', timestamp: '2026-01-02T00:00:00Z' };
-  const f = await selected(u => u.pathname.endsWith('/messages')
-    ? u.searchParams.get('direction') === 'before'
-      ? { items: [external], afterCursor: 'after1' }
-      : { items: [internal], afterCursor: 'after2' }
-    : u.pathname.endsWith('/activity') ? { now: 0, working: null, steps: [], subtasks: [], awaiting: null, seenId: 2 } : undefined);
+  const f = await selected(u => {
+    if (u.pathname === '/api/conversations') {
+      return { items: [{ id: 'g:A', preview: external.content, previewDirection: external.direction }], nextCursor: null };
+    }
+    if (u.pathname.endsWith('/messages')) {
+      return u.searchParams.get('direction') === 'before'
+        ? { items: [external], afterCursor: 'after1' }
+        : { items: [internal], afterCursor: 'after2' };
+    }
+    if (u.pathname.endsWith('/activity')) return { now: 0, working: null, steps: [], subtasks: [], awaiting: null, seenId: 2 };
+  });
   t.after(() => f.state.destroy());
   await f.timer.advance(5000);
   const listed = f.state.snapshot().items.find(row => row.id === 'g:A');
-  assert.equal(listed.preview, 'Internal secret');
+  assert.equal(listed.preview, 'External preview');
   assert.equal(listed.previewDirection, 'in');
   assert.equal(listed.stamp, new Date(internal.timestamp).getTime() / 86400000 + 2440587.5);
   assert.equal(f.state.snapshot().messages.length, 2, 'the internal row remains visible in selected history');

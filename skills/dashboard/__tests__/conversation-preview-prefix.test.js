@@ -77,7 +77,7 @@ for (const locale of ['en', 'zh']) for (const tab of ['mine', 'external']) {
     assert.equal(f.preview('draft:empty').textContent, f.words['chat.page.blankPreview']);
   });
 
-  test(`${tab} refreshed list previews follow the latest visible message including internal relays in ${locale}`, { timeout: 2000 }, async t => {
+  test(`${tab} refreshed list previews keep the latest non-internal message and its direction in ${locale}`, { timeout: 2000 }, async t => {
     const f = fixture(t, locale), prefix = prefixes(locale, tab);
     await f.open(tab); await f.select('g:IN');
     assert.equal(f.messageReads, 1, 'selecting the detail loads an empty initial history');
@@ -89,7 +89,7 @@ for (const locale of ['en', 'zh']) for (const tab of ['mine', 'external']) {
       assert.equal(f.messageReads, index + 2, 'each update reads real message state');
       assert.equal(f.listReads, listReads + index + 1, 'automatic stream catchup rereads deliberately stale list metadata before message merging');
       assert.ok(f.preview('g:IN') === preview, 'message refresh retains the keyed list preview node');
-      assert.equal(preview.textContent, prefix[direction === 'in' ? 'out' : 'in'] + 'internal relay');
+      assert.equal(preview.textContent, prefix[direction] + content);
       assert.equal(f.preview('g:OUT').textContent, prefix.out + 'initial outgoing', 'another conversation is unchanged');
       assert.equal(f.preview('g:EMPTY').textContent, f.words['chat.page.noMessages']);
       assert.equal(f.preview('draft:empty').textContent, f.words['chat.page.blankPreview']);

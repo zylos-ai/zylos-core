@@ -134,7 +134,8 @@ test('in single the Origin conversation shows other conversations and external c
 
             const item = page.locator(`#wb-chat [data-conversation-id="${ORIGIN_ID}"]`);
             const preview = await item.innerText();
-            assert.match(preview, /Internal relay to Origin/, 'the Origin list row previews its latest visible message');
+            assert.match(preview, /Origin answers Telegram/, 'the Origin list row previews its latest non-internal message');
+            assert.doesNotMatch(preview, /Internal relay to Origin/);
             const boxes = await page.locator('#wb-chat .conversation-message-list [data-message-id]').evaluateAll(nodes => nodes.map(node => {
               const box = node.getBoundingClientRect(); return { left: box.left, right: box.right, width: innerWidth };
             }));

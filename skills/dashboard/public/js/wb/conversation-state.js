@@ -246,16 +246,18 @@ export function createConversationState({
       && activityOrder(row, previous) < 0)) listUpdates.add(row.id);
   }
   function updateCurrentItem(id, newer) {
-    const latest = newer.at(-1);
-    if (!latest) return;
+    if (!newer.length) return;
+    const latest = newer.findLast(row => row.channel !== 'internal');
     const timestamp = asDate(newer.findLast(received)?.timestamp);
     const stamp = timestamp ? timestamp.getTime() / 86400000 + 2440587.5 : null;
     items = items.map((row, index) => {
       if (row.id !== id) return row;
       const next = {
         ...row,
-        previewDirection: latest.direction,
-        preview: typeof latest.preview === 'string' ? latest.preview : Array.from(preview(latest.internal?.content ?? latest.content)).slice(0, 160).join(''),
+        ...(latest ? {
+          previewDirection: latest.direction,
+          preview: typeof latest.preview === 'string' ? latest.preview : Array.from(preview(latest.content)).slice(0, 160).join(''),
+        } : {}),
         ...(timestamp && timestamp.getTime() >= sortTime(row) ? { stamp } : {})
       };
       if (sortTime(next) > sortTime(row)) noteListUpdate(next, index, items);

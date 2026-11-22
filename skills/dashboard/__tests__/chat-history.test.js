@@ -214,7 +214,7 @@ test('history treats markers as literal except on earlier Dashboard inbound refe
   assert.equal(referenceReads, 1);
 });
 
-test('external list membership excludes relay-only groups while receive time and preview include relays', t => {
+test('external list membership excludes relay-only groups and relays affect receive time only', t => {
   const f = fixture(t);
   for (let i = 0; i < 7; i++) f.add({ id: 10 + i * 10, session_group: `tg:${i}` });
   f.add({ id: 85, session_group: 'tg:0', content: 'visible latest', timestamp: '2026-01-02 00:00:00' });
@@ -229,7 +229,7 @@ test('external list membership excludes relay-only groups while receive time and
   assert.equal(f.history._db().pragma('query_only', { simple: true }), 1);
   assert.throws(() => f.history._db().exec("UPDATE conversations SET content='changed' WHERE id=10"), /readonly/);
   assert.deepEqual(items.map(item => item.session_group), ['tg:0', 'tg:1', 'tg:2', 'tg:3', 'tg:4', 'tg:5', 'tg:6']);
-  assert.equal(items[0].preview, 'internal');
+  assert.equal(items[0].preview, 'visible latest');
   assert.equal(items[0].previewDirection, 'in');
   assert.equal(items[0].stamp, f.db.prepare("SELECT julianday('2026-02-01 00:00:00') AS stamp").get().stamp);
   const body = f.history.messages(items[0].id, { tab: 'external' });
@@ -353,7 +353,7 @@ test('received activity moves a row and outbound messages only change its previe
   own(7, 'a', '07', { channel: 'internal', endpoint_id: 'telegram:peer', content: '[internal] telegram:peer said: Relayed' });
   f.add({ id: 8, channel: 'system', session_group: 'origin', timestamp: '2026-01-08', content: 'Task is not a timeline preview' });
   assert.deepEqual(names(), ['origin', 'a', 'b', 'out-only']);
-  assert.deepEqual([byName('a').stamp, byName('a').preview, byName('a').previewDirection], [julian('07'), 'Relayed', 'in']);
+  assert.deepEqual([byName('a').stamp, byName('a').preview, byName('a').previewDirection], [julian('07'), 'Agent reply', 'out']);
   assert.deepEqual([byName('origin').stamp, byName('origin').preview], [julian('08'), 'Origin preview']);
 });
 
@@ -715,7 +715,7 @@ test('internal rows preserve raw facts and project peers on both histories witho
   assert.equal(external[3].internal.peerDisplayName, 'missing:peer');
   assert.equal(external[3].internal.peerChannel, null);
   assert.equal(external[4].internal.peerExists, false, 'internal-only group does not create a navigable peer');
-  for (const [tab, id, expected] of [['mine', 1, body], ['external', 2, 'unlisted peer']]) {
+  for (const [tab, id, expected] of [['mine', 1, 'own external'], ['external', 2, 'telegram external']]) {
     const list = f.history.list({ tab }).items.filter(item => !item.origin);
     assert.equal(list.length, 1);
     assert.equal(list[0].preview, expected);
