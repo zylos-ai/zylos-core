@@ -16,24 +16,19 @@ function timestampMillis(value) {
     ? `${value.replace(' ', 'T')}Z` : value);
 }
 
-/** Reads `read(key)` for every key, four at a time, in key order; a failed read is null. */
-async function readEach(keys, read) {
-  const values = new Array(keys.length);
-  let cursor = 0;
-  async function next() {
-    while (cursor < keys.length) {
-      const index = cursor++;
-      try { values[index] = await read(keys[index]); } catch { values[index] = null; }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(4, keys.length) }, next));
-  return values;
+/** Reads every key at once; when the reader fails, each group is unreadable. */
+async function readAll(groupBacklog, keys) {
+  try { return await groupBacklog.many(keys); } catch { return keys.map(() => null); }
 }
 
+/** A group the backlog lists: something pending, a Sync running, or a read that failed. */
+const listed = row => (known(row.count) && row.count > 0) || row.syncing === true || Boolean(row.reason);
+
 /**
- * The supplied group reader owns the only per-group backlog cache, shared with details. Every group row,
- * Origin's own included, compares its own unsummarized count with the group threshold. The cross-group
- * Origin Sync backlog is a separate field, read only in multi mode.
+ * The supplied group reader owns the only per-group backlog cache, shared with details and the memory tree. Every
+ * group is read; only the groups with something to show are listed. Each row, Origin's own included, compares its own
+ * unsummarized count with the group threshold. The cross-group Origin Sync backlog is a separate field, read only in
+ * multi mode.
  */
 export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, originBacklog = null,
   readConfig = async () => JSON.parse(await fs.readFile(path.join(zylosDir, '.zylos', 'config.json'), 'utf8')),
@@ -64,7 +59,7 @@ export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, origi
     const rows = new Map(snapshot.rows.filter(row => row.sessionGroup !== null).map(row => [row.sessionGroup, row]));
     const keys = [...rows.keys()];
     const threshold = positive(config?.syncThreshold);
-    const backlogs = readEach(keys, groupBacklog);
+    const backlogs = readAll(groupBacklog, keys);
     async function readGroups() {
       return (await backlogs).map((read, index) => {
         const sessionGroup = keys[index], row = rows.get(sessionGroup);
@@ -79,7 +74,7 @@ export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, origi
           threshold,
           ...(backlog.reason ? { reason: backlog.reason } : {}),
         };
-      });
+      }).filter(listed);
     }
     async function readOrigin() {
       if (snapshot.view !== 'multi' || !originBacklog) return undefined;
@@ -99,14 +94,11 @@ export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, origi
   };
 }
 
-/** A group with nothing pending and nothing to report: the page folds these. */
-export const quietBacklog = row => row.count === 0 && !row.aged && row.syncing === false && !row.reason;
-
-// The one backlog order: long-waiting groups first, then groups that need a look before quiet ones, then the
-// pending count (unknown after known), the oldest pending message (unknown last) and the session-group ID.
+// The one backlog order: long-waiting groups first, then the pending count (unknown after known), the oldest
+// pending message (unknown last) and the session-group ID.
 function orderKey(row) {
   const first = timestampMillis(row.firstAt);
-  return [row.aged ? 0 : 1, quietBacklog(row) ? 1 : 0, known(row.count) ? -row.count : 1, Number.isFinite(first) ? first : null, row.sessionGroup];
+  return [row.aged ? 0 : 1, known(row.count) ? -row.count : 1, Number.isFinite(first) ? first : null, row.sessionGroup];
 }
 function compareKeys(a, b) {
   for (let index = 0; index < a.length; index++) {
@@ -118,11 +110,11 @@ function compareKeys(a, b) {
   }
   return 0;
 }
-const orderPosition = position => Array.isArray(position) && position.length === 5
-  && [0, 1].includes(position[0]) && [0, 1].includes(position[1]) && Number.isSafeInteger(position[2])
-  && (position[3] === null || Number.isFinite(position[3])) && typeof position[4] === 'string';
+const orderPosition = position => Array.isArray(position) && position.length === 4
+  && [0, 1].includes(position[0]) && Number.isSafeInteger(position[1])
+  && (position[2] === null || Number.isFinite(position[2])) && typeof position[3] === 'string';
 
-/** What the page says about all groups, whatever is loaded or searched. `threshold` is the one most groups share. */
+/** What the page says about all listed groups, whatever is loaded or searched. `threshold` is the one most groups share. */
 function backlogSummary(groups) {
   const tally = new Map();
   for (const row of groups) if (positive(row.threshold)) tally.set(row.threshold, (tally.get(row.threshold) ?? 0) + 1);
@@ -132,7 +124,6 @@ function backlogSummary(groups) {
     aged: groups.filter(row => row.aged).length,
     syncing: groups.filter(row => row.syncing === true).length,
     unknown: groups.filter(row => row.count == null || row.syncing === null).length,
-    quiet: groups.filter(quietBacklog).length,
     threshold: [...tally].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0] ?? null,
   };
 }
@@ -145,7 +136,7 @@ export function parseBacklogQuery(searchParams) {
 }
 
 /**
- * One page of the backlog under the list API standard. Every group is read and ordered in memory (the group
+ * One page of the backlog under the list API standard. The listed groups are ordered in memory (the group
  * reader's 30-second cache is shared with group details and the memory tree), then `q` (session-group ID or
  * display name) selects and the cursor pages. Origin Sync, budgets and the summary are page fields.
  */
@@ -178,9 +169,10 @@ export async function readBacklogPage(read, searchParams) {
 }
 
 /**
- * Pending count and syncing state for each session group of the memory tree, from what the group reader read in the
- * last 30 seconds (null when it has not): the tree never waits for a backlog read.
+ * Pending count and syncing state for each session group of the memory tree, read with the backlog's own reader.
+ * A count or state that cannot be read is null, and a failed read leaves every badge null: the tree still answers.
  */
-export function treeBacklog(keys, cached) {
-  return keys.map(key => cached(key)).map(read => read ? { count: known(read.count) ? read.count : null, syncing: read.syncing ?? null } : null);
+export async function treeBacklog(groupBacklog, keys) {
+  const reads = await readAll(groupBacklog, keys);
+  return reads.map(read => read ? { count: known(read.count) ? read.count : null, syncing: read.syncing ?? null } : null);
 }

@@ -27,12 +27,18 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   fs.writeFileSync(path.join(dashboardDir, 'config.json'), JSON.stringify({ auth: { enabled: true, password: 'fixture-password' } }));
   fs.mkdirSync(path.join(root, 'comm-bridge'));
   const c4 = new Database(path.join(root, 'comm-bridge/c4.db'));
-  c4.exec('CREATE TABLE conversations(id INTEGER PRIMARY KEY, session_group TEXT, direction TEXT, channel TEXT, timestamp TEXT, content TEXT)');
-  const put = c4.prepare('INSERT INTO conversations VALUES(?,?,?,?,?,?)');
+  // The columns and tables Core's unsummarized calculation reads, beside the legacy rows (with no group) the single view lists.
+  c4.exec(`CREATE TABLE conversations(id INTEGER PRIMARY KEY, session_group TEXT, direction TEXT, channel TEXT, timestamp TEXT, content TEXT, status TEXT DEFAULT 'delivered');
+    CREATE TABLE checkpoints(id INTEGER PRIMARY KEY, session_group TEXT, end_conversation_id INTEGER, no_content INTEGER DEFAULT 0);
+    CREATE TABLE mode_transitions(phase TEXT)`);
+  const put = c4.prepare('INSERT INTO conversations(id,session_group,direction,channel,timestamp,content) VALUES(?,?,?,?,?,?)');
   put.run(1, null, 'in', 'telegram', '2026-10-01 12:00:00', 'private single body');
   put.run(2, 'origin', 'out', 'telegram', '2026-10-01 12:00:00', 'private Origin body');
   put.run(3, null, 'out', 'internal', '2026-10-01 12:00:00', 'private internal body');
   put.run(4, 'telegram:a', 'in', 'telegram', '2026-10-01 12:00:00', 'private ordinary body');
+  // Origin's Sync marker: only a group with one asks sync-lock.js whether its Sync is held.
+  fs.mkdirSync(path.join(root, 'activity-monitor/session-groups/origin'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'activity-monitor/session-groups/origin/sync.lock'), '{}');
   let clock = 1800000000000;
   let engine, auth, reader, server, view = 'multi', snapshotReads = 0, cachedSnapshot = null;
   const calls = [], restarts = [];
@@ -75,10 +81,6 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
       const cutoff = Number(args[args.indexOf('--active-since') + 1]);
       return { stdout: JSON.stringify({ ok: true, data: { groups: groups.filter(row => row.lastActivityAt >= cutoff), hasOlder: false } }) };
     }
-    if (args[0] === path.join(root, '.claude/skills/comm-bridge/scripts/c4-db.js') && args[1] === 'unsummarized') {
-      const global = !args.includes('--group');
-      return { stdout: JSON.stringify({ ok: true, data: { count: global ? 3 : 7, firstAt: 100 } }) };
-    }
     if (args[0] === path.join(root, '.claude/skills/zylos-memory/scripts/sync-lock.js')) {
       return { stdout: JSON.stringify({ sync: { held: true }, origin: { held: false } }) };
     }
@@ -113,7 +115,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   } });
   t.mock.module('../src/lib/core-modules.js', { namedExports: {
     loadCoreModule: async name => {
-      if (['model-rotation-thresholds.js', 'session-usage-reader.js', 'session-hot-ttl.js', 'config-store.js', 'config-lock.js', 'private-file.js', 'pm2.js', 'session-nudge.js'].includes(name)) return import(new URL('../../../cli/lib/' + name, import.meta.url));
+      if (['model-rotation-thresholds.js', 'session-usage-reader.js', 'session-hot-ttl.js', 'config-store.js', 'config-lock.js', 'private-file.js', 'pm2.js', 'session-nudge.js', 'session-group-paths.js'].includes(name)) return import(new URL('../../../cli/lib/' + name, import.meta.url));
       if (name === 'config.js') return { ZYLOS_DIR: root, readSessionMode: () => ({ mode: 'multi' }) };
       if (name === 'am-sock-client.js') return {
         submit: async request => { restarts.push(request); return { kind: 'accepted', reply: { result: 'accepted' } }; },
@@ -283,19 +285,16 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   await t.test('backlog HTTP reads reuse cached views without rebuilding even when count cache is warm', async () => {
     const before = snapshotReads;
     // The fixture's group lock is held and its Origin Sync lock is not: Origin's details read the group lock.
-    for (const [mode, count, syncing] of [['single', 3, true], ['multi', 7, true]]) {
+    for (const [mode, count, syncing] of [['single', 4, true], ['multi', 1, true]]) {
       view = mode; cachedSnapshot = snapshot();
       for (let round = 0; round < 2; round++) {
         const response = await request('/api/groups/origin/backlog');
         assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), { count, firstAt: new Date(100).toISOString(), syncing });
+        assert.deepEqual(await response.json(), { count, firstAt: '2026-10-01T12:00:00.000Z', syncing });
         assert.equal(snapshotReads, before, 'backlog must not invoke the rebuilding getter with a cached view');
       }
     }
-    const countCalls = calls.filter(call => call.args[1] === 'unsummarized');
-    assert.deepEqual(countCalls.map(call => call.args.slice(1)), [
-      ['unsummarized', '--json'], ['unsummarized', '--group', 'origin', '--json'],
-    ]);
+    assert.deepEqual(calls.filter(call => call.args[1] === 'unsummarized'), [], 'counts come from Core\'s calculation in this process');
     const lockCalls = calls.filter(call => call.args[0].endsWith('/sync-lock.js'));
     assert.deepEqual(lockCalls.map(call => call.args.slice(1)), [
       ['status', '--json'], ['status', '--group', 'origin', '--json'],
@@ -311,7 +310,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
       if (route === 'runs') {
         assert.deepEqual(value.runs.map(run => run.runId), ['single-run']);
         assert.equal(value.runs[0].endReason, 'running');
-      } else if (route === 'backlog') assert.deepEqual(value, { count: 3, firstAt: new Date(100).toISOString(), syncing: true });
+      } else if (route === 'backlog') assert.deepEqual(value, { count: 4, firstAt: '2026-10-01T12:00:00.000Z', syncing: true });
       else assert.deepEqual(value.messages.map(row => row.id), [1]);
     };
     for (const first of ['runs', 'backlog', 'messages' + range]) {
@@ -329,8 +328,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     const before = snapshotReads;
     const response = await request('/api/groups/origin/backlog');
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { count: 7, firstAt: new Date(100).toISOString(), syncing: true }, 'Origin reads its group sync lock, not the Origin Sync lock');
-    assert.deepEqual(calls.at(-2).args.slice(1), ['unsummarized', '--group', 'origin', '--json']);
+    assert.deepEqual(await response.json(), { count: 1, firstAt: '2026-10-01T12:00:00.000Z', syncing: true }, 'Origin reads its group sync lock, not the Origin Sync lock');
     assert.deepEqual(calls.at(-1).args.slice(1), ['status', '--group', 'origin', '--json']);
     assert.equal(snapshotReads, before, 'a cached unreadable view must not trigger a new build');
   });

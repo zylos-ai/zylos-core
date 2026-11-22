@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -213,11 +213,19 @@ test('single messages retain NULL scope and never include Origin or other groups
   assert.throws(() => reader.getGroupMessages(null, { since: 'invalid' }), { code: 'INVALID_ARGUMENT', statusCode: 400 });
 });
 
+// Core's ranges from an in-memory answer, and a Sync marker file for every group, so each group asks for its status.
+const markerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runs-backlog-marker-'));
+fs.writeFileSync(path.join(markerDir, 'sync.lock'), '{}');
+after(() => fs.rmSync(markerDir, { recursive: true, force: true }));
+const markers = async () => ({ groupRunDir: () => markerDir });
+const coreRanges = (answer, calls = []) => ({ getUnsummarizedRanges: scopes => { calls.push(scopes); return scopes.map(answer); } });
+
 test('backlog has one shared thirty-second per-group cache for count and lock status', async () => {
-  let clock = 1000, countCalls = 0, lockCalls = 0;
-  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance', now: () => clock,
+  let clock = 1000, lockCalls = 0;
+  const countCalls = [];
+  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance', now: () => clock, loadPaths: markers,
     env: { HOME: '/isolated', ZYLOS_SESSION_GROUP: 'unrelated', ZYLOS_RUN_ID: 'unrelated-run' },
-    runC4Db: async args => { countCalls++; assert.deepEqual(args, ['unsummarized', '--group', 'telegram:a', '--json']); return { ok: true, data: { count: 3, firstAt: 100 } }; },
+    c4Reader: coreRanges(scope => { assert.equal(scope, 'telegram:a'); return { count: 3, firstAt: 100 }; }, countCalls),
     execute: async (file, argv, options) => {
       lockCalls++;
       assert.equal(file, process.execPath);
@@ -231,15 +239,15 @@ test('backlog has one shared thirty-second per-group cache for count and lock st
     } });
   assert.deepEqual(await backlog('telegram:a'), { count: 3, firstAt: 100, syncing: true });
   clock += 29999; await backlog('telegram:a');
-  assert.deepEqual([countCalls, lockCalls], [1, 1]);
+  assert.deepEqual([countCalls.length, lockCalls], [1, 1]);
   clock += 101; await backlog('telegram:a');
-  assert.deepEqual([countCalls, lockCalls], [2, 2]);
+  assert.deepEqual([countCalls.length, lockCalls], [2, 2]);
 });
 
 test('backlog count and lock failures remain independent and Origin reads its group sync lock, not the Origin Sync lock', async () => {
   let countFailed = false, lockFailed = true;
-  const backlog = () => createGroupBacklog({ zylosDir: '/isolated/instance',
-    runC4Db: async () => countFailed ? { ok: false } : { ok: true, data: { count: 3, firstAt: 100 } },
+  const backlog = () => createGroupBacklog({ zylosDir: '/isolated/instance', loadPaths: markers,
+    c4Reader: coreRanges(() => countFailed ? null : { count: 3, firstAt: 100 }),
     execute: async () => {
       if (lockFailed) throw new Error('lock unavailable');
       return { stdout: JSON.stringify({ sync: { held: false }, origin: { held: true } }) };
@@ -249,34 +257,30 @@ test('backlog count and lock failures remain independent and Origin reads its gr
   assert.deepEqual(await backlog()('origin'), { count: null, firstAt: null, reason: 'backlog_failed', syncing: false });
 });
 
-test('single backlog uses global commands and keeps its cache separate from multi Origin', async () => {
+test('single backlog reads the whole machine and keeps its cache separate from multi Origin', async () => {
   let view = 'single';
-  const calls = [];
-  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance', getSnapshot: async () => ({ view }),
+  const calls = [], scopes = [];
+  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance', getSnapshot: async () => ({ view }), loadPaths: markers,
     env: { HOME: '/isolated/home', ZYLOS_SESSION_GROUP: 'wrong-group', ZYLOS_RUN_ID: 'wrong-run', RETAIN: 'yes' },
+    c4Reader: coreRanges(scope => ({ count: scope === null ? 7 : 2, firstAt: 100 }), scopes),
     execute: async (file, argv, options) => {
       calls.push({ file, argv, options });
-      if (argv[0].endsWith('/c4-db.js')) {
-        return { stdout: JSON.stringify({ ok: true, data: { count: argv.includes('--group') ? 2 : 7, firstAt: 100 } }) };
-      }
       return { stdout: JSON.stringify({ sync: { held: true }, origin: { held: false } }) };
     } });
   const single = await backlog('origin');
   assert.deepEqual(single, { count: 7, firstAt: 100, syncing: true });
-  assert.equal(calls.length, 2);
-  assert.deepEqual(calls[0].argv, ['/isolated/instance/.claude/skills/comm-bridge/scripts/c4-db.js', 'unsummarized', '--json']);
-  assert.deepEqual(calls[1].argv, ['/isolated/instance/.claude/skills/zylos-memory/scripts/sync-lock.js', 'status', '--json']);
+  assert.deepEqual(scopes, [[null]], 'Core\'s global range');
+  assert.deepEqual(calls.map(call => call.argv), [['/isolated/instance/.claude/skills/zylos-memory/scripts/sync-lock.js', 'status', '--json']]);
   assert.equal(await backlog('origin'), single);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 1);
   view = 'multi';
   const origin = await backlog('origin');
   assert.deepEqual(origin, { count: 2, firstAt: 100, syncing: true });
-  assert.equal(calls.length, 4);
-  assert.deepEqual(calls[2].argv.slice(1), ['unsummarized', '--group', 'origin', '--json']);
-  assert.deepEqual(calls[3].argv.slice(1), ['status', '--group', 'origin', '--json']);
+  assert.deepEqual(scopes, [[null], ['origin']]);
+  assert.deepEqual(calls[1].argv.slice(1), ['status', '--group', 'origin', '--json']);
   view = 'single';
   assert.equal(await backlog('origin'), single);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 2);
   for (const call of calls) {
     assert.equal(call.file, process.execPath);
     assert.equal(call.options.env.ZYLOS_DIR, '/isolated/instance');
@@ -290,23 +294,23 @@ test('single backlog uses global commands and keeps its cache separate from mult
 
 test('an unavailable backlog view retains the requested Origin scope', async () => {
   const countCalls = [], lockCalls = [];
-  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance',
+  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance', loadPaths: markers,
     getSnapshot: async () => { throw new Error('unavailable'); },
-    runC4Db: async args => { countCalls.push(args); return { ok: true, data: { count: 2 } }; },
+    c4Reader: coreRanges(() => ({ count: 2 }), countCalls),
     execute: async (file, argv) => {
       lockCalls.push(argv);
       return { stdout: JSON.stringify({ sync: { held: true }, origin: { held: false } }) };
     } });
   assert.deepEqual(await backlog('origin'), { count: 2, firstAt: null, syncing: true });
-  assert.deepEqual(countCalls, [['unsummarized', '--group', 'origin', '--json']]);
+  assert.deepEqual(countCalls, [['origin']]);
   assert.deepEqual(lockCalls[0].slice(1), ['status', '--group', 'origin', '--json']);
 });
 
 
 test('reading another scope discards expired backlog entries permanently', async () => {
   let clock = 1000, calls = 0;
-  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance', now: () => clock,
-    runC4Db: async () => ({ ok: true, data: { count: ++calls } }),
+  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance', now: () => clock, loadPaths: markers,
+    c4Reader: coreRanges(() => ({ count: ++calls })),
     execute: async () => ({ stdout: JSON.stringify({ sync: { held: false } }) }) });
   assert.equal((await backlog('telegram:a')).count, 1);
   clock = 31001;
@@ -315,4 +319,20 @@ test('reading another scope discards expired backlog entries permanently', async
   // was already discarded while another scope was read.
   clock = 1001;
   assert.equal((await backlog('telegram:a')).count, 3);
+});
+
+test('a read that waits keeps the cached values it started with when another read sweeps them out', async () => {
+  let clock = 1000, paused = false, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance', now: () => clock,
+    loadPaths: async () => { if (paused) await gate; return markers(); },
+    c4Reader: coreRanges(scope => ({ count: scope === 'telegram:a' ? 1 : 2 })),
+    execute: async () => ({ stdout: JSON.stringify({ sync: { held: false } }) }) });
+  await backlog('telegram:a');
+  clock = 30999; paused = true;
+  const waiting = backlog.many(['telegram:a', 'telegram:b']);
+  clock = 31000; paused = false;
+  await backlog('telegram:c');
+  release();
+  assert.deepEqual((await waiting).map(value => value.count), [1, 2]);
 });

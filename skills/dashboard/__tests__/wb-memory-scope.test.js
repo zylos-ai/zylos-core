@@ -104,23 +104,21 @@ test('technical charts show each threshold, unknown readings, age, Core budgets 
   f.controller.destroy();
 });
 
-test('backlog rows: waiting groups first, then by pending count, groups with nothing pending set apart', () => {
+test('backlog rows: waiting groups first, then by pending count; groups with nothing pending are not listed', () => {
   const page = backlogPage({ groups: [
-    { sessionGroup: 'quiet', count: 0, syncing: false, threshold: 15 },
     { sessionGroup: 'few', count: 3, syncing: false, threshold: 15 },
     { sessionGroup: 'unknown', count: null, syncing: null, threshold: 15 },
     { sessionGroup: 'old-small', count: 2, aged: true, firstAt: '2026-11-01 00:00:00', syncing: false, threshold: 15 },
     { sessionGroup: 'many', count: 40, syncing: false, threshold: 15 },
     { sessionGroup: 'old-big', count: 9, aged: true, firstAt: '2026-11-02 00:00:00', syncing: false, threshold: 15 },
     { sessionGroup: 'zero-syncing', count: 0, syncing: true, threshold: 15 },
-    { sessionGroup: 'origin', count: 0, syncing: false, threshold: 30 },
+    { sessionGroup: 'origin', count: 1, syncing: false, threshold: 30 },
   ] }, '/api/memory/backlog');
   const view = memoryBacklogView(page.items, page.summary.threshold);
-  assert.deepEqual(view.active.map(row => row.sessionGroup), ['old-big', 'old-small', 'many', 'few', 'zero-syncing', 'unknown']);
-  assert.deepEqual(view.quiet.map(row => row.sessionGroup), ['origin', 'quiet'], 'quiet groups last, by ID');
+  assert.deepEqual(view.rows.map(row => row.sessionGroup), ['old-big', 'old-small', 'many', 'few', 'origin', 'zero-syncing', 'unknown']);
   assert.equal(view.threshold, 15, 'the header names the threshold most groups share');
-  assert.equal(view.quiet[0].ownThreshold, 30, 'a group with another threshold keeps it on its row');
-  assert.equal(view.active[0].ownThreshold, null);
+  assert.equal(view.rows[4].ownThreshold, 30, 'a group with another threshold keeps it on its row');
+  assert.equal(view.rows[0].ownThreshold, null);
   assert.equal(memoryBacklogView(null).threshold, null);
 });
 
@@ -133,10 +131,10 @@ test('backlog age reads C4 UTC text in whole hours, then days from 48 hours', ()
   assert.equal(memoryBacklogAge('2026-11-10 00:00:00', now), null, 'a time ahead of the clock gives no age');
 });
 
-test('backlog card: threshold in the header, age as a mark on its row, quiet groups folded, a filter past twelve groups', async () => {
+test('backlog card: threshold in the header, age as a mark on its row, no line for groups with nothing pending, a filter past twelve groups', async () => {
   const hoursAgo = h => new Date(Date.now() - h * 3600e3).toISOString();
   const groups = [{ sessionGroup: 'telegram:dm-1', displayName: 'Waiting long', count: 20, threshold: 15, syncing: false, aged: true, firstAt: hoursAgo(9.5) }];
-  for (let i = 0; i < 12; i++) groups.push({ sessionGroup: `telegram:dm-q${i}`, displayName: `Quiet ${i}`, count: 0, threshold: 15, syncing: false });
+  for (let i = 0; i < 12; i++) groups.push({ sessionGroup: `telegram:dm-q${i}`, displayName: `Few ${i}`, count: 1, threshold: 15, syncing: false });
   const f = fixture({ detail: () => 'technical', request: async () => ({ groups }) });
   await f.controller.load();
   const card = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
@@ -149,24 +147,17 @@ test('backlog card: threshold in the header, age as a mark on its row, quiet gro
   assert.equal(nodesOfClass(nodesOfClass(first, 'wb-memory-bl-head')[0], 'wb-memory-bl-tag').includes(mark), true, 'the mark sits with the name, not on a line of its own');
   const over = nodesOfClass(first, 'wb-memory-bl-tag')[1];
   assert.equal(over?.textContent, 'wb.memory.overThreshold', 'over the threshold is also said in words'); assert.match(over.className, /\bwarn\b/);
-  const rest = nodesOfClass(card, 'wb-memory-rest')[0];
-  assert.equal(rest.tagName, 'DETAILS'); assert.equal(rest.open, false);
-  assert.match(rest.textContent, /wb.memory.restQuiet \{"count":12\}/);
-  assert.equal(nodesOfClass(rest, 'wb-memory-bl').length, 12, 'quiet groups stay reachable inside the fold');
+  assert.equal(rows().length, 13, 'every listed group is a row');
+  assert.equal(allNodes(card).some(node => node.tagName === 'DETAILS'), false, 'nothing is folded away');
   const originalFilter = allNodes(card).find(node => node.tagName === 'INPUT');
-  rest.open = true; rest.dispatch('toggle');
   f.controller.render();
-  assert.equal(nodesOfClass(f.chartsRoot, 'wb-memory-rest')[0].open, true, 'an opened fold stays open across refreshes');
-  rest.open = false; rest.dispatch('toggle'); f.controller.render();
-  assert.equal(nodesOfClass(f.chartsRoot, 'wb-memory-rest')[0].open, true, 'a late toggle from a fold drawn over changes nothing');
   const mountedCard = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
   const filter = allNodes(mountedCard).find(node => node.tagName === 'INPUT');
   assert.ok(filter, 'thirteen groups get a filter');
   assert.equal(filter, originalFilter, 'refresh keeps the live filter input mounted');
-  filter.value = 'quiet 1'; filter.dispatch('input'); await typed();
+  filter.value = 'few 1'; filter.dispatch('input'); await typed();
   const card2 = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
-  assert.deepEqual(nodesOfClass(card2, 'wb-memory-chart-label').map(node => node.textContent), ['Quiet 1', 'Quiet 10', 'Quiet 11'], 'a search lists matching quiet groups unfolded');
-  assert.equal(nodesOfClass(card2, 'wb-memory-rest').length, 0);
+  assert.deepEqual(nodesOfClass(card2, 'wb-memory-chart-label').map(node => node.textContent), ['Few 1', 'Few 10', 'Few 11'], 'a search lists the matching groups');
   filter.value = 'nothing'; filter.dispatch('input'); await typed();
   assert.match(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0].textContent, /wb.memory.noMatch/);
   f.controller.destroy();
@@ -360,16 +351,22 @@ test('the header threshold is the one most groups share, not the first or the sm
   assert.equal(view([15, 30]), 15, 'a tie goes to the smaller threshold');
 });
 
-test('a short backlog list has no filter and folds an all-quiet list under one line', async () => {
+test('a short backlog list has no filter, and an empty list says no group has anything waiting', async () => {
   const f = fixture({ detail: () => 'technical', request: async () => ({ groups: [
-    { sessionGroup: 'telegram:dm-1', count: 0, threshold: 15, syncing: false },
-    { sessionGroup: 'telegram:dm-2', count: 0, threshold: 15, syncing: false },
+    { sessionGroup: 'telegram:dm-1', count: 2, threshold: 15, syncing: false },
+    { sessionGroup: 'telegram:dm-2', count: 1, threshold: 15, syncing: false },
   ] }) });
   await f.controller.load();
   const card = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
   assert.equal(allNodes(card).some(node => node.tagName === 'INPUT'), false);
-  assert.match(nodesOfClass(card, 'wb-memory-rest')[0].textContent, /wb.memory.allQuiet \{"count":2\}/);
+  assert.equal(nodesOfClass(card, 'wb-memory-bl').length, 2);
   f.controller.destroy();
+  const empty = fixture({ detail: () => 'technical', request: async () => ({ groups: [] }) });
+  await empty.controller.load();
+  const rows = nodesOfClass(nodesOfClass(empty.chartsRoot, 'wb-memory-progress')[0], 'wb-memory-rows')[0];
+  assert.deepEqual(rows.children.map(node => [node.className, node.textContent]), [['wb-memory-source', t('wb.memory.noBacklogGroups')]],
+    'one line and no count, instead of a blank card');
+  empty.controller.destroy();
 });
 
 test('ordinary view hides progress and budgets and unavailable budgets draw no threshold lines', async () => {
@@ -713,18 +710,21 @@ test('memory files list flat per section, skip dot files and know their scope', 
 
 test('the file list folds by section, keeps search results open and names the folding state', async () => {
   const collapsed = new Set(), toggled = [], listRoot = createDocument().createElement('div');
-  // The tree first answers without badges; once the backlog card has read the groups, the tree is read again.
-  const backlogRow = { sessionGroup: 'telegram:dm-1001', count: 12, threshold: 15, syncing: false };
+  // The tree answers with each group's badge; loading the backlog card reads only the backlog.
+  const requested = [];
   const f = fixture({ listRoot, isCollapsed: key => collapsed.has(key), toggleCollapsed: key => toggled.push(key),
-    request: async path => path.startsWith('/api/memory/tree')
-      ? { sessionGroups: [{ sessionGroup: 'telegram:dm-1001', backlog: { count: backlogRow.count, syncing: false } }] } : { groups: [backlogRow] } });
+    request: async path => { requested.push(path.split('?')[0]); return { groups: [{ sessionGroup: 'telegram:dm-1001', count: 12, threshold: 15, syncing: false }] }; } });
+  const value = tree();
+  value.sessionGroups[0].backlog = { count: 12, syncing: false };
+  f.setTree(value);
   assert.deepEqual(f.controller.sectionKeys(), ['shared', 'session-groups/telegram:dm-1001']);
   f.controller.renderList();
   const heads = () => nodesOfClass(listRoot, 'wb-memory-section-h').concat(nodesOfClass(listRoot, 'wb-memory-group-h'));
-  assert.deepEqual(nodesOfClass(listRoot, 'wb-memory-count'), [], 'no badge before the backlog is read');
-  await f.controller.load();
   assert.deepEqual(nodesOfClass(listRoot, 'wb-memory-count').map(node => node.textContent), [t('wb.memory.pending', { count: 12 })],
-    'after the backlog read the group shows the same pending count as the backlog card');
+    'the group shows the tree\'s pending count as soon as the tree is drawn');
+  await f.controller.load();
+  assert.deepEqual(requested, ['/api/memory/backlog'], 'the backlog card does not read the tree again');
+  assert.deepEqual(nodesOfClass(listRoot, 'wb-memory-count').map(node => node.textContent), [t('wb.memory.pending', { count: 12 })]);
   assert.deepEqual(heads().map(node => node.attributes['aria-expanded']), ['true', 'true']);
   const paths = () => allNodes(listRoot).filter(node => node.dataset.path).map(node => node.dataset.path);
   assert.ok(paths().includes('state.md') && paths().includes('session-groups/telegram:dm-1001/handoff.md'));

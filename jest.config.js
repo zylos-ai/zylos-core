@@ -41,6 +41,7 @@ export default {
     '<rootDir>/test/dashboard-demand-poll.integration.test.js',
     '<rootDir>/test/legacy-group-reads-browser.test.js',
     '<rootDir>/test/dashboard-object-api.integration.test.js',
+    '<rootDir>/test/dashboard-memory-backlog-core.integration.test.js',
     '<rootDir>/test/dashboard-static-cache-browser.integration.test.js',
     '<rootDir>/test/account-usage-cache.integration.test.js',
     '<rootDir>/test/dashboard-transcript-idle.integration.test.js',
