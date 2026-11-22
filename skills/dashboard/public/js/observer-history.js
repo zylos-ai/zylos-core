@@ -36,6 +36,11 @@ export class ObserverHistory {
     this.markdown = createHistoryMarkdown(globalThis.window?.markdownit);
     this.root.innerHTML = `<div class="history-controls"><label class="history-session-field"><span data-label="sessions"></span><select data-history="sessions"></select></label><form data-history="search-form"><input data-history="query" type="search" minlength="2" maxlength="200"><button class="action-btn" data-label="search"></button></form><label><input data-history="internal" type="checkbox"><span data-label="internal"></span></label></div><div data-history="status" role="status"></div><div data-history="results" class="history-results" hidden></div><div data-history="timeline" class="history-timeline" tabindex="0"><button class="action-btn" data-history="older" data-label="older" hidden></button><div data-history="entries"></div></div><button class="action-btn history-latest" data-history="latest" data-label="latest" hidden></button>`;
     this.el = name => root.querySelector(`[data-history="${name}"]`);
+    const more = doc.createElement('button');
+    more.type = 'button'; more.className = 'action-btn'; more.hidden = true;
+    more.dataset.history = 'more-sessions'; more.dataset.label = 'more_sessions';
+    this.el('sessions').closest('label').after(more);
+    more.onclick = () => { if (this.sessionCursor) this.loadSessions(this.sessionCursor); };
     this.el('sessions').onchange = () => this.select(this.el('sessions').value);
     this.el('internal').onchange = () => this.select(this.session);
     this.el('search-form').onsubmit = event => { event.preventDefault(); this.search(); };
@@ -44,7 +49,7 @@ export class ObserverHistory {
     this.el('timeline').onscroll = () => {
       const timeline = this.el('timeline');
       this.el('latest').hidden = this.atBottom() && this.session === this.current;
-      if (timeline.scrollTop < 60 && this.hasOlder) this.load('before');
+      if (timeline.scrollTop < 60 && this.before) this.load('before');
       this.schedule();
     };
     this.doc.addEventListener('visibilitychange', () => {
@@ -74,7 +79,7 @@ export class ObserverHistory {
       item.node.replaceWith(node); item.node = node;
     }
     for (const option of this.el('sessions').options) {
-      const session = this.sessions?.find(s => s.id === option.value);
+      const session = this.sessions?.find(s => s.id === option.value) ?? this.retainedSession;
       if (session) option.textContent = this.sessionLabel(session);
     }
     this.el('query').placeholder = this.label('search_placeholder');
@@ -86,6 +91,8 @@ export class ObserverHistory {
     for (const controller of this.controllers) controller.abort();
     this.controllers.clear();
     this.loading = false;
+    this.loadingSessions = false;
+    this.el('more-sessions').disabled = false;
     for (const field of this.fields.values()) { field.loading = false; field.more.disabled = false; field.all.disabled = false; }
   }
   setActive(active) {
@@ -93,14 +100,14 @@ export class ObserverHistory {
     if (scope !== this.scope) {
       this.scope = scope;
       this.session = this.current = null;
-      this.sessions = null;
+      this.sessions = this.sessionCursor = this.anchor = this.retainedSession = null;
       this.entries.clear(); this.fields.clear();
       this.el('sessions').replaceChildren();
       this.el('entries').replaceChildren();
       this.el('results').replaceChildren();
       this.el('results').hidden = true;
       this.before = this.after = null;
-      this.hasOlder = false;
+      this.el('more-sessions').hidden = true;
       this.el('older').hidden = this.el('latest').hidden = true;
     }
     this.active = active;
@@ -119,68 +126,95 @@ export class ObserverHistory {
       const response = await this.request(this.endpoint(`/api/observer/history/${route}`) + '?' + new URLSearchParams(this.scopedParams(params)), { cache: 'no-store', signal: controller.signal });
       const data = await response.json();
       if (generation !== this.generation) throw Object.assign(new Error('stale'), { name: 'AbortError' });
-      if (!response.ok) throw new Error(data.error?.message || this.label('error'));
+      if (!response.ok) throw Object.assign(new Error(data.error?.message || this.label('error')), { code: data.error?.code });
       return data;
     } finally { this.controllers.delete(controller); }
   }
   error(error) { if (error.name !== 'AbortError') this.el('status').textContent = this.label('error') + ': ' + error.message; }
   sessionLabel(session) {
-    const time = historyTime(session.startedAt);
-    const title = session.title || session.startedAt || session.id;
+    const time = historyTime(session.updatedAt);
+    const title = session.title || session.updatedAt || session.id;
     const body = session.title && time ? `${time} · ${title}` : title;
     return `${session.kind === 'subagent' ? '↳ ' : ''}${session.id === this.current ? this.label('current') + ' · ' : ''}${body}`;
   }
   async start() {
     this.el('status').textContent = this.label('loading');
+    await this.loadSessions();
+  }
+  async loadSessions(cursor = null, refreshTimeline = true) {
+    if (this.loadingSessions || !this.active || this.doc.hidden) return;
+    const generation = this.generation;
+    const more = this.el('more-sessions');
+    this.loadingSessions = more.disabled = true;
     try {
-      const data = await this.json('sessions');
+      const data = await this.json('sessions', cursor ? { cursor } : {});
       this.current = data.current;
-      const main = data.sessions.filter(s => s.kind !== 'subagent');
-      main.sort((a, b) => Number(b.id === data.current) - Number(a.id === data.current));
-      const sessions = main.flatMap(s => [s, ...data.sessions.filter(child => child.parentId === s.id)]);
-      for (const session of data.sessions) if (!sessions.includes(session)) sessions.push(session);
-      this.sessions = sessions;
-      this.el('sessions').replaceChildren(...sessions.map(s => {
+      const previous = this.sessions?.find(session => session.id === this.session)
+        ?? (this.retainedSession?.id === this.session ? this.retainedSession : null);
+      const sessions = new Map((cursor ? this.sessions : []).map(session => [session.id, session]));
+      for (const session of data.items) if (!sessions.has(session.id)) sessions.set(session.id, session);
+      this.sessions = [...sessions.values()];
+      this.retainedSession = previous && !sessions.has(previous.id) ? previous : null;
+      this.sessionCursor = data.nextCursor;
+      more.hidden = !this.sessionCursor;
+      const options = this.retainedSession ? [...this.sessions, this.retainedSession] : this.sessions;
+      this.el('sessions').replaceChildren(...options.map(s => {
         const option = this.doc.createElement('option'); option.value = s.id;
         option.textContent = this.sessionLabel(s);
         return option;
       }));
-      this.el('status').textContent = sessions.length ? '' : this.label('empty');
-      if (sessions.length) await this.select(sessions.some(s => s.id === this.session) ? this.session : data.current || sessions[0].id);
-    } catch (error) { this.error(error); }
+      if (!cursor && (refreshTimeline || !this.session)) {
+        this.el('status').textContent = options.length ? '' : this.label('empty');
+        const selected = this.session ?? (sessions.has(data.current) ? data.current : this.sessions[0]?.id);
+        await this.select(selected ?? null, selected === this.session ? this.anchor : null);
+      } else this.el('sessions').value = this.session;
+    } catch (error) {
+      if (cursor && error.code === 'invalid_cursor' && generation === this.generation) {
+        this.loadingSessions = false;
+        await this.loadSessions(null, false);
+      } else this.error(error);
+    } finally {
+      if (generation === this.generation) this.loadingSessions = more.disabled = false;
+    }
   }
-  async select(session, around) {
+  async select(session, anchor = null) {
     this.cancel();
     this.session = session;
-    this.el('sessions').value = session;
+    this.anchor = anchor;
+    this.el('sessions').value = session ?? '';
     this.entries.clear(); this.fields.clear();
     this.el('entries').replaceChildren();
     this.el('results').hidden = true;
     this.before = this.after = null;
-    this.hasOlder = false;
-    await this.load(around ? 'around' : 'latest', around);
+    this.el('older').hidden = this.el('latest').hidden = true;
+    if (session) await this.load(anchor ? 'anchor' : 'latest');
   }
   atBottom() { const el = this.el('timeline'); return el.scrollHeight - el.scrollTop - el.clientHeight < 80; }
-  schedule() {
+  schedule(delay = 3000) {
     clearTimeout(this.timer);
-    if (this.active && !this.doc.hidden && this.atBottom()) this.timer = setTimeout(() => this.load('after'), 3000);
+    if (this.active && !this.doc.hidden && this.after && this.atBottom()) this.timer = setTimeout(() => this.load('after'), delay);
   }
-  async load(direction, around) {
+  async load(direction) {
     if (this.loading || !this.active || this.doc.hidden || !this.session) return;
+    const paging = direction === 'before' || direction === 'after';
+    const cursor = direction === 'before' ? this.before : this.after;
+    if (paging && !cursor) return;
     this.loading = true;
     const generation = this.generation;
     const timeline = this.el('timeline');
     const oldHeight = timeline.scrollHeight;
     const oldTop = timeline.scrollTop;
     const wasBottom = this.atBottom();
-    const params = { session: this.session, limit: 50, internal: this.el('internal').checked ? 1 : 0 };
-    if (direction === 'around') params.around = around;
-    else if (direction !== 'latest' && this[direction]) params[direction] = this[direction];
+    const limit = 50;
+    const params = { session: this.session, internal: Boolean(this.el('internal').checked), limit };
+    let delay;
+    if (paging) Object.assign(params, { direction, cursor });
+    else if (direction === 'anchor') params.anchor = this.anchor;
     try {
       const data = await this.json('entries', params);
       const additions = [];
       const visibleUpdates = (data.updates || []).filter(entry => this.entries.has(entry.id));
-      for (const entry of [...data.entries, ...visibleUpdates]) {
+      for (const entry of [...data.items, ...visibleUpdates]) {
         const old = this.entries.get(entry.id);
         if (old && JSON.stringify(old.entry) === JSON.stringify(entry)) continue;
         const node = this.renderEntry(entry, old?.node);
@@ -189,17 +223,20 @@ export class ObserverHistory {
       }
       const container = this.el('entries');
       if (direction === 'before') container.prepend(...additions); else container.append(...additions);
-      if (direction !== 'after') { this.before = data.before; this.hasOlder = data.hasOlder; }
-      if (direction !== 'before' && data.after) this.after = data.after;
+      if (direction !== 'after') this.before = data.nextCursor;
+      if (direction !== 'before') this.after = data.afterCursor;
+      if (direction === 'after' && data.items.length === limit) delay = 0;
       this.refreshOverflow();
-      this.el('older').hidden = !this.hasOlder;
+      this.el('older').hidden = !this.before;
       this.el('status').textContent = this.entries.size ? '' : this.label('empty');
       if (direction === 'before') timeline.scrollTop = oldTop + timeline.scrollHeight - oldHeight;
-      else if (direction === 'around') this.entries.get(around)?.node.scrollIntoView({ block: 'center' });
+      else if (direction === 'anchor') this.entries.get(this.anchor)?.node.scrollIntoView({ block: 'center' });
       else if (direction === 'latest' || wasBottom) timeline.scrollTop = timeline.scrollHeight;
       this.el('latest').hidden = this.atBottom() && this.session === this.current;
-    } catch (error) { this.error(error); }
-    finally { if (generation === this.generation) { this.loading = false; this.schedule(); } }
+    } catch (error) {
+      if (paging && error.code === 'invalid_cursor' && generation === this.generation) await this.select(this.session, this.anchor);
+      else this.error(error);
+    } finally { if (generation === this.generation) { this.loading = false; this.schedule(delay); } }
   }
   renderEntry(entry, oldNode) {
     const node = this.doc.createElement('article');

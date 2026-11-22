@@ -63,16 +63,16 @@ for (const scoped of [false, true]) test(`AGY ${scoped ? 'group override' : 'ins
   }) : undefined });
   t.after(() => service.close());
   const listing = scoped ? (await request(service, 'sessions?session_group=dashboard:team')).body : await service.sessions();
-  assert.deepEqual(listing, { runtime: 'agy', current: null, sessions: [] });
+  assert.deepEqual(listing, { runtime: 'agy', current: null, items: [], nextCursor: null });
   for (const suffix of ['entries?session=claude-session', 'content?session=claude-session&entry=o:0&field=body',
     'search?session=claude-session&q=Claude']) {
     const response = await request(service, suffix);
     assert.equal(response.status, 404);
-    assert.equal(response.body.error.code, 'session_not_found');
+    assert.equal(response.body.error.code, suffix.startsWith('entries?') ? 'not_found' : 'session_not_found');
   }
   // The sentinel is a valid real Claude transcript, so emptiness above proves
   // runtime separation rather than an unreadable fixture.
   const claude = new HistoryService({ config: { ...config, runtime: 'claude' }, redactor });
   t.after(() => claude.close());
-  assert.equal((await claude.sessions()).sessions[0].id, 'claude-session');
+  assert.equal((await claude.sessions()).items[0].id, 'claude-session');
 });

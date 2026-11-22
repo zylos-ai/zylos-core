@@ -58,7 +58,7 @@ export async function runObserverBrowser(t, sandbox, signal) {
         ...(legacy ? {} : { sessionMode: mode, target: running ? { sessionGroup: mode === 'single' ? null : group, runId: 'run-' + (group || 'single'), runtime: 'claude' } : null }),
         runtime: { state: 'idle' }, agentSize: running ? { cols: 120, rows: 40 } : null };
     }
-    if (p.startsWith('/api/observer/history/')) return { sessions: [], entries: [], hasMore: false };
+    if (p === '/api/observer/history/sessions') return { items: [], nextCursor: null, current: null };
     // Two external conversations; the first is not the observed group's, so a return that only reopens the
     // conversation page (which selects the first one on wide screens) does not pass for a return to GROUP's.
     if (p === '/api/chat/conversations') return { items: url.searchParams.get('tab') === 'external' ? chats.map(chat => chat.row) : [], nextCursor: null, tz: 'UTC' };
