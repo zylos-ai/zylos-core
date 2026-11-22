@@ -148,6 +148,18 @@ export class SessionAdapter extends RuntimeAdapter {
       if (!runId || !['single','multi'].includes(sessionMode) ||
           (sessionMode === 'single' ? sessionGroup !== null && sessionGroup !== 'origin' : !sessionGroup)) throw adapterError('LAUNCH_FAILED','Invalid launch arguments','error');
       const root = await fs.realpath(this.options.root || ZYLOS_DIR);
+      // Codex and Antigravity discover workspace skills under .agents/skills.
+      const agentsDir = path.join(root, '.agents');
+      const agentsSkillsPath = path.join(agentsDir, 'skills');
+      let agentsSkillsExists = false;
+      try { await fs.lstat(agentsSkillsPath); agentsSkillsExists = true; } catch { /* not present */ }
+      if (!agentsSkillsExists) {
+        try {
+          await fs.mkdir(agentsDir, { recursive: true });
+          await fs.symlink(path.join(root, '.claude', 'skills'), agentsSkillsPath);
+        } catch { /* non-fatal */ }
+      }
+
       const cleanEnv = launchEnvironment(root,env,{runtime:this.runtimeId});
       let args = buildRuntimeArgs(this.runtimeId, launchConfig, {root, help});
       const upgrade = discoverUpgradeContext(root);

@@ -72,19 +72,6 @@ export class CodexAdapter extends SessionAdapter {
       process.stderr.write(`${message}\n`);
       throw adapterError('LAUNCH_FAILED', message, cause);
     }
-
-    // Ensure .agents/skills points to .claude/skills for Codex skill discovery.
-    const agentsDir = path.join(root, '.agents');
-    const agentsSkillsPath = path.join(agentsDir, 'skills');
-    let agentsSkillsExists = false;
-    try { fs.lstatSync(agentsSkillsPath); agentsSkillsExists = true; } catch { /* not present */ }
-    if (!agentsSkillsExists) {
-      try {
-        fs.mkdirSync(agentsDir, { recursive: true });
-        fs.symlinkSync(path.join(root, '.claude', 'skills'), agentsSkillsPath);
-      } catch { /* non-fatal */ }
-    }
-
     return super.launch(options);
   }
 

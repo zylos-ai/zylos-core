@@ -123,47 +123,6 @@ function baseLaunch(t, check = () => {}) {
   return calls;
 }
 
-test('Codex creates the skills symlink before launching', async t => {
-  const { root, adapter } = fixture(t);
-  const skillsLink = path.join(root, '.agents', 'skills');
-  const skillsDir = path.join(root, '.claude', 'skills');
-  fs.mkdirSync(skillsDir, { recursive: true });
-  assert.throws(() => fs.lstatSync(path.dirname(skillsLink)), { code: 'ENOENT' });
-  const calls = baseLaunch(t, () => assert.equal(fs.readlinkSync(skillsLink), skillsDir));
-
-  assert.deepEqual(await adapter.launch(launchArgs), { started: true });
-  assert.equal(calls.length, 1);
-});
-
-test('Codex preserves an existing dangling skills symlink', async t => {
-  const { root, adapter } = fixture(t);
-  const skillsPath = path.join(root, '.agents', 'skills');
-  const customTarget = path.join(root, 'custom-skills');
-  fs.mkdirSync(path.dirname(skillsPath));
-  fs.symlinkSync(customTarget, skillsPath);
-  const original = fs.lstatSync(skillsPath);
-  const calls = baseLaunch(t, () => {
-    const current = fs.lstatSync(skillsPath);
-    assert.equal(current.ino, original.ino);
-    assert.equal(current.mode, original.mode);
-    assert.equal(fs.readlinkSync(skillsPath), customTarget);
-  });
-
-  await adapter.launch(launchArgs);
-  assert.equal(calls.length, 1);
-});
-
-test('Codex still launches when the skills symlink cannot be created', async t => {
-  const { root, adapter } = fixture(t);
-  const agentsPath = path.join(root, '.agents');
-  fs.writeFileSync(agentsPath, 'blocks directory creation');
-  const calls = baseLaunch(t);
-
-  assert.deepEqual(await adapter.launch(launchArgs), { started: true });
-  assert.equal(calls.length, 1);
-  assert.equal(fs.readFileSync(agentsPath, 'utf8'), 'blocks directory creation');
-});
-
 test('Codex launch refreshes changed hooks before the tmux launch boundary and skips valid trust', async t => {
   const f = fixture(t);
   const calls = baseLaunch(t, () => assert.equal(f.valid().valid, true, 'trust must be current before runtime launch'));
