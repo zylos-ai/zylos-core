@@ -1650,7 +1650,8 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
 /* Same-row controls share a size tier; segmented sizes always describe the rail,
    leaving its existing 2px inset for the selected surface. */
 :is(.wb-seg, .wb-seg2, .wb-seg-sm) { align-items: stretch; }
-:is(.wb-seg, .wb-seg2, .wb-seg-sm) > button { height: 100%; min-height: 0; }
+/* The extra [class] specificity keeps segment sizing above page-level height rules. */
+:is(.wb-seg, .wb-seg2, .wb-seg-sm)[class] > button { height: 100%; min-height: 0; }
 .wb-bh { align-items: center; }
 :is(.wb-name-editor, .wb-cfg-controls) { --wb-h: var(--wb-control-compact); align-items: center; }
 :is(.wb-name-editor, .wb-cfg-controls) :is(.wb-input, input, select, .wb-btn-sm, .wb-link-btn) { height: var(--wb-h); }
@@ -1679,12 +1680,11 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   .wb-switch-l { min-height: 40px; }
   /* Measure the search outer frame once; its input fits inside the border. */
   .wb-search { min-height: var(--wb-control-touch); }
-  /* Multiline engine options retain their content-driven height. */
-  :is(.wb-seg, .wb-seg2) { height: auto; }
-  :is(.wb-btn-sm, .wb-icon-btn-sm, .wb-search, .wb-input, .wb-seg, .wb-seg2, .wb-seg-sm) { height: var(--wb-control-touch); }
+  /* [class] keeps the touch sizing above page-level height rules. */
+  :is(.wb-btn-sm, .wb-icon-btn-sm, .wb-search, .wb-input, .wb-seg, .wb-seg2, .wb-seg-sm)[class] { height: var(--wb-control-touch); }
   :is(.wb-name-editor, .wb-cfg-controls) { --wb-h: var(--wb-control-touch); }
   :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
-    :is(.wb-seg, .wb-seg2, .wb-seg-sm) > :is(button, .wb-btn) { height: 100%; min-height: 0; }
+    :is(.wb-seg, .wb-seg2, .wb-seg-sm)[class] > :is(button, .wb-btn) { height: 100%; min-height: 0; }
   .wb-date-native { min-height: 0; }
   #wb-auto-name { height: var(--wb-control-touch); }
   .app-header .header-icon-btn { width: 44px; min-width: 44px; min-height: 44px; }

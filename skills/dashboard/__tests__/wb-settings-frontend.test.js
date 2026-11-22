@@ -499,21 +499,30 @@ test('the mounted default effort uses configured metadata and only saves a user 
     assert.equal(root.querySelector('#settings-model-result').textContent, 'wb.settings.defaultsSaved wb.settings.effortNextStart');
   } finally { panel.destroy(); }
 });
+async function draftEngine(root, runtime) {
+  await selectEngine(root, runtime);
+  const model = root.querySelector('#settings-model-' + runtime); model.value = 'two'; await model.dispatch('change');
+  const effort = root.querySelector('#settings-effort-' + runtime); effort.value = runtime === 'codex' ? 'minimal' : 'low'; await effort.dispatch('change');
+}
+
 async function draftBothEngines(root) {
-  for (const runtime of ['claude', 'codex']) {
-    await selectEngine(root, runtime);
-    const model = root.querySelector('#settings-model-' + runtime); model.value = 'two'; await model.dispatch('change');
-    const effort = root.querySelector('#settings-effort-' + runtime); effort.value = runtime === 'codex' ? 'minimal' : 'low'; await effort.dispatch('change');
-  }
+  for (const runtime of ['claude', 'codex']) await draftEngine(root, runtime);
 }
 
 test('saving model and effort confirms and writes only the selected engine', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [], asked = [];
   const tr = (key, params) => key === 'effort.minimal' ? 'Minimal' : t(key, params);
-  const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t: tr, read: async () => ({}),
+  const claude = { ...effortMeta('claude'), model_thresholds: { one: 70, two: 70 }, model_threshold_max: { two: 95 } };
+  const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude, codex: effortMeta('codex') }, document, t: tr, read: async () => ({}),
     confirm: async text => { asked.push(text); return true; }, execute: async (action, body, options) => { calls.push({ action, body, options }); return true; } });
-  await draftBothEngines(root);
-  await root.querySelector('#settings-save-models').dispatch('click');
+  await draftEngine(root, 'claude');
+  const threshold = root.querySelector('#settings-threshold-claude');
+  threshold.value = '96';
+  await threshold.dispatch('input');
+  await draftEngine(root, 'codex');
+  const save = root.querySelector('#settings-save-models');
+  assert.equal(save.disabled, false, 'an invalid threshold on Claude does not block saving Codex');
+  await save.dispatch('click');
   assert.equal(asked.length, 1);
   assert.match(asked[0], /Name a/, 'the explicit engine still inherits its default model');
   assert.match(asked[0], /Minimal/);
@@ -523,6 +532,8 @@ test('saving model and effort confirms and writes only the selected engine', asy
   await selectEngine(root, 'claude');
   assert.equal(root.querySelector('#settings-model-claude').closest('.wb-pref-c').querySelector('.wb-dirty').hidden, false);
   assert.equal(root.querySelector('#settings-model-result').textContent, '');
+  threshold.value = '70';
+  await threshold.dispatch('input');
   await root.querySelector('#settings-save-models').dispatch('click');
   assert.equal(asked.length, 2);
   assert.match(asked[1], /Name origin.*\nName c/);

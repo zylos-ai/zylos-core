@@ -204,7 +204,7 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
         engineResult.textContent = t('wb.settings.saveFailed');
         return;
       }
-      baselineRuntime = runtime;
+      baselineRuntime = result?.data?.baseline ?? runtime;
       const saved = t(result?.messageKey ?? 'result.runtime_saved', {
         ...result?.messageParams, value: runtimeName(baselineRuntime),
       });
