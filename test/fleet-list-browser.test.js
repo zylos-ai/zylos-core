@@ -337,9 +337,16 @@ test('Fleet reloads the visible page and settings page the configured machines',
           assert.equal(await cards.count(), 4);
           all.push(...await names());
           assert.equal(new Set(all).size, 20);
-          await root.locator(previous).click();
-          await waitForCard('Node 08');
           await page.mouse.move(0, 0);
+          visible = data.agents.slice(0, 16);
+          await push();
+          await waitForCard('Node 08');
+          assert.equal(await cards.count(), 8);
+          assert.equal(await root.locator(previous).isEnabled(), true);
+          assert.equal(await root.locator(next).isDisabled(), true);
+          visible = data.agents;
+          await push();
+          await root.locator(next + ':enabled').waitFor();
           await page.waitForFunction(() => !document.querySelector('#agent-fleet-root').matches(':hover'));
           const changed = data.agents.find(agent => agent.name === 'Node 08');
           changed.state = 'OFFLINE'; changed.pulse_rate = 0;

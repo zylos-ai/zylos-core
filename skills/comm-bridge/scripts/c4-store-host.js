@@ -49,9 +49,9 @@ export function hostFunctions({ read, write, snapshot, get, all, run, seconds, k
       })),
       getSessionHostAllowlist: () => read(allowlist),
       listSessionHostsPage: ({ q, after, limit, total }) => snapshot(c => {
-        const search = q ? ' WHERE (host_group_matches(source_group, ?) OR host_group_matches(target_group, ?))' : '';
-        const values = q ? [q.toLowerCase(), q.toLowerCase()] : [];
-        if (q) c.function('host_group_matches', (group, term) => Number(group.toLowerCase().includes(term)));
+        const term = q?.toLowerCase();
+        const search = term ? ' WHERE (instr(lower(source_group), ?) OR instr(lower(target_group), ?))' : '';
+        const values = term ? [term, term] : [];
         const boundary = after === null ? '' : `${search ? ' AND' : ' WHERE'} source_group > ?`;
         const rows = all(c, `SELECT source_group, target_group, attached_by, attached_at
           FROM session_hosts${search}${boundary} ORDER BY source_group LIMIT ?`,

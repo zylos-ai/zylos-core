@@ -83,7 +83,7 @@ test('chat, observer, fleet and key projections keep user content and identifier
   assert.equal(projected.items[0].id, 1700000000);
   assert.equal(projectApiTimestamps('/api/observer/leases', { expiresAt: at }).expiresAt, iso);
   assert.equal(projectApiTimestamps('/api/keys', { items: [{ created_at: '2026-11-16 02:03:04' }], nextCursor: 'opaque' }).items[0].created_at, iso);
-  assert.equal(projectApiTimestamps('/api/fleet', { self: { system_metrics: { sampledAt: at } }, agents: [{ rate_limit_7d_recorded_at: at }] }).agents[0].rate_limit_7d_recorded_at, iso);
+  assert.equal(projectApiTimestamps('/api/fleet', { items: [{ rate_limit_7d_recorded_at: at }] }).items[0].rate_limit_7d_recorded_at, iso);
 });
 
 test('HTTP and SSE use the same immutable wire projection', () => {
@@ -125,20 +125,17 @@ test('zero clocks are unknown and event, Git and preview fields normalize actual
 });
 
 
-test('Fleet attention recovery times use ISO in local and remote HTTP and SSE records', () => {
+test('Fleet pages project attention recovery times and pushes project the update time', () => {
   const record = { group_summary: { attention: [
     { kind: 'rate_limited', until: at / 1000 },
     { kind: 'rate_limited', until: 0 },
     { kind: 'channel_restarting', count: 3 },
   ] } };
-  const payload = { self: record, agents: [record] };
-  for (const result of [projectApiTimestamps('/api/fleet', payload), projectEventTimestamps('fleet', payload)]) {
-    for (const item of [result.self, result.agents[0]]) {
-      assert.equal(item.group_summary.attention[0].until, iso);
-      assert.equal(item.group_summary.attention[1].until, null);
-      assert.deepEqual(item.group_summary.attention[2], { kind: 'channel_restarting', count: 3 });
-    }
-  }
-  assert.equal(projectApiTimestamps('/api/fleet/agents/peer', record).group_summary.attention[0].until, iso);
+  const { items: [item] } = projectApiTimestamps('/api/fleet', { items: [record] });
+  assert.equal(item.group_summary.attention[0].until, iso);
+  assert.equal(item.group_summary.attention[1].until, null);
+  assert.deepEqual(item.group_summary.attention[2], { kind: 'channel_restarting', count: 3 });
+  const push = { summary: { count: 2 }, updated_at: at };
+  assert.deepEqual(projectEventTimestamps('fleet', push), { summary: { count: 2 }, updated_at: iso });
   assert.equal(record.group_summary.attention[0].until, at / 1000);
 });
