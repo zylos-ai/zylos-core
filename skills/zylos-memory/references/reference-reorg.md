@@ -20,6 +20,8 @@ this session started is still running, do nothing. Start only one at a time:
   Terra-tier model named in the exposed tool description, such as
   `gpt-6.1-terra`, with `fork_turns: "none"`. If no Terra-tier model is listed,
   omit `model` and inherit the parent model.
+- Antigravity: use `invoke_subagent` with `Model` set to `flash`; it runs in the
+  background and its result returns automatically.
 
 Give the worker this file's path so it reads the procedure itself. Tell it to
 use only `memory-write.js --append` for existing pages; new pages still use

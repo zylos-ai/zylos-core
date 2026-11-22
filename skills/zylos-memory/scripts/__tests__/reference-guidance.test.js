@@ -66,8 +66,8 @@ test('the skill holds the launch and selection rules the background Sync control
   for (const kind of ['group', 'origin', 'global']) assert.ok(skill.includes(`references/${kind}-sync.md`));
   assert.ok(skill.includes('Old queued prompts'));
   // Parent-only launch/result rules plus explicit per-job file lists and API navigation.
-  // 9 KiB retains the small-parent budget without clipping required instructions.
-  assert.ok(Buffer.byteLength(skill) < 9 * 1024);
+  // The 10 KiB budget includes the Antigravity launch and result-handling guidance.
+  assert.ok(Buffer.byteLength(skill) < 10 * 1024);
   assert.match(text, /Start a background subagent when requested and continue the current work, following the runtime-specific result handling below\./);
 });
 
