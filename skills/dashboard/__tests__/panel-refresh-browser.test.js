@@ -100,7 +100,7 @@ test('background panel refresh preserves reading position and folds', { skip: !c
             const url = new URL(route.request().url());
             if (!url.pathname.startsWith('/api/groups/') && url.pathname !== '/api/instance') return route.fallback();
             const snapshot = workbenchSnapshot(fixtureAt), row = snapshot.rows[1];
-            if (url.pathname === '/api/groups/running') boardReads++;
+            if (url.pathname === '/api/groups') boardReads++;
             row.contextPct = 60 + boardReads;
             row.preview.source = 'c4'; row.preview.timestamp = fixtureAt;
             // The group is idle with queued work blocked on rate limiting; its evidence fold persists.

@@ -1,4 +1,4 @@
-import { isRetiredApiPath } from './api-routes.js';
+import { isConversationApiPath, isRetiredApiPath } from './api-routes.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { browserBaseFromRequest, browserPath, browserRoot, isPathWithinBase } from './browser-base.js';
@@ -340,7 +340,7 @@ function nextTarget(req, base) {
 function needsAdminApiAccess(pathname, method) {
   pathname = pathname.replace(/\/{2,}/g, '/');
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
-  if (pathname.startsWith('/api/chat/') || pathname.startsWith('/api/observer/history/') ||
+  if (isConversationApiPath(pathname) || pathname.startsWith('/api/observer/history/') ||
       pathname === '/observer/frame' || pathname === '/observer/stream') return true;
   if (pathname === '/api/fleet/agents' || pathname.startsWith('/api/fleet/agents/')) return true;
   if (pathname === '/api/keys' || pathname.startsWith('/api/keys/')) return true;
@@ -349,7 +349,7 @@ function needsAdminApiAccess(pathname, method) {
   if (!proxied) return false;
   const remotePath = proxied[1];
   return remotePath === '/api/memory/file' || remotePath === '/api/memory/git' ||
-    remotePath.startsWith('/api/chat/') || remotePath.startsWith('/api/observer/history/');
+    isConversationApiPath(remotePath) || remotePath.startsWith('/api/observer/history/');
 }
 
 export function generateApiKey() {

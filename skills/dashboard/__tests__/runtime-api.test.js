@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRuntimeOverridesReader, handleRuntimeOptions, runtimeDefaults, runtimeVersionRecord } from '../src/lib/runtime-api.js';
+import { handleRuntimeOptions, runtimeDefaults, runtimeVersionRecord } from '../src/lib/runtime-api.js';
 import { sessionThreshold, readThresholdPolicy } from '../src/lib/session-threshold.js';
 
 function fixture(t) {
@@ -13,28 +13,6 @@ function fixture(t) {
   fs.writeFileSync(path.join(zylosDir, '.claude/settings.json'), JSON.stringify({ model: 'opus', effortLevel: 'high' }));
   return zylosDir;
 }
-
-for (const query of ['', 'q=telegram:agy']) test(`runtime overrides preserve Antigravity rows for ${query || 'unfiltered lists'}`, async t => {
-  const zylosDir = fixture(t);
-  const read = createRuntimeOverridesReader({ zylosDir,
-    env: { ZYLOS_SESSION_GROUP: 'other-group' },
-    displayNames: { listAll: async () => new Map([['telegram:agy', { displayName: 'Gemini' }]]), search: async () => [] },
-    run: async (command, args, options) => {
-      assert.equal(command, 'zylos');
-      assert.deepEqual(args.slice(0, 2), ['group', 'overrides']);
-      assert.equal(options.env.ZYLOS_DIR, zylosDir);
-      assert.equal(Object.hasOwn(options.env, 'ZYLOS_SESSION_GROUP'), false);
-      return { stdout: JSON.stringify({ ok: true, data: { runtimeTotal: 3, runtime: [
-        { sessionGroup: 'telegram:claude', runtime: 'claude' },
-        { sessionGroup: 'telegram:codex', runtime: 'codex' },
-        { sessionGroup: 'telegram:agy', runtime: 'agy' }], nextAfter: 'opaque' } }) };
-    } });
-  const page = await read(new URLSearchParams(query));
-  assert.equal(page.runtime.length, 3);
-  assert.equal(page.runtime[2].runtime, 'agy');
-  assert.equal(page.runtime[2].name.displayName, 'Gemini');
-  assert.equal(page.nextAfter, 'opaque');
-});
 
 for (const [activeRuntime, query] of [['agy', ''], ['claude', '?runtime=agy']]) {
   test(`runtime options return Antigravity defaults for active ${activeRuntime} and query ${query || '(none)'}`, t => {

@@ -151,9 +151,9 @@ export async function runFleetRunningGroupsBrowser(t, sandbox) {
           const url = new URL(route.request().url());
           assert.equal(route.request().method(), 'GET', 'render/navigation never mutates a runtime');
           if (url.pathname.startsWith('/fleet/remote-case/api/')) {
-            remoteReads.push(url.pathname);
+            remoteReads.push(url.pathname + url.search);
             url.pathname = url.pathname.slice('/fleet/remote-case'.length);
-            if (url.pathname === '/api/groups/running' && scenario.remote && !scenario.legacy) {
+            if (url.pathname === '/api/groups' && url.searchParams.get('side') === 'running' && scenario.remote && !scenario.legacy) {
               // Delayed transport stresses the actual remote-click route. The shell's
               // deferred-promise tests provide deterministic ordering/cancellation proof.
               await new Promise(resolve => setTimeout(resolve, 500));
@@ -246,7 +246,8 @@ export async function runFleetRunningGroupsBrowser(t, sandbox) {
           await page.locator('#wb-side .wb-d-top').waitFor({ state: 'visible' });
           assert.match(new URL(page.url()).pathname, /^\/fleet\/remote-case\//, 'remote problem enters the selected remote machine');
           assert.match(await page.locator('#wb-side .wb-d-title').innerText(), /Lark 运维群/, 'remote detail resolves the actual named problem');
-          assert.ok(remoteReads.some(url => url === '/fleet/remote-case/api/groups/running'), 'remote group list uses the remote API prefix');
+          assert.ok(remoteReads.some(url => url.startsWith('/fleet/remote-case/api/groups?side=running')),
+            'remote group list uses the remote API prefix');
         }
         assert.deepEqual(errors, [], 'no browser errors');
         assert.deepEqual(external, [], 'no unexpected external requests');

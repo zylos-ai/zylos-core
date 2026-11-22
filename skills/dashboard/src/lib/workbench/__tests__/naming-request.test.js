@@ -40,7 +40,7 @@ test('the naming prompt keeps its words and substitutes only the first CLI path'
   const script = '/tmp/fixture/.claude/skills/dashboard/scripts/group-name.js';
   const text = namePromptText(script, NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH);
   assert.equal(text.replace(script, ORIGINAL_GROUP_NAME_PATH), NAME_PROMPT);
-  assert.match(text, /group-name.js set <组键> "名字"/);
+  assert.match(text, /group-name\.js set <group-key> "name"/);
   assert.equal(namePromptText('/tmp/$&/group-name.js', ORIGINAL_GROUP_NAME_PATH + ' · ' + ORIGINAL_GROUP_NAME_PATH, ORIGINAL_GROUP_NAME_PATH),
     '/tmp/$&/group-name.js · ' + ORIGINAL_GROUP_NAME_PATH, 'literal replacement characters survive');
   assert.throws(() => namePromptText(script, 'no path here', ORIGINAL_GROUP_NAME_PATH), /name_prompt_path_missing/);
@@ -78,7 +78,7 @@ function childFailure({ code = 1, signal = null, killed = false, stdout = '' } =
 // Nothing the child printed reaches the API body; all of it reaches the service log.
 function assertClean(body, label) {
   const text = JSON.stringify(body);
-  for (const fragment of ['Command failed', '--content', 'c4-control', 'group-name.js', '请给 Dashboard', ROOT, '/fixture', 'node:internal',
+  for (const fragment of ['Command failed', '--content', 'c4-control', 'group-name.js', PROMPT.split('\n')[0], ROOT, '/fixture', 'node:internal',
     'Cannot find module', process.execPath]) {
     assert.equal(text.includes(fragment), false, `${label}: the API body has no ${JSON.stringify(fragment)}`);
   }

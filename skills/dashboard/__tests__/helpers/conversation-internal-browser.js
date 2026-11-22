@@ -69,7 +69,7 @@ export async function runInternalConversationBrowser(t, sandbox) {
     const url = new URL(request.url);
     if (url.origin !== fixture.base) return;
     requests.set(requestId, url);
-    if (url.pathname.startsWith('/api/chat/')) pending.add(requestId);
+    if (url.pathname.startsWith('/api/conversations')) pending.add(requestId);
     if (url.pathname.endsWith('/messages')) {
       assert.ok(reads.length < 300, 'bounded message request capture');
       reads.push({ url: request.url, requestId, sequence: ++sequence });
@@ -94,7 +94,7 @@ export async function runInternalConversationBrowser(t, sandbox) {
       await delay(20);
     }
   };
-  const historyRead = (url, id, side) => url.pathname === `/api/chat/conversations/${encodeURIComponent(id)}/messages`
+  const historyRead = (url, id, side) => url.pathname === `/api/conversations/${encodeURIComponent(id)}/messages`
     && url.searchParams.get('tab') === side && url.searchParams.get('direction') === 'after' && url.searchParams.has('cursor');
   const selected = async id => page.waitForFunction(id => document.querySelector('#wb-chat [aria-current="true"]')?.dataset.conversationId === id, id);
   const row = id => page.locator(`#wb-chat [data-message-id="${id}"]`);

@@ -98,8 +98,8 @@ unfinished audit resumes; a completed audit returns its original result.
 | --- | --- | --- |
 | GET | `/api/groups/:group/deletion-preview` | Preview and confirmed boundary |
 | DELETE | `/api/groups/:group` | Delete through the preview cutoff |
-| GET | `/api/chat/drafts/:localId/deletion` | Preview the draft or its bound group |
-| DELETE | `/api/chat/drafts/:localId` | Delete that exact preview target |
+| GET | `/api/conversations/drafts/:localId/deletion` | Preview the draft or its bound group |
+| DELETE | `/api/conversations/drafts/:localId` | Delete that exact preview target |
 
 Encode groups as URL path components. DELETE accepts only the server preview's
 fields plus explicit confirmation:

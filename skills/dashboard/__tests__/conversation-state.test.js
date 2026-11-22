@@ -107,7 +107,7 @@ function fixture(extra = () => undefined, t = key => key) {
       const value = await extra(u, options);
       if (value !== undefined) { if (u.pathname.startsWith('/api/groups/')) { fixtureInstance = value.fixtureInstance; const { fixtureInstance: ignored, ...detail } = value; return detail; } return value; }
       if (p === '/api/instance') return { session_mode: { sessionMode: 'multi' }, ...fixtureInstance };
-      if (u.pathname === '/api/chat/conversations') return {
+      if (u.pathname === '/api/conversations') return {
         items: [{
           id: 'g:A',
           stamp: 1
@@ -304,9 +304,9 @@ test('automatic read failure keeps rows and uses bounded exponential backoff wit
   assert.equal(f.reads().length, n + 1);
   f.state.destroy();
 });
-test('list refresh merges the first page without discarding later pages or their cursor', async () => {
+test('quiet list refresh indicates new conversations without disturbing loaded pages or their cursor', async () => {
   let lists = 0;
-  const f = fixture(u => u.pathname === '/api/chat/conversations' ? u.searchParams.get('cursor') ? {
+  const f = fixture(u => u.pathname === '/api/conversations' ? u.searchParams.get('cursor') ? {
     items: [{
       id: 'g:C',
       stamp: 0
@@ -331,10 +331,31 @@ test('list refresh merges the first page without discarding later pages or their
   await f.state.open();
   await f.state.loadMore();
   await f.timer.advance(30000);
-  assert.equal(f.state.snapshot().items.length, 3);
+  assert.deepEqual(f.state.snapshot().items.map(row => row.id), ['g:A', 'g:C']);
+  assert.equal(f.state.snapshot().items[0].stamp, 3);
+  assert.equal(f.state.snapshot().listUpdates, 1);
   assert.equal(f.state.snapshot().nextCursor, 'deep');
   assert.equal(f.state.snapshot().loading, false);
   f.state.destroy();
+});
+test('quiet first-page refresh clears pins from cached rows omitted by the server', async t => {
+  let firstPage = {
+    items: [{ id: 'g:A', stamp: 1, pinOrder: 0 }, { id: 'g:B', stamp: 2, pinOrder: 1 }, { id: 'g:C', stamp: 3 }],
+    nextCursor: 'more'
+  };
+  const f = fixture(url => url.pathname === '/api/conversations' ? firstPage : undefined);
+  t.after(() => f.state.destroy());
+  await f.state.open();
+  assert.deepEqual(f.state.snapshot().items.map(row => row.id), ['g:A', 'g:B', 'g:C']);
+
+  // Another client unpins A, whose last activity puts it outside the first page.
+  firstPage = { items: [{ id: 'g:B', stamp: 2, pinOrder: 0 }, { id: 'g:C', stamp: 3 }], nextCursor: 'new-more' };
+  await f.timer.advance(30000);
+  const { items, nextCursor } = f.state.snapshot();
+  assert.deepEqual(items.map(row => row.id), ['g:B', 'g:C', 'g:A']);
+  assert.equal(items[0].pinOrder, 0);
+  assert.equal(Object.hasOwn(items[2], 'pinOrder'), false);
+  assert.equal(nextCursor, 'new-more');
 });
 test('new rows merge and update only current preview while question state refresh preserves forms and all loaded pages', async () => {
   let refreshed = false;
@@ -471,7 +492,7 @@ test('cursor restart preserves shown rows, exposes a gap, and fills it by before
     const direction = u.searchParams.get('direction'),
       cursor = u.searchParams.get('cursor');
     if (direction === 'after') throw {
-      code: 'invalid_chat_cursor'
+      code: 'invalid_cursor'
     };
     if (!cursor) {
       if (initial) {
@@ -533,7 +554,7 @@ test('load older follows a renewed chain through already shown pages until genui
     if (u.searchParams.get('direction') === 'after' && expired) {
       expired = false;
       throw {
-        code: 'invalid_chat_cursor'
+        code: 'invalid_cursor'
       };
     }
     if (u.searchParams.get('direction') === 'after') return {
@@ -638,11 +659,11 @@ test('new question rows received during send refresh their authoritative state i
   assert.equal(f.state.snapshot().questions[0].interruptId, 'new-question');
   f.state.destroy();
 });
-test('SQL UTC timestamps retain the correct list ordering independently of the browser timezone', async () => {
+test('incoming SQL UTC timestamps update the row in place and prompt for its new order', async () => {
   const previous = process.env.TZ;
   process.env.TZ = 'Asia/Shanghai';
   try {
-    const f = await selected(u => u.pathname === '/api/chat/conversations' ? {
+    const f = await selected(u => u.pathname === '/api/conversations' ? {
       items: [{
         id: 'g:B',
         stamp: 2461253
@@ -654,7 +675,8 @@ test('SQL UTC timestamps retain the correct list ordering independently of the b
     } : u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'after' ? {
       items: [{
         id: 11,
-        direction: 'out',
+        direction: 'in',
+        channel: 'dashboard',
         content: 'new',
         timestamp: '2026-11-08 12:00:00'
       }],
@@ -663,7 +685,8 @@ test('SQL UTC timestamps retain the correct list ordering independently of the b
     await f.timer.advance(5000);
     const row = f.state.snapshot().items.find(r => r.id === 'g:A');
     assert.equal(row.stamp, Date.parse('2026-11-08T12:00:00Z') / 86400000 + 2440587.5);
-    assert.equal(f.state.snapshot().items[0].id, 'g:A');
+    assert.equal(f.state.snapshot().items[0].id, 'g:B');
+    assert.equal(f.state.snapshot().listUpdates, 1);
     f.state.destroy();
   } finally {
     if (previous === undefined) delete process.env.TZ;else process.env.TZ = previous;
@@ -674,7 +697,7 @@ test('gap backfill rejects a repeating cursor instead of looping indefinitely', 
   const f = await selected(u => {
     if (!u.pathname.endsWith('/messages')) return;
     if (u.searchParams.get('direction') === 'after') throw {
-      code: 'invalid_chat_cursor'
+      code: 'invalid_cursor'
     };
     const cursor = u.searchParams.get('cursor');
     if (!cursor) {
@@ -715,7 +738,7 @@ test('navigating away stops a gap chain before requesting another page', async (
   const f = await selected(u => {
     if (!u.pathname.includes('g%3AA/messages')) return;
     if (u.searchParams.get('direction') === 'after') throw {
-      code: 'invalid_chat_cursor'
+      code: 'invalid_cursor'
     };
     if (!u.searchParams.get('cursor')) {
       if (first) {
@@ -1092,7 +1115,7 @@ test('conversation read failure immediately after storing a send cannot make del
         deliveryState: 'pending'
       };
     }
-    if (sent && u.pathname === '/api/chat/conversations/g%3AA' && !options?.method) {
+    if (sent && u.pathname === '/api/conversations/g%3AA' && !options?.method) {
       throw {
         code: 'network_lost'
       };
@@ -1113,7 +1136,7 @@ test('conversation read failure immediately after storing a send cannot make del
 test('creating a draft ignores duplicate clicks while the original request is pending', { timeout: 2000 }, async () => {
   const pending = deferred();
   let creates = 0;
-  const f = fixture(u => u.pathname === '/api/chat/drafts' ? (creates++, pending.promise) : undefined);
+  const f = fixture(u => u.pathname === '/api/conversations/drafts' ? (creates++, pending.promise) : undefined);
   await f.state.open();
   const first = f.state.createDraft('Named conversation');
   assert.equal(f.state.snapshot().creatingDraft, true);
@@ -1133,7 +1156,7 @@ test('creating a draft ignores duplicate clicks while the original request is pe
 test('draft creation failure resets the guard so an explicit later attempt can run', async () => {
   let creates = 0;
   const f = fixture(u => {
-    if (u.pathname === '/api/chat/drafts') {
+    if (u.pathname === '/api/conversations/drafts') {
       if (++creates === 1) throw {
         code: 'draft_unavailable'
       };
@@ -1185,7 +1208,7 @@ function groupFixture(readGroup, extra = () => undefined) {
   return fixture((u, options) => {
     const value = extra(u, options);
     if (value !== undefined) return value;
-    if (u.pathname === '/api/chat/conversations/g%3AA') return {
+    if (u.pathname === '/api/conversations/g%3AA') return {
       conversation: {
         id: 'g:A',
         sessionGroup: 'dashboard:a',
@@ -1252,7 +1275,7 @@ test('a send completed after navigation preserves the selected group read', { ti
   let reads = 0;
   const f = groupFixture(() => ++reads === 1 ? groupSnapshot('running') : pending.promise, u => {
     if (u.pathname.endsWith('/send')) return send.promise;
-    if (u.pathname === '/api/chat/conversations/g%3AB') return {
+    if (u.pathname === '/api/conversations/g%3AB') return {
       conversation: { id: 'g:B', sessionGroup: 'dashboard:b', state: 'active' }, stored: false
     };
   });
@@ -1288,7 +1311,7 @@ test('returning to a conversation clears its previous wait before metadata arriv
   const f = groupFixture(() => returning ? status.promise : groupSnapshot('running', {
     rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, wait }],
     instance: { runtimeHealth: { claude: { health: 'recovering' } } }
-  }), u => returning && u.pathname === '/api/chat/conversations/g%3AA' ? metadata.promise : undefined);
+  }), u => returning && u.pathname === '/api/conversations/g%3AA' ? metadata.promise : undefined);
   t.after(() => f.state.destroy());
   await f.state.open(); await f.state.select('g:A'); await flush();
   assert.equal(f.state.snapshot().groupWait, wait);
@@ -1365,7 +1388,7 @@ test('conversation state clears wait when navigating to a group without a target
     rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, wait },
       { sessionGroup: 'dashboard:b', presence: 'running', target: { runtime: null }, wait: null }],
     instance: { runtimeHealth: { claude: { health: 'rate_limited' }, codex: { health: 'ok' } } }
-  }), u => u.pathname === '/api/chat/conversations/g%3AB' ? {
+  }), u => u.pathname === '/api/conversations/g%3AB' ? {
     conversation: { id: 'g:B', sessionGroup: 'dashboard:b', state: 'active' }, stored: false
   } : undefined);
   t.after(() => f.state.destroy());
@@ -1481,7 +1504,7 @@ test('a hanging group status request cannot block selection or five-second messa
   let signal;
   const pending = deferred();
   const f = fixture((u, options) => {
-    if (u.pathname === '/api/chat/conversations/g%3AA') return { conversation: { id: 'g:A', sessionGroup: 'dashboard:a', state: 'active' }, stored: false };
+    if (u.pathname === '/api/conversations/g%3AA') return { conversation: { id: 'g:A', sessionGroup: 'dashboard:a', state: 'active' }, stored: false };
     if (u.pathname.startsWith('/api/groups/')) {
       signal = options.signal;
       signal.addEventListener('abort', () => pending.reject({ code: 'aborted' }), { once: true });
@@ -1512,7 +1535,7 @@ test('a hanging group status request cannot block selection or five-second messa
 
 for (const health of ['ok', 'rate_limited']) test(`sending with ${health} health preserves the group refresh cadence`, { timeout: 2000 }, async () => {
   const f = fixture(u => {
-    if (u.pathname === '/api/chat/conversations/g%3AA') return { conversation: { id: 'g:A', sessionGroup: 'dashboard:a', state: 'active' }, stored: false };
+    if (u.pathname === '/api/conversations/g%3AA') return { conversation: { id: 'g:A', sessionGroup: 'dashboard:a', state: 'active' }, stored: false };
     if (u.pathname.startsWith('/api/groups/')) return groupSnapshot('running', {
       rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, wait: null }],
       instance: { runtimeHealth: { claude: { health } } }
@@ -1598,7 +1621,7 @@ test('switching conversations aborts a pending group read and reads the new grou
   const pending = deferred();
   let reads = 0, oldSignal;
   const f = fixture((u, options) => {
-    if (['/api/chat/conversations/g%3AA', '/api/chat/conversations/g%3AB'].includes(u.pathname)) {
+    if (['/api/conversations/g%3AA', '/api/conversations/g%3AB'].includes(u.pathname)) {
       const id = decodeURIComponent(u.pathname.split('/').at(-1));
       return { conversation: { id, sessionGroup: id === 'g:A' ? 'dashboard:a' : 'dashboard:b', state: 'active' }, stored: false };
     }
@@ -1722,7 +1745,7 @@ test('external selection outside the first page preserves supplied group metadat
   assert.equal(f.state.snapshot().selectedId, metadata.id);
   assert.equal(f.state.snapshot().conversation.session_group, metadata.session_group);
   assert.equal(f.state.snapshot().conversation.channel, 'telegram');
-  assert.equal(f.calls.some(c => c.path === '/api/chat/conversations/' + metadata.id), false);
+  assert.equal(f.calls.some(c => c.path === '/api/conversations/' + metadata.id), false);
   assert.equal(f.calls.some(c => c.options?.method), false);
   f.state.destroy();
 });
@@ -1733,7 +1756,7 @@ test('conversation list and incremental reads request previews in the current pa
   f.document.documentElement = { lang: 'en' };
   await f.state.open(); await f.state.select('g:A'); await flush();
   await f.timer.advance(5000);
-  const reads = f.calls.filter(call => /^\/api\/chat\/conversations(?:\?|\/[^/]+\/messages\?)/.test(call.path));
+  const reads = f.calls.filter(call => /^\/api\/conversations(?:\?|\/[^/]+\/messages\?)/.test(call.path));
   assert.ok(reads.length >= 3);
   for (const call of reads) {
     assert.equal(new URL(call.path, 'http://fixture').searchParams.has('locale'), false);
@@ -1918,7 +1941,7 @@ test('empty foreground passes keep the thirty second list refresh alive', async 
     await f.visible(true);
   }
   assert.equal(f.state.snapshot().selectedId, null);
-  const lists = () => f.calls.filter(call => new URL(call.path, 'http://fixture').pathname === '/api/chat/conversations');
+  const lists = () => f.calls.filter(call => new URL(call.path, 'http://fixture').pathname === '/api/conversations');
   assert.equal(lists().length, 1);
   await f.timer.advance(29999);
   assert.equal(lists().length, 1);
@@ -1969,7 +1992,7 @@ test('an in-flight pass retains single flight across visibility changes and clos
 test('a synchronous request error after an empty pass backs off and recovers automatic list refresh', async t => {
   let fail = true, lists = 0;
   const f = fixture(u => {
-    if (u.pathname !== '/api/chat/conversations') return;
+    if (u.pathname !== '/api/conversations') return;
     if (++lists === 1) return { items: [], nextCursor: null };
     if (fail) throw { code: 'temporary_list_failure' };
     return { items: [], nextCursor: null };
@@ -2016,7 +2039,7 @@ test('foreground events cannot overlap a slow automatic list poll', async t => {
   const pending = deferred();
   let lists = 0, concurrent = 0, maximum = 0;
   const f = fixture(u => {
-    if (u.pathname !== '/api/chat/conversations') return;
+    if (u.pathname !== '/api/conversations') return;
     lists++;
     concurrent++;
     maximum = Math.max(maximum, concurrent);
@@ -2074,20 +2097,27 @@ test('a continuing send retains the accelerated deadline installed when sending 
   assert.equal(f.reads().at(-1).time, started + 4000);
 });
 
-test('internal rows stay out of delivery status and list previews', async t => {
+test('internal rows advance list time and stay out of previews and delivery status', async t => {
   const external = { id: 1, channel: 'dashboard', direction: 'in', status: 'pending', content: 'External preview', timestamp: '2026-01-01T00:00:00Z' };
   const internal = { id: 2, channel: 'internal', direction: 'in', status: 'pending', content: 'Internal secret', timestamp: '2026-01-02T00:00:00Z' };
-  const f = await selected(u => u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'before'
-    ? { items: [external, internal], afterCursor: 'after2' }
-    : u.pathname.endsWith('/activity') ? { now: 0, working: null, steps: [], subtasks: [], awaiting: null, seenId: 2 } : undefined);
+  const f = await selected(u => {
+    if (u.pathname === '/api/conversations') {
+      return { items: [{ id: 'g:A', preview: external.content, previewDirection: external.direction }], nextCursor: null };
+    }
+    if (u.pathname.endsWith('/messages')) {
+      return u.searchParams.get('direction') === 'before'
+        ? { items: [external], afterCursor: 'after1' }
+        : { items: [internal], afterCursor: 'after2' };
+    }
+    if (u.pathname.endsWith('/activity')) return { now: 0, working: null, steps: [], subtasks: [], awaiting: null, seenId: 2 };
+  });
   t.after(() => f.state.destroy());
-  await flush();
+  await f.timer.advance(5000);
   const listed = f.state.snapshot().items.find(row => row.id === 'g:A');
   assert.equal(listed.preview, 'External preview');
   assert.equal(listed.previewDirection, 'in');
-  assert.equal(listed.stamp, new Date(external.timestamp).getTime() / 86400000 + 2440587.5);
+  assert.equal(listed.stamp, new Date(internal.timestamp).getTime() / 86400000 + 2440587.5);
   assert.equal(f.state.snapshot().messages.length, 2, 'the internal row remains visible in selected history');
-  await f.timer.advance(5000);
   const reads = f.calls.filter(call => new URL(call.path, 'http://fixture').pathname.endsWith('/status'));
   assert.ok(reads.length > 0, 'status has the external positive control');
   for (const read of reads) assert.equal(new URL(read.path, 'http://fixture').searchParams.get('ids'), '1');
@@ -2118,8 +2148,8 @@ test('an internal outbound relay preserves accelerated waiting and avoids questi
 test('polling refreshes the selected name when its row is outside the first page', async t => {
   let name = null;
   const f = fixture(u => {
-    if (u.pathname === '/api/chat/conversations') return { items: [{ id: 'g:B', display_name: 'Other' }], nextCursor: null };
-    if (decodeURIComponent(u.pathname) === '/api/chat/conversations/g:A') return { conversation: { id: 'g:A', state: 'active', displayName: name } };
+    if (u.pathname === '/api/conversations') return { items: [{ id: 'g:B', display_name: 'Other' }], nextCursor: null };
+    if (decodeURIComponent(u.pathname) === '/api/conversations/g:A') return { conversation: { id: 'g:A', state: 'active', displayName: name } };
   });
   t.after(() => f.state.destroy());
   await f.state.open(); await f.state.select('g:A'); await flush();
@@ -2208,7 +2238,7 @@ for (const session_mode of [null, undefined, 'unreadable', { sessionMode: 'unrea
 test('historic UTF-8 groups use canonical optional status and keep readable chat', async t => {
   const key = 'telegram:运维群-测试';
   const f = groupFixture(() => groupSnapshot('running', { rows: [{ sessionGroup: key, presence: 'running' }] }), u =>
-    u.pathname === '/api/chat/conversations/g%3AA' ? {
+    u.pathname === '/api/conversations/g%3AA' ? {
       conversation: { id: 'g:A', sessionGroup: key, state: 'active' }, stored: false
     } : undefined);
   t.after(() => f.state.destroy());
@@ -2276,4 +2306,44 @@ test('remote refusal from optional activity clears the conversation', async () =
     assert.equal(f.state.snapshot().blocked, true);
     assert.equal(f.state.snapshot().messages.length, 0);
   } finally { f.state.destroy(); }
+});
+
+test('opening at the read position keeps the divider stable and jumps directly to the newest page', async t => {
+  const pending = deferred(), writes = [];
+  let readUpTo = 25;
+  const f = fixture((url, options) => {
+    if (url.pathname.endsWith('/read')) {
+      writes.push(options.body.upTo);
+      return pending.promise;
+    }
+    if (!url.pathname.endsWith('/messages')) return;
+    if (url.searchParams.get('anchor') === 'read') return {
+      items: [{ id: 25, direction: 'out' }, { id: 26, direction: 'out' }],
+      readUpTo, unreadCount: readUpTo === 25 ? 100 : 16, nextCursor: 'older', afterCursor: 'newer',
+    };
+    return { items: [{ id: 140, direction: 'out' }], nextCursor: 'latest-older', afterCursor: 'latest' };
+  });
+  t.after(() => f.state.destroy());
+  await f.state.open();
+  await f.state.select('g:A');
+  assert.equal(f.state.snapshot().unreadDividerId, 26);
+  assert.equal(f.state.snapshot().unreadCount, 100);
+
+  const write = f.state.markRead(26);
+  await f.state.markRead(27);
+  assert.deepEqual(writes, [26], 'only one read write is in flight');
+  readUpTo = 26;
+  pending.resolve({ readUpTo });
+  await write;
+  await f.state.markRead(25);
+  assert.deepEqual(writes, [26], 'read position never moves backwards');
+  assert.equal(f.state.snapshot().unreadDividerId, 26, 'sync does not move the divider');
+  assert.equal(f.state.snapshot().unreadCount, 16);
+
+  await f.state.jumpToLatest();
+  assert.deepEqual(f.state.snapshot().messages.map(row => row.id), [140]);
+  assert.equal(f.state.snapshot().positionAtUnread, false);
+  const newest = new URL(f.calls.at(-1).path, 'http://fixture');
+  assert.equal(newest.searchParams.has('cursor'), false);
+  assert.equal(newest.searchParams.has('anchor'), false);
 });

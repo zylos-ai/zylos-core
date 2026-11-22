@@ -145,9 +145,37 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     if (c4.ok && Array.isArray(c4.data)) c4.data = { groups: c4.data, hasOlder: false };
     sources.c4 = source(c4); sources.q = source(q);
     const taskNames = c4.ok ? await namesOfTasks(c4.data.groups) : new Map();
-    const { rows, hasOlder } = mergeGroups({ status, c4, q, names: await displayNames.listAll(), taskNames, statusError }, sanitizer);
+    const names = await displayNames.listAll();
+    const { rows, hasOlder } = mergeGroups({ status, c4, q, names, taskNames, statusError }, sanitizer);
+    const listKnown = status != null && status.groupListError == null;
     const ov = await cli.readOverrides([...new Set([...rows.map(row => row.sessionGroup).filter(group => group !== null), 'origin'])]);
     sources.ov = source(ov);
+    const runtimeOverrides = new Map((ov.ok ? ov.data.runtime : []).map(item => [item.sessionGroup, item.runtime]));
+    const modelsByGroup = new Map();
+    for (const item of ov.ok ? ov.data.model : []) {
+      if (!modelsByGroup.has(item.sessionGroup)) modelsByGroup.set(item.sessionGroup, new Map());
+      modelsByGroup.get(item.sessionGroup).set(item.runtime, item);
+    }
+    if (mode === 'multi') {
+      const known = new Set(rows.map(row => row.sessionGroup ?? 'origin'));
+      for (const sessionGroup of runtimeOverrides.keys()) if (!known.has(sessionGroup)) {
+        rows.push({ sessionGroup, presence: listKnown ? 'not_running' : 'unknown', name: names.get(sessionGroup) ?? null,
+          live: null, c4: null, preview: null, origin: false,
+          reason: listKnown ? null : statusError ?? 'group_list_failed' });
+      }
+    }
+    const messageTimes = new Map();
+    let messageOrderKnown = true;
+    if (c4Reader?.getGroupSortMessage && c4.ok) {
+      try {
+        for (const row of rows) {
+          const key = row.sessionGroup ?? 'origin';
+          const timestamp = c4Reader.getGroupSortMessage(key)?.timestamp;
+          messageTimes.set(key, timestamp == null ? null
+            : timestamp.includes('T') ? timestamp : timestamp.replace(' ', 'T') + 'Z');
+        }
+      } catch { messageOrderKnown = false; }
+    }
     let baselineRuntime = null;
     if (ov.ok) baselineRuntime = ov.data.baseline.runtime;
     else { try { baselineRuntime = await readConfigRuntime() ?? null; } catch {} }
@@ -201,8 +229,8 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       row.queue = q.ok ? (singleOrigin ? singleQueue(q.data.groups) : q.data.groups.find(item => item.sessionGroup === row.sessionGroup)) ??
         { pending: { count: 0, oldestAt: null, head: null }, running: { count: 0 }, fence: null } : { known: false, reason: q.reason };
       row.fence = row.queue.known === false ? null : row.queue.fence ?? q.data.globalFence;
-      const selectedRuntime = ov.ok ? ov.data.runtime.find(item => item.sessionGroup === row.sessionGroup)?.runtime ?? ov.data.baseline.runtime : null;
-      const selectedModel = ov.ok ? ov.data.model.find(item => item.sessionGroup === row.sessionGroup && item.runtime === selectedRuntime) : null;
+      const selectedRuntime = ov.ok ? runtimeOverrides.get(row.sessionGroup) ?? ov.data.baseline.runtime : null;
+      const selectedModel = ov.ok ? modelsByGroup.get(row.sessionGroup)?.get(selectedRuntime) : null;
       row.target = row.presence === 'starting' ? { runtime: null, model: null }
         : row.presence === 'running' ? { runtime: observation?.identity.runtime ?? row.live?.runtime ?? null, model: !row.launchConfig ? null : row.launchConfig.mode === 'override'
           ? { model: row.launchConfig.model, effort: row.launchConfig.effort } : 'default',
@@ -271,7 +299,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     const restarts = store.queryEvents({ types: AUTO_RESTART_TYPES, since: new Date(at - AUTO_RESTART_WINDOW_MS).toISOString(),
       until: new Date(at).toISOString(), sourceTime: true, limit: 1000 }).length;
     const value = { readAt: at, mode, view: status?.view ?? null, rows, counts: countRows(rows), hasOlder,
-      listKnown: status !== null && status.groupListError === null, baselineRuntime,
+      listKnown, baselineRuntime,
       instance: { runtimeHealth: status?.runtimeHealth ?? null, supervisorPaused: status?.supervisorPaused ?? null, accounts: accountsCache.accounts,
         pool, services, system, sessionModeStatus, autoRestarts: { count: restarts } },
       overrides: ov.ok ? ov.data : null, sources };
@@ -279,7 +307,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     // public copy of the event catalog or slot owners.
     // Exact names establish membership even when single-mode lists show only Origin.
     const catalog = new Set((c4.ok ? c4.data.groups : []).map(item => item.sessionGroup));
-    Object.defineProperty(value, 'groupEvidence', { value: { activations, positions, owners, rawGroups, catalog } });
+    Object.defineProperty(value, 'groupEvidence', { value: { activations, positions, owners, rawGroups, catalog, messageTimes, messageOrderKnown, runtimeOverrides, modelsByGroup } });
     if (services) {
       let channels = [];
       try { channels = await readChannels(); } catch { /* skill discovery unavailable */ }

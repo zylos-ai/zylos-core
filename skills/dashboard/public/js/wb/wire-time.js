@@ -67,7 +67,7 @@ const FLEET_RECORD = [
 ];
 const FLEET = [...beneath('self', FLEET_RECORD), ...beneath('agents.*', FLEET_RECORD)];
 const EVENTS = ms('events.*.timestamp', 'gaps.*.timestamp', 'events.*.metadata.pasted_at');
-const MEMORY = ms('firstAt', 'groups.*.firstAt', 'originSync.firstAt', 'commit.author_date', 'mtime');
+const MEMORY = ms('firstAt', 'items.*.firstAt', 'originSync.firstAt', 'commit.author_date', 'mtime');
 
 function mapPath(value, segments, unit, convert = isoTimestamp) {
   if (!segments.length) return convert(value, unit);
@@ -91,6 +91,7 @@ export function projectApiTimestamps(pathname, value) {
   if (pathname === '/api/instance') return project(value, INSTANCE);
   if (pathname === '/api/health') return project(value, ms('startedAt', 'source.*.*.updated_at'));
   if (pathname === '/api/groups/activity') return project(value, ms('start', 'groups.*.inbound.*'));
+  if (pathname === '/api/groups') return project(value, [...ms('readAt'), ...beneath('items.*', GROUP)]);
   if (pathname.startsWith('/api/groups/')) {
     return project(value, [...GROUP, ...beneath('rows.*', GROUP), ...beneath('group', GROUP), ...EVENTS,
       ...ms('messages.*.timestamp', 'runs.*.startAt', 'runs.*.endAt', 'firstAt', 'data.updatedAt')]);
@@ -105,8 +106,10 @@ export function projectApiTimestamps(pathname, value) {
   if (pathname === '/api/auth/token') return project(value, ms('expires_at'));
   if (pathname === '/api/keys' || pathname.startsWith('/api/keys/')) return project(value,
     ms('created_at', 'last_used_at', 'revoked_at', 'key.created_at', 'key.last_used_at', 'key.revoked_at',
-      'keys.*.created_at', 'keys.*.last_used_at', 'keys.*.revoked_at'));
-  if (pathname.startsWith('/api/chat/')) return project(value, [...CHAT, ...ACTIVITY]);
+      'items.*.created_at', 'items.*.last_used_at', 'items.*.revoked_at'));
+  if (pathname === '/api/conversations' || pathname.startsWith('/api/conversations/')) return project(value, [...CHAT, ...ACTIVITY]);
+  if (pathname === '/api/observer/history/sessions') return project(value, ms('items.*.updatedAt'));
+  if (pathname === '/api/observer/history/entries') return project(value, ms('items.*.ts', 'updates.*.ts'));
   if (pathname.startsWith('/api/observer/')) return project(value, ms('expiresAt', 'current.startedAt', 'sessions.*.startedAt',
     'sessions.*.updatedAt', 'session.startedAt', 'session.updatedAt', 'entries.*.ts', 'entry.ts'));
   if (pathname === '/api/fleet') return project(value, FLEET);

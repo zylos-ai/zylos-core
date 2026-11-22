@@ -72,6 +72,9 @@ export async function runAttachmentVisual(t, sandbox) {
   scenes.older.imageRow = fixture.addAgent(scenes.older.draft.localId, { version: 1, kind: 'message', messageId: 'older-media-message',
     fallbackText: '更早图片', blocks: [mediaBlock('older', olderImage, 'image')] });
   for (let index = 0; index < 70; index++) scenes.older.visibleRow = fixture.addOutbound(scenes.older.draft.localId, `更早的历史讨论 ${index + 1}：保留历史阅读位置。`).id;
+  // Start this older-history scene at the latest page with the fixture's history already read.
+  const readOlder = await fixture.request(scenes.older.route + '/read', { method: 'PUT', body: { upTo: scenes.older.visibleRow } });
+  assert.equal(readOlder.status, 200, readOlder.text);
   const external = fixture.c4.insertConversation('in', 'telegram', 'media-external',
     '原渠道资料\n[attachment:image /private/original/photo.png name="原渠道截图.png" 120 KB]\n[MEDIA:/private/original/legacy.png]', { groupName: 'media-external' });
   const externalId = 'g:' + Buffer.from(external.session_group).toString('hex').toUpperCase();
@@ -112,10 +115,10 @@ export async function runAttachmentVisual(t, sandbox) {
     // A newly sent draft may not have reached the group snapshot yet. Only
     // this exact optional read and its typed not-found response are expected.
     if (response.status() === 404 && response.request().method() === 'GET'
-        && url.pathname === expectedMissingGroupPath && url.search === '?include=') {
+        && url.pathname === expectedMissingGroupPath && url.search === '') {
       assert.ok(missingGroupChecks.length < 16, 'new-group status checks stay bounded');
       missingGroupChecks.push(response.json().then(body => {
-        if (body?.error?.code !== 'GROUP_NOT_FOUND' && !errors.length) errors.push('unexpected new-group status error');
+        if (body?.error?.code !== 'not_found' && !errors.length) errors.push('unexpected new-group status error');
       }).catch(error => { if (!errors.length) errors.push(error.message); }));
       return;
     }
@@ -196,7 +199,7 @@ export async function runAttachmentVisual(t, sandbox) {
     await itemNamed('旧待发资料.pdf').locator('[data-action="retryUpload"]').waitFor();
     assert.equal(await itemNamed('旧待发资料.pdf').getAttribute('data-upload-state'), 'expired');
     await chooseFiles([textFile('补充说明.pdf')]); await waitReady('补充说明.pdf');
-    const uploadPattern = '**/api/chat/conversations/*/uploads';
+    const uploadPattern = '**/api/conversations/*/uploads';
     expectedHttpError = (url, status) => url.pathname.endsWith('/uploads') && status === 503;
     await context.route(uploadPattern, route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ ok: false, error: { code: 'chat_attachment_write_failed', message: 'chat_attachment_write_failed' } }) }));
     await chooseFiles([imageFile('补充截图.png')]);
@@ -321,7 +324,7 @@ export async function runAttachmentVisual(t, sandbox) {
   await page.reload(); await page.locator('#wb-chat [data-conversation-id]').first().waitFor(); await choose('uploads');
   await page.locator('#wb-chat .chat-message .chat-attachment-name').filter({ hasText: '粘贴截图.png' }).waitFor();
   const imageSources = await page.locator('#wb-chat .chat-message .chat-attachment-image-content').evaluateAll(nodes => nodes.map(node => node.src));
-  assert.ok(imageSources.length && imageSources.every(source => source.startsWith(fixture.base + '/api/chat/') && !source.startsWith('blob:')), 'sent images reload through authorized history routes');
+  assert.ok(imageSources.length && imageSources.every(source => source.startsWith(fixture.base + '/api/conversations') && !source.startsWith('blob:')), 'sent images reload through authorized history routes');
   check('text plus ready IDs, per-conversation tray isolation, successful-send removal and authorized image reload');
   await chooseFiles([textFile('刷新前未发送.txt')]); await waitReady('刷新前未发送.txt');
   await page.reload(); await page.locator('#wb-chat [data-conversation-id]').first().waitFor(); await choose('other');
@@ -359,7 +362,7 @@ export async function runAttachmentVisual(t, sandbox) {
   await page.waitForFunction(() => document.querySelectorAll('#wb-chat .conversation-upload-tray [data-upload-id]').length === 0);
   check('twenty ready files sent together; twenty-first item rejected without an upload request');
   // Abort is an explicitly injected network failure, not a real backend error.
-  const uploadPattern = '**/api/chat/conversations/*/uploads';
+  const uploadPattern = '**/api/conversations/*/uploads';
   await context.route(uploadPattern, route => route.abort());
   await chooseFiles([textFile('中断上传.txt')]); await itemNamed('中断上传.txt').locator('[data-action="retryUpload"]').waitFor();
   await context.unroute(uploadPattern); await itemNamed('中断上传.txt').locator('[data-action="retryUpload"]').click(); await waitReady('中断上传.txt');
@@ -374,7 +377,7 @@ export async function runAttachmentVisual(t, sandbox) {
   await itemNamed('旧待发资料.pdf').locator('[data-action="retryUpload"]').click(); await waitReady('旧待发资料.pdf');
   await clearTray(); check('real tray expiry timer under controlled browser time; explicit reupload restores readiness');
   // Pure attachment first send uses a persisted blank draft, then its canonical group.
-  const draft = await fixture.request('/api/chat/drafts', { method: 'POST', body: { displayName: '仅附件首发' } }); assert.equal(draft.status, 201);
+  const draft = await fixture.request('/api/conversations/drafts', { method: 'POST', body: { displayName: '仅附件首发' } }); assert.equal(draft.status, 201);
   expectedMissingGroupPath = '/api/groups/' + encodeURIComponent('dashboard:' + draft.body.conversation.localId);
   await page.locator('#wb-chat [data-action="refresh"]').click();
   await page.locator(`#wb-chat [data-conversation-id="${draft.body.conversation.id}"]`).click();
@@ -524,7 +527,7 @@ export async function runAttachmentVisual(t, sandbox) {
     node.dispatchEvent(over); node.dispatchEvent(drop); return { over: over.defaultPrevented, drop: drop.defaultPrevented };
   });
   assert.equal(readonlyDrop.over, true); assert.equal(readonlyDrop.drop, true); assert.equal(uploads, uploadsBeforeReadonlyDrop);
-  fixture.setProxy(fixture); expectedHttpError = (url, status) => url.pathname.startsWith('/fleet/Remote/api/chat/') && status === 403;
+  fixture.setProxy(fixture); expectedHttpError = (url, status) => url.pathname.startsWith('/fleet/Remote/api/conversations') && status === 403;
   // Settings admission may hide the remote conversation tab before its page mounts.
   // In either admission path, no upload control remains and the overview is shown.
   await page.goto(fixture.base + '/fleet/Remote/chat');

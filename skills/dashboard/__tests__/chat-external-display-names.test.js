@@ -66,7 +66,7 @@ function fixture(t) {
   });
   const list = async tab => {
     if (!server.listening) await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/chat/conversations?tab=${tab}`,
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/conversations?tab=${tab}`,
       { headers: { cookie: `__Secure-zylos_dashboard_session=${cookie}` } });
     assert.equal(response.status, 200);
     const body = await response.json();
@@ -84,8 +84,8 @@ test('external channel list shows a stored group display name and otherwise the 
   const external = await f.list('external');
   assert.equal(external.get('lark:group-oc_named'), 'Product team');
   assert.equal(external.get('lark:dm-oc_plain'), 'lark:dm-oc_plain');
-  assert.equal(external.get(''), '旧历史');
-  assert.equal(external.size, 3);
+  assert.equal(external.has(''), false);
+  assert.equal(external.size, 2);
 });
 
 test('my conversations keep their naming while external names come from the same store', async t => {

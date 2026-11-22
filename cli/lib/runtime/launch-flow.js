@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { getRuntime } from './index.js';
 import { connection as openConnection, dependencies } from './session-ops.js';
 import { adapterError, runtimeExecutable, runtimeHelpAsync, validateLaunchConfig, launchEnvironment, shellQuote, writeSessionLaunchScript } from './session-command.js';
@@ -159,6 +160,18 @@ export async function launchSession({runtime,sessionGroup,runId,launchConfig,ses
     if (!runId || !['single','multi'].includes(sessionMode) ||
         (sessionMode === 'single' ? sessionGroup !== null && sessionGroup !== 'origin' : !sessionGroup)) throw adapterError('LAUNCH_FAILED','Invalid launch arguments','error');
     const root = await fs.realpath(options.root || ZYLOS_DIR);
+    // Some runtimes discover workspace skills under .agents/skills.
+    const agentsDir = path.join(root, '.agents');
+    const agentsSkillsPath = path.join(agentsDir, 'skills');
+    let agentsSkillsExists = false;
+    try { await fs.lstat(agentsSkillsPath); agentsSkillsExists = true; } catch { /* not present */ }
+    if (!agentsSkillsExists) {
+      try {
+        await fs.mkdir(agentsDir, { recursive: true });
+        await fs.symlink(path.join(root, '.claude', 'skills'), agentsSkillsPath);
+      } catch { /* non-fatal */ }
+    }
+
     const cleanEnv = launchEnvironment(root,env,{ runtimeEnv: impl.launch.env });
     let args = impl.launch.buildArgs(launchConfig, {root, help});
     const upgrade = discoverUpgradeContext(root);

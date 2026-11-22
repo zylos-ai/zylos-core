@@ -49,18 +49,18 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       const remote = url.pathname.match(/^\/fleet\/([^/]+)(\/api\/.*)$/);
       if (!remote) return route.fallback();
       const apiPath = remote[2];
-      if (apiPath.startsWith('/api/chat/')) {
+      if (apiPath.startsWith('/api/conversations')) {
         assert.ok(chatRequests.length < 100, 'chat request capture is bounded');
         chatRequests.push(apiPath);
       }
       // No push stream: its every (re)open reads the state again, and a state allowing remote access read after a
       // refusal rightly means the switch is back on. Without it no state is read after the entry read in this case.
       if (apiPath === '/api/stream') return route.abort();
-      const kind = apiPath.startsWith('/api/chat/') ? 'chat' : apiPath.startsWith('/api/observer/') ? 'observer' : null;
+      const kind = apiPath.startsWith('/api/conversations') ? 'chat' : apiPath.startsWith('/api/observer/') ? 'observer' : null;
       if (kind && kind === refuse.now) { refusals.push(apiPath); return route.fulfill({ status: 403, json: REFUSAL }); }
       if (apiPath === '/api/observer/status') return route.fulfill({ json: OBSERVER_STATUS });
       let value = workbenchAnswer(new URL(apiPath + url.search, 'http://fixture'), Date.now());
-      if (apiPath === '/api/groups/running' && value) value = { ...value, rows: value.rows.map(row => row.id === GROUP
+      if (apiPath === '/api/groups' && url.searchParams.get('side') === 'running' && value) value = { ...value, items: value.items.map(row => row.id === GROUP
         ? { ...row, state: { kind: 'idle', since: null }, flags: {} } : row) };
       if (value?.sessionGroup === GROUP) value = { ...value, state: { kind: 'idle' }, flags: {}, tools: [], working: { on: false, since: null, main: null, tools: 0, subagents: null } };
       if (apiPath === '/api/instance' && value) value = { ...value, agent: { name: REMOTE } };
@@ -131,7 +131,7 @@ export async function runRemoteAccessBrowser(t, sandbox) {
     refuse.now = 'chat';
     await page.locator('.tab[data-tab="chat"]').click();
     await leftForOverview(page);
-    assert.ok(refusals.some(path => path.startsWith('/api/chat/')), 'the conversation page met the refusal');
+    assert.ok(refusals.some(path => path.startsWith('/api/conversations')), 'the conversation page met the refusal');
     assert.equal(await page.locator('#tab-chat').isVisible(), false);
     assert.equal(await page.locator('#observer-tab').isVisible(), false, 'the observer entry follows');
     // Asking for the conversation tab again keeps the overview.

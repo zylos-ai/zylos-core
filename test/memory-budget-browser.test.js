@@ -7,6 +7,7 @@ import { chatEnabled, createChatSandbox } from '../skills/dashboard/__tests__/he
 import { startPage } from '../skills/dashboard/__tests__/helpers/workbench-browser.js';
 import { openDashboardTab } from '../skills/dashboard/__tests__/helpers/browser-navigation.js';
 import { BUDGETS, WARN_THRESHOLDS, measureMemoryText } from '../skills/zylos-memory/scripts/memory-budget.js';
+import { backlogAnswer } from '../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
 
 // Boundary: actual Dashboard modules/styles/i18n with measured budget payloads, eight view combinations.
 // Run when memory budget copy, payload or presentation changes; unrelated changes may skip.
@@ -48,11 +49,11 @@ test('memory budget display shows both startup dimensions at phone and desktop w
           const page = await context.newPage(); page.setDefaultTimeout(10_000);
           const errors = [];
           page.on('pageerror', error => { if (errors.length < 3) errors.push(error.message); });
-          await page.route('**/api/memory/backlog', route => route.fulfill({ json: {
-            groups: [], hasOlder: false, budgets: { limits: BUDGETS, warnings: WARN_THRESHOLDS,
+          await page.route('**/api/memory/backlog*', route => route.fulfill({ json: backlogAnswer({
+            groups: [], budgets: { limits: BUDGETS, warnings: WARN_THRESHOLDS,
               checks: { 'identity.md': measureMemoryText('identity.md', '中'.repeat(3000)),
                 'references.md': measureMemoryText('references.md', 'a'.repeat(8000)) } },
-          } }));
+          }, new URL(route.request().url())) }));
           await page.goto(base + '/');
           await openDashboardTab(page, 'memory');
           const chart = page.locator('.wb-memory-budgets');

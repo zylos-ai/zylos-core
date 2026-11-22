@@ -83,7 +83,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_latest ON state_snapshots(runtime, sess
 `;
 
 // Shared by the service and the side-effect-free schema owner.
-export const TARGET_SCHEMA_VERSION = 28;
+export const TARGET_SCHEMA_VERSION = 30;
 
 export function inspectDatabase(db) {
   const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
@@ -91,6 +91,8 @@ export function inspectDatabase(db) {
   if (!Number.isInteger(currentVersion) || currentVersion < 0) throw new Error('Unsupported Dashboard schema version');
   if (currentVersion === TARGET_SCHEMA_VERSION) {
     const required = {
+      chat_pins: 'tab conversation_id position',
+      chat_read_positions: 'conversation_id last_read',
       chat_attachments: 'id local_id namespace storage_name name size mime kind source principal created_at c4_watermark scanned_c4_id scan_upper_id next_check_at',
       chat_attachment_messages: 'attachment_id c4_id',
       chat_answers: 'answer_id question_c4_id session_group endpoint_id content action created_at',
@@ -206,7 +208,7 @@ export function inspectDatabase(db) {
   return { currentVersion, targetVersion: TARGET_SCHEMA_VERSION, needsMigration: currentVersion < TARGET_SCHEMA_VERSION };
 }
 
-export function migrateDatabase(db) {
+export function migrateDatabase(db, { conversationHighwater = () => 0 } = {}) {
   const { currentVersion } = inspectDatabase(db);
   if (currentVersion > TARGET_SCHEMA_VERSION) {
     const error = new Error(`Dashboard schema ${currentVersion} is newer than supported ${TARGET_SCHEMA_VERSION}`);
@@ -580,6 +582,50 @@ export function migrateDatabase(db) {
         }
         db.exec('INSERT OR IGNORE INTO schema_migrations(version) VALUES(28)');
       })();
+    }
+    if (currentVersion < 29) {
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS chat_pins (
+            conversation_id TEXT NOT NULL PRIMARY KEY,
+            position INTEGER NOT NULL UNIQUE CHECK(position >= 0)
+          );
+          INSERT OR IGNORE INTO schema_migrations(version) VALUES(29);
+        `);
+      })();
+    }
+
+
+    if (currentVersion < 30) {
+      db.transaction(() => {
+        if (!db.pragma('table_info(chat_pins)').some(column => column.name === 'tab')) {
+          db.exec(`
+            ALTER TABLE chat_pins RENAME TO chat_pins_v29;
+            CREATE TABLE chat_pins (
+              tab TEXT NOT NULL CHECK(tab IN ('mine','external')),
+              conversation_id TEXT NOT NULL,
+              position INTEGER NOT NULL CHECK(position >= 0),
+              PRIMARY KEY(tab, conversation_id),
+              UNIQUE(tab, position)
+            );
+            INSERT INTO chat_pins(tab, conversation_id, position)
+              SELECT 'mine', conversation_id, position FROM chat_pins_v29;
+            DROP TABLE chat_pins_v29;
+          `);
+        }
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS chat_read_positions (
+            conversation_id TEXT NOT NULL PRIMARY KEY,
+            last_read INTEGER NOT NULL CHECK(last_read >= 0)
+          );
+        `);
+        // The empty ID is the deployment watermark, shared by conversations
+        // without their own read position. Public IDs always have a prefix.
+        if (!db.prepare("SELECT 1 FROM chat_read_positions WHERE conversation_id=''").get()) {
+          db.prepare("INSERT INTO chat_read_positions VALUES ('', ?)").run(conversationHighwater());
+        }
+        db.exec('INSERT OR IGNORE INTO schema_migrations(version) VALUES(30)');
+      }).immediate();
     }
 
 }

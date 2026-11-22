@@ -51,9 +51,9 @@ export async function runStaleStatusBrowser(t, sandbox) {
         res.write(`event: chat_ready\ndata: ${JSON.stringify({ version: 1, tab: 'mine', conversationId: url.searchParams.get('chat_conversation'), ids: [] })}\n\n`);
         streams.add(res); res.on('close', () => streams.delete(res)); return;
       }
-      if (url.pathname === '/api/instance' || url.pathname.startsWith('/api/groups/')) return sendJson(res, 200, await snapshot(url));
-      if (url.pathname === '/api/chat/conversations') return sendJson(res, 200, { items: [{ ...conversation, session_group: GROUP, display_name: conversation.displayName }], nextCursor: null, tz: 'UTC' });
-      if (url.pathname.startsWith('/api/chat/conversations/')) {
+      if (url.pathname === '/api/instance' || url.pathname === '/api/groups' || url.pathname.startsWith('/api/groups/')) return sendJson(res, 200, await snapshot(url));
+      if (url.pathname === '/api/conversations') return sendJson(res, 200, { items: [{ ...conversation, session_group: GROUP, display_name: conversation.displayName }], nextCursor: null, tz: 'UTC' });
+      if (url.pathname.startsWith('/api/conversations/')) {
         const p = url.pathname;
         const value = p.endsWith('/messages') ? { items: [{ id: 1, direction: 'in', channel: 'telegram', content: '核对最后一次会话状态', timestamp: new Date(sampledAt).toISOString() }], nextCursor: null, afterCursor: 'after-1', tz: 'UTC' }
           : p.endsWith('/activity') ? { now: new Date().toISOString(), items: [] }

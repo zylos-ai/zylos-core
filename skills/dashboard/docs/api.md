@@ -4,6 +4,8 @@
 
 This reference describes Dashboard HTTP routes, including health, instance, session groups, usage, memory, schedules, settings, chat, terminal history, Fleet and push. Any PR that changes an API documented here must update this file in the same PR. Check methods, paths, parameters, permissions, fields and errors against the implementation, rather than copying a design proposal.
 
+Collection endpoints follow the [list API standard](list-api-standard.md) for paths, filters, paging, cursors, errors, ordering and cost. This file documents each concrete route.
+
 Paths are relative to the Dashboard base URL. For example, with the default HTTP mount, `/api/instance` is available at `/dashboard/api/instance`. Group IDs are URL-encoded session-group keys such as `telegram%3Aexample`, or `origin` for the single session and the multi-session Origin. Display names are not IDs.
 
 ## Runtime Descriptors Asset
@@ -268,10 +270,11 @@ Lists contain presentation observations only. Running rows have exactly these fi
 | `flags` | object | Independent conditions, below |
 | `mainAgent` | `busy` / `idle` / `unknown` | Main Agent observation for instruction callers; UI does not display it |
 | `contextPct` | number / null | Current session context percentage |
-| `lastActivityAt` | string / null | Latest recorded C4 activity |
+| `lastActivityAt` | string / null | Time of the latest received C4 message, or the first visible message if the group has never received one. Null when neither exists |
+| `runtimeOverridden`, `modelOverridden` | boolean / null | Explicit runtime and model override observations; null when the evidence cannot establish the answer |
 | `currentAction` | `{tool:string\|null,message:string\|null,receivedAt:string\|null}` | First current tool name, latest received message excerpt (at most 120 characters), and its ISO timestamp; absent observations remain null |
 
-Offline rows have exactly `id`, `displayName`, `channel`, `lastActivityAt` and `flags`. The ID remains necessary to open detail or perform a group action. The compact action contains no tool arguments, tool detail or raw message. Lists do not include `sessionGroup`, stored `name` metadata, `side`, `presence`, `live`, `working`, `wait`, `queue`, `target`, `launchConfig`, `c4`, `tools` or any other raw observations. Search adds `side` to distinguish running and offline results.
+Offline rows include `id`, `displayName`, `channel`, `lastActivityAt`, `flags`, `runtimeOverridden` and `modelOverridden`. An offline row with a runtime override also carries its configured `runtime`. The ID remains necessary to open detail or perform a group action. The compact action contains no tool arguments, tool detail or raw message. Lists do not include `sessionGroup`, stored `name` metadata, `side`, `presence`, `live`, `working`, `wait`, `queue`, `target`, `launchConfig`, `c4`, `tools` or any other raw observations.
 
 In single-session mode, Origin receives messages from every channel group. Its pending queue count and oldest timestamp aggregate all C4 delivery queues, and its latest received-message preview is selected across those groups. The Origin row's `queued` flag, the queued-row count in `counts.running.flags.queued`, `currentAction.message`/`receivedAt`, and detail `queue`/`preview` use these same collected observations. Detail `raw` is read from the same source group as the selected preview. The queued-row count counts Origin once when its pending message count is positive. Multi-session mode keeps each group's own queue and received-message scope.
 
@@ -303,39 +306,31 @@ Flags are independent: a working row can carry both `queued` and `blocked`. Miss
 
 Returns `readAt:string`, `listKnown:boolean`, `running:{total:number,states:Record<PrimaryState,number>,flags:Record<Flag,number>}`, `offline:{total:number,waitingSlot:number,startFailed:number}`, and `pool:{used:number|null,capacity:number|null}|null`. Running state counts include working, idle, starting, stopping and unknown. `running.flags.noResponse` counts the independent no-response flag, including a row also flagged with an error. All count/pool observations are numeric or null; there are no rows, mode or capacity-provenance records. Session mode comes only from `/api/instance`. Pool capacity provenance is not exposed by instance or counts.
 
-**Errors:** 502 `GROUP_CATALOG_UNREADABLE`; common read errors. Other source availability is represented by nullable observations. In counts, `listKnown` additionally requires a readable C4 catalog; running and offline responses expose the snapshot’s live-list availability directly. Offline and search still reject an unreadable C4 catalog even when the live list is known.
+**Errors:** 502 `GROUP_CATALOG_UNREADABLE`; common read errors. Other source availability is represented by nullable observations. In counts, `listKnown` additionally requires a readable C4 catalog.
 
 Example: `GET /api/groups/counts`.
 
-### GET /api/groups/running
+### GET /api/groups
 
-**Access:** Read. **Parameters:** none; this list is not paginated.
+**Access:** Read. Supports these optional query parameters. Filters combine with AND before paging.
 
-Returns `{readAt:string,listKnown:boolean,rows:RunningRow[]}` with only the running fields listed above. Confirmed offline rows are excluded. Its practical size follows the session pool.
+| Parameter | Values and behavior |
+|---|---|
+| `side` | `running` or `offline` |
+| `flag` | `queued`, `blocked`, `waitingSlot`, `startFailed`, `unreadable`, or `noResponse`; matches a key present in the row's flags |
+| `runtime` | `claude`, `codex`, or `agy`; matches the current runtime on the running side. Starting rows have no current runtime |
+| `runtimeOverridden` | `true` or `false`; matches an explicit runtime selection, even if it equals the default. Override-only groups with no C4 messages can appear on the offline side |
+| `modelOverridden` | `true` or `false`; matches a launch model override, a desired model override for the current runtime, or a stored model override for that runtime |
+| `q` | Case-insensitive substring of the group ID/address or display name. Trimmed to a term of at most 64 characters; a blank term applies no filter |
+| `include` | `total` adds the total match count |
+| `limit` | Integer from 1 through 100, default 50 |
+| `cursor` | Opaque continuation returned by the previous page |
 
-**Errors:** common read errors.
+Returns `{items:Array<RunningRow|OfflineRow>,nextCursor:string|null,total?:number,readAt:string,listKnown:boolean}`. Origin sorts first when it matches. Other groups sort descending by `lastActivityAt` (null sorts as zero), then ascending by ID. Received messages count when their direction is inbound and their channel is neither empty, `void`, nor `control`. Outgoing replies do not update the sort time. Pass the cursor unchanged with the same filters and `q`; after `invalid_cursor`, reload the first page. `listKnown` is false if the live list is incomplete or an override filter depends on unreadable evidence.
 
-Example: `GET /api/groups/running`.
+**Errors:** 400 `invalid_parameter` with `error.param` for an unknown, repeated, or invalid query parameter; 400 `invalid_cursor`; 503 `unavailable` for an unreadable catalog or sort observations; common read errors.
 
-### GET /api/groups/offline
-
-**Access:** Read. **Parameters:** optional `q:string` (trimmed, at most 64 characters), `flag:queued|blocked|waitingSlot|startFailed|unreadable|noResponse` (one flag), `cursor:string` (opaque cursor from the previous page), `limit:integer` (1–200, default 50).
-
-Returns `{readAt:string,listKnown:boolean,rows:OfflineRow[],nextCursor:string|null}` with only the five offline fields above. Rows are ordered by descending last activity and then ID. Text matches group ID/address and display name. A flag matches only when that key exists in the row’s flags; text and flag filters combine with AND before pagination. Pass the cursor unchanged with the same filters to continue.
-
-**Errors:** 400 `INVALID_LIMIT`, `INVALID_QUERY`, `INVALID_FLAG`, `INVALID_CURSOR`; 502 `GROUP_CATALOG_UNREADABLE`; common read errors.
-
-Example: `GET /api/groups/offline?flag=startFailed&q=team&limit=20`.
-
-### GET /api/groups/search
-
-**Access:** Read. **Parameters:** `q:string`, matched against ID/address and name; empty or more than 64 characters returns no results.
-
-Returns `{rows:Array<RunningRow|OfflineRow>,truncated:boolean}`, at most 50 results across both sides. Search alone adds `side:"running"|"offline"` to each result; all other fields follow its side’s list schema.
-
-**Errors:** 502 `GROUP_CATALOG_UNREADABLE`; common read errors.
-
-Example: `GET /api/groups/search?q=team`.
+Example: `GET /api/groups?side=running&runtime=codex&modelOverridden=false&limit=8&include=total`.
 
 ### GET /api/groups/activity
 
@@ -353,21 +348,21 @@ Example: `GET /api/groups/activity?range=6h&ids=origin,telegram%3Aexample`.
 
 ### GET /api/groups/:id
 
-**Access:** Read. **Parameters:** encoded group ID; optional `include=raw,config` (default both). An empty `include=` requests neither extra; either name can be selected independently.
+**Access:** Read. **Parameters:** encoded group ID; optional `include=raw,config`. Omit the parameter to request neither part. Either name can be selected independently, once. The Origin Operations Interface retains its default of both parts and accepts an empty `include=` to omit them.
 
 Returns the complete group observation, including the applicable list fields plus `sessionGroup:string|null`, `name:object|null`, `side:"running"|"offline"`, `presence:string`, `live:object|null`, `fence:object|null`, `working:object|null`, `queue:object|null`, `wait:object|null`, `target:object|null`, `launchConfig:object|null`, `createdAt:string|null`, `c4:object|null`, `tools:array`, and other source observations. `readAt:string` is the snapshot’s ISO observation timestamp. `runtimeInfo` is the group-specific object `{runtime:string|null,model:string|null,effort:string|null,runningVersion:string|null,installedVersion:string|null,update:string|null,pendingRestart:boolean}`. Its runtime/model/effort and running version are observed group values; unavailable strings remain null. `installedVersion` is the installed version for that runtime; `update` is an available newer version string or null, using the same version comparison as `versions[runtime]`. `pendingRestart` is true only on the running side when known evidence identifies a newer installed CLI or a desired runtime/model/effort that differs from the current observation. False does not establish that unknown values match. This group-specific object does not appear in `/api/instance`.
 
 Detail also includes `currentAction:{tool:string|null,message:string|null,receivedAt:string|null}` using the same bounded, sanitized projection as a running list row. Optional `include` extras do not change this field.
 
-`effective` contains `{runtime:string|null,model:string|null,effort:string|null,runtimeOverridden:boolean|null,modelOverridden:boolean|null}`. Effective runtime, model and effort describe the actual ready run. They are null while a run is starting and describe the desired configuration when offline. The runtime override flag reports whether the group explicitly selects a runtime, even when that selection equals the instance default. The model override flag reads the launch override mode for an active run and the desired model configuration when offline. Top-level override fields and `effective` use the same observations. Unknown evidence yields null. `run` is `{runId:string|null,sessionId:string|null,createdAt:string|null}|null`.
+`effective` contains `{runtime:string|null,model:string|null,effort:string|null,runtimeOverridden:boolean|null,modelOverridden:boolean|null}`. Effective runtime, model and effort describe the actual ready run. They are null while a run is starting and describe the desired configuration when offline. The runtime override flag reports whether the group explicitly selects a runtime, even when that selection equals the instance default. The model override flag uses launch, desired and stored override evidence for the runtime; an active session without a readable launch configuration reports null. The Origin Operations Interface retains the launch override mode for an active run. Top-level override fields and `effective` use the same observations. Unknown evidence yields null. `run` is `{runId:string|null,sessionId:string|null,createdAt:string|null}|null`.
 
 When requested, `raw:string|null` contains sanitized first-message content and `config:object|null` contains Core runtime/model read envelopes. An optional read failure returns its field as null and `rawError` or `configError` as `{code:string,message:string}`; it does not fail the whole detail request. Unrequested extras and their error fields are omitted. The address remains stable across lifecycle changes.
 
 `config.modelOverrides` is a read-only `Array<{runtime:string,model:string,effort:string}>|null` from the same group snapshot. It contains only the requested group's saved model and effort pairs, including pairs for runtimes other than the selected one. A runtime missing from a successful array follows the instance default. An empty array means no pairs are saved, and `null` means the snapshot could not read the overrides. For example, the field may be `[{"runtime":"codex","model":"gpt-5","effort":"high"}]` when the selected runtime is Claude.
 
-Bare keys `counts`, `running`, `offline`, `search`, `activity`, `naming-prompt` and `runtime-overrides` are reserved API namespace segments and cannot address a group detail. Use namespaced group keys rather than those bare names.
+Group IDs other than Origin are namespaced. The retired paths `/api/groups/running`, `/api/groups/offline`, `/api/groups/search`, and `/api/groups/runtime-overrides` return 404 `not_found`.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_INCLUDE`; 404 `GROUP_NOT_FOUND`; 502 `GROUP_CATALOG_UNREADABLE` when an unknown group cannot be checked against the catalog or a historical key cannot be verified; common read errors. Detail for a current valid key remains readable when unrelated catalog collection fails. Individual Core configuration errors can also appear inside their configuration envelopes.
+**Errors:** 400 `SESSION_GROUP_INVALID` or `invalid_parameter` with `error.param` for invalid query parameters; 404 `not_found`; 502 `GROUP_CATALOG_UNREADABLE` when an unknown group cannot be checked against the catalog or a historical key cannot be verified; common read errors. Detail for a current valid key remains readable when unrelated catalog collection fails. Individual Core configuration errors can also appear inside their configuration envelopes.
 
 Group observation reads (detail, usage, runs, messages, events, backlog and restart status) also accept historical imported group IDs outside the current write grammar, such as `telegram:运维群-测试`, only when a healthy instance C4 catalog contains that exact group with C4 evidence. They reuse the same request snapshot catalog as detail; status-only rows, queue-only rows, usage/event history and filesystem presence do not prove membership. IDs are decoded exactly once and must retain a valid namespace, a nonempty local name of at most 95 characters and total length at most 128. Control characters, DEL, slash, backslash and dot-only traversal names (`.` or `..`) are rejected before catalog lookup. A literal percent in an existing name is allowed after decoding; no second decode occurs. Malformed URL encoding returns 400 `SESSION_GROUP_INVALID`.
 
@@ -375,9 +370,9 @@ Unknown historical IDs return 400 `SESSION_GROUP_INVALID`; an unreadable catalog
 
 Example historical observation: `GET /api/groups/telegram%3A%E8%BF%90%E7%BB%B4%E7%BE%A4-%E6%B5%8B%E8%AF%95/runs?limit=3`.
 
-Conversation status is an optional consumer of this detail. A newly created chat group can be absent from the snapshot: `GROUP_NOT_FOUND` means no reading yet, with a retry on the existing status cadence. Chat remains usable without a status reading; other HTTP errors retain their existing failure semantics.
+Conversation status is an optional consumer of this detail. A newly created chat group absent from the snapshot returns `not_found`. The Origin Operations Interface retains `GROUP_NOT_FOUND`. Chat remains usable without a status reading and retries on the existing status cadence.
 
-Example: `GET /api/groups/telegram%3Aexample?include=`.
+Example: `GET /api/groups/telegram%3Aexample`.
 
 ### GET /api/groups/:id/usage
 
@@ -467,16 +462,6 @@ Returns `{ok:true,data:{sessionGroup:string,displayName:string|null,source:strin
 
 Example: `DELETE /api/groups/telegram%3Aexample/name`.
 
-### GET /api/groups/runtime-overrides
-
-**Access:** Read. **Parameters:** optional `q:string` (name/address search), `after:string` (Core's opaque pagination boundary).
-
-Returns `runtime:Array<{sessionGroup:string,runtime:string,name:object|null}>`, `nextAfter:string|null`, and `runtimeTotal:number` when querying the unfiltered list. Search results need not include a total. Only explicit runtime overrides are listed; row `runtime` is `claude`, `codex` or `agy`.
-
-**Errors:** 502 `override_list_failed`; common read errors.
-
-Example: `GET /api/groups/runtime-overrides?q=team`.
-
 ### POST /api/groups/naming-prompt
 
 **Access:** Admin, including through Fleet. Local read-only credentials are rejected before forwarding; remote read-only credentials remain subject to the target’s admin gate. **Parameters:** none; any JSON body is ignored.
@@ -523,7 +508,7 @@ Example: `POST /api/groups/telegram%3Aexample/actions/restart` with `{"runId":"o
 
 Returns `requestId:string`, `completion:string` (supervisor lookup result, or `unknown`), and `group:{id:string,runId:string|null,sessionId:string|null,ready:boolean,state:object}`. This works for any group, including Origin; group identity and current state are observations, not proof that a particular restart caused them.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_REQUEST_ID`; 404 `GROUP_NOT_FOUND`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; common read errors.
+**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_REQUEST_ID`; 404 `not_found` for groups and `GROUP_NOT_FOUND` for Origin; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; common read errors.
 
 Example: `GET /api/groups/origin/restarts/00000000-0000-4000-8000-000000000001`.
 
@@ -612,11 +597,11 @@ Read-scope callers can inspect the tree and backlog. File bodies and Git metadat
 
 | Method/path | Parameters and result | Errors / example |
 |---|---|---|
-| `GET /api/memory/tree` | No parameters. Returns `root:{name,path,type,children}`, recursively ordered directories/files with relative paths and file metadata, and `sessionGroups:{sessionGroup,displayName}[]`: one entry per valid session-group directory under `session-groups/`, with its display name or null. | 500 `memory_browser_failed` when the memory directory cannot be read (including when it is missing). Example: `GET /api/memory/tree`. |
+| `GET /api/memory/tree` | No parameters. Returns `root:{name,path,type,children}`, recursively ordered directories/files with relative paths and file metadata, and `sessionGroups:{sessionGroup,displayName,backlog}[]`: one entry per valid session-group directory under `session-groups/`, with its display name or null, and `backlog:{count,syncing}` (pending count or null when unknown; whether the group's Memory Sync runs, or null). The backlog is read with the same per-group reader (and 30-second cache) as `GET /api/memory/backlog` and group details, so the badges match the backlog card. When a group's backlog cannot be read its fields are null (and when the reader fails, `backlog` is null for every group); the tree is still returned. | 500 `memory_browser_failed` when the memory directory cannot be read (including when it is missing). Example: `GET /api/memory/tree`. |
 | `GET /api/memory/file` | Required `path`. Returns `{path,name,size_bytes,mtime,sha256,markdown,text}`. `mtime` is ISO; `sha256` is the optimistic-write version. | 400 `invalid_memory_path`, 404 `memory_file_not_found`, 413 `memory_file_too_large`, 415 `unsupported_memory_file` (not a supported text file name, or not valid UTF-8), 500 `memory_browser_failed`. Example: `GET /api/memory/file?path=state.md`. |
 | `PUT /api/memory/file` | Required `path`; JSON `{text:string,sha256:string}`. Returns `{ok:true,...file}` after Core's lock, conflict check and atomic save. | 400 `invalid_memory_write` (body, text or sha256 invalid), `memory_write_empty`, `invalid_memory_path`; 404 `memory_file_not_found`; 409 `memory_conflict` (with current file), `memory_sync_busy`; 413 `memory_file_too_large`; 415 `unsupported_memory_file`; 503 `memory_write_unavailable`, `memory_lock_timeout`; 502 `memory_write_unknown`; 500 `memory_write_failed` or `memory_browser_failed`. Example body: `{"text":"# Current work\n","sha256":"<64 hex characters>"}`. |
 | `GET /api/memory/git` | Required `path` (empty root allowed). Returns `{path,commit:null|{hash,short_hash,author_name,author_date,subject}}`. Missing Git history yields `commit:null`. | 400 `invalid_memory_path`, 404 `memory_file_not_found`, 500 `memory_browser_failed`. Example: `GET /api/memory/git?path=state.md`. |
-| `GET /api/memory/backlog` | No parameters. Returns `{groups,originSync?,hasOlder,budgets}`. Each group has `sessionGroup,displayName,c4,count,firstAt,aged,syncing,threshold` and optional failure `reason`; multi mode adds cross-group `originSync`. | 503 `backlog_failed`. Example: `GET /api/memory/backlog`. |
+| `GET /api/memory/backlog` | A list under the list API standard: `q` (matches the session-group ID or display name, case-insensitive), `limit=1..100` (default 50), `cursor`. Returns `{items,nextCursor,summary,originSync?,budgets}`. Each item has `sessionGroup,displayName,c4,count,firstAt,aged,syncing,threshold` and optional failure `reason`. The backlog of every group in the session-group snapshot is read (from the shared 30-second per-group cache), and only groups with `count` above 0, `syncing` true or a `reason` are listed; they are ordered in memory before `q` and paging apply. Order: groups waiting over six hours (`aged`) first; then `count` DESC with unknown counts after known ones; then `firstAt` ASC with unknown last; then `sessionGroup` ASC. Page fields describe all listed groups whatever `q` and the cursor: `summary:{groups,waiting,aged,syncing,unknown,threshold}` (group counts; `threshold` is the sync threshold most groups share, or null), multi mode's cross-group `originSync` and `budgets`. | 400 `invalid_parameter` (with `error.param`) for an unknown, repeated or invalid parameter; 400 `invalid_cursor` for a cursor that is forged, from another search or from before a Dashboard restart (reload the first page); 503 `unavailable` when the backlog cannot be read. Example: `GET /api/memory/backlog?q=telegram&limit=50`. |
 
 Backlog `count`, `firstAt`, `syncing` and `threshold` can be null when unknown; `budgets` is an object or null. Its `limits` map keeps byte numbers for reference INDEX files; `identity.md` and `references.md` have `{maxChars,maxTokens}` startup display limits. `warnings` has byte numbers for INDEX files and `{chars,estimatedTokens}` for startup files (80% of both limits). `checks` maps the two startup filenames to `{chars,estimatedTokens,sizeBytes,maxChars,maxTokens,warnThreshold:{chars,estimatedTokens},status:"ok"|"warning"|"over",budgetUsagePct}` or null when unreadable. Measurements read the current text, independent of runtime; usage is the larger fraction of the two dimensions. These are reporting fields and never prevent writes. Historical C4 groups accepted by group observation reads retain their count and oldest time. Historical groups cannot participate in per-group sync, so `aged:false`, `syncing:null` and `reason:"backlog_failed"` avoid implying an overdue sync. Syncable groups become `aged:true` when the oldest message is over six hours old. Unsafe names have unknown backlog fields. Multi-mode `originSync` is a separate cross-group observation.
 
@@ -650,37 +635,49 @@ Schedule `nextRunAt`, `lastRunAt`, `updatedAt`, history `executedAt`/`completedA
 | `GET /api/settings/chat` | Read, including Fleet read proxies. Returns `{chat_allow_remote:boolean}`. This is the sole source of the remote chat/terminal visibility setting. | Common read errors. Example: `GET /api/settings/chat`. |
 | `PUT /api/settings/chat` | Admin; local only (see Access). JSON `{chat_allow_remote:boolean}`. Returns `{ok:true,chat_allow_remote}`; disabling revokes remote chat/terminal access. | 400 `invalid_chat_settings`; 500 `chat_settings_write_failed`. Example body: `{"chat_allow_remote":false}`. |
 | `POST /api/auth/token` | Public credential exchange; requires `Authorization: Bearer <API key>`. Returns `{ok:true,token,expires_at,ttl_seconds,scope}`. The API key is not itself a data-access bearer token. | 401 `invalid_api_key`. Example: `POST /api/auth/token` with the key header. |
-| `GET /api/keys` | Admin; local only (see Access). Returns key metadata; key material is omitted. | Common access errors. Example: `GET /api/keys`. |
-| `POST /api/keys` | Admin; local only (see Access). JSON `{name,scope:"read"|"admin"}`; returns `{ok:true,key,plaintext_key,...keyMetadata}`. The key is shown once. | 400 `invalid_name`, `invalid_scope` or `duplicate_name` when the name already exists at validation; 409 `name_taken` if a concurrent insert wins the database unique constraint. Example body: `{"name":"reader","scope":"read"}`. |
-| `POST /api/keys/:name/rotate` | Admin; local only (see Access). Returns `{ok:true,key,plaintext_key,...keyMetadata}` with replacement material once. | 404 `unknown_key`. Example: `POST /api/keys/reader/rotate`. |
-| `DELETE /api/keys/:name` | Admin; local only (see Access). `permanent=1` permanently removes an already revoked key; otherwise revokes it. Returns `{ok:true,...}`. | 404 `unknown_key`; 409 `must_revoke_first`. Example: `DELETE /api/keys/reader`. |
-| `POST /api/keys/purge-revoked` | Admin; local only (see Access). Returns `{ok:true,purged,...keyMetadata}`. | Common write errors. Example: `POST /api/keys/purge-revoked`. |
+| `GET /api/keys` | Admin; local only (see Access). A list under the list API standard: `q` (matches the key name, case-insensitive), `limit=1..100` (default 50), `cursor`, `include=total`. Returns `{items,nextCursor,total?,counts:{active,revoked}}`; each item is `{name,scope,created_at,last_used_at,revoked_at,status:"active"|"revoked"}` (key material and hashes are never returned). Order: active keys before revoked ones, then `created_at` DESC, then key ID DESC. `total` counts the keys matching `q`; `counts` covers every key, whatever the search. | 400 `invalid_parameter` (with `error.param`) for an unknown, repeated or invalid parameter; 400 `invalid_cursor` for a cursor that is forged, from another search or from before a Dashboard restart (reload the first page); 503 `unavailable` when the key table cannot be read; common access errors. Example: `GET /api/keys?q=ci&limit=8&include=total`. |
+| `POST /api/keys` | Admin; local only (see Access). JSON `{name,scope:"read"|"admin"}`; returns `{ok:true,key,plaintext_key}`. The key is shown once; the list is read again with `GET /api/keys`. | 400 `invalid_name`, `invalid_scope` or `duplicate_name` when the name already exists at validation; 409 `name_taken` if a concurrent insert wins the database unique constraint. Example body: `{"name":"reader","scope":"read"}`. |
+| `POST /api/keys/:name/rotate` | Admin; local only (see Access). Returns `{ok:true,key,plaintext_key}` with replacement material once. | 404 `unknown_key`. Example: `POST /api/keys/reader/rotate`. |
+| `DELETE /api/keys/:name` | Admin; local only (see Access). `permanent=1` permanently removes an already revoked key and returns `{ok:true,deleted}`; otherwise revokes it and returns `{ok:true}`. | 404 `unknown_key`; 409 `must_revoke_first`. Example: `DELETE /api/keys/reader`. |
+| `POST /api/keys/purge-revoked` | Admin; local only (see Access). Returns `{ok:true,purged}`. | Common write errors. Example: `POST /api/keys/purge-revoked`. |
 | `GET /login`, `POST /login` | Public password login form and submission (`application/x-www-form-urlencoded`, password, optional remember). Success redirects and sets the scoped secure session cookie. Failure renders HTML. | Invalid credentials/rate limit are rendered on the form. Example: `GET /login`. |
 | `POST /logout` | Browser session logout; clears cookie and redirects. | Always clears the session, including when Origin is missing or mismatched; no same-origin precondition. Example: `POST /logout`. |
 
-## Chat
+## Conversations
 
-**Access:** Admin for all conversation content, metadata, attachment and chat push routes below. The remote chat switch must be enabled for API-session access. All conversation content and attachment reads require admin scope at both the local and destination instances; read keys receive 403. Writes also require admin and browser same origin. `GET /api/settings/chat` remains read-scoped because it exposes only the access setting. Local password sessions can read their own instance independently of the remote switch. Conversation IDs are opaque and must be URL-encoded; query parameters are validated per route. Take `items[].id` from `GET /api/chat/conversations` (or `conversation.id` from draft creation). For example, Origin has ID `g:6F726967696E`, encoded as `g%3A6F726967696E`; the group key `origin` is not a chat conversation ID. Use the returned ID for subsequent conversation requests, with the same `tab` where supported. Message IDs come from `items[].id` in that conversation’s `/messages` response.
+**Access:** Admin for all conversation content, metadata, attachment and chat push routes below. The remote chat switch must be enabled for API-session access. All conversation content and attachment reads require admin scope at both the local and destination instances; read keys receive 403. Writes also require admin and browser same origin. `GET /api/settings/chat` remains read-scoped because it exposes only the access setting. Local password sessions can read their own instance independently of the remote switch. Conversation IDs are opaque and must be URL-encoded; query parameters are validated per route. Take `items[].id` from `GET /api/conversations` (or `conversation.id` from draft creation). For example, Origin has ID `g:6F726967696E`, encoded as `g%3A6F726967696E`; the group key `origin` is not a chat conversation ID. Use the returned ID for subsequent conversation requests, with the same `tab` where supported. Message IDs come from `items[].id` in that conversation’s `/messages` response.
 
 | Method/path | Contract and minimal example |
 |---|---|
-| `GET /api/chat/conversations` | `tab=mine|external`, `limit`, `cursor`. Returns `{items,nextCursor,tz,deletionAllowed,...}`. Example: `GET /api/chat/conversations?tab=mine`. |
-| `GET /api/chat/conversations/:id` | Returns reconciliation receipt plus conversation metadata. Example: `GET /api/chat/conversations/g%3A6F726967696E`. |
-| `POST /api/chat/drafts` | JSON `{displayName?}` → `{ok:true,conversation}` (201). Example body: `{}`. |
-| `PATCH /api/chat/conversations/:id` | JSON `{displayName}` → `{ok:true,conversation}`. Example body: `{"displayName":"Work"}`. |
-| `POST /api/chat/conversations/:id/send` | JSON `{content,retry?,attachments?,quote?}` → `{ok:true,...receipt}`. Uncertain delivery is not safe to repeat automatically. Example body: `{"content":"Hello"}`. |
-| `GET /api/chat/conversations/:id/messages` | `tab,limit,cursor,direction,recheckIds` → paged messages and `tz`. Example: `GET /api/chat/conversations/g%3A6F726967696E/messages?limit=30`. |
-| `GET /api/chat/conversations/:id/status` | Optional `tab`; required `ids` is a comma-separated list of 1–100 distinct positive message IDs from `/messages` → `{items:Array<{id,direction,status,delivery_action,deliveryState}>}`. Example: after `/messages` returns an item with `id:123`, `GET /api/chat/conversations/g%3A6F726967696E/status?ids=123`. |
-| `GET /api/chat/conversations/:id/activity` | `tab,subtask` → current conversation activity. Example: `GET /api/chat/conversations/g%3A6F726967696E/activity`. |
-| `GET /api/chat/conversations/:id/questions` | Optional `limit=1..100` (default 50), `cursor`. Returns `{items,nextCursor}` with interactive questions for the stored conversation. Example: `GET /api/chat/conversations/g%3A6F726967696E/questions`. |
-| `POST /api/chat/conversations/:id/answers` | JSON control answer payload validated against the stored question/control; returns `{ok:true,...receipt}`. Example: JSON `{interruptId,action,retry?}`, using the stored question/control action from the question response. |
-| `GET /api/chat/conversations/:id/uploads/config` | Returns `{maxUploadBytes:number,maxAttachments:number}` for a writable conversation. Example: `GET /api/chat/conversations/g%3A6F726967696E/uploads/config`. |
-| `POST /api/chat/conversations/:id/uploads` | Multipart file upload → `{ok:true,id,name,size,mime,kind}` (201). Example: multipart field `file` containing one supported file. |
-| `GET /api/chat/conversations/:id/attachments/:attachmentId` | Streams authorized file bytes with safe content type/disposition. Example: `GET /api/chat/conversations/g%3A6F726967696E/attachments/<id>`. |
-| `GET /api/chat/drafts/:id/deletion` | Local-owner-only draft deletion preview. Here `:id` is the bare `conversation.localId` returned by `POST /api/chat/drafts`, also available as `items[].localId` on draft rows in the conversation list. Do not pass the `d:`-prefixed conversation ID. Example: with `localId:"550e8400-e29b-41d4-a716-446655440000"`, `GET /api/chat/drafts/550e8400-e29b-41d4-a716-446655440000/deletion`. |
-| `DELETE /api/chat/drafts/:id` | Local-owner-only; `:id` is the same bare `localId` used for the preview. JSON `{confirmed:true,operationId,cutoffId}` from the preview. Returns `{ok:true,...deletionResult}`. Example: `DELETE /api/chat/drafts/550e8400-e29b-41d4-a716-446655440000` with the preview's confirmation values. Passing `d:<uuid>` returns 404 `chat_conversation_not_found`. |
+| `GET /api/conversations` | Optional `tab` (`mine` by default or `external`), `q`, `limit` (1–100, default 50), and `cursor`. Returns `{items,nextCursor,tz,deletionAllowed}`. Example `GET /api/conversations?tab=mine&q=work&limit=20`. |
+| `PUT /api/conversations/pins` | Optional `tab` (`mine` by default or `external`). JSON `{ids:string[]}` replaces the complete order for that tab and returns `{ok:true,ids}`. Use `[]` to clear the order. An identical replacement is idempotent. Example `PUT /api/conversations/pins?tab=mine` with `{"ids":["g:64617368626F6172643A776F726B"]}`. |
+| `GET /api/conversations/:id` | Returns reconciliation receipt plus conversation metadata. Example: `GET /api/conversations/g%3A6F726967696E`. |
+| `POST /api/conversations/drafts` | JSON `{displayName?}` → `{ok:true,conversation}` (201). Example body: `{}`. |
+| `PATCH /api/conversations/:id` | JSON `{displayName}` → `{ok:true,conversation}`. Example body: `{"displayName":"Work"}`. |
+| `POST /api/conversations/:id/send` | JSON `{content,retry?,attachments?,quote?}` → `{ok:true,...receipt}`. Uncertain delivery is not safe to repeat automatically. Example body: `{"content":"Hello"}`. |
+| `GET /api/conversations/:id/messages` | `tab`, `limit`, `cursor`, `direction` (`before` by default or `after`), `recheckIds`, and first-page `anchor=read` for `mine`. Returns paged messages, `nextCursor`, `afterCursor`, and `tz`. The read anchor also returns `readUpTo` and `unreadCount`. Example `GET /api/conversations/g%3A6F726967696E/messages?anchor=read`. |
+| `PUT /api/conversations/:id/read` | JSON `{upTo:number}` advances the recorded read position for a `mine` conversation, including Origin. Returns `{ok:true,readUpTo}`. The ID must belong to that conversation's message page. Example `PUT /api/conversations/g%3A6F726967696E/read` with `{"upTo":123}`. |
+| `GET /api/conversations/:id/status` | Optional `tab`; required `ids` is a comma-separated list of 1–100 distinct positive message IDs from `/messages` → `{items:Array<{id,direction,status,delivery_action,deliveryState}>}`. Example: after `/messages` returns an item with `id:123`, `GET /api/conversations/g%3A6F726967696E/status?ids=123`. |
+| `GET /api/conversations/:id/activity` | `tab,subtask` → current conversation activity. Example: `GET /api/conversations/g%3A6F726967696E/activity`. |
+| `GET /api/conversations/:id/questions` | Optional `limit=1..100` (default 50), `cursor`. Returns `{items,nextCursor}` with interactive questions for the stored conversation. Example: `GET /api/conversations/g%3A6F726967696E/questions`. |
+| `POST /api/conversations/:id/answers` | JSON control answer payload validated against the stored question/control; returns `{ok:true,...receipt}`. Example: JSON `{interruptId,action,retry?}`, using the stored question/control action from the question response. |
+| `GET /api/conversations/:id/uploads/config` | Returns `{maxUploadBytes:number,maxAttachments:number}` for a writable conversation. Example: `GET /api/conversations/g%3A6F726967696E/uploads/config`. |
+| `POST /api/conversations/:id/uploads` | Multipart file upload → `{ok:true,id,name,size,mime,kind}` (201). Example: multipart field `file` containing one supported file. |
+| `GET /api/conversations/:id/attachments/:attachmentId` | Streams authorized file bytes with safe content type/disposition. Example: `GET /api/conversations/g%3A6F726967696E/attachments/<id>`. |
+| `GET /api/conversations/drafts/:id/deletion` | Local-owner-only draft deletion preview. Here `:id` is the bare `conversation.localId` returned by `POST /api/conversations/drafts`, also available as `items[].localId` on draft rows in the conversation list. Do not pass the `d:`-prefixed conversation ID. Example: with `localId:"550e8400-e29b-41d4-a716-446655440000"`, `GET /api/conversations/drafts/550e8400-e29b-41d4-a716-446655440000/deletion`. |
+| `DELETE /api/conversations/drafts/:id` | Local-owner-only; `:id` is the same bare `localId` used for the preview. JSON `{confirmed:true,operationId,cutoffId}` from the preview. Returns `{ok:true,...deletionResult}`. Example: `DELETE /api/conversations/drafts/550e8400-e29b-41d4-a716-446655440000` with the preview's confirmation values. Passing `d:<uuid>` returns 404 `chat_conversation_not_found`. |
 
-Chat validation uses HTTP 400 (`invalid_chat_parameters`, invalid conversation/control IDs), missing resources 404, forbidden writes 403, conflicting state 409, upload limits 413 and upstream/unknown outcomes 502. All JSON failures use the common error envelope. Attachment downloads are binary; SSE uses the Push contract below.
+The list follows the [Dashboard List API Standard](list-api-standard.md). It returns the newest received message time as the row's ISO 8601 `stamp`, with the conversation ID as a unique ascending tie-breaker. If a conversation has never received a message, its first visible message sets the time. The latest visible non-internal message supplies `preview` and `previewDirection` even if an outbound reply left the sort time unchanged. Received internal relays and tasks can set the sort time. Drafts in `mine` retain their own time. Legacy history with an empty session group stays accessible by its `l:` message route but is omitted from the collection.
+
+The unfiltered first `mine` page puts Origin first. Each tab inserts its own complete pin order on its first page before the ordinary time-ordered rows. Pins have a zero-based `pinOrder`. Origin and pins do not use a slot or affect the cursor. Search trims and matches `q` case-insensitively against display names and session group IDs, up to 64 characters. It never searches message content. For nonempty `q`, all matches, including pins and Origin, take part in normal ordering, paging and limits. Matching pins retain `pinOrder`. Cursors must be reused with the same tab and trimmed query. After `invalid_cursor`, request the first page with those filters.
+
+`PUT /api/conversations/pins` uses chat admin and browser same-origin checks. Pass unique IDs of established conversations belonging to the selected tab. Origin, drafts, missing conversations, IDs from another tab, and duplicates are rejected as `invalid_chat_pin` (400). Malformed encoded IDs can return `invalid_chat_conversation` (400). Invalid write parameters return `invalid_chat_parameters` (400). Validation failures preserve the old order.
+
+`mine` list rows carry a boolean `unread`. It compares the last read position with the newest visible message other than a Dashboard inbound message written by the owner. After upgrading, existing messages start as read. An accepted send with a stored message ID advances the sender's read position to that ID. `PUT /api/conversations/:id/read` requires admin and browser same origin, including when proxied through Fleet. A valid lower position leaves the position unchanged. An invalid or unrelated message ID returns 400 `invalid_parameter` with `error.param: "upTo"`. An ID outside the `mine` conversation set returns 404 `not_found`.
+
+The read anchor returns messages on both sides of the saved position, with up to half the page after it and earlier messages filling any remaining space. It uses the saved ID even if that message was removed. `unreadCount` counts only messages that can make the conversation unread and is capped at 100. `nextCursor` reads earlier messages and `afterCursor` reads later messages. A first page without an anchor uses normal timeline paging and leaves out `readUpTo` and `unreadCount`. `anchor=read` is only valid without a cursor and in `mine`.
+
+The list, messages, status and activity use the common error envelope with 400 `invalid_parameter` (includes `error.param`), 400 `invalid_cursor`, 404 `not_found`, or 503 `unavailable` as applicable. Existing access and other write error codes still apply. Authenticated requests to the retired `/api/chat/*` path family return 404. Chat settings stay at `/api/settings/chat`. Attachment downloads are binary. The existing `chat_messages_changed` hint also reports changes to the relevant tab's ordering, pins and read positions so clients can fetch current data.
 
 ## Terminal Observer and History
 
@@ -699,18 +696,22 @@ Chat validation uses HTTP 400 (`invalid_chat_parameters`, invalid conversation/c
 | `POST /api/observer/leases/:id/release` | Releases owned lease → `{ok:true,released:true}`; missing owned lease is idempotent. Example: `POST /api/observer/leases/<id>/release`. |
 | `GET /observer/frame` | HTML terminal frame; `X-Observer-Lease` header required. HEAD is supported. Example: `GET /observer/frame` with lease header. |
 | `GET /observer/stream` | WebSocket upgrade with the observer protocol and lease credentials. Query parameters are rejected. Example: connect to `/observer/stream` using the issued lease. |
-| `GET /api/observer/history/sessions` | Optional `session_group` (default Origin); in single mode a non-Origin selection returns 400 `invalid_session_group`. Existing historical keys follow the same C4-catalog membership rules as group detail (unreadable catalog: 502 `group_catalog_unreadable`, unknown/unsafe key: 400 `invalid_session_group`) → `{runtime,current,sessions}`. A group can list sessions recorded under different runtimes. Mixed-runtime lists are ordered by descending update time. Entries, content and search use the requested session’s recorded runtime. Each list request refreshes discovery and file metadata (including appended titles/bytes/timestamps and Codex event ordering), reusing parsed metadata; entries/content/search retain scoped snapshots. Example: `GET /api/observer/history/sessions?session_group=telegram%3Ateam`. |
-| `GET /api/observer/history/entries` | Same group, required `session`, optional `before|after|around`, `limit=1..200`, `internal=0|1` → entries, updates and older/newer cursors. Example: `GET /api/observer/history/entries?session_group=origin&session=<id>`. |
+| `GET /api/observer/history/sessions` | Optional `session_group` (default Origin), `limit` and `cursor` → `{items,nextCursor,runtime,current}`. Rows contain `id`, `kind`, `title` and ISO `updatedAt` or null, ordered by `updatedAt` descending then ID ascending, even across runtimes. `current` is a session ID or null and may refer to a later page. Example: `GET /api/observer/history/sessions?session_group=telegram%3Ateam`. |
+| `GET /api/observer/history/entries` | Same group, required `session`, optional `internal=true\|false` (default false), `direction=before\|after` (default before), `limit` and `cursor`. First page opens at the newest entries or at `anchor=<entry-id>`. Returns `{items,nextCursor,afterCursor,updates}`. Example: `GET /api/observer/history/entries?session_group=origin&session=<id>`. |
 | `GET /api/observer/history/content` | Same group, required `session,entry,field`, optional text `offset` → UTF-16 text chunk `{text,offset,next,total}` or binary bytes. Example: `GET /api/observer/history/content?session_group=origin&session=<id>&entry=o:0&field=text`. |
 | `GET /api/observer/history/search` | Same group, required `session,q` (2–200 chars), optional `limit=1..200`, `before` and `internal=1` to include internal entries → `{matches:Array<{entry,snippet}>,before,hasMore}`. Example: `GET /api/observer/history/search?session_group=origin&session=<id>&q=hello`. |
 
-Antigravity scopes return `{runtime:"agy",current:null,sessions:[]}` because native transcript reading and collection are not integrated. Requests for an unavailable native session retain HTTP 404 `session_not_found`; they never fall back to Claude history.
+Both lists use `limit=1..100` (default 50) and signed cursors bound to the group and, for entries, the session and `internal` filter. Unknown, repeated or invalid parameters return 400 `invalid_parameter` with `error.param`; invalid cursors return 400 `invalid_cursor` and the affected list silently retries without the cursor. An unreadable dependency returns 503 `unavailable`. There is no alternate legacy list format.
 
-All four history routes use the same selected group. In single mode only Origin is valid; selecting any non-Origin group returns HTTP 400 `invalid_session_group` from group-detail validation, including groups that have readable history in multi mode. History supports offline groups through imported runtime-event attribution and transcript files, without acquiring a live terminal lease. A session outside the selected group returns 404. Missing/disabled observer history returns 404; invalid group/target/cursor/size returns 400; state conflicts return 409; inaccessible dependencies return 503. Rejected `/observer/stream` upgrades use the common JSON error envelope (including 401 `unauthorized`, 403 `same_origin_required` and 404 `not_found`); terminal stream failures close the connection after upgrade.
+Entries are ordered oldest to newest within a page by transcript order: numeric source-record position and then the entry ID's numeric block index (an unnumbered block sorts first). The stable entry ID encodes both parts; a cursor is not a row offset. `nextCursor` reads older entries and is null when there are no more. `afterCursor` is always a signed position, including at the newest boundary or in an empty session. Pass it as `cursor` with `direction=after`; fewer than `limit` items means the reader has caught up for now. Forward reads also return `updates` for late replacements of already visible tool or outbound entries. `anchor` cannot be combined with `cursor`. The session list rescans discovery per request and the entry route still reads the scoped transcript; this change does not add an index or cache.
+
+All four history routes validate group scope as in group detail. In single mode only Origin is valid; offline groups are available in multi mode using imported attribution and transcript files without acquiring a terminal lease. Entries, content and search use the session's recorded runtime. Antigravity scopes return an empty list because native transcript reading is not integrated. Unknown or out-of-scope sessions return 404 `not_found` for entries and 404 `session_not_found` for content/search. Content and search retain their original group errors (400 `invalid_session_group`, 502 `group_catalog_unreadable`). Search is a find-in-transcript operation, like Ctrl+F, not a collection list; it retains its own match and continuation format. Content retrieves text chunks or binary data, not a list.
+
+Missing/disabled observer history returns 404. Rejected `/observer/stream` upgrades use the common JSON error envelope (including 401 `unauthorized`, 403 `same_origin_required` and 404 `not_found`); terminal stream failures close the connection after upgrade.
 
 ## Fleet
 
-`GET /api/fleet` is a read-scoped status API. Configuration and probe routes are admin and local only (see Access). A remote request is authorized both on the local proxy and the destination; no old-version fallback exists.
+`GET /api/fleet` is a read-scoped status API. Configuration and probe routes are admin and local only (see Access). A remote request is authorized both on the local proxy and the destination. Fleet checks the remote `GET /api/instance` field `versions.zylos.installed` before opening its page or reading its other APIs. Versions before `1.0.0-beta.16` and peers whose instance response has no readable version show `health_reason: "version_unsupported"`. Direct Fleet page and API requests for these peers return 502 `version_unsupported`.
 
 | Method/path | Contract and minimal example |
 |---|---|
@@ -720,7 +721,7 @@ All four history routes use the same selected group. In single mode only Origin 
 | `POST /api/fleet/agents/test` | JSON `{base_url,read_api_key}` → `{ok:true,reachable:true,scope,version}`. Validation returns 400 `invalid_url` or `missing_read_api_key`. A failed destination probe returns HTTP 502 with `{ok:false,reachable:false,error:{code,message}}`; the code is `auth_failed`, `version_unsupported` or `unreachable`. Example: same destination/key as an add request. |
 | `DELETE /api/fleet/agents/:name` | Removes the configured remote → `{ok:true,self,agents}`. Returns 400 `invalid_name` for an undecodable name, 404 `unknown_agent` when no remote has that name, and 500 `failed_to_save_config` when saving fails. Example: `DELETE /api/fleet/agents/worker`. |
 | `GET /fleet/:name/*` | Proxies allowed read routes/assets using configured credentials. Reads of local-only routes return 403 `local_endpoint_not_proxyable`, and deletion previews return 403 `remote_deletion_forbidden` (see the write row). Example: `GET /fleet/worker/api/settings/chat`. |
-| `PUT`, `PATCH`, `POST`, `DELETE /fleet/:name/*` | Only explicit object-write allowlist entries are proxyable, with admin and browser same origin; group display-name writes are allowed. Three refusals apply: a local-only route (see Access; reads and writes alike) returns 403 `local_endpoint_not_proxyable`; group and draft deletion and deletion previews (`/api/groups/:id`, `/api/groups/:id/deletion-preview`, `/api/chat/drafts/:id`, `/api/chat/drafts/:id/deletion`; any `DELETE`, and any method on the preview/deletion paths) return 403 `remote_deletion_forbidden`; any other write outside the allowlist returns 403 `not_allowed_via_fleet`. Example: `POST /fleet/worker/api/schedules/report/actions/pause`. |
+| `PUT`, `PATCH`, `POST`, `DELETE /fleet/:name/*` | Only explicit object-write allowlist entries are proxyable, with admin and browser same origin. Allowed writes include group display names and marking a Mine conversation read. Three refusals apply: a local-only route (see Access; reads and writes alike) returns 403 `local_endpoint_not_proxyable`; group and draft deletion and deletion previews (`/api/groups/:id`, `/api/groups/:id/deletion-preview`, `/api/conversations/drafts/:id`, `/api/conversations/drafts/:id/deletion`; any `DELETE`, and any method on the preview/deletion paths) return 403 `remote_deletion_forbidden`; any other write outside the allowlist returns 403 `not_allowed_via_fleet`. Example: `POST /fleet/worker/api/schedules/report/actions/pause`. |
 
 Fleet rejects unknown agents with 404, invalid memory path queries with 400 `invalid_memory_path`, and upstream failures with 502/504. Suffix handling depends on the path:
 

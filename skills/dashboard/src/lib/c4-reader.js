@@ -1,6 +1,16 @@
 import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
+import { progressFunctions } from '../../../comm-bridge/scripts/c4-store-progress.js';
 import path from 'node:path';
 import fs from 'node:fs';
+import { originVisible, visible } from './chat/visibility.js';
+
+// Keep this predicate aligned for list ordering and incremental invalidation.
+export const receivedMessage = "c.direction='in' AND c.channel<>'' AND c.channel NOT IN ('void','control')";
+
+export function prepareLatestReceived(db) {
+  return db.prepare(`SELECT c.id, c.timestamp FROM conversations c INDEXED BY idx_conv_group_id
+    WHERE c.session_group=? AND ${receivedMessage} ORDER BY c.id DESC LIMIT 1`);
+}
 
 export class C4Reader {
   constructor(zylosDir) {
@@ -76,6 +86,20 @@ export class C4Reader {
     } catch { return null; }
   }
 
+  /** Latest received message, or the first visible message when there has been no input. */
+  getGroupSortMessage(sessionGroup) {
+    const db = this._open();
+    if (!db) throw new Error('Group message order unavailable');
+    if (this._groupSort?.db !== db) {
+      this._groupSort = { db,
+        received: prepareLatestReceived(db),
+        first: db.prepare(`SELECT c.id, c.timestamp FROM conversations c INDEXED BY idx_conv_group_id
+          WHERE c.session_group=? AND ((c.session_group='origin' AND ${originVisible}) OR (${visible}))
+          ORDER BY c.id LIMIT 1`) };
+    }
+    return this._groupSort.received.get(sessionGroup) ?? this._groupSort.first.get(sessionGroup) ?? null;
+  }
+
   getInboundTimes({ since, groups }) {
     // Omitting groups reads the inbound stream consumed by single-session Origin.
     if (groups?.length === 0) return [];
@@ -111,6 +135,30 @@ export class C4Reader {
         return { count: row.count, firstAt: row.count ? db.prepare('SELECT timestamp FROM conversations WHERE id=?').get(row.firstId).timestamp : null };
       })();
     } catch { throw failure(); }
+  }
+
+  /**
+   * Core's own unsummarized range (`progressFunctions().api`, the calculation behind `c4-db.js unsummarized`) for
+   * each scope, all in one snapshot of this read-only connection; null is the whole machine (Origin in single
+   * mode). `readConfig` is Core's strict config read, which Origin's range needs. One entry per scope:
+   * `{ count, firstAt }`, or null when that scope cannot be read.
+   */
+  getUnsummarizedRanges(scopes, { readConfig }) {
+    const db = this._open();
+    if (!db) throw Object.assign(new Error('Group backlog unavailable'), { code: 'READ_FAILED', statusCode: 502 });
+    const refuse = () => { throw new Error('The backlog connection is read-only'); };
+    const snapshot = operation => db.transaction(() => operation(db))();
+    const { api } = progressFunctions({
+      read: operation => operation(db), snapshot, write: refuse, run: refuse,
+      get: (c, sql, ...args) => c.prepare(sql).get(...args), all: (c, sql, ...args) => c.prepare(sql).all(...args),
+      seconds: () => Math.floor(Date.now() / 1000), dependencies: { readConfig },
+    });
+    return snapshot(() => scopes.map(scope => {
+      try {
+        const { count, firstAt } = scope === null ? api.getGlobalUnsummarizedRange() : api.getUnsummarizedRange(scope);
+        return { count, firstAt };
+      } catch { return null; }
+    }));
   }
 
   getGroupMessages(key, { since = 0, until = Date.now() } = {}) {
@@ -199,6 +247,7 @@ export class C4Reader {
 
   close() {
     this._db?.close();
+    this._groupSort = null;
     this._db = null;
     this._fileIdentity = null;
   }

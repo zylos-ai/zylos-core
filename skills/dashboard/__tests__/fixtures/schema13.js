@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 );
 `;
 
-const SCHEMA_V1 = `
+export const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY,
   applied_at TEXT NOT NULL DEFAULT (datetime('now'))

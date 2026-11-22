@@ -103,6 +103,20 @@ async function makeServer() {
   return makeServerWithDir(zylosDir);
 }
 
+/** Every key the list route returns, following nextCursor page by page. */
+async function listedKeys(origin, token) {
+  const keys = [];
+  let cursor = null;
+  do {
+    const resp = await fetch(`${origin}/api/keys?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(resp.status, 200);
+    const body = await resp.json();
+    keys.push(...body.items);
+    cursor = body.nextCursor;
+  } while (cursor);
+  return keys;
+}
+
 async function closeServer(server) {
   openServers.delete(server);
   server.closeAllConnections();
@@ -164,7 +178,7 @@ for (const auth of [undefined, { enabled: false }, { password: null }, { passwor
     const running = await makeServerWithDir(root);
     server = running.server;
     const { origin } = running;
-    for (const route of ['/api/usage/series', '/api/chat/conversations', '/api/instance', '/api/stream', '/observer/frame']) {
+    for (const route of ['/api/usage/series', '/api/conversations', '/api/instance', '/api/stream', '/observer/frame']) {
       const response = await fetch(origin + route, { headers: { 'X-Forwarded-Prefix': '/dashboard' } });
       assert.equal(response.status, 401, route);
       await response.text();
@@ -214,7 +228,7 @@ test('a stored enabled:false auth setting still requires sign-in for pages and A
   assert.match(await loginPage.text(), /type="password"/);
   for (const [method, route] of [['GET', '/api/settings/timezone'], ['PUT', '/api/settings/timezone'],
     ['POST', '/api/settings/timezone/actions/restart-services'], ['GET', '/api/memory/tree'], ['GET', '/api/memory/file?path=state.md'],
-    ['GET', '/api/chat/conversations'], ['GET', '/api/stream'], ['GET', '/api/keys']]) {
+    ['GET', '/api/conversations'], ['GET', '/api/stream'], ['GET', '/api/keys']]) {
     const response = await fetch(origin + route, { method, headers: { Origin: origin } });
     assert.equal(response.status, 401, `${method} ${route}`);
     await response.text();
@@ -933,6 +947,11 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
       }));
       return;
     }
+    if (req.url === '/api/instance') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ versions: { zylos: { installed: '1.0.0-beta.16' } } }));
+      return;
+    }
     if (req.url === '/api/groups/origin/actions/interrupt' || req.url === '/api/groups/origin/actions/chop-chop') {
       actionHits += 1;
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -1074,6 +1093,67 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
   }
 });
 
+test('the key list pages active keys before revoked ones, newest first, with search, counts and the standard errors', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  writeConfig(zylosDir, 'secret', { auth: { password: 'secret' } });
+  const { origin, server } = await makeServerWithDir(zylosDir);
+  try {
+    const store = new Store(path.join(zylosDir, 'components', 'dashboard', 'dashboard.db'));
+    const adminKey = generateApiKey();
+    store.insertApiKey({ name: 'admin-key', keyHash: hashApiKey(adminKey), scope: 'admin' });
+    // 69 more keys, most created in the same second (the ID breaks the tie); every third one is revoked.
+    for (let index = 1; index <= 69; index++) store.insertApiKey({ name: `key-${String(index).padStart(2, '0')}`, keyHash: hashApiKey(generateApiKey()), scope: 'read' });
+    for (let index = 3; index <= 69; index += 3) store.revokeApiKey(`key-${String(index).padStart(2, '0')}`);
+    store.db.prepare("UPDATE api_keys SET created_at = '2026-01-01 00:00:00' WHERE name IN ('key-10', 'key-11')").run();
+    const expected = store.db.prepare('SELECT name FROM api_keys ORDER BY (revoked_at IS NOT NULL), created_at DESC, id DESC').all().map(row => row.name);
+    store.close();
+    const { token } = await (await fetch(`${origin}/api/auth/token`, { method: 'POST', headers: { Authorization: `Bearer ${adminKey}` } })).json();
+    const get = async query => { const resp = await fetch(`${origin}/api/keys${query}`, { headers: { Authorization: `Bearer ${token}` } }); return { status: resp.status, body: await resp.json() }; };
+
+    const first = await get('?limit=8&include=total');
+    assert.equal(first.status, 200);
+    assert.equal(first.body.total, 70);
+    assert.deepEqual(first.body.counts, { active: 47, revoked: 23 });
+    const pages = [first.body.items.map(key => key.name)], cursors = [null];
+    let cursor = first.body.nextCursor;
+    while (cursor) {
+      cursors.push(cursor);
+      const page = await get(`?limit=8&cursor=${encodeURIComponent(cursor)}`);
+      assert.equal(page.status, 200); assert.equal('total' in page.body, false, 'the total only when asked for');
+      pages.push(page.body.items.map(key => key.name));
+      cursor = page.body.nextCursor;
+    }
+    assert.equal(pages.length, 9);
+    assert.deepEqual(pages.flat(), expected, 'all 70 keys once each: active first, then created_at DESC, id DESC');
+    assert.ok(pages.flat().indexOf('key-03') > pages.flat().indexOf('key-11'), 'a revoked key comes after every active one');
+    const back = await get(`?limit=8&cursor=${encodeURIComponent(cursors[4])}`);
+    assert.deepEqual(back.body.items.map(key => key.name), pages[4], 'a remembered cursor shows the same page again');
+    assert.equal(JSON.stringify(pages).includes('key_hash'), false);
+    const tens = [];
+    let next = null;
+    do {
+      const page = await get(`?limit=10${next ? `&cursor=${encodeURIComponent(next)}` : ''}`);
+      tens.push(page.body.items.length); next = page.body.nextCursor;
+    } while (next && tens.length <= 8);
+    assert.deepEqual(tens, [10, 10, 10, 10, 10, 10, 10], 'a last page that ends exactly at the limit has no next cursor');
+
+    const search = await get('?q=KEY-1&include=total');
+    assert.deepEqual(search.body.items.map(key => key.name).sort(), ['key-10', 'key-11', 'key-12', 'key-13', 'key-14', 'key-15', 'key-16', 'key-17', 'key-18', 'key-19']);
+    assert.equal(search.body.total, 10); assert.deepEqual(search.body.counts, { active: 47, revoked: 23 }, 'the counts cover every key');
+
+    const refused = await get('?limit=0');
+    assert.equal(refused.status, 400);
+    assert.equal(refused.body.ok, false); assert.equal(refused.body.error.code, 'invalid_parameter'); assert.equal(refused.body.error.param, 'limit');
+    const forged = await get('?cursor=forged');
+    assert.equal(forged.status, 400); assert.equal(forged.body.error.code, 'invalid_cursor');
+    const otherSearch = await get(`?q=key&cursor=${encodeURIComponent(cursors[1])}`);
+    assert.equal(otherSearch.body.error.code, 'invalid_cursor', 'a cursor is valid only for its own search');
+  } finally {
+    await closeServer(server);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
 test('API key management is admin-gated, show-once, and revoke invalidates active sessions', { timeout: TEST_TIMEOUT_MS }, async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
   writeConfig(zylosDir, 'secret', { auth: { password: 'secret' } });
@@ -1119,7 +1199,7 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
     assert.equal(createBody.key.scope, 'read');
     assert.equal(createBody.key.status, 'active');
     assert.match(createBody.plaintext_key, /^zylos_ak_/);
-    assert.equal(JSON.stringify(createBody.keys).includes(createBody.plaintext_key), false);
+    assert.equal('keys' in createBody, false, 'a write answers without the key list');
     assert.equal(JSON.stringify(createBody).includes('key_hash'), false);
 
     const createdTokenResp = await fetch(`${origin}/api/auth/token`, {
@@ -1170,7 +1250,7 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
     });
     assert.equal(list.status, 200);
     const listBody = await list.json();
-    assert.equal(listBody.keys.some(k => k.name === 'producer-read' && k.status === 'active'), true);
+    assert.equal(listBody.items.some(k => k.name === 'producer-read' && k.status === 'active'), true);
     assert.equal(JSON.stringify(listBody).includes(createBody.plaintext_key), false);
     assert.equal(JSON.stringify(listBody).includes(createAdminBody.plaintext_key), false);
     assert.equal(JSON.stringify(listBody).includes('key_hash'), false);
@@ -1180,8 +1260,8 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
       headers: { Authorization: `Bearer ${adminToken}` }
     });
     assert.equal(revoke.status, 200);
-    const revokeBody = await revoke.json();
-    assert.equal(revokeBody.keys.some(k => k.name === 'producer-read' && k.status === 'revoked'), true);
+    assert.deepEqual(await revoke.json(), { ok: true });
+    assert.equal((await listedKeys(origin, adminToken)).some(k => k.name === 'producer-read' && k.status === 'revoked'), true);
 
     const revokedExchange = await fetch(`${origin}/api/auth/token`, {
       method: 'POST',
@@ -1410,8 +1490,9 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
     assert.equal(revokeFirst.status, 200);
 
     const recreated = await createKey('producer-read');
-    assert.equal(recreated.keys.filter(key => key.name === 'producer-read' && key.status === 'revoked').length, 1);
-    assert.equal(recreated.keys.filter(key => key.name === 'producer-read' && key.status === 'active').length, 1);
+    const afterRecreate = await listedKeys(origin, adminToken);
+    assert.equal(afterRecreate.filter(key => key.name === 'producer-read' && key.status === 'revoked').length, 1);
+    assert.equal(afterRecreate.filter(key => key.name === 'producer-read' && key.status === 'active').length, 1);
     const activeTokenResp = await fetch(`${origin}/api/auth/token`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${recreated.plaintext_key}` }
@@ -1486,7 +1567,7 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
       headers: { Authorization: `Bearer ${adminToken}` }
     });
     assert.equal(revokeNamedRotate.status, 200);
-    assert.equal((await revokeNamedRotate.json()).keys.some(key => key.name === 'rotate' && key.status === 'revoked'), true);
+    assert.equal((await listedKeys(origin, adminToken)).some(key => key.name === 'rotate' && key.status === 'revoked'), true);
     const recreatedNamedRotate = await createKey('rotate');
     const rotateNamedRotate = await fetch(`${origin}/api/keys/rotate/rotate`, {
       method: 'POST',
@@ -1515,9 +1596,10 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
     });
     assert.equal(deleteRevokedWhileActive.status, 200);
     const deleteRevokedWhileActiveBody = await deleteRevokedWhileActive.json();
-    assert.equal(deleteRevokedWhileActiveBody.deleted, 1);
-    assert.equal(deleteRevokedWhileActiveBody.keys.some(key => key.name === 'old-delete' && key.status === 'active'), true);
-    assert.equal(deleteRevokedWhileActiveBody.keys.some(key => key.name === 'old-delete' && key.status === 'revoked'), false);
+    assert.deepEqual(deleteRevokedWhileActiveBody, { ok: true, deleted: 1 });
+    const afterHardDelete = await listedKeys(origin, adminToken);
+    assert.equal(afterHardDelete.some(key => key.name === 'old-delete' && key.status === 'active'), true);
+    assert.equal(afterHardDelete.some(key => key.name === 'old-delete' && key.status === 'revoked'), false);
     await fetch(`${origin}/api/keys/old-delete`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${adminToken}` }
@@ -1548,7 +1630,7 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
       headers: { Authorization: `Bearer ${adminToken}` }
     });
     assert.equal(deleteNamedPurge.status, 200);
-    assert.equal((await deleteNamedPurge.json()).keys.some(key => key.name === 'purge-revoked' && key.status === 'revoked'), true);
+    assert.equal((await listedKeys(origin, adminToken)).some(key => key.name === 'purge-revoked' && key.status === 'revoked'), true);
 
     const purgeReadScope = await fetch(`${origin}/api/keys/purge-revoked`, {
       method: 'POST',
@@ -1563,8 +1645,10 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
     assert.equal(purge.status, 200);
     const purgeBody = await purge.json();
     assert.ok(purgeBody.purged >= 2);
-    assert.equal(purgeBody.keys.some(key => key.status === 'revoked'), false);
-    assert.equal(purgeBody.keys.some(key => key.name === 'active-delete' && key.status === 'active'), true);
+    assert.equal('keys' in purgeBody, false);
+    const afterPurge = await listedKeys(origin, adminToken);
+    assert.equal(afterPurge.some(key => key.status === 'revoked'), false);
+    assert.equal(afterPurge.some(key => key.name === 'active-delete' && key.status === 'active'), true);
   } finally {
     await closeServer(server);
     fs.rmSync(zylosDir, { recursive: true, force: true });
@@ -1622,7 +1706,7 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
     if (isObjectApi(req.url)) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(await objectResponse(req.url, { working: 1,
-        instance: { agent: { name: 'masked zylos_ak_...abcd in identity text' }, versions: { zylos: { installed: '0.3.0', latest: '0.4.0', update: '0.4.0' } } },
+        instance: { agent: { name: 'masked zylos_ak_...abcd in identity text' }, versions: { zylos: { installed: '1.0.0-beta.16', latest: '1.0.0', update: '1.0.0' } } },
         rows: [{ id: 'origin', displayName: 'Origin', runtime: 'claude', model: null, state: { kind: 'working' }, flags: { blocked: { reason: 'auth_failed' } } }],
       }).text());
       return;

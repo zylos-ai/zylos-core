@@ -20,7 +20,7 @@ export async function runOverviewReadState(sandbox, scenario) {
     }
     if (url.pathname.startsWith('/api/')) {
       const now = Date.now(), snapshot = workbenchSnapshot(now);
-      if (url.pathname === '/api/groups/running' && failGroups) return sendJson(res, 500, { ok: false, error: { code: 'FIXTURE_READ_FAILED', message: 'Fixture read failed' } });
+      if (url.pathname === '/api/groups' && failGroups) return sendJson(res, 500, { ok: false, error: { code: 'FIXTURE_READ_FAILED', message: 'Fixture read failed' } });
       if (scenario.kind === 'empty') snapshot.rows = [];
       // Independent channel health remains observable when the group read fails.
       else snapshot.instance.services.channels = [{ channel: 'fixture', service: 'fixture-service', status: 'online', restarts10m: 0, lastSendFailed: true, consecutiveFailures: 2 }];

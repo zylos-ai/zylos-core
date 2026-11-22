@@ -3,67 +3,24 @@ import { countLabel } from '../count-label.js';
 import { effortOptionState, modelOptionState } from '../runtime-ui.js';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js';
 import { annotateStatus } from './board.js';
-import { readSettingsGroupSnapshot, settingsCard } from './settings.js';
+import { knownGroupTotal, modelFollowerFilter, readSettingsGroups, runtimeFollowerFilter, runtimeOverrideFilter, settingsCard } from './settings.js';
+import { mountPagedList } from './paged-list.js';
 
-const running = row => ['running', 'starting'].includes(row.presence);
-export function defaultGroups(snapshot, page) {
-  const rows = snapshot?.rows ?? [];
-  const overrides = snapshot?.overrides;
-  const keys = new Set(overrides?.runtime?.map(row => row.sessionGroup) ?? []);
-  const followers = overrides == null ? null : rows.filter(row => row.presence === 'running' && !keys.has(row.sessionGroup));
-  const flat = overrides == null ? [] : rows.filter(row => row.sessionGroup != null && keys.has(row.sessionGroup));
-  const total = Number.isInteger(page?.runtimeTotal) ? page.runtimeTotal : null;
-  return { followers, flat, total, baseline: snapshot?.baselineRuntime ?? null,
-    older: overrides != null && total != null && snapshot?.hasOlder != null && total > flat.length };
-}
-export function modelFollowers(snapshot, runtime) {
-  if (snapshot?.overrides == null) return null;
-  return (snapshot.rows ?? []).filter(row => running(row) && (row.effective?.runtime ?? row.target?.runtime) === runtime &&
-    !row.modelOverridden && !(row.desired?.mode === 'override' && row.desired.runtime === runtime) &&
-    !snapshot.overrides.model?.some(item => item.sessionGroup === row.sessionGroup && item.runtime === runtime));
-}
 export function runtimeNotFound(snapshot, runtime) {
   return runtimeInstallPolicy(runtime) === 'whenUsed' && snapshot?.instance?.versions?.[runtime]?.installed === null;
 }
 
-export function runtimeHealth(snapshot, runtime) {
-  const health = snapshot?.instance?.runtimeHealth?.[runtime]?.health;
+export function runtimeHealth(instance, runtime) {
+  const health = instance?.runtimeHealth?.[runtime]?.health;
   return health === 'auth_failed' ? 'unavailable' : health == null ? 'unknown' : 'available';
 }
-export function runtimeConfirmation(snapshot, t = key => key) {
-  const rows = defaultGroups(snapshot).followers;
-  return interruptFollowers(rows, snapshot, t);
-}
-function interruptFollowers(rows, snapshot, t, label = 'wb.settings.interruptFollowers') {
-  if (rows == null || snapshot?.listKnown === false) return t('wb.settings.cannotList');
-  return [countLabel(t, label, rows.length), ...rows.slice(0, 5).map(row =>
-    row.name?.displayName ?? fallbackName(row, t)), ...(rows.length > 5 ? [t('wb.settings.moreGroups', { count: rows.length })] : [])].join('\n');
-}
-export function createOverrideSearch({ read, onChange, setTimer = setTimeout, clearTimer = clearTimeout }) {
-  let sequence = 0, timer, query = '', rows = [], nextAfter = null, destroyed = false;
-  async function request(append) {
-    const captured = ++sequence, currentQuery = query;
-    const suffix = new URLSearchParams({ q: currentQuery });
-    if (append && nextAfter != null) suffix.set('after', nextAfter);
-    try {
-      const result = await read('/api/groups/runtime-overrides?' + suffix);
-      if (destroyed || captured !== sequence) return;
-      rows = append ? [...rows, ...(result.runtime ?? [])] : result.runtime ?? [];
-      nextAfter = result.nextAfter ?? null;
-      onChange({ query, rows, nextAfter, error: null });
-    } catch (error) {
-      if (!destroyed && captured === sequence) onChange({ query, rows, nextAfter, error });
-    }
-  }
-  return {
-    input(value) {
-      clearTimer(timer); sequence++; query = String(value).trim(); rows = []; nextAfter = null;
-      if (!query) { onChange(null); return; }
-      timer = setTimer(() => request(false), 300);
-    },
-    more() { if (nextAfter != null && query) return request(true); },
-    destroy() { destroyed = true; sequence++; clearTimer(timer); },
-  };
+const groupName = (row, t) => row.displayName ?? fallbackName({ ...row, sessionGroup: row.id }, t);
+
+function interruptFollowers(page, t, label = 'wb.settings.interruptFollowers') {
+  const count = knownGroupTotal(page);
+  if (count == null) return t('wb.settings.cannotList');
+  return [countLabel(t, label, count), ...page.items.map(row => groupName(row, t)),
+    ...(count > 5 ? [t('wb.settings.moreGroups', { count })] : [])].join('\n');
 }
 
 const runtimes = ['claude', 'codex'];
@@ -97,41 +54,57 @@ export function modelChangeLabel(change, t = key => key, metadata = {}) {
   return t(change.key === 'model' ? 'wb.settings.changeModel' : 'wb.settings.changeEffort',
     { runtime: runtimeName(change.runtime), value: change.key === 'effort' ? effortText(change.value, t) : model() });
 }
-function modelRestartFollowers(snapshot, runtime) {
-  if (snapshot?.listKnown !== true || snapshot.rows?.some(row => row.presence === 'running' &&
-    (row.effective?.runtime ?? row.target?.runtime) === runtime && row.modelOverridden === null)) return null;
-  return modelFollowers(snapshot, runtime)?.filter(row => row.presence === 'running') ?? null;
-}
 /** The single confirmation for drafted defaults and their affected running sessions. */
-export function modelSaveConfirmation(changes, t = key => key, metadata = {}, snapshot) {
+export function modelSaveConfirmation(changes, t = key => key, metadata = {}, pages = {}) {
   const notes = changes.some(change => change.action === 'switch-effort') ? [t('wb.settings.effortNextStart')] : [];
   return [t('wb.settings.confirmModels'), ...notes, ...changes.flatMap(change => {
     const label = modelChangeLabel(change, t, metadata);
     if (change.action !== 'switch-model') return [label];
-    const rows = modelRestartFollowers(snapshot, change.runtime);
-    return rows?.length === 0 ? [label] : [label, interruptFollowers(rows, snapshot, t, 'wb.settings.restartModelFollowers')];
+    const page = pages[change.runtime];
+    return knownGroupTotal(page) === 0 ? [label] : [label, interruptFollowers(page, t, 'wb.settings.restartModelFollowers')];
   })].join('\n');
 }
-function restartFailures(data, rows, t) {
+async function restartFailures(data, getName, t) {
   const failed = (data?.groups ?? []).filter(group => group.restart && group.restart.status !== 'accepted');
-  const messages = failed.map(group => {
-    const row = rows?.find(row => (row.sessionGroup ?? 'origin') === group.sessionGroup);
-    return t(group.restart.status === 'unknown' ? 'wb.settings.savedRestartUnknown' : 'wb.settings.savedRestartFailed',
-      { group: row?.name?.displayName ?? row?.displayName ?? group.sessionGroup, reason: group.restart.reason });
-  });
+  const messages = await Promise.all(failed.map(async group =>
+    t(group.restart.status === 'unknown' ? 'wb.settings.savedRestartUnknown' : 'wb.settings.savedRestartFailed',
+      { group: await getName(group.sessionGroup), reason: group.restart.reason })));
   if (data?.groupsComplete === false) messages.push(t('wb.settings.restartListIncomplete'));
   return messages;
 }
 /** The engine switch confirmation: what happens, then which groups restart with it. */
-export function runtimeSaveConfirmation(runtime, snapshot, t = key => key) {
-  return [t('confirm.switch_runtime', { value: runtimeName(runtime) }), runtimeConfirmation(snapshot, t)].join('\n');
+export function runtimeSaveConfirmation(runtime, page, t = key => key) {
+  return [t('confirm.switch_runtime', { value: runtimeName(runtime) }), interruptFollowers(page, t)].join('\n');
 }
 
-export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoot, document = root.ownerDocument,
-  t = key => key, read, readSnapshot = () => readSettingsGroupSnapshot(read), execute, confirm = async () => false, writable = () => true, onGroup = () => {}, version = () => {} } = {}) {
+export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}, sessionRoot, document = root.ownerDocument,
+  t = key => key, read, execute, confirm = async () => false, writable = () => true, onGroup = () => {}, version = () => {} } = {}) {
   root.replaceChildren();
-  const groups = defaultGroups(snapshot, page);
-  let destroyed = false;
+  let baselineRuntime = instance?.default_runtime ?? null, destroyed = false;
+  const loadedNames = new Map();
+  function remember(row) {
+    if (row.displayName != null) loadedNames.set(row.id, row.displayName);
+  }
+  async function confirmationPage(filter) {
+    try {
+      const page = await readSettingsGroups(read, filter, { limit: 5 });
+      page.items.forEach(remember);
+      return page;
+    } catch { return null; }
+  }
+  async function resultName(id) {
+    if (loadedNames.has(id)) return loadedNames.get(id);
+    if (!destroyed) {
+      try {
+        const row = await read('/api/groups/' + encodeURIComponent(id) + (id === 'origin' ? '?include=' : ''));
+        if (row.displayName != null) {
+          loadedNames.set(id, row.displayName);
+          return row.displayName;
+        }
+      } catch { /* The group key is still available. */ }
+    }
+    return id;
+  }
   const technical = () => document.documentElement?.dataset.detail === 'technical';
   const controls = [];
   const lock = (node, fn) => { controls.push({ node, lock: fn }); node.disabled = fn(); };
@@ -141,44 +114,66 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   }
   function groupRow(row, meta, showStatus) {
     const button = element(document, 'button', undefined, 'wb-gl-row'); button.type = 'button';
-    button.append(element(document, 'span', row.name?.displayName ?? fallbackName(row, t)));
+    button.append(element(document, 'span', groupName(row, t)));
     if (meta) {
       const label = element(document, 'small', meta);
       if (showStatus) annotateStatus(document, label, row, { t });
       button.append(label);
     }
-    button.addEventListener('click', () => onGroup(row.sessionGroup));
+    button.addEventListener('click', () => onGroup(row.id));
     return button;
   }
   const failed = () => element(document, 'p', t('wb.unknown') + (technical() ? ' · override_list_failed' : ''), 'wb-note');
-  // Counts stay visible; names fold into a searchable list so large instances are not spelled out.
-  function groupList(rows, meta, { searchable = rows?.length > 8 } = {}) {
+  function groupList(total, filter, meta) {
     const details = element(document, 'details', undefined, 'wb-glist');
-    const summary = element(document, 'summary'); summary.append(icon(document, 'chev', 'xs'), element(document, 'span', countLabel(t, 'wb.settings.showGroups', rows.length)));
-    const box = element(document, 'div', undefined, 'wb-gl-box'), list = element(document, 'div', undefined, 'wb-gl-rows');
-    const redraw = query => {
-      const term = query.toLocaleLowerCase();
-      const shown = rows.filter(row => [row.sessionGroup, row.name?.displayName].some(value => String(value ?? '').toLocaleLowerCase().includes(term)));
-      list.replaceChildren(...(shown.length ? shown.map(row => groupRow(row, meta?.(row), meta === stateText)) : [element(document, 'p', t('wb.noMatch'), 'wb-gl-empty')]));
-    };
-    if (searchable) {
-      const input = element(document, 'input'); input.type = 'search'; input.placeholder = t('wb.settings.searchGroups');
-      input.addEventListener('input', () => redraw(input.value)); box.append(input);
-    }
-    redraw(''); box.append(list); details.append(summary, box); return details;
+    const summary = element(document, 'summary'); summary.append(icon(document, 'chev', 'xs'), element(document, 'span', countLabel(t, 'wb.settings.showGroups', total)));
+    const list = element(document, 'div', undefined, 'wb-gl-box wb-gl-rows');
+    const failure = element(document, 'p', t('wb.readFailed'), 'wb-note wb-plist-empty');
+    failure.hidden = true;
+    const isOpen = () => !destroyed && details.open;
+    const pages = mountPagedList({
+      document, t, list, placeholder: t('wb.settings.searchGroups'),
+      server: {
+        async readPage({ limit, cursor, q, total }) {
+          if (!isOpen()) throw Error('list_closed');
+          const page = await readSettingsGroups(read, filter, { limit, cursor, q, total });
+          if (page.listKnown !== true) throw Error('list_unknown');
+          return page;
+        },
+        render(items) {
+          if (!isOpen()) return;
+          failure.hidden = true;
+          list.replaceChildren(...items.map(row => {
+            remember(row);
+            return groupRow(row, meta(row), meta === stateText);
+          }));
+        },
+        onError() { if (isOpen()) failure.hidden = false; },
+      },
+    });
+    pages.search.querySelector('input').maxLength = 64;
+    details.addEventListener('toggle', () => {
+      if (!isOpen()) return;
+      failure.hidden = true;
+      return pages.refresh({ first: true });
+    });
+    const content = element(document, 'div', undefined, 'wb-gl-content');
+    content.append(pages.search, list, pages.empty, failure, pages.pager);
+    details.append(summary, content);
+    return details;
   }
   const stateText = row => t('wb.state.' + (row.state?.kind ?? 'unknown'));
 
   // ─── Default engine ───
   const engine = settingsCard(document, { icon: 'bot', title: t('wb.settings.currentRuntime'), sub: technical() ? 'zylos runtime' : '' });
   engine.card.id = 'settings-current-runtime';
-  let draftRuntime = groups.baseline, savingRuntime = false;
+  let draftRuntime = baselineRuntime, savingRuntime = false;
   const line = element(document, 'div', undefined, 'wb-set-inline');
   // Each engine's choice carries its own sign-in state, so the state stays under the engine it describes on any width.
   const seg = element(document, 'div', undefined, 'wb-seg2 wb-seg-engine'); seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', t('wb.settings.currentRuntime'));
   const segButtons = {}, segNames = {};
   for (const runtime of runtimes) {
-    const health = runtimeHealth(snapshot, runtime);
+    const health = runtimeHealth(instance, runtime);
     const button = element(document, 'button', undefined); button.type = 'button'; button.id = 'settings-use-' + runtime;
     const login = element(document, 'span', undefined, 'wb-login wb-login-' + health);
     login.append(element(document, 'span', undefined, 'wb-hdot'), element(document, 'span', t('wb.settings.health.' + health)));
@@ -193,19 +188,18 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   line.append(seg);
   const saveRuntime = element(document, 'button', t('wb.settings.saveRuntime'), 'wb-btn wb-btn-primary'); saveRuntime.type = 'button'; saveRuntime.id = 'settings-save-runtime';
   const undoRuntime = element(document, 'button', t('wb.settings.undo'), 'wb-btn'); undoRuntime.type = 'button'; undoRuntime.id = 'settings-undo-runtime';
-  undoRuntime.addEventListener('click', () => { draftRuntime = groups.baseline; redrawEngine(); });
+  undoRuntime.addEventListener('click', () => { draftRuntime = baselineRuntime; redrawEngine(); });
   lock(undoRuntime, () => savingRuntime || !writable());
-  lock(saveRuntime, () => savingRuntime || !writable() || draftRuntime == null || draftRuntime === groups.baseline || runtimeHealth(snapshot, draftRuntime) === 'unavailable');
+  lock(saveRuntime, () => savingRuntime || !writable() || draftRuntime == null || draftRuntime === baselineRuntime || runtimeHealth(instance, draftRuntime) === 'unavailable');
   saveRuntime.addEventListener('click', async () => {
     if (saveRuntime.disabled) return;
     const runtime = draftRuntime;
     savingRuntime = true;
     refreshLocks();
     try {
-      const current = await readSnapshot().catch(() => null);
+      const current = await confirmationPage(runtimeFollowerFilter);
       if (destroyed || !writable()) return;
-      const { followers } = defaultGroups(current);
-      const needsConfirmation = current?.listKnown !== true || followers?.length !== 0;
+      const needsConfirmation = knownGroupTotal(current) !== 0;
       if (needsConfirmation &&
           !(await confirm(runtimeSaveConfirmation(runtime, current, t), { title: t('wb.settings.confirm.runtime'), danger: true }))) return;
       if (destroyed || !writable()) return;
@@ -214,11 +208,11 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
         engineResult.textContent = t('wb.settings.saveFailed');
         return;
       }
-      groups.baseline = draftRuntime = result?.data?.baseline ?? runtime;
+      baselineRuntime = draftRuntime = result?.data?.baseline ?? runtime;
       const saved = t(result?.messageKey ?? 'result.runtime_saved', {
-        ...result?.messageParams, value: runtimeName(groups.baseline),
+        ...result?.messageParams, value: runtimeName(baselineRuntime),
       });
-      engineResult.textContent = [saved, ...restartFailures(result?.data, current?.rows, t)].join('\n');
+      engineResult.textContent = [saved, ...await restartFailures(result?.data, resultName, t)].join('\n');
       redrawEngine();
     } catch (error) { engineResult.textContent = error.message; }
     finally { savingRuntime = false; refreshLocks(); }
@@ -227,44 +221,22 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   const engineResult = element(document, 'p', '', 'wb-note'); engineResult.id = 'settings-engine-result'; engineResult.setAttribute('role', 'status');
   const split = element(document, 'div', undefined, 'wb-set-split');
   // A count of zero tells nothing, so its line is left out.
-  const followerCol = element(document, 'div');
-  if (groups.followers == null) followerCol.append(element(document, 'div', t('wb.settings.followers', { count: t('wb.unknown') }), 'wb-gsum'), failed());
-  else if (groups.followers.length) followerCol.append(element(document, 'div', countLabel(t, 'wb.settings.followers', groups.followers.length), 'wb-gsum'),
-    groupList(groups.followers, stateText, { searchable: true }));
-  followerCol.hidden = groups.followers != null && !groups.followers.length;
-  const overrideCol = element(document, 'div');
-  overrideCol.hidden = groups.total === 0;
-  overrideCol.append(element(document, 'div', countLabel(t, 'wb.settings.overrides', groups.total ?? t('wb.unknown')), 'wb-gsum'));
-  if (groups.total == null) overrideCol.append(failed());
-  const overrides = element(document, 'div', undefined, 'wb-gl-box');
-  const flat = element(document, 'div', undefined, 'wb-gl-rows'); flat.append(...groups.flat.map(row => groupRow(row, row.target?.runtime ? runtimeName(row.target.runtime) : null)));
-  const searchRoot = element(document, 'div', undefined, 'wb-gl-rows');
-  const search = createOverrideSearch({ read, onChange(value) {
-    searchRoot.replaceChildren(); flat.hidden = value != null && !value.error;
-    if (value == null) return;
-    if (value.error) { searchRoot.append(element(document, 'p', t('wb.readFailed') + (technical() ? ' · override_list_failed' : ''), 'wb-gl-empty')); return; }
-    if (!value.rows.length) searchRoot.append(element(document, 'p', t('wb.noMatch'), 'wb-gl-empty'));
-    else searchRoot.append(...value.rows.map(row => groupRow(row, row.runtime ? runtimeName(row.runtime) : null)));
-    if (value.nextAfter != null) {
-      const more = element(document, 'button', t('wb.detail.loadMore'), 'wb-link-btn wb-gl-more'); more.type = 'button';
-      more.addEventListener('click', () => search.more()); searchRoot.append(more);
-    }
-  } });
-  if (groups.total !== 0) {
-    const input = element(document, 'input'); input.id = 'settings-overrides-search'; input.type = 'search'; input.placeholder = t('wb.settings.searchGroups');
-    input.addEventListener('input', () => search.input(input.value)); overrides.append(input);
-    overrides.append(flat, searchRoot);
-    if (groups.older) {
-      const older = element(document, 'button', t('wb.settings.older'), 'wb-link-btn wb-gl-more'); older.type = 'button';
-      older.addEventListener('click', () => input.focus()); overrides.append(older);
-    }
-    overrideCol.append(overrides);
+  function groupColumn(key, total, filter, meta) {
+    const col = element(document, 'div');
+    col.hidden = total === 0;
+    col.append(element(document, 'div', countLabel(t, key, total ?? t('wb.unknown')), 'wb-gsum'));
+    if (total == null) col.append(failed());
+    else if (total > 0) col.append(groupList(total, filter, meta));
+    return col;
   }
-  split.append(followerCol, overrideCol);
+  split.append(
+    groupColumn('wb.settings.followers', groupCounts.followers, runtimeFollowerFilter, stateText),
+    groupColumn('wb.settings.overrides', groupCounts.overrides, runtimeOverrideFilter, row => runtimeName(row.runtime)),
+  );
   const engineNote = element(document, 'p', t('wb.settings.runtimeNote'), 'wb-note');
   // The chosen engine's CLI version and its upgrade button: choosing the other engine shows and upgrades that one.
   const engineVersion = element(document, 'div', undefined, 'wb-engine-version'); engineVersion.id = 'settings-engine-version';
-  const selectedRuntime = () => draftRuntime ?? groups.baseline ?? DEFAULT_RUNTIME;
+  const selectedRuntime = () => draftRuntime ?? baselineRuntime ?? DEFAULT_RUNTIME;
   const drawVersion = () => version(engineVersion, selectedRuntime());
   engine.card.append(line, engineVersion, engineResult, split, engineNote); root.append(engine.card);
   function redrawEngine() {
@@ -272,12 +244,12 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
       segButtons[runtime].setAttribute('aria-pressed', String(draftRuntime === runtime));
       const name = segNames[runtime];
       name.textContent = runtimeName(runtime);
-      if (runtime === groups.baseline) {
+      if (runtime === baselineRuntime) {
         name.textContent += ' ';
         name.append(element(document, 'span', t('wb.settings.defaultEngineBadge'), 'wb-tag'));
       }
     }
-    const changed = draftRuntime != null && draftRuntime !== groups.baseline;
+    const changed = draftRuntime != null && draftRuntime !== baselineRuntime;
     saveRuntime.hidden = undoRuntime.hidden = !changed;
     drawVersion();
     refreshLocks();
@@ -357,10 +329,10 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
     const thresholdBox = element(document, 'span', undefined, 'wb-set-inline'); thresholdBox.append(threshold, element(document, 'span', '%'));
     effortField.append(element(document, 'span', t('actions.effort'), 'wb-fld-l'), wrapSelect(document, effort));
     fields.append(field(t('actions.model'), wrapSelect(document, model), custom), effortField, field(t('actions.threshold'), thresholdBox), dirty);
-    const users = modelFollowers(snapshot, runtime);
-    const count = element(document, 'small', users == null ? t('wb.unknown') : users.length ? countLabel(t, 'wb.settings.modelFollowers', users.length) : t('wb.settings.noFollowers'), 'wb-pref-note');
+    const users = groupCounts.models?.[runtime];
+    const count = element(document, 'small', users == null ? t('wb.unknown') : users ? countLabel(t, 'wb.settings.modelFollowers', users) : t('wb.settings.noFollowers'), 'wb-pref-note');
     cell.append(fields, count);
-    if (users?.length) cell.append(groupList(users, stateText));
+    if (users > 0) cell.append(groupList(users, modelFollowerFilter(runtime), stateText));
     rows[runtime] = { model, custom, effort, threshold, thresholdEdits, dirty, meta, renderEffort, renderThreshold,
       thresholdInvalid: () => modelValue() && (modelThresholdValue(rows[runtime]?.meta ?? meta, modelValue()) == null
         ? Boolean((rows[runtime]?.meta ?? meta).model_thresholds)
@@ -410,9 +382,10 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
     };
     try {
       const modelChanges = pending.filter(change => change.action === 'switch-model');
-      const current = modelChanges.length ? await readSnapshot().catch(() => null) : null;
+      const current = Object.fromEntries(await Promise.all(modelChanges.map(async change =>
+        [change.runtime, await confirmationPage(modelFollowerFilter(change.runtime))])));
       if (destroyed || !writable()) return;
-      const affected = modelChanges.filter(change => modelRestartFollowers(current, change.runtime)?.length !== 0);
+      const affected = modelChanges.filter(change => knownGroupTotal(current[change.runtime]) !== 0);
       const danger = affected.length > 0;
       const needsConfirmation = danger || modelChanges.length !== pending.length;
       if (needsConfirmation && !(await confirm(modelSaveConfirmation(pending, t, metadata, current), { title: t('wb.settings.confirm.models'), danger }))) return;
@@ -425,7 +398,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
         const accepted = await execute(change.action, body, { confirmed: true });
         if (accepted === false) break;
         applied.push(change);
-        if (change.action === 'switch-model') failures.push(...restartFailures(accepted?.data, current?.rows, t));
+        if (change.action === 'switch-model') failures.push(...await restartFailures(accepted?.data, resultName, t));
         if (rows[change.runtime]) {
           const row = rows[change.runtime];
           row.meta = change.action === 'set-threshold'
@@ -443,7 +416,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   });
   function refreshLocks() { for (const { node, lock: fn } of controls) node.disabled = fn(); }
   redrawEngine(); redrawModels();
-  return { destroy: () => { destroyed = true; search.destroy(); }, refreshLocks, selectedRuntime, refreshVersion: drawVersion };
+  return { destroy: () => { destroyed = true; }, refreshLocks, selectedRuntime, refreshVersion: drawVersion };
 }
 
 /** One global value, loaded and saved through the selected instance's normal action path. */

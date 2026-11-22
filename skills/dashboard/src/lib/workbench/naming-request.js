@@ -3,13 +3,18 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 
 export const ORIGINAL_GROUP_NAME_PATH = '~/zylos/.claude/skills/dashboard/scripts/group-name.js';
-export const NAME_PROMPT = `请给 Dashboard 里还没有名字的会话组起个名字：
+export const NAME_PROMPT = `Name the unnamed conversation groups in Dashboard.
 
-1. 运行 node ~/zylos/.claude/skills/dashboard/scripts/group-name.js list --unnamed --active 3d，列出最近 3 天有活动、还没有名字的组。
-2. 给每个组找出一个人能认出来的名字：群聊用群名，私聊用对方的名字。不同渠道拿名字的办法不一样，你自己判断：有的消息开头就写着（比如「[TG GROUP:产品周会]」「howard said」），有的只有编号，要用这个渠道的工具或接口去查。实在查不到就先跳过，最后告诉我。
-3. 用 group-name.js set <组键> "名字" 设置。名字要短，让人一眼认出是哪个群、或者和谁的私聊。
-4. 已经有名字的组不要动。
-5. 做完列出你给每个组起的名字。`;
+1. Run node ~/zylos/.claude/skills/dashboard/scripts/group-name.js list --unnamed --active 3d to list unnamed groups active in the last three days.
+2. Identify the conversation type from the group key and use the applicable naming rule:
+   - For a forum topic, use its title. You may prefix it with a short group name. Look up the title in the channel component's topic records. Telegram topic keys look like telegram:group<chat-id>:topic-<topic-id>. Follow the Telegram skill to run topics.js list --chat <chat-id>, then find the name field of the entry matching the topic ID. If there is no non-empty title, use the recent conversation as described below.
+   - For an ordinary group chat, use the group name. For a direct chat, use the other person's name. Check the message header (for example, "[TG GROUP:Product Weekly]" or "howard said") or use the channel's tools.
+   - When the applicable title or name is unavailable, read recent conversation from that group and choose a meaningful short name that reflects its main subject. Skip the group only if it has no conversation content.
+   - Never use a bare number, an ID, or a name such as "Group Name · Topic Number".
+   - Use the language of the topic title or the conversation in that group. Copy the topic title as written, without translating it.
+3. Use group-name.js set <group-key> "name" to set a short name that makes the topic, group, or direct chat easy to recognize.
+4. Keep existing group names.
+5. When finished, list the names you assigned and the groups you skipped because they had no conversation content.`;
 
 /** Preserve the supplied prompt verbatim apart from its known CLI path. */
 export function namePromptText(scriptPath, template, originalPath) {

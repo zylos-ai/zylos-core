@@ -11,7 +11,7 @@ const respondDenied = (res, denied) => {
 
 /** Server-owned conversation routing and saved question constraints govern every action. */
 export async function handleChatAnswers(req, res, url, { auth, config, answers, delivery, sender, readMode }) {
-  const match = /^\/api\/chat\/conversations\/([^/]+)\/(questions|answers)$/.exec(url.pathname);
+  const match = /^\/api\/conversations\/([^/]+)\/(questions|answers)$/.exec(url.pathname);
   if (!match) return false;
   const read = match[2] === 'questions';
   const preflight = read ? requireChatAccess(req, auth, config) : requireChatWritePreflight(req, auth, config);

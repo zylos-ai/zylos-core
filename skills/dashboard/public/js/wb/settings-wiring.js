@@ -23,6 +23,20 @@ export function keyActionRequest(action, name) {
 }
 
 /**
+ * Whether a key with exactly this name is still on the server, read through the key list's `readPage`. A name search
+ * also matches longer names, so the pages are read until the name turns up or none are left.
+ */
+export async function keyStillListed(readPage, name) {
+  let cursor = null;
+  do {
+    const page = await readPage({ q: name, cursor, limit: 100 });
+    if ((page.items ?? []).some(key => key.name === name)) return true;
+    cursor = page.nextCursor ?? null;
+  } while (cursor);
+  return false;
+}
+
+/**
  * Connects the settings page and the key table to the dashboard's own confirmation dialog, and renders them.
  * Every change these components make goes through one of the confirmations built here; the components
  * themselves refuse to act when no confirmation is given, and the page code never passes one in itself.
@@ -31,7 +45,7 @@ export function keyActionRequest(action, name) {
  *   `runConfirmed`, and only once the card has confirmed the change, so nothing is asked twice or run unasked.
  * - `engineVersion(root, runtime)` draws the chosen engine's CLI version and upgrade button inside the default engine card.
  * - `keyPage` is how key requests reach the server and the page: `request(method, path)` resolves to
- *   `{ ok, data }`; `renderKeys(data)`, `renderCreated(key | null)` (the new key shown once), `createdKey()`
+ *   `{ ok, data }`; `reload()` (reads the key page shown again after a change), `renderCreated(key | null)` (the new key shown once), `createdKey()`
  *   (the one shown now, or null), `status(text, kind)`, `busy(on)` and `errorText(code, fallback)`. The page
  *   decides nothing about which request an action makes or what its answer shows.
  */
@@ -55,7 +69,7 @@ export function wireSettingsConfirmations({ document, t, runner, keyPage, remote
     try {
       const { ok, data } = await keyPage.request(request.method, request.path);
       if (!ok) throw new Error(keyPage.errorText(data?.error?.code, t(request.status.failed)));
-      keyPage.renderKeys(data);
+      keyPage.reload();
       if (request.showsNewKey) keyPage.renderCreated({ name: data.key?.name || name, plaintext_key: data.plaintext_key });
       else if (keyPage.createdKey()?.name === name) keyPage.renderCreated(null);
       keyPage.status(t(request.status.done), 'success');

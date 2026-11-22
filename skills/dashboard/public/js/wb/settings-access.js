@@ -20,8 +20,8 @@ export function renderKeyTable(root, keys = [], { document = root.ownerDocument,
   for (const key of ['name', 'scope', 'status', 'created', 'lastUsed', '']) head.append(element(document, 'th', key ? t('wb.settings.keys.col.' + key) : ''));
   const thead = element(document, 'thead'); thead.append(head);
   const body = element(document, 'tbody');
-  const ordered = [...keys.filter(key => keyStatus(key) !== 'revoked'), ...keys.filter(key => keyStatus(key) === 'revoked')];
-  for (const key of ordered) {
+  // The server orders the keys: active before revoked, newest first.
+  for (const key of keys) {
     const status = keyStatus(key), row = element(document, 'tr', undefined, 'api-key-row' + (status === 'revoked' ? ' revoked' : ''));
     row.dataset.search = key.name;
     const name = element(document, 'td'), label = element(document, 'b', key.name); label.title = key.name; name.append(label);
@@ -46,12 +46,6 @@ export function renderKeyTable(root, keys = [], { document = root.ownerDocument,
     body.append(row);
   }
   table.append(thead, body); root.replaceChildren(table);
-}
-
-/** Counts for the existing-keys card header. */
-export function keyCounts(keys = []) {
-  const revoked = keys.filter(key => keyStatus(key) === 'revoked').length;
-  return { active: keys.length - revoked, revoked };
 }
 
 /** One-time plaintext panel after creating or rotating a key. */

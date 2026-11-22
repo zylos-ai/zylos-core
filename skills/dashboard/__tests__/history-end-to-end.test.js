@@ -56,14 +56,14 @@ test('read-only Claude files recover full C4 and persisted outputs through redac
   const redactor = createRedactor({ zylosDir });
   const service = new HistoryService({ parser: new ClaudeHistory({ zylosDir, homeDir: root }), redactor });
   try {
-    const listing = await service.sessions(); assert.equal(listing.sessions.length, 1);
+    const listing = await service.sessions(); assert.equal(listing.items.length, 1);
     const page = await service.entries(params({ session: 'session' }));
-    const inbound = page.entries.find(entry => entry.fields.body);
-    const call = page.entries.find(entry => entry.kind === 'tool');
+    const inbound = page.items.find(entry => entry.fields.body);
+    const call = page.items.find(entry => entry.kind === 'tool');
     assert.equal(await complete(service, 'session', inbound.id, 'body'), (await redactor.redact(message)).text);
     assert.equal(await complete(service, 'session', call.id, 'output'), (await redactor.redact(output)).text);
     assert.equal(JSON.parse(await complete(service, 'session', call.id, 'input')).command, 'printf fixture');
-    const image = page.entries.find(entry => entry.fields.attachment);
+    const image = page.items.find(entry => entry.fields.attachment);
     assert.equal((await service.content(params({ session: 'session', entry: image.id, field: 'attachment' }))).binary.data.toString(), 'raster fixture');
     assert.equal((await service.search(params({ session: 'session', q: 'fixture_private_value' }))).matches.length, 0);
     assert.ok((await service.search(params({ session: 'session', q: 'output line' }))).matches.some(match => match.entry === call.id));
@@ -90,7 +90,7 @@ test('Codex full aggregated command output reaches API beyond the model preview'
   const service = new HistoryService({ config: { runtime: 'codex' }, parser });
   try {
     const page = await service.entries(params({ session: 'thread' }));
-    const tool = page.entries.find(entry => entry.kind === 'tool');
+    const tool = page.items.find(entry => entry.kind === 'tool');
     assert.equal(await complete(service, 'thread', tool.id, 'output'), (await service.redactor.redact(full)).text);
     assert.match(await complete(service, 'thread', tool.id, 'modelOutput'), /truncated/);
   } finally { await service.close(); }

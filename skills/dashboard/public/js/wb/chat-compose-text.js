@@ -84,17 +84,20 @@ const indent = value => String(value).split('\n').map((line, index) => index ===
  * An annotation is `{ messageId, direction, timestamp, excerpt, length, comment }`; `excerpt` holds at most
  * MAX_CHARS characters and `length` the selected text's full length.
  */
-export function composeContent({ text = '', annotations = [], timeZone = null, now = new Date() } = {}) {
+export function composeContent({ text = '', annotations = [], timeZone = null, now = new Date(), t } = {}) {
   const count = annotations.length;
   // Without annotations the user's text is sent as typed, as before; the server compares a retry's content exactly.
   if (!count) return String(text ?? '');
   const own = String(text ?? '').trim();
-  const lines = [own || `请看下面我标注的 ${count} 处内容，有批注的请逐条回应。`, '', `【标注 ${count} 条】原消息都在本对话里，c4_id 是消息编号。`];
+  const lines = [own || t('chat.annotation.sendIntro', { count }), '', t('chat.annotation.sendHeading', { count })];
   annotations.forEach((item, index) => {
-    lines.push(`${index + 1}. ${item.direction === 'in' ? '我' : 'AI'} · ${annotationStamp(item.timestamp, timeZone, now)} · c4_id=${item.messageId}`);
+    const author = t(item.direction === 'in' ? 'chat.annotation.sendMe' : 'chat.page.ai');
+    lines.push(`${index + 1}. ${author} · ${annotationStamp(item.timestamp, timeZone, now)} · c4_id=${item.messageId}`);
     const length = Math.max(chars(item.excerpt), Number(item.length) || 0), cut = length > MAX_CHARS;
-    lines.push(`   原文${cut ? `（前 ${MAX_CHARS} 字，全文 ${length} 字，可按 c4_id 查）` : ''}：「${indent(firstChars(item.excerpt, MAX_CHARS))}」`);
-    if (item.comment) lines.push(`   批注：${indent(item.comment)}`);
+    const original = cut ? t('chat.annotation.sendOriginalTruncated', { limit: MAX_CHARS, length }) : t('chat.annotation.sendOriginal');
+    // Insert user text literally after translation so replacement patterns such as $& stay intact.
+    lines.push(`   ${original.replace('{excerpt}', () => indent(firstChars(item.excerpt, MAX_CHARS)))}`);
+    if (item.comment) lines.push(`   ${t('chat.annotation.sendComment').replace('{comment}', () => indent(item.comment))}`);
   });
   return lines.join('\n');
 }

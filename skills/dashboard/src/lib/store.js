@@ -8,7 +8,7 @@ import { loadCoreModule } from './core-modules.js';
 const { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
 
 export class Store {
-  constructor(dbPath) {
+  constructor(dbPath, schemaOptions) {
     // History attribution and transcript discovery stay warm between imports.
     // This generation is process-local; opening the store always starts cold.
     this.historyRevision = 0;
@@ -22,7 +22,7 @@ export class Store {
     }
     this.db.pragma('busy_timeout = 5000');
     try {
-      this.checkSchema();
+      this.checkSchema(schemaOptions);
       this.db.pragma('journal_mode = WAL');
       this._prepareStatements();
     } catch (error) {
@@ -33,9 +33,9 @@ export class Store {
 
   // Opening only checks. Existing data is migrated by the upgrade transaction
   // or the first Dashboard takeover; an empty file is built at the current layout.
-  checkSchema() {
+  checkSchema(schemaOptions) {
     const empty = this.db.prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get() === undefined;
-    if (empty) { migrateDatabase(this.db); return; }
+    if (empty) { migrateDatabase(this.db, schemaOptions); return; }
     const { currentVersion, targetVersion, needsMigration } = inspectDatabase(this.db);
     if (currentVersion > targetVersion) {
       throw Object.assign(new Error(`Dashboard schema ${currentVersion} is newer than supported ${targetVersion}`), { code: 'SCHEMA_TOO_NEW' });
@@ -317,6 +317,24 @@ export class Store {
 
     this._listApiKeys = this.db.prepare(`
       SELECT id, name, scope, created_at, last_used_at, revoked_at FROM api_keys ORDER BY created_at DESC
+    `);
+
+    // One page of the key list: active before revoked, then created_at DESC, id DESC, after a keyset position;
+    // q matches the name.
+    this._listApiKeysPage = this.db.prepare(`
+      SELECT id, name, scope, created_at, last_used_at, revoked_at, (revoked_at IS NOT NULL) AS revoked FROM api_keys
+      WHERE (@q IS NULL OR instr(lower(name), lower(@q)) > 0)
+        AND (@afterRevoked IS NULL OR (revoked_at IS NOT NULL) > @afterRevoked OR ((revoked_at IS NOT NULL) = @afterRevoked
+          AND (created_at < @afterCreated OR (created_at = @afterCreated AND id < @afterId))))
+      ORDER BY revoked ASC, created_at DESC, id DESC LIMIT @limit
+    `);
+
+    this._countApiKeys = this.db.prepare(`
+      SELECT
+        COUNT(*) FILTER (WHERE revoked_at IS NULL) AS active,
+        COUNT(*) FILTER (WHERE revoked_at IS NOT NULL) AS revoked,
+        COUNT(*) FILTER (WHERE @q IS NULL OR instr(lower(name), lower(@q)) > 0) AS matched
+      FROM api_keys
     `);
 
     this._revokeApiKey = this.db.prepare(`
@@ -1051,6 +1069,16 @@ export class Store {
 
   listApiKeys() {
     return this._listApiKeys.all();
+  }
+
+  /** Up to `limit` keys after `after` ([revoked 0|1, created_at, id]): active first, then created_at DESC, id DESC. */
+  listApiKeysPage({ after = null, limit, q = null }) {
+    return this._listApiKeysPage.all({ q, afterRevoked: after?.[0] ?? null, afterCreated: after?.[1] ?? null, afterId: after?.[2] ?? null, limit });
+  }
+
+  /** Active and revoked key counts, and the number of keys whose name matches `q`. */
+  countApiKeys(q = null) {
+    return this._countApiKeys.get({ q });
   }
 
   revokeApiKey(name) {

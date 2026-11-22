@@ -1,3 +1,4 @@
+import { groupDetailPath } from './group-data.js';
 import { instantMs, conversationStampMs, activityTimes } from './api-time.js';
 import { parseC4Content, evaluateFormState } from '../../chat-schema.js';
 import { messageState } from './chat-delivery-state.js';
@@ -6,14 +7,16 @@ import { normalizeChatSubscription, chatSubscriptionKey, matchesChatEvent } from
 import { answerDisplay } from './chat-answer.js';
 import { composeContent, storedContent, contentBytes, MAX_ANNOTATIONS, MAX_CONTENT_BYTES } from './chat-compose-text.js';
 const merge = (old, rows) => [...new Map([...old, ...rows].map(row => [row.id, row])).values()];
-const base = '/api/chat/conversations';
+const base = '/api/conversations';
 const pathFor = id => `${base}/${encodeURIComponent(id)}`;
 /** The fixed Origin conversation: group `origin` encoded like every other group ID. */
 export const ORIGIN_CONVERSATION_ID = 'g:6F726967696E';
 export const isOriginConversation = id => id === ORIGIN_CONVERSATION_ID;
-// Origin stays pinned first; the rest follow recent activity.
-const listOrder = (a, b) => Number(isOriginConversation(b.id)) - Number(isOriginConversation(a.id))
-  || (conversationStampMs(b.stamp) || 0) - (conversationStampMs(a.stamp) || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const sortTime = row => conversationStampMs(row.stamp) || 0;
+const activityOrder = (a, b) => sortTime(b) - sortTime(a) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const received = row => row.direction === 'in' && row.channel && !['void', 'control'].includes(row.channel);
+export const isOwnChatMessage = row => row.direction === 'in' && row.channel === 'dashboard';
+const errorCode = error => error?.code || error?.payload?.error?.code;
 const query = values => new URLSearchParams(Object.entries(values).filter(([, v]) => v !== null && v !== undefined)).toString();
 export function createConversationState({
   request,
@@ -53,6 +56,8 @@ export function createConversationState({
     error = null,
     loading = false,
     creatingDraft = false;
+  let search = '', listLoaded = false, loadingMore = false, savingPins = false, readWrite = null;
+  const listUpdates = new Set();
   let groupPresenceRead = null, workingTimer = null, storedWorkingTimer = null;
   let deletionAllowed = false;
   let streamState = 'polling', streamTimer = null, streamScope = null, readDirty = false, retryAt = 0;
@@ -125,6 +130,11 @@ export function createConversationState({
     olderLoading: false,
     olderError: null,
     afterCursor: null,
+    readUpTo: 0,
+    unreadCount: null,
+    unreadDividerId: null,
+    timelineRevision: 0,
+    positionAtUnread: false,
     input: '',
     // The composer draft besides the text: one quote, the annotations, and the content and quote sent while the
     // outcome is open (the composer is read-only then and a retry sends exactly these).
@@ -170,6 +180,9 @@ export function createConversationState({
     mode,
     items: [...items],
     nextCursor,
+    search,
+    listUpdates: listUpdates.size,
+    savingPins,
     selectedId,
     ...(cell() || blank()),
     tz: instanceTz,
@@ -226,19 +239,40 @@ export function createConversationState({
     if (parsed.kind === 'envelope' && parsed.envelope.kind === 'answer') return answerDisplay(parsed.envelope).answer;
     return parsed.kind === 'text' ? parsed.text : parsed.kind === 'envelope' ? parsed.envelope.fallbackText : parsed.fallbackText ?? t('chat.invalidContent');
   };
-  function updateCurrentItem(current, id) {
-    const latest = current.messages.findLast(row => row.channel !== 'internal');
-    if (!latest) return;
-    const timestamp = asDate(latest.timestamp);
+  function noteListUpdate(row, index, currentRows) {
+    // Fixed rows never move because of activity unless they are search results.
+    if (!search && (row.origin || isOriginConversation(row.id) || Number.isInteger(row.pinOrder))) return;
+    if (currentRows.slice(0, index).some(previous => (search
+      || !previous.origin && !isOriginConversation(previous.id) && !Number.isInteger(previous.pinOrder))
+      && activityOrder(row, previous) < 0)) listUpdates.add(row.id);
+  }
+  function moveSentRowToFront(row) {
+    listUpdates.delete(row.id);
+    if (!search && (isOriginConversation(row.id) || Number.isInteger(row.pinOrder))) return;
+    const others = items.filter(item => item.id !== row.id);
+    const firstOrdinary = others.findIndex(item => search ||
+      !isOriginConversation(item.id) && !Number.isInteger(item.pinOrder));
+    others.splice(firstOrdinary < 0 ? others.length : firstOrdinary, 0, row);
+    items = others;
+  }
+  function updateCurrentItem(id, newer) {
+    if (!newer.length) return;
+    const latest = newer.findLast(row => row.channel !== 'internal');
+    const timestamp = asDate(newer.findLast(received)?.timestamp);
     const stamp = timestamp ? timestamp.getTime() / 86400000 + 2440587.5 : null;
-    items = items.map(row => row.id === id ? {
-      ...row,
-      previewDirection: latest.direction,
-      preview: typeof latest.preview === 'string' ? latest.preview : Array.from(preview(latest.content)).slice(0, 160).join(''),
-      ...(stamp === null ? {} : {
-        stamp
-      })
-    } : row).sort(listOrder);
+    items = items.map((row, index) => {
+      if (row.id !== id) return row;
+      const next = {
+        ...row,
+        ...(latest ? {
+          previewDirection: latest.direction,
+          preview: typeof latest.preview === 'string' ? latest.preview : Array.from(preview(latest.content)).slice(0, 160).join(''),
+        } : {}),
+        ...(timestamp && timestamp.getTime() >= sortTime(row) ? { stamp } : {})
+      };
+      if (sortTime(next) > sortTime(row)) noteListUpdate(next, index, items);
+      return next;
+    });
   }
   function streamSubscription() {
     if (!valid(epoch)) return null;
@@ -350,6 +384,9 @@ export function createConversationState({
         }
         if (current && id && !id.startsWith('d:')) {
           await syncCurrent(current, id, currentTab, e);
+          if (currentTab === 'mine' && current.historyLoaded) {
+            await readUnread(current, id, e);
+          }
         }
         if (valid(e)) {
           updateError = null;
@@ -436,58 +473,139 @@ export function createConversationState({
       failure(err, e, target);
     }
   }
-  async function list(more = false, quiet = false) {
-    if (!active || blocked || more && !nextCursor) return;
-    const e = epoch,
-      version = ++listVersion,
-      currentTab = tab,
-      cursor = more ? nextCursor : null;
+  const localeHeaders = () => ({ 'X-Zylos-Locale': document?.documentElement?.lang?.startsWith('en') ? 'en' : 'zh' });
+  const listPage = (currentTab, q, cursor) => request(`${base}?${query({ tab: currentTab, q: q || null, limit: 50, cursor })}`,
+    { headers: localeHeaders() });
+  async function list(more = false, quiet = false, sentId = null) {
+    if (!active || blocked || quiet && loadingMore || more && (loading || !nextCursor)) return;
+    const e = epoch, version = ++listVersion, currentTab = tab, q = search;
+    // If a background read supersedes a foreground refresh, apply that refresh's result.
+    const takeover = quiet && loading;
+    const ownsList = () => valid(e) && version === listVersion && currentTab === tab && q === search;
     if (!quiet) {
       listLoadingVersion = version;
+      loadingMore = more;
       loading = true;
       error = null;
       emit();
     }
     try {
-      const data = await request(`${base}?${query({
-        tab: currentTab,
-        limit: 50,
-        cursor
-      })}`, { headers: { 'X-Zylos-Locale': document?.documentElement?.lang?.startsWith('en') ? 'en' : 'zh' } });
-      if (!valid(e) || version !== listVersion || currentTab !== tab) return;
-      if (!Array.isArray(data?.items)) throw {
-        code: 'chat_invalid_response'
-      };
+      const data = await listPage(currentTab, q, more ? nextCursor : null);
+      if (!ownsList()) return;
+      if (!Array.isArray(data?.items)) throw { code: 'chat_invalid_response' };
       readZone(data);
       deletionAllowed = data.deletionAllowed === true;
-      items = more || quiet ? merge(items, data.items) : data.items;
-      items.sort(listOrder);
-      // An external conversation's header name comes from its list row, copied
-      // when it was opened; a later list carries a renamed or cleared name.
-      if (currentTab === 'external') for (const row of data.items) {
+      let rows = data.items;
+      if (quiet && listLoaded && !takeover) {
+        // Refresh the pages already shown, while keeping their displayed order
+        // and their original scroll frontier. New rows wait behind the notice.
+        let cursor = data.nextCursor;
+        const seen = new Set();
+        for (let depth = 1; depth < listDepth && cursor && !seen.has(cursor); depth++) {
+          seen.add(cursor);
+          const next = await listPage(currentTab, q, cursor);
+          if (!ownsList()) return;
+          if (!Array.isArray(next?.items)) throw { code: 'chat_invalid_response' };
+          rows = merge(rows, next.items);
+          cursor = next.nextCursor;
+        }
+        const incoming = new Map(rows.map(row => [row.id, row]));
+        const previous = items;
+        const known = new Set(previous.map(row => row.id));
+        items = previous.map(row => {
+          const fresh = incoming.get(row.id);
+          if (fresh) return fresh;
+          if (q || !Number.isInteger(row.pinOrder)) return row;
+          const { pinOrder, ...unpinned } = row;
+          return unpinned;
+        });
+        for (const [index, row] of items.entries()) {
+          if (sortTime(row) > sortTime(previous[index])) noteListUpdate(row, index, items);
+        }
+        const isPin = row => Number.isInteger(row.pinOrder);
+        if (!q) {
+          const oldPins = previous.filter(isPin).map(row => row.id);
+          const newPins = rows.filter(isPin);
+          if (oldPins.length !== newPins.length || newPins.some((row, index) => row.id !== oldPins[index])) {
+            const origin = items.find(row => isOriginConversation(row.id));
+            const ordinary = items.filter(row => !isOriginConversation(row.id) && !isPin(row));
+            for (const id of oldPins) {
+              const index = ordinary.findIndex(row => row.id === id);
+              if (index === -1) continue;
+              const [unpinned] = ordinary.splice(index, 1);
+              const lower = ordinary.findIndex(row => activityOrder(unpinned, row) < 0);
+              ordinary.splice(lower < 0 ? ordinary.length : lower, 0, unpinned);
+            }
+            items = [...(origin ? [origin] : []), ...newPins, ...ordinary];
+            for (const row of newPins) listUpdates.delete(row.id);
+          }
+        }
+        const displayed = new Set(items.map(row => row.id));
+        for (const row of rows) if (!known.has(row.id) && !displayed.has(row.id)) listUpdates.add(row.id);
+        // A conversation opened directly may only reach this page after the send.
+        if (sentId && !displayed.has(sentId) && incoming.has(sentId)) moveSentRowToFront(incoming.get(sentId));
+      } else if (more) {
+        items = merge(items, rows);
+        for (const row of rows) listUpdates.delete(row.id);
+      } else {
+        items = rows;
+        listDepth = 1;
+        listLoaded = true;
+        listUpdates.clear();
+      }
+      if (currentTab === 'external') for (const row of rows) {
         const cached = cells.get(`external:${row.id}`);
         if (cached?.conversation && Object.hasOwn(row, 'display_name')) cached.conversation = { ...cached.conversation, display_name: row.display_name };
       }
       if (more) listDepth++;
-      if (!quiet || listDepth === 1) nextCursor = data.nextCursor ?? null;
+      if (!quiet || takeover || !listUpdates.size && listDepth === 1) nextCursor = data.nextCursor ?? null;
       if (!more) lastListAt = now();
       if (quiet && listLoadingVersion && listLoadingVersion < version) {
         listLoadingVersion = 0;
         loading = false;
       }
-
       emit();
-      return data.items;
+      return rows;
     } catch (err) {
-      if (!valid(e) || version !== listVersion || currentTab !== tab) return;
+      if (!ownsList()) return;
+      if (errorCode(err) === 'invalid_cursor' && (more || quiet)) {
+        // A restarted Dashboard no longer accepts this paging position.
+        loading = false;
+        listDepth = 1;
+        nextCursor = null;
+        return list();
+      }
       if (quiet) throw err;
       failure(err, e);
     } finally {
       if (valid(e) && listLoadingVersion === version && !quiet) {
         listLoadingVersion = 0;
+        loadingMore = false;
         loading = false;
         emit();
       }
+    }
+  }
+  async function replacePin(id, beforeId = null, reorder = false) {
+    if (!active || blocked || savingPins || isOriginConversation(id) || id.startsWith('d:')) return;
+    const e = epoch, currentTab = tab;
+    savingPins = true;
+    emit();
+    try {
+      const { items: firstPage } = await listPage(currentTab, '', null);
+      if (!valid(e) || currentTab !== tab) return;
+      const ids = firstPage.filter(row => Number.isInteger(row.pinOrder)).sort((a, b) => a.pinOrder - b.pinOrder).map(row => row.id);
+      if (reorder && (!ids.includes(id) || !ids.includes(beforeId) || id === beforeId)) return;
+      const order = ids.filter(value => value !== id);
+      if (reorder) order.splice(ids.indexOf(beforeId), 0, id);
+      else if (!ids.includes(id)) order.push(id);
+      await request(`${base}/pins?${query({ tab: currentTab })}`, { method: 'PUT', body: { ids: order } });
+      if (valid(e) && currentTab === tab) await list();
+    } catch (err) {
+      failure(err, e);
+    } finally {
+      savingPins = false;
+      if (valid(e)) emit();
     }
   }
   async function select(id, fallbackMetadata) {
@@ -506,6 +624,7 @@ export function createConversationState({
     current.error = null;
     current.olderError = null;
     current.historyLoaded = false;
+    current.unreadDividerId = null;
     current.conversation ||= items.find(item => item.id === id)
       || (fallbackMetadata?.id === id ? {
         id, session_group: fallbackMetadata.session_group, channel: fallbackMetadata.channel,
@@ -539,7 +658,7 @@ export function createConversationState({
     }
     if (!valid(e) || version !== selectedVersion || currentTab !== tab || id.startsWith('d:')) return;
     readGroupPresence(current, currentTab, e);
-    await Promise.all([history(current, id, currentTab, 'initial', e), questions(current, id, currentTab, false, e)]);
+    await Promise.all([history(current, id, currentTab, 'initial', e, false, currentTab === 'mine'), questions(current, id, currentTab, false, e)]);
   }
   function questionDraftScope(id, row) {
     const block = row?.constraints?.block, scope = draftScope();
@@ -749,7 +868,7 @@ export function createConversationState({
       if (active && sendIdentity === openedIdentity && !blocked) emit();
     }
   }
-  async function readPage(current, id, currentTab, direction, cursor, e) {
+  async function readPage(current, id, currentTab, direction, cursor, e, anchor = false, limit = 50) {
     if (!valid(e)) return null;
     const unavailable = currentTab === 'mine' && direction === 'after' ? current.messages.filter(row => row.attachments?.some(item => !item.available)) : [];
     let start = unavailable.findIndex(row => row.id > (current.attachmentRecheckAfter ?? 0));
@@ -757,11 +876,12 @@ export function createConversationState({
     const rechecking = unavailable.slice(start, start + 100);
     const data = await request(`${pathFor(id)}/messages?${query({
       tab: currentTab,
-      limit: 50,
+      limit,
       direction,
       cursor,
+      anchor: anchor ? 'read' : null,
       ...(rechecking.length ? { recheckIds: rechecking.map(row => row.id).join(',') } : {})
-    })}`, { headers: { 'X-Zylos-Locale': document?.documentElement?.lang?.startsWith('en') ? 'en' : 'zh' } });
+    })}`, { headers: localeHeaders() });
     if (!valid(e)) return null;
     if (!Array.isArray(data?.items)) throw {
       code: 'chat_invalid_response'
@@ -769,7 +889,7 @@ export function createConversationState({
     if (rechecking.length) current.attachmentRecheckAfter = rechecking.at(-1).id;
     return data;
   }
-  function applyMessages(current, id, data, trackQuestions = false) {
+  function applyMessages(current, id, data, trackQuestions = false, updatePreview = false) {
     readZone(data);
     const previousNewest = current.messages.at(-1)?.id ?? 0;
     const known = new Set(current.messages.map(row => row.id));
@@ -783,7 +903,7 @@ export function createConversationState({
     if (newer.some(row => row.channel !== 'internal' && row.direction === 'out')) fastUntil = 0;
     if (newest?.direction === 'in') fastUntil = now() + 120000;
     if (trackQuestions && newer.some(row => row.channel !== 'internal')) current.pendingQuestionRefresh = true;
-    updateCurrentItem(current, id);
+    if (updatePreview) updateCurrentItem(id, newer);
     return added.length;
   }
   async function recoverCursor(current, id, currentTab, e) {
@@ -805,20 +925,94 @@ export function createConversationState({
     emit();
     return added;
   }
-  async function history(current, id, currentTab, direction, e = epoch, quiet = false) {
+  function applyUnread(current, id, data) {
+    if (!Number.isSafeInteger(data.readUpTo) || data.readUpTo < current.readUpTo) return;
+    current.readUpTo = data.readUpTo;
+    if (Number.isSafeInteger(data.unreadCount)) {
+      current.unreadCount = data.unreadCount;
+      items = items.map(row => row.id === id && row.unread !== (data.unreadCount > 0)
+        ? { ...row, unread: data.unreadCount > 0 } : row);
+    }
+  }
+  async function readUnread(current, id, e) {
+    if (!valid(e) || current !== cell() || id !== selectedId || tab !== 'mine'
+        || !Number.isSafeInteger(current.unreadCount)) return;
+    const data = await readPage(current, id, 'mine', 'before', null, e, true, 1);
+    if (data && current === cell() && id === selectedId && tab === 'mine') {
+      applyUnread(current, id, data);
+      emit();
+    }
+  }
+  async function markRead(upTo) {
+    const current = cell(), id = selectedId, e = epoch;
+    if (!active || blocked || tab !== 'mine' || !current?.historyLoaded || !id || id.startsWith('d:')
+        || !Number.isSafeInteger(current.unreadCount) || !Number.isSafeInteger(upTo) || upTo <= current.readUpTo || readWrite) return;
+    const task = request(`${pathFor(id)}/read`, { method: 'PUT', body: { upTo } });
+    readWrite = task;
+    try {
+      const data = await task;
+      if (!valid(e) || !Number.isSafeInteger(data.readUpTo) || data.readUpTo <= current.readUpTo) return;
+      const previous = current.readUpTo;
+      current.readUpTo = data.readUpTo;
+      if (current.unreadCount < 100) {
+        const read = current.messages.filter(row => row.id > previous && row.id <= data.readUpTo && !isOwnChatMessage(row)).length;
+        current.unreadCount = Math.max(0, current.unreadCount - read);
+      }
+      await readUnread(current, id, e);
+    } catch (err) {
+      if (errorCode(err) === 'remote_chat_disabled') failure(err, e);
+    } finally {
+      readWrite = null;
+      if (valid(e)) emit();
+    }
+  }
+  async function jumpToLatest() {
+    const current = cell(), id = selectedId, currentTab = tab, e = epoch;
+    if (!current?.historyLoaded) return false;
+    const version = ++current.historyVersion;
+    try {
+      const data = await readPage(current, id, currentTab, 'before', null, e);
+      if (!data || version !== current.historyVersion || current !== cell() || id !== selectedId || currentTab !== tab) return false;
+      current.messages = [];
+      current.messageCursor = data.nextCursor ?? null;
+      current.afterCursor = data.afterCursor ?? null;
+      current.gap = null;
+      current.recoveryOlder = false;
+      applyMessages(current, id, data);
+      current.positionAtUnread = false;
+      current.timelineRevision++;
+      emit();
+      return true;
+    } catch (err) {
+      failure(err, e, current);
+      return false;
+    }
+  }
+  async function history(current, id, currentTab, direction, e = epoch, quiet = false, anchor = false) {
     let cursor = direction === 'after' ? current.afterCursor : direction === 'before' ? current.messageCursor : null;
     if (direction !== 'initial' && !cursor) return 0;
     const version = ++current.historyVersion;
     try {
       let data;
       try {
-        data = await readPage(current, id, currentTab, direction === 'initial' ? 'before' : direction, cursor, e);
+        data = await readPage(current, id, currentTab, direction === 'initial' ? 'before' : direction, cursor, e, anchor);
       } catch (err) {
-        if (err?.code === 'invalid_chat_cursor') return await recoverCursor(current, id, currentTab, e);
+        if (errorCode(err) === 'invalid_cursor') return await recoverCursor(current, id, currentTab, e);
         throw err;
       }
       if (!data || version !== current.historyVersion || current !== cell() || id !== selectedId || currentTab !== tab) return 0;
-      let added = applyMessages(current, id, data, direction === 'after' && currentTab === 'mine');
+      if (anchor && Number.isSafeInteger(data.readUpTo)) {
+        applyUnread(current, id, data);
+        current.messages = [];
+        current.gap = null;
+        current.recoveryOlder = false;
+        current.unreadDividerId = current.unreadCount > 0
+          ? data.items.find(row => row.id > data.readUpTo && !isOwnChatMessage(row))?.id ?? null : null;
+        current.positionAtUnread = true;
+        current.timelineRevision++;
+      }
+      const recent = direction === 'after';
+      const added = applyMessages(current, id, data, recent && currentTab === 'mine', recent || !anchor && direction === 'initial');
       if (direction !== 'after') {
         current.messageCursor = data.nextCursor ?? null;
         current.historyLoaded = true;
@@ -883,7 +1077,7 @@ export function createConversationState({
     const stillCurrent = () => valid(e) && navigation === selectedVersion && version === current.groupPresenceVersion;
     record.promise = (async () => {
       try {
-        const data = await request('/api/groups/' + encodeURIComponent(sessionGroup) + '?include=', { signal: record.controller.signal });
+        const data = await request(groupDetailPath(sessionGroup), { signal: record.controller.signal });
         if (!stillCurrent()) return;
         const origin = sessionGroup === 'origin';
         const group = data;
@@ -896,7 +1090,7 @@ export function createConversationState({
           working: group?.working ?? null } : null);
       } catch {
         if (!stillCurrent()) return;
-        // GROUP_NOT_FOUND is normal for a new conversation not yet present in
+        // not_found is normal for a new conversation not yet present in
         // the group snapshot: no reading, and retry on the normal cadence.
         // Other unreadable optional sources also clear a stale running marker.
         current.groupPresence = null;
@@ -1004,6 +1198,7 @@ export function createConversationState({
           if (refreshed && valid(e)) current.pendingQuestionRefresh = false;
         }
       }
+      if (currentTab === 'mine') await readUnread(current, id, e);
       if (valid(e)) {
         updateError = null;
         retryDelay = 5000;
@@ -1039,7 +1234,7 @@ export function createConversationState({
         try {
           data = await readPage(current, id, currentTab, 'before', gap.cursor, e);
         } catch (err) {
-          if (err?.code === 'invalid_chat_cursor' && !recovered) {
+          if (errorCode(err) === 'invalid_cursor' && !recovered) {
             recovered = true;
             await recoverCursor(current, id, currentTab, e);
             priorMin = Infinity;
@@ -1099,7 +1294,7 @@ export function createConversationState({
         try {
           data = await readPage(current, id, currentTab, 'before', cursor, e);
         } catch (err) {
-          if (err?.code === 'invalid_chat_cursor' && !recovered) {
+          if (errorCode(err) === 'invalid_cursor' && !recovered) {
             recovered = true;
             await recoverCursor(current, id, currentTab, e);
             continue;
@@ -1159,7 +1354,7 @@ export function createConversationState({
     creatingDraft = true;
     emit();
     try {
-      await run(() => request('/api/chat/drafts', {
+      await run(() => request('/api/conversations/drafts', {
         method: 'POST',
         body: displayName === undefined ? {} : {
           displayName
@@ -1202,7 +1397,7 @@ export function createConversationState({
     // A quote alone is not a message; text, an annotation or an attachment is.
     if (!current.pending && !current.input.trim() && !current.annotations.length && !attachments.length) return;
     // An open outcome is retried with the same content and quote; otherwise the annotations follow the user's words.
-    const payload = current.pending ?? { content: composeContent({ text: current.input, annotations: current.annotations, timeZone: instanceTz, now: new Date(now()) }),
+    const payload = current.pending ?? { content: composeContent({ text: current.input, annotations: current.annotations, timeZone: instanceTz, now: new Date(now()), t }),
       quote: current.quote?.id ?? null };
     if (contentBytes(storedContent(payload.content, payload.quote)) > MAX_CONTENT_BYTES) return;
     const e = epoch,
@@ -1238,19 +1433,32 @@ export function createConversationState({
       if (destroyed || sendIdentity !== openedIdentity || blocked) return outcome;
       outcome = result;
       current.receipt = result;
+      if (result.stored === true && Number.isSafeInteger(result.messageId) && result.messageId > current.readUpTo) {
+        current.readUpTo = result.messageId;
+        current.unreadCount = 0;
+      }
       current.retryRequired = result.stored === null;
       if (!result.preserveInput && result.stored === true && current.input === text) clearCompose(current);
       else if (result.stored === null) current.pending = { ...current.pending, answered: true };
       else current.pending = null;
       if (result.error) current.error = result.error;
       const canonical = result.conversationId || id;
-      // A committed draft becomes this canonical conversation; keep quiet list merges from retaining its old row.
-      if (result.stored === true && id.startsWith('d:') && canonical !== id) items = items.filter(row => row.id !== id);
+      const ownSend = result.stored === true;
+      if (ownSend && valid(e) && tab === currentTab) {
+        let row = items.find(item => item.id === canonical);
+        if (id.startsWith('d:') && canonical !== id) {
+          const draft = items.find(item => item.id === id);
+          if (!row && draft) row = { ...draft, id: canonical, draft: false, state: 'active' };
+          items = items.filter(item => item.id !== id);
+        }
+        if (row) moveSentRowToFront(row);
+      }
       cells.set(`${currentTab}:${canonical}`, current);
       moveCompose(current, canonical);
       persistCompose(current);
       if (selectedId === id && tab === currentTab) selectedId = canonical;
       if (valid(e)) {
+        if (ownSend && tab === currentTab) emit();
         await run(() => request(pathFor(canonical)), data => {
           current.conversation = data.conversation;
           emit();
@@ -1263,7 +1471,7 @@ export function createConversationState({
             readGroupPresence(current, currentTab, e);
           }
         }
-        await list();
+        await list(false, ownSend || canonical === id, ownSend ? canonical : null);
         if (!valid(e) || tab !== currentTab) return outcome;
         if (!canonical.startsWith('d:')) await syncAfterSend(current, canonical, currentTab, e);
       }
@@ -1358,6 +1566,9 @@ export function createConversationState({
         items = [];
         nextCursor = null;
         selectedId = null;
+        search = '';
+        listLoaded = false;
+        listUpdates.clear();
         mode = null;
         deletionAllowed = false;
         blocked = false;
@@ -1404,10 +1615,28 @@ export function createConversationState({
       items = [];
       nextCursor = null;
       listDepth = 1;
+      listLoaded = false;
+      listUpdates.clear();
       emit();
       await list();
       schedule();
     },
+    async setSearch(value) {
+      if (!active || blocked || value.trim() === search) return;
+      search = value.trim();
+      items = [];
+      nextCursor = null;
+      listLoaded = false;
+      listUpdates.clear();
+      listDepth = 1;
+      await list();
+      schedule();
+    },
+    refreshList: () => list(),
+    togglePin: id => replacePin(id),
+    reorderPin: (id, targetId) => replacePin(id, targetId, true),
+    markRead,
+    jumpToLatest,
     select: async (id, fallbackMetadata) => {
       stopTimer();
       fastUntil = 0;

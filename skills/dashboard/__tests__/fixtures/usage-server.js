@@ -5,7 +5,7 @@ import os from 'node:os';
 import * as childProcess from 'node:child_process';
 import { promisify } from 'node:util';
 import { Store } from '../../src/lib/store.js';
-import { C4Reader } from '../../src/lib/c4-reader.js';
+import { C4Reader, prepareLatestReceived, receivedMessage } from '../../src/lib/c4-reader.js';
 import { StateEngine } from '../../src/lib/state-engine.js';
 import { CoreState } from '../../src/lib/core-state.js';
 import { EventLoopMonitor } from '../../src/lib/event-loop-monitor.js';
@@ -47,6 +47,7 @@ export async function usageServer(t, configBody = {}, { snapshot } = {}) {
     Store: class extends Store { constructor(...args) { super(...args); store = this; } }
   } });
   t.mock.module('../../src/lib/c4-reader.js', { namedExports: {
+    prepareLatestReceived, receivedMessage,
     C4Reader: class extends C4Reader { constructor(...args) { super(...args); reader = this; } }
   } });
   t.mock.module('../../src/lib/state-engine.js', { namedExports: {

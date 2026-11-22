@@ -48,7 +48,7 @@ test('instance and group projections convert exact evidence fields while preserv
   assert.equal(projected.working.subagents.lastActivityAt, iso);
   assert.equal(projected.duration, 123);
   assert.equal(projected.preview.text, group.preview.text);
-  assert.equal(projectApiTimestamps('/api/groups/running', { readAt: at, rows: [group] }).rows[0].queue.pending.oldestAt, iso);
+  assert.equal(projectApiTimestamps('/api/groups', { readAt: at, items: [group] }).items[0].queue.pending.oldestAt, iso);
   assert.deepEqual(projectApiTimestamps('/api/groups/activity', { start: at, cellSeconds: 60, groups: { origin: { inbound: [at] } } }),
     { start: iso, cellSeconds: 60, groups: { origin: { inbound: [iso] } } });
 });
@@ -75,14 +75,14 @@ test('schedule list, detail, history, preview and command times use ISO while cu
 test('chat, observer, fleet and key projections keep user content and identifiers opaque', () => {
   const chat = { items: [{ id: 1700000000, stamp: at / 86400000 + 2440587.5, timestamp: at,
     quote: { timestamp: at }, content: { timestamp: at, createdAt: at } }], nextCursor: 'opaque' };
-  const projected = projectApiTimestamps('/api/chat/conversations', chat);
+  const projected = projectApiTimestamps('/api/conversations', chat);
   assert.equal(projected.items[0].stamp, iso);
   assert.equal(projected.items[0].timestamp, iso);
   assert.equal(projected.items[0].quote.timestamp, iso);
   assert.deepEqual(projected.items[0].content, chat.items[0].content);
   assert.equal(projected.items[0].id, 1700000000);
   assert.equal(projectApiTimestamps('/api/observer/leases', { expiresAt: at }).expiresAt, iso);
-  assert.equal(projectApiTimestamps('/api/keys', { keys: [{ created_at: '2026-11-16 02:03:04' }] }).keys[0].created_at, iso);
+  assert.equal(projectApiTimestamps('/api/keys', { items: [{ created_at: '2026-11-16 02:03:04' }], nextCursor: 'opaque' }).items[0].created_at, iso);
   assert.equal(projectApiTimestamps('/api/fleet', { self: { system_metrics: { sampledAt: at } }, agents: [{ rate_limit_7d_recorded_at: at }] }).agents[0].rate_limit_7d_recorded_at, iso);
 });
 
@@ -111,11 +111,15 @@ test('zero clocks are unknown and event, Git and preview fields normalize actual
   const instance = projectApiTimestamps('/api/instance', { runtimeHealth: { claude: { updatedAt: at, cooldownUntil: 0 } } });
   assert.equal(instance.runtimeHealth.claude.updatedAt, iso);
   assert.equal(instance.runtimeHealth.claude.cooldownUntil, null);
-  assert.equal(projectApiTimestamps('/api/chat/conversations', { items: [{ stamp: 0 }] }).items[0].stamp, null);
+  assert.equal(projectApiTimestamps('/api/conversations', { items: [{ stamp: 0 }] }).items[0].stamp, null);
   const event = projectApiTimestamps('/api/groups/origin/events', { events: [{ metadata: { pasted_at: at, source_time: 9, received_at: 8 } }] });
   assert.equal(event.events[0].metadata.pasted_at, iso);
   assert.equal(event.events[0].metadata.source_time, 9);
   assert.equal(event.events[0].metadata.received_at, 8);
+  const backlog = projectApiTimestamps('/api/memory/backlog', { items: [{ firstAt: '2026-11-16 02:03:04' }], originSync: { firstAt: '2026-11-16 02:03:04' }, nextCursor: 'opaque' });
+  assert.equal(backlog.items[0].firstAt, iso);
+  assert.equal(backlog.originSync.firstAt, iso);
+  assert.equal(backlog.nextCursor, 'opaque');
   assert.equal(projectApiTimestamps('/api/memory/git', { commit: { author_date: '2026-11-16T10:03:04+08:00' } }).commit.author_date, iso);
   assert.equal(projectApiTimestamps('/api/schedules/preview', { iso: '2026-11-16T10:03:04+08:00' }).iso, iso);
 });

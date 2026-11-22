@@ -197,7 +197,7 @@ test('remote agent named local has a distinct draft identity from the local dash
   assert.equal(draftInstance(root, 'local'), root + '/fleet/local');
   const cleared = [];
   const auth = createDraftAuth({ authRoot: root, store: { clearInstance(scope) { cleared.push(scope); } }, fetch: async () => ({ status: 401 }) });
-  await auth.fetch(root + '/fleet/local/api/chat/conversations');
+  await auth.fetch(root + '/fleet/local/api/conversations');
   assert.deepEqual(cleared, [{ authRoot: root, instance: root + '/fleet/local' }]);
 });
 

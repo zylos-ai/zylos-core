@@ -103,9 +103,9 @@ test('the Origin conversation is pinned first in "mine" with or without messages
   const f = fixture(t);
   const [empty] = f.history.list({ tab: 'mine' }).items;
   assert.deepEqual({ id: empty.id, group: empty.session_group, endpoint: empty.endpoint_id, localId: empty.localId,
-    name: empty.display_name, count: empty.count, preview: empty.preview, draft: empty.draft, origin: empty.origin },
+    name: empty.display_name, preview: empty.preview, draft: empty.draft, origin: empty.origin },
   { id: ORIGIN_CONVERSATION_ID, group: 'origin', endpoint: 'origin', localId: 'origin',
-    name: 'Origin', count: 0, preview: '', draft: false, origin: true });
+    name: 'Origin', preview: '', draft: false, origin: true });
   assert.equal(f.history.list({ tab: 'mine' }).items.length, 1);
   assert.deepEqual(f.history.messages(ORIGIN_CONVERSATION_ID).items, [], 'an empty Origin conversation is empty, not missing');
   f.add('out', 'dashboard', 'origin', 'An older alert');
@@ -117,16 +117,18 @@ test('the Origin conversation is pinned first in "mine" with or without messages
   assert.deepEqual(listed.map(item => item.id), [ORIGIN_CONVERSATION_ID, sent.conversationId], 'Origin stays first outside activity order');
   assert.equal(listed[0].preview, 'An older alert');
   const first = f.history.list({ tab: 'mine', limit: 1 });
-  assert.deepEqual(first.items.map(item => item.id), [ORIGIN_CONVERSATION_ID]);
-  const next = f.history.list({ tab: 'mine', limit: 1, cursor: first.nextCursor });
-  assert.deepEqual(next.items.map(item => item.id), [sent.conversationId]);
-  assert.equal(next.nextCursor, null);
+  assert.deepEqual(first.items.map(item => item.id), [ORIGIN_CONVERSATION_ID, sent.conversationId]);
+  assert.equal(first.nextCursor, null);
   f.add('in', 'telegram', 'chat', 'external words', 'telegram:chat');
   assert.equal(f.history.list({ tab: 'external' }).items.some(item => item.id === ORIGIN_CONVERSATION_ID || item.session_group === 'origin'), false);
   assert.throws(() => f.history.messages(ORIGIN_CONVERSATION_ID, { tab: 'external' }), { code: 'chat_conversation_not_found' });
   const { highwater } = f.history.chatChangeSnapshot({ tab: 'mine' });
-  f.add('in', 'system', 'scheduler', 'scheduled task');
-  assert.equal(f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: highwater }).listChanged, false);
+  const scheduled = f.add('in', 'system', 'scheduler', 'scheduled task');
+  f.db.prepare("UPDATE conversations SET timestamp='2026-02-03 04:05:06' WHERE id=?").run(scheduled);
+  assert.equal(f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: highwater }).listChanged, true);
+  const [updatedOrigin] = f.history.list({ tab: 'mine' }).items;
+  assert.equal(updatedOrigin.stamp, f.db.prepare("SELECT julianday('2026-02-03 04:05:06')").pluck().get());
+  assert.equal(updatedOrigin.preview, 'An older alert');
   f.add('out', 'dashboard', 'origin', 'A new alert');
   assert.equal(f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: highwater }).listChanged, true);
 });
@@ -147,8 +149,8 @@ test('Origin messages show Dashboard and internal rows both ways but not system,
     [['out', 'telegram:chat', true, 'relay to Telegram'], ['in', 'telegram:chat', true, 'relayed back']]);
   assert.equal(items[1].deliveryState, 'stored');
   const [origin] = f.history.list({ tab: 'mine' }).items;
-  assert.equal(origin.count, 2, 'summaries count Dashboard rows only');
-  assert.equal(origin.preview, 'system alert', 'summaries exclude internal messages');
+  assert.equal(Object.hasOwn(origin, 'count'), false);
+  assert.equal(origin.preview, 'system alert', 'the preview stays on the latest non-internal row');
   assert.deepEqual(f.history.status(ORIGIN_CONVERSATION_ID, { ids: [shown[0]] }).items.map(row => row.deliveryState), ['delivered']);
 });
 
@@ -263,7 +265,7 @@ test('an internal message to origin from another session appears in the Origin c
   const items = f.history.messages(ORIGIN_CONVERSATION_ID).items;
   assert.deepEqual(items.map(row => [row.direction, row.channel, row.internal?.peerSessionGroup, row.internal?.content]),
     [['in', 'internal', group, 'please tell the owner in Origin']]);
-  assert.equal(f.history.list({ tab: 'mine' }).items[0].preview, '', 'the summary still excludes internal messages');
+  assert.equal(f.history.list({ tab: 'mine' }).items[0].preview, '', 'a relay alone does not provide a list preview');
 });
 
 // In single mode Core records the rows of every conversation and external chat
@@ -297,7 +299,6 @@ test('the Origin conversation shows every row recorded under origin with its own
   assert.deepEqual([items[5].internal.peerSessionGroup, items[5].internal.content], [namedGroup, 'Origin to the X thread']);
   const [origin] = f.history.list({ tab: 'mine' }).items;
   assert.equal(origin.id, ORIGIN_CONVERSATION_ID);
-  assert.equal(origin.count, shown.length - 1, 'summaries count no internal rows');
   assert.equal(origin.preview, 'Origin answers Telegram');
   assert.equal(origin.previewDirection, 'out');
   assert.equal(f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: highwater }).listChanged, true);

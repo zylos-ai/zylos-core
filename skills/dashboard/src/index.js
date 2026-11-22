@@ -13,8 +13,6 @@ import { createReadinessCheck } from './lib/readiness.js';
 import { bootId, publishHealthProcess } from './lib/health-process.js';
 import { createCoalescedBroadcast } from './lib/coalesced-broadcast.js';
 import http from 'node:http';
-import { execFile, execFileSync } from 'node:child_process';
-import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -80,12 +78,12 @@ import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js
 import { createRuns } from './lib/workbench/runs.js';
 import { createGroupConfig } from './lib/workbench/group-config.js';
 import { createGroupBacklog } from './lib/workbench/group-backlog.js';
-import { createMemoryBacklog } from './lib/workbench/memory-backlog.js';
+import { createMemoryBacklog, readBacklogPage, treeBacklog } from './lib/workbench/memory-backlog.js';
 import { createOriginBacklog } from './lib/workbench/origin-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
 import { createSessionHostRoutes } from './lib/session-host-routes.js';
 import { createGroupDeletionRoutes } from './lib/workbench/group-deletion.js';
-import { createGroupsApi, groupCounts, projectGroup, projectListRow } from './lib/workbench/groups-api.js';
+import { createGroupsApi, groupCounts, groupListRows } from './lib/workbench/groups-api.js';
 import { usageSummary, usagePricing, createUsageCostReader } from './lib/workbench/usage-api.js';
 import { isSameOriginRequest } from './lib/request-origin.js';
 import { usageSeries } from './lib/workbench/usage-series.js';
@@ -93,13 +91,15 @@ import { hostSeries } from './lib/workbench/host-series.js';
 import { createNamingRequest } from './lib/workbench/naming-request.js';
 import { createGroupSnapshot } from './lib/workbench/group-snapshot.js';
 import { createScheduleRead, scheduleReadResponse } from './lib/workbench/schedule-read.js';
+import { listErrorBody } from './lib/list-query.js';
+import { apiKeyPayload, apiKeysPage } from './lib/api-key-list.js';
 import { createScheduleWrite } from './lib/workbench/schedule-write.js';
 import { createScheduleTz } from './lib/workbench/schedule-tz.js';
 import { createInstanceTimezone, handleInstanceTimezone, handleInstanceTimezoneRestart } from './lib/instance-timezone.js';
 import { handleAction, instanceDefaults } from './lib/actions.js';
 import { VersionChecker } from './lib/version-checker.js';
 import { isNewerVersion } from './lib/version-utils.js';
-import { DASHBOARD_RUNTIMES, createRuntimeOverridesReader, runtimeVersionRecord as projectRuntimeVersion, runtimeDefaults, handleRuntimeOptions } from './lib/runtime-api.js';
+import { DASHBOARD_RUNTIMES, runtimeVersionRecord as projectRuntimeVersion, runtimeDefaults, handleRuntimeOptions } from './lib/runtime-api.js';
 
 const { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES, getRuntime, runtimesWith } = await loadCoreModule('runtime/index.js');
 
@@ -135,9 +135,11 @@ config.runtime = defaultRuntime();
 
 // 1-2. Store
 const dbPath = path.join(config.dataDir, 'dashboard.db');
+const c4Reader = new C4Reader(config.zylosDir);
 let store;
 try {
-  store = new Store(dbPath);
+  store = new Store(dbPath, { conversationHighwater: () => c4Reader._open()
+    ?.prepare('SELECT COALESCE(MAX(id),0) FROM conversations').pluck().get() ?? 0 });
 } catch (err) {
   console.error(`[dashboard] Failed to open database: ${err.message}`);
   process.exit(1);
@@ -253,14 +255,13 @@ async function broadcastFleetState() {
     const snapshot = await workbench.getSnapshot(undefined, { cachedObservations: true });
     const instance = buildInstancePayload();
     const counts = groupCounts(snapshot, { allowUnreadable: true });
-    const rows = snapshot.rows.map(row => projectGroup(row, snapshot));
-    const running = rows.filter(row => row.side === 'running').map(projectListRow);
+    const running = groupListRows(snapshot, 'running');
     const instanceKey = publicationKey(instance), groupsKey = publicationKey({ counts, running });
     const instanceChanged = instanceKey !== lastInstancePublication, groupsChanged = groupsKey !== lastGroupsPublication;
     if (instanceChanged) { sse.broadcast('instance', instance); lastInstancePublication = instanceKey; }
     if (groupsChanged) { sse.broadcast('groups', counts); lastGroupsPublication = groupsKey; }
     if ((instanceChanged || groupsChanged) && fleetPollerReady) {
-      broadcastFleet(fleetPoller.getFleet(), () => selfFleetState(instance, counts, rows, running));
+      broadcastFleet(fleetPoller.getFleet(), () => selfFleetState(instance, counts, snapshot, running));
     }
   } catch (err) {
     process.stderr.write(`[fleet] instance/groups SSE broadcast skipped: ${err.message}\n`);
@@ -323,7 +324,7 @@ const stateEngine = new StateEngine(store, collectors, config, {
 timeMethod(stateEngine, '_periodicSnapshot', 'state.snapshot');
 timeMethod(stateEngine, '_readAMHeartbeat', 'state.heartbeat');
 
-observerService.historyService = new HistoryService({ config, store, stateEngine, readCurrentSessionId: () => coreState.getSingleSessionId(), readGroupKey: key => groupsApi.detail(key, { include: [] }) });
+observerService.historyService = new HistoryService({ config, store, stateEngine, readCurrentSessionId: () => coreState.getSingleSessionId(), readGroupKey: key => groupsApi.detail(key, new URLSearchParams(key === 'origin' ? 'include=' : '')) });
 
 // Wire collector updates to state engine
 pm2Collector._onUpdate = (data) => {
@@ -351,7 +352,6 @@ for (const { instance } of eventDrivenCollectors) {
 }
 
 // 9b. C4 reader (read-only access to comm-bridge DB)
-const c4Reader = new C4Reader(config.zylosDir);
 const displayNames = createDisplayNames({ store, zylosDir: config.zylosDir, sanitizer });
 const workbench = createGroupSnapshot({ zylosDir: config.zylosDir, store, c4Reader, sanitizer, displayNames, sessionObservations,
   readConfigRuntime: () => loadZylosConfig(config.zylosDir).runtime ?? null,
@@ -362,7 +362,8 @@ const instanceTimezone = createInstanceTimezone({ zylosDir: config.zylosDir,
 const getDetailSnapshot = () => workbench.getCachedSnapshot() ?? workbench.getSnapshot();
 const groupRuns = createRuns({ store, getSnapshot: getDetailSnapshot });
 const groupConfig = createGroupConfig({ zylosDir: config.zylosDir });
-const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, c4Reader, getSnapshot: getDetailSnapshot });
+const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, c4Reader, getSnapshot: getDetailSnapshot,
+  readConfig: () => readConfigStrict(path.join(config.zylosDir, '.zylos', 'config.json')) });
 const memoryBacklog = createMemoryBacklog({ zylosDir: config.zylosDir, getSnapshot: at => workbench.getSnapshot(at), groupBacklog,
   originBacklog: createOriginBacklog({ zylosDir: config.zylosDir }) });
 function recordDashboardInterrupt(record) {
@@ -371,7 +372,6 @@ function recordDashboardInterrupt(record) {
 const groupAction = createGroupActions({ zylosDir: config.zylosDir, config, onInterrupt: recordDashboardInterrupt });
 const sendNamingPrompt = createNamingRequest({ zylosDir: config.zylosDir, readMode: () => loadZylosConfig(config.zylosDir).session_mode });
 
-const runtimeOverridesPage = createRuntimeOverridesReader({ zylosDir: config.zylosDir, displayNames, run: promisify(execFile) });
 function installedVersions() {
   return { ...installed };
 }
@@ -430,17 +430,16 @@ async function refreshDashboardState({ fresh = false } = {}) {
 // Fleet records reuse a cost summary for at most 30 s; usage HTTP reads do not.
 const readFleetCost = createUsageCostReader(store);
 
-function selfFleetState(instance, counts, rows, running = rows.filter(row => row.side === 'running').map(projectListRow)) {
+function selfFleetState(instance, counts, snapshot, running = groupListRows(snapshot, 'running')) {
   return fleetStateFromObjects(instance, counts, readFleetCost({ tz: instanceTz() }), {
     rows: running,
-    failedRows: rows.filter(row => row.side === 'offline' && row.flags?.startFailed).map(projectListRow),
+    failedRows: groupListRows(snapshot, 'offline', 'startFailed'),
   });
 }
 
 function cachedSelfFleetState() {
   const snapshot = workbench.getCachedSnapshot() ?? { rows: [], readAt: Date.now(), listKnown: false };
-  return selfFleetState(buildInstancePayload(), groupCounts(snapshot, { allowUnreadable: true }),
-    snapshot.rows.map(row => projectGroup(row, snapshot)));
+  return selfFleetState(buildInstancePayload(), groupCounts(snapshot, { allowUnreadable: true }), snapshot);
 }
 
 function buildSelfFleetRecord(buildState = cachedSelfFleetState) {
@@ -506,30 +505,6 @@ function maskApiKey(value) {
 
 function normalizeApiKeyName(value) {
   return String(value || '').trim();
-}
-
-function apiKeysPayload() {
-  return {
-    keys: store.listApiKeys().map(key => ({
-      name: key.name,
-      scope: key.scope,
-      created_at: key.created_at,
-      last_used_at: key.last_used_at,
-      revoked_at: key.revoked_at,
-      status: key.revoked_at ? 'revoked' : 'active'
-    }))
-  };
-}
-
-function apiKeyPayload(key) {
-  return {
-    name: key.name,
-    scope: key.scope,
-    created_at: key.created_at,
-    last_used_at: key.last_used_at,
-    revoked_at: key.revoked_at,
-    status: key.revoked_at ? 'revoked' : 'active'
-  };
 }
 
 function validateApiKeyName(name) {
@@ -796,9 +771,13 @@ async function handleAgentRename(req, res) {
   }
 }
 
-async function handleApiKeys(req, res) {
+async function handleApiKeys(req, res, url) {
   if (req.method === 'GET') {
-    sendJson(res, 200, apiKeysPayload());
+    try {
+      sendJson(res, 200, apiKeysPage(store, url.searchParams));
+    } catch (error) {
+      sendJson(res, error.statusCode ?? 500, error.statusCode ? listErrorBody(error) : { error: 'internal_error' });
+    }
     return;
   }
   if (req.method !== 'POST') {
@@ -831,7 +810,6 @@ async function handleApiKeys(req, res) {
       ok: true,
       key: apiKeyPayload(created),
       plaintext_key: key,
-      ...apiKeysPayload()
     });
   } catch (err) {
     if (isUniqueConstraintError(err)) {
@@ -870,7 +848,6 @@ async function handleApiKeyRotate(req, res, pathname) {
     ok: true,
     key: apiKeyPayload(rotated),
     plaintext_key: key,
-    ...apiKeysPayload()
   });
 }
 
@@ -880,7 +857,7 @@ async function handleApiKeysPurge(req, res) {
     return;
   }
   const purged = store.purgeRevokedApiKeys();
-  sendJson(res, 200, { ok: true, purged, ...apiKeysPayload() });
+  sendJson(res, 200, { ok: true, purged });
 }
 
 async function handleApiKeyDelete(req, res, pathname, url) {
@@ -899,7 +876,7 @@ async function handleApiKeyDelete(req, res, pathname, url) {
   if (url.searchParams.get('permanent') === '1') {
     const result = store.hardDeleteApiKey(name);
     if (result.deleted > 0) {
-      sendJson(res, 200, { ok: true, deleted: result.deleted, ...apiKeysPayload() });
+      sendJson(res, 200, { ok: true, deleted: result.deleted });
       return;
     }
     if (result.active) {
@@ -914,7 +891,7 @@ async function handleApiKeyDelete(req, res, pathname, url) {
     sendJson(res, 404, { error: 'unknown_key' });
     return;
   }
-  sendJson(res, 200, { ok: true, ...apiKeysPayload() });
+  sendJson(res, 200, { ok: true });
 }
 
 async function runInitialCollectors() {
@@ -982,7 +959,12 @@ async function handleApi(req, res, pathname, url) {
     sendJson(res, 200, buildInstancePayload());
     return true;
   }
-  if (pathname === '/api/groups/counts' || pathname === '/api/groups/running' || pathname === '/api/groups/offline' || pathname === '/api/groups/search' || pathname === '/api/groups/activity') {
+  if (pathname === '/api/groups') {
+    try { sendJson(res, 200, await groupsApi.list(url.searchParams)); }
+    catch (error) { workbenchFailure(res, error); }
+    return true;
+  }
+  if (pathname === '/api/groups/counts' || pathname === '/api/groups/activity') {
     try {
       const operation = pathname.split('/').at(-1);
       sendJson(res, 200, await groupsApi[operation](url.searchParams));
@@ -1005,7 +987,7 @@ async function handleApi(req, res, pathname, url) {
       const { lookupRestartRequest } = await loadCoreModule('am-sock-client.js');
       const completion = await lookupRestartRequest(requestId, { deadlineAt: Date.now() + 10000, sessionGroup: key });
       await workbench.getSnapshot(undefined, { fresh: true });
-      const row = await groupsApi.detail(key, { include: [] });
+      const row = await groupsApi.detail(key, new URLSearchParams(key === 'origin' ? 'include=' : ''));
       sendJson(res, 200, { requestId, completion: completion === 'deadline_exceeded' ? 'unknown' : completion,
         group: { id: key, runId: row.runId ?? row.run?.runId ?? null, sessionId: row.sessionId ?? row.run?.sessionId ?? null,
           ready: row.presence === 'running' && row.live?.status?.valid === true, state: row.state } });
@@ -1050,8 +1032,11 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/memory/backlog') {
-    try { sendJson(res, 200, await memoryBacklog()); }
-    catch { sendJson(res, 503, { error: 'backlog_failed' }); }
+    try {
+      sendJson(res, 200, await readBacklogPage(memoryBacklog, url.searchParams));
+    } catch (error) {
+      sendJson(res, error.statusCode ?? 500, error.statusCode ? listErrorBody(error) : { error: 'internal_error' });
+    }
     return true;
   }
 
@@ -1074,12 +1059,6 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
-  if (pathname === '/api/groups/runtime-overrides') {
-    try { sendJson(res, 200, await runtimeOverridesPage(url.searchParams)); }
-    catch { sendJson(res, 502, { error: 'override_list_failed' }); }
-    return true;
-  }
-
   if (pathname === '/api/usage/pricing') {
     try { sendJson(res, 200, usagePricing(store, { tz: (await scheduleTz()).tz })); }
     catch (error) { workbenchFailure(res, error); }
@@ -1088,7 +1067,7 @@ async function handleApi(req, res, pathname, url) {
 
   const groupDetail = pathname.match(/^\/api\/groups\/([^/]+)$/);
   if (groupDetail) {
-    try { sendJson(res, 200, await groupsApi.detail(workbenchGroupDetailKey(groupDetail[1]), { include: url.searchParams })); }
+    try { sendJson(res, 200, await groupsApi.detail(workbenchGroupDetailKey(groupDetail[1]), url.searchParams)); }
     catch (error) { workbenchFailure(res, error); }
     return true;
   }
@@ -1343,7 +1322,9 @@ async function handleMemoryApi(req, res, pathname, url) {
       const sessionGroups = (groupRoot?.children ?? [])
         .filter(node => node.type === 'directory' && parseSessionGroup(node.name) !== null)
         .map(node => ({ sessionGroup: node.name, displayName: names.get(node.name)?.displayName ?? null }));
-      sendJson(res, 200, { ...tree, sessionGroups });
+      // Each group's pending count and syncing state for the badge beside its name.
+      const backlogs = await treeBacklog(groupBacklog, sessionGroups.map(group => group.sessionGroup));
+      sendJson(res, 200, { ...tree, sessionGroups: sessionGroups.map((group, index) => ({ ...group, backlog: backlogs[index] })) });
       return true;
     }
     if (pathname === '/api/memory/file') {
@@ -1454,14 +1435,14 @@ export function createServer() {
     } })) return;
     if (await handleChatAttachments(req, res, url, { auth, config, sender, attachments,
       readMode: () => loadZylosConfig(config.zylosDir).session_mode })) return;
-    if (pathname.startsWith('/api/chat/conversations/')) {
+    if (pathname.startsWith('/api/conversations/')) {
       await answersReady;
       if (await handleChatAnswers(req, res, url, { auth, config, answers, delivery: answerDelivery, sender,
         readMode: () => loadZylosConfig(config.zylosDir).session_mode })) return;
     }
     if (await sessionHostRoutes(req, res, url)) return;
     if (await groupDeletionRoutes(req, res, url)) return;
-    if (await handleChatConversations(req, res, url, { auth, config, conversations, sender,
+    if (await handleChatConversations(req, res, url, { auth, config, conversations, sender, history,
       readMode: () => loadZylosConfig(config.zylosDir).session_mode })) return;
     if (await handleChatHistory(req, res, url, { auth, config, history, activity: chatActivity, instanceTz: scheduleTz })) return;
 
@@ -1606,7 +1587,7 @@ export function createServer() {
     }
 
     if (pathname === '/api/keys') {
-      await handleApiKeys(req, res);
+      await handleApiKeys(req, res, url);
       return;
     }
 

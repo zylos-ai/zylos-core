@@ -361,7 +361,7 @@ export function createAnnotationUi({ document, t, root, composer, composeBox, na
     const summary = node('summary');
     summary.append(icon(document, 'chev'), node('span', t('chat.annotation.preview')));
     preview.append(summary);
-    const content = s.pending?.content ?? composeContent({ text: s.input, annotations: items, timeZone: s.tz });
+    const content = s.pending?.content ?? composeContent({ text: s.input, annotations: items, timeZone: s.tz, t });
     const quoteId = s.pending ? s.pending.quote : s.quote?.id ?? null;
     if (quoteId && s.quote) {
       preview.append(node('p', t('chat.annotation.previewQuote', { who: quoteAuthor(s.quote, t), time: shortStamp(s.quote.timestamp, s.tz) }), 'conversation-annotation-preview-quote'));

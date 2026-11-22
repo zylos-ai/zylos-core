@@ -1,5 +1,5 @@
 import { formatZoned, instanceZone, instanceZoneReady } from './wb/instance-zone.js';
-import { readGroupSnapshot, displayGroupRow, instanceActionRequest } from './wb/group-data.js';
+import { readGroupSnapshot, readGroupPage, displayGroupRow, groupDetailPath, instanceActionRequest } from './wb/group-data.js';
 import { waitUntilDeadline } from './request-timeout.js';
 import { createConversationPush } from './wb/conversation-push.js';
 import { consumeDraftReset, createDraftRestoreStore, createComposeRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js';
@@ -8,8 +8,8 @@ import { mountSessionHostSettings } from './wb/session-host-settings.js';
 import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js';
 import { createPricingPanel } from './wb/settings-pricing.js';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js';
-import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js';
+import { renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js';
+import { keyStillListed, wireSettingsConfirmations } from './wb/settings-wiring.js';
 import { coreVersion, renderBrandVersion, renderCoreUpdate, renderEngineVersion } from './wb/settings-version.js';
 import { mountConversationPage } from './wb/conversation-page.js';
 import { mountMobileNavigation } from './wb/mobile-navigation.js';
@@ -1086,6 +1086,11 @@ function renderObserverPage() {
   const picker = $('#observer-group-picker'), select = $('#observer-group-select');
   if (picker && select) {
     picker.hidden = !multi || Boolean(focus);
+    const more = $('#observer-group-more'), groups = state.observer.groups;
+    if (more) {
+      more.hidden = !groups?.nextCursor;
+      more.disabled = Boolean(groups?.loading);
+    }
     const options = [{ value: '', label: t('wb.observer.chooseGroup') }];
     const rows = runningObserverGroups(state.observer.groups);
     if (group !== undefined && !rows.some(item => (item.sessionGroup ?? 'origin') === group)) {
@@ -1847,6 +1852,7 @@ function initObserverControls() {
       });
     });
   }
+  $('#observer-group-more')?.addEventListener('click', () => loadMoreObserverGroups());
   $('#observer-group-select')?.addEventListener('change', event => {
     openObserverFor(event.target.value || undefined, 'live', { focus: Boolean(state.observer.focus) }).catch(() => {});
   });
@@ -2269,14 +2275,15 @@ function renderFleetManage(data, draft = null) {
   machineList?.refresh();
 }
 
-function renderApiKeys(data) {
-  const keys = data?.keys || [];
-  const counts = keyCounts(keys);
+/** One page of keys from the server, with the counts of all active and revoked keys for the card header. */
+function renderApiKeys(keys, { counts = { active: 0, revoked: 0 } } = {}) {
   const purgeBtn = fleetManageModal.querySelector('#api-key-purge-revoked');
   if (purgeBtn) { purgeBtn.hidden = !counts.revoked; purgeBtn.textContent = t('wb.settings.keys.purge', { count: counts.revoked }); }
   fleetManageModal.querySelector('#api-key-count').textContent = t('wb.settings.keys.counts', counts);
-  settingsWiring().renderKeyTable(fleetManageModal.querySelector('#api-key-list'), keys);
-  keyList?.refresh();
+  const root = fleetManageModal.querySelector('#api-key-list');
+  // A search that finds nothing says so below the list; "no keys yet" is only for an instance without any.
+  if (!keys.length && counts.active + counts.revoked > 0) root.replaceChildren();
+  else settingsWiring().renderKeyTable(root, keys);
 }
 
 function renderCreatedApiKey(createdKey) {
@@ -2292,7 +2299,7 @@ function settingsWiring() {
     document, t, runner: pageActions(), setBusy: setModalBodyDisabled, remoteTarget: viewedRemoteTarget,
     keyPage: {
       request: async (method, path) => { const resp = await fetch(api(path), { method }); return { ok: resp.ok, data: await resp.json() }; },
-      renderKeys: renderApiKeys, renderCreated: renderCreatedApiKey, createdKey: () => fleetManageModal?._createdKey ?? null,
+      reload: () => keyList?.refresh(), renderCreated: renderCreatedApiKey, createdKey: () => fleetManageModal?._createdKey ?? null,
       status: (text, kind) => fleetManageStatus(text, kind, '#api-key-list'), busy: setApiKeyBusy, errorText: fleetManageError,
     },
     writable: () => !remoteIsReadOnly(), onGroup: openWorkbenchGroup,
@@ -2315,15 +2322,16 @@ async function copyCreatedApiKey() {
   }
 }
 
-async function loadApiKeys() {
-  try {
-    const resp = await fetch(api('/api/keys'), { cache: 'no-store' });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(fleetManageError(data.error?.code, t('fleet_manage.keys_load_failed')));
-    renderApiKeys(data);
-  } catch (err) {
-    fleetManageStatus(err.message, 'error', '#api-key-list');
-  }
+/** One page of the key list (GET /api/keys); a refused request throws an error carrying the response's code. */
+async function readApiKeys({ q, cursor, limit, total }) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (q) params.set('q', q);
+  if (cursor) params.set('cursor', cursor);
+  if (total) params.set('include', 'total');
+  const resp = await fetch(api(`/api/keys?${params}`), { cache: 'no-store' });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw Object.assign(new Error(fleetManageError(data.error?.code, t('fleet_manage.keys_load_failed'))), { code: data.error?.code });
+  return data;
 }
 
 async function testFleetAgent() {
@@ -2408,7 +2416,7 @@ async function createApiKey() {
     const data = await resp.json();
     if (!resp.ok) throw new Error(fleetManageError(data.error?.code, t('fleet_manage.key_save_failed')));
     fleetManageModal.querySelector('#api-key-name').value = '';
-    renderApiKeys(data);
+    keyList?.refresh();
     renderCreatedApiKey({ name: data.key?.name || body.name, plaintext_key: data.plaintext_key });
     fleetManageStatus(t('fleet_manage.key_created_status'), 'success', createRow);
   } catch (err) {
@@ -2426,10 +2434,10 @@ async function purgeRevokedApiKeys() {
     const resp = await fetch(api('/api/keys/purge-revoked'), { method: 'POST' });
     const data = await resp.json();
     if (!resp.ok) throw new Error(fleetManageError(data.error?.code, t('fleet_manage.purge_revoked_failed')));
-    renderApiKeys(data);
-    if (fleetManageModal?._createdKey?.name && !data.keys?.some(key => key.name === fleetManageModal._createdKey.name)) {
-      renderCreatedApiKey(null);
-    }
+    keyList?.refresh();
+    // A new key still shown once may have been revoked elsewhere and cleared just now: stop showing it.
+    const shown = fleetManageModal?._createdKey?.name;
+    if (shown && data.purged > 0 && !(await keyStillListed(readApiKeys, shown).catch(() => true))) renderCreatedApiKey(null);
     fleetManageStatus(countLabel(t, 'fleet_manage.purge_revoked_status', data.purged ?? 0), 'success', '#api-key-list');
   } catch (err) {
     fleetManageStatus(err.message, 'error', '#api-key-list');
@@ -2618,18 +2626,18 @@ async function refreshObserverStatus({ quiet = false, signal } = {}) {
     try {
       const [resp, groups] = await Promise.all([
         fetch(endpoint, { cache: 'no-store', signal }),
-        fetch(observerEndpoint('/api/groups/running'), { cache: 'no-store', signal }).then(response => { if (!response.ok) throw Error('read_failed'); return response.json(); }).catch(() => null)
+        fetch(observerEndpoint('/api/groups?side=running'), { cache: 'no-store', signal }).then(response => { if (!response.ok) throw Error('read_failed'); return response.json(); }).catch(() => null)
       ]);
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw observerRequestError(data, resp.status);
       if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
       state.observer.status = data;
-      if (state.observer.group !== undefined && groups && !groups.rows?.some(row => (row.id ?? row.sessionGroup) === state.observer.group)) {
-        const selected = await fetch(observerEndpoint('/api/groups/' + encodeURIComponent(state.observer.group) + '?include='), { cache: 'no-store', signal }).then(response => response.ok ? response.json() : null).catch(() => null);
+      if (state.observer.group !== undefined && groups && !groups.items?.some(row => (row.id ?? row.sessionGroup) === state.observer.group)) {
+        const selected = await fetch(observerEndpoint(groupDetailPath(state.observer.group ?? 'origin')), { cache: 'no-store', signal }).then(response => response.ok ? response.json() : null).catch(() => null);
         if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
-        if (selected) groups.rows = [...(groups.rows ?? []), selected];
+        if (selected) groups.items = [...(groups.items ?? []), selected];
       }
-      if (groups) groups.rows = (groups.rows ?? []).map(row => displayGroupRow(row));
+      if (groups) groups.rows = (groups.items ?? []).map(row => displayGroupRow(row));
       state.observer.groups = groups;
       renderObserverStatus(data);
       if (data && state.observer.intent && (data.desired?.enabled !== true || observerRecoveryReason(data))) {
@@ -2646,6 +2654,33 @@ async function refreshObserverStatus({ quiet = false, signal } = {}) {
   })();
   try { return await request.promise; }
   catch (error) { if (!quiet) throw error; return null; }
+}
+
+async function loadMoreObserverGroups() {
+  const groups = state.observer.groups, targetKey = observerTargetKey();
+  if (!groups?.nextCursor || groups.loading) return;
+  const current = () => state.observer.groups === groups && observerTargetKey() === targetKey;
+  groups.loading = true;
+  renderObserverPage();
+  try {
+    const next = await readGroupPage(async path => {
+      const response = await fetch(observerEndpoint(path), { cache: 'no-store', signal: AbortSignal.timeout(30000) });
+      const value = await response.json();
+      if (!response.ok) throw observerRequestError(value, response.status);
+      return value;
+    }, { side: 'running', cursor: groups.nextCursor });
+    if (!current()) return;
+    const loaded = new Map(groups.rows.map(row => [row.sessionGroup, row]));
+    for (const row of next.rows) loaded.set(row.sessionGroup, row);
+    groups.rows = [...loaded.values()];
+    groups.nextCursor = next.nextCursor;
+  } catch (error) {
+    if (!current()) return;
+    if (error.code === 'invalid_cursor') await refreshObserverStatus({ quiet: true });
+  } finally {
+    groups.loading = false;
+    if (current()) renderObserverPage();
+  }
 }
 
 // Disabling and uninstalling close the open terminal view, so both ask first; only uninstalling is destructive.
@@ -2712,8 +2747,8 @@ let keyList = null;
 let machineList = null;
 const settingsLists = [];
 /** One of the settings page's long lists: search above, one page of rows, the pager below. */
-function mountSettingsList(list, rowSelector, placeholderKey) {
-  const pager = mountPagedList({ document, t, list, rows: () => [...list.querySelectorAll(rowSelector)], placeholder: t(placeholderKey) });
+function mountSettingsList(list, rowSelector, placeholderKey, server = null) {
+  const pager = mountPagedList({ document, t, list, rows: () => [...list.querySelectorAll(rowSelector)], placeholder: t(placeholderKey), server });
   list.before(pager.search); list.after(pager.empty, pager.pager);
   settingsLists.push(() => { pager.setPlaceholder(t(placeholderKey)); pager.relabel(); });
   return pager;
@@ -2736,7 +2771,10 @@ function initSettingsPage() {
   settingsPage = composeSettings(root, { settings: oldSettings, fleet: oldFleet, actions: oldActions, controls, t });
   oldSettings.remove(); oldFleet.remove(); oldActions.remove();
   for (const box of root.querySelectorAll('.settings-table-scroll, #api-key-list')) watchScrollHint(box);
-  keyList = mountSettingsList(root.querySelector('#api-key-list'), 'tbody tr', 'wb.settings.keys.search');
+  // The server pages and searches the key list: there can be any number of keys.
+  keyList = mountSettingsList(root.querySelector('#api-key-list'), 'tbody tr', 'wb.settings.keys.search', {
+    readPage: readApiKeys, render: renderApiKeys, onError: err => fleetManageStatus(err.message, 'error', '#api-key-list'),
+  });
   machineList = mountSettingsList(root.querySelector('#fleet-agent-list'), '.wb-agent-row', 'wb.settings.fleet.search');
   settingsModal = root; fleetManageModal = root; actionsModal = settingsPage.actionsScope;
   // The upgrade button is drawn into the default engine card each time that card renders.
@@ -2764,13 +2802,13 @@ function initSettingsPage() {
     confirm: confirmSetting, writable: () => !remoteIsReadOnly(),
     identity: observerTargetKey, target: viewedRemoteTarget, onSaved: () => refreshState().catch(() => {}),
   });
-  const read = async path => { const target = observerTargetKey(); const value = await fetchJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
+  const read = async path => { const target = observerTargetKey(); const value = await requestAgentJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
   settingsLoader = createSettingsLoader({ read, onLoad(value) {
     settingsDefaults?.destroy();
     settingsDefaults = settingsWiring().renderDefaults(defaults, value, read, settingsPage.slots.idleReclaim);
     settingsPricing?.destroy(); settingsPricing = null;
     if (value.prices) {
-      settingsPricing = createPricingPanel({ root: settingsPage.sections.pricing, host: root, snapshot: value.snapshot,
+      settingsPricing = createPricingPanel({ root: settingsPage.sections.pricing, host: root, groupCounts: value.groupCounts.pricing,
         data: value.prices, usage: value.usage, t, formatTokens: tok, writable: () => !remoteIsReadOnly(), onDirty: count => settingsPage.badge('pricing', count),
         write: body => requestAgentJson('/api/settings/pricing', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
     } else { const status = root.querySelector('#settings-status'); status.hidden = false; status.textContent = t('wb.readFailed'); }
@@ -2830,7 +2868,7 @@ function refreshSettingsPage() {
   if (!REMOTE_AGENT) {
     const identity = observerTargetKey();
     fetch(api('/api/fleet/agents'), { cache: 'no-store' }).then(async response => { if (!response.ok) throw Error('read_failed'); return response.json(); }).then(value => { if (identity === observerTargetKey()) renderFleetManage(value); }).catch(error => { if (identity === observerTargetKey()) fleetManageStatus(error.message, 'error', '#fleet-agent-list'); });
-    loadApiKeys();
+    keyList?.refresh({ first: true });
   }
   // Another machine opened through this one: its keys and its own list of machines stay on that machine.
   const remote = Boolean(REMOTE_AGENT), fleetButton = document.querySelector('[data-settings-section="fleet"]');

@@ -37,7 +37,7 @@ function fixture(t, locale) {
       const url = new URL(path, 'http://fixture');
       let body;
       if (path === '/api/instance') body = { session_mode: { sessionMode: 'multi' } };
-      else if (url.pathname === '/api/chat/conversations') {
+      else if (url.pathname === '/api/conversations') {
         listReads++; body = { items: items(url.searchParams.get('tab')), nextCursor: null };
       } else if (url.pathname.endsWith('/messages')) {
         messageReads++; body = { items: pending, afterCursor: 'after', nextCursor: null };
@@ -80,7 +80,7 @@ for (const locale of ['en', 'zh']) for (const tab of ['mine', 'external']) {
     assert.equal(f.preview('draft:empty').textContent, f.words['chat.page.blankPreview']);
   });
 
-  test(`${tab} refreshed list previews follow the latest non-internal message in ${locale}`, { timeout: 2000 }, async t => {
+  test(`${tab} refreshed list previews keep the latest non-internal message and its direction in ${locale}`, { timeout: 2000 }, async t => {
     const f = fixture(t, locale), prefix = prefixes(locale, tab);
     await f.open(tab); await f.select('g:IN');
     assert.equal(f.messageReads, 1, 'selecting the detail loads an empty initial history');
@@ -88,7 +88,7 @@ for (const locale of ['en', 'zh']) for (const tab of ['mine', 'external']) {
     for (const [index, direction] of ['in', 'out'].entries()) {
       const content = `refreshed ${direction}`;
       await f.receive([{ id: 10 + index * 2, direction, channel: tab === 'mine' ? 'dashboard' : 'telegram', content },
-        { id: 11 + index * 2, direction: direction === 'in' ? 'out' : 'in', channel: 'internal', content: 'internal tail must not become the preview' }]);
+        { id: 11 + index * 2, direction: direction === 'in' ? 'out' : 'in', channel: 'internal', content: 'internal relay' }]);
       assert.equal(f.messageReads, index + 2, 'each update reads real message state');
       assert.equal(f.listReads, listReads + index + 1, 'automatic stream catchup rereads deliberately stale list metadata before message merging');
       assert.ok(f.preview('g:IN') === preview, 'message refresh retains the keyed list preview node');

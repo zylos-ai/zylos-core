@@ -253,9 +253,9 @@ test('single Origin aggregates channel queues and latest inbound while multi gro
   f.live.set(null, f.live.get('telegram:first'));
   f.setMode('single');
   const api = createGroupsApi({ workbench: f.service });
-  const list = await api.running(), origin = list.rows[0], detail = await api.detail('origin', { include: ['raw'] });
+  const list = await api.list(new URLSearchParams('side=running')), origin = list.items[0], detail = await api.detail('origin', new URLSearchParams('include=raw'));
   const singleSnapshot = await f.service.getSnapshot();
-  assert.equal(list.rows.length, 1); assert.equal(origin.id, 'origin');
+  assert.equal(list.items.length, 1); assert.equal(origin.id, 'origin');
   assert.equal(origin.flags.queued.count, 3);
   assert.equal(origin.flags.queued.oldestAt, new Date(f.now() - 9000).toISOString());
   assert.equal((await api.counts()).running.flags.queued, 1);
@@ -274,14 +274,14 @@ test('single Origin aggregates channel queues and latest inbound while multi gro
   assert.deepEqual(detail.currentAction, origin.currentAction);
   for (const [key, value] of Object.entries(origin)) assert.deepEqual(detail[key], value, `detail retains list field ${key}`);
   f.setMode('multi'); f.advance(3000);
-  const multi = (await api.running()).rows;
+  const multi = (await api.list(new URLSearchParams('side=running'))).items;
   assert.equal(multi.length, 3); assert.equal((await api.counts()).running.flags.queued, 3);
   assert.equal((await f.service.raw('origin', singleSnapshot)).raw, detail.raw, 'source stays tied to the selected single snapshot after a new multi generation');
   const multiOrigin = multi.find(row => row.id === 'origin');
   assert.equal(multiOrigin.flags.queued.count, 1);
   assert.equal(multiOrigin.currentAction.message, 'Origin queued');
   for (const row of multi) {
-    const expanded = await api.detail(row.id, { include: [] });
+    const expanded = await api.detail(row.id, new URLSearchParams(row.id === 'origin' ? 'include=' : ''));
     assert.equal(row.flags.queued.count, 1); assert.equal(expanded.queue.pending.count, 1);
     assert.deepEqual(expanded.currentAction, row.currentAction);
     assert.equal(row.currentAction.message, row.id === 'telegram:first' ? 'Being delivered' : row.id === 'origin' ? 'Origin queued' : 'Latest received ?token=[REDACTED]');
@@ -298,7 +298,7 @@ test('single Origin queue head uses priority before conversation id', async t =>
     { sessionGroup: 'telegram:first', pending: { count: 1, oldestAt: f.now() - 2000, head: { id: 1, priority: 3 } }, running: { count: 0 } },
     { sessionGroup: 'lark:second', pending: { count: 1, oldestAt: f.now() - 1000, head: { id: 2, priority: 1 } }, running: { count: 0 } },
   ] } } : original(args);
-  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', { include: [] });
+  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', new URLSearchParams('include='));
   assert.deepEqual(detail.queue.pending.head, { id: 2, priority: 1 });
 });
 
@@ -313,7 +313,7 @@ test('single Origin without a preview has no unrelated raw message', async t => 
     if (args[0] === 'groups') for (const row of result.data.groups) row.preview = null;
     return result;
   };
-  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', { include: ['raw'] });
+  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', new URLSearchParams('include=raw'));
   assert.equal(detail.preview, null); assert.equal(detail.raw, null);
   assert.equal(Object.hasOwn(detail, 'rawError'), false);
 });
@@ -352,15 +352,15 @@ test('remote chat permission preserves workbench groups and search for all API s
     return args.includes('--key-match') ? { ...value, data: groups } : { ...value, data: { ...value.data, groups } };
   };
   const api = createGroupsApi({ workbench: f.service });
-  const http = await chatHttpFixture(t, {}, { workbench: url => api[url.pathname.split('/').at(-1)](url.searchParams) });
+  const http = await chatHttpFixture(t, {}, { workbench: url => api[url.pathname === '/api/groups' ? 'list' : 'activity'](url.searchParams) });
   for (const allowRemote of [false, true]) {
     http.config.chat.allowRemote = allowRemote;
     for (const identity of ['read', 'admin']) for (const fleet of [false, true]) {
-      const direct = await http.request({ method: 'GET', path: '/api/groups/running' }, { identity, fleet });
+      const direct = await http.request({ method: 'GET', path: '/api/groups?side=running' }, { identity, fleet });
       assert.equal(direct.status, 200);
       const value = JSON.parse(direct.text);
       for (const key of ['dashboard:local-chat', 'telegram:external']) {
-        const row = value.rows.find(row => row.id === key);
+        const row = value.items.find(row => row.id === key);
         assert.ok(row.state); assert.ok(Object.hasOwn(row, 'duration'));
         assert.match(row.currentAction.message, /Visible summary/);
         assert.match(row.currentAction.message, /REDACTED/);
@@ -368,14 +368,14 @@ test('remote chat permission preserves workbench groups and search for all API s
         assert.doesNotMatch(row.currentAction.message, /sk-123456/);
         for (const field of ['preview', 'tools', 'raw', 'live']) assert.equal(Object.hasOwn(row, field), false);
       }
-      const search = await http.request({ method: 'GET', path: '/api/groups/search?q=local-chat' }, { identity, fleet });
+      const search = await http.request({ method: 'GET', path: '/api/groups?q=local-chat' }, { identity, fleet });
       assert.equal(search.status, 200);
-      assert.ok(JSON.parse(search.text).rows.some(row => row.id === 'dashboard:local-chat'));
-      assert.deepEqual(JSON.parse(search.text).rows.find(row => row.id === 'dashboard:local-chat').currentAction,
-        value.rows.find(row => row.id === 'dashboard:local-chat').currentAction);
-      const named = await http.request({ method: 'GET', path: '/api/groups/search?q=Private%20project' }, { identity, fleet });
+      assert.ok(JSON.parse(search.text).items.some(row => row.id === 'dashboard:local-chat'));
+      assert.deepEqual(JSON.parse(search.text).items.find(row => row.id === 'dashboard:local-chat').currentAction,
+        value.items.find(row => row.id === 'dashboard:local-chat').currentAction);
+      const named = await http.request({ method: 'GET', path: '/api/groups?q=Private%20project' }, { identity, fleet });
       assert.equal(named.status, 200);
-      assert.ok(JSON.parse(named.text).rows.some(row => row.id === 'dashboard:local-chat'));
+      assert.ok(JSON.parse(named.text).items.some(row => row.id === 'dashboard:local-chat'));
       const activity = await http.request({ method: 'GET', path: '/api/groups/activity?range=60m&ids=dashboard%3Alocal-chat' }, { identity, fleet });
       assert.equal(activity.status, 200);
       assert.deepEqual(JSON.parse(activity.text), await f.service.activity('60m', ['dashboard:local-chat']));
@@ -582,8 +582,8 @@ for (const failure of ['statusError', 'modeError', 'c4Error', 'queueError', 'ove
     if (failure === 'statusError') {
       assert.ok(value.rows.every(row => row.state.kind === 'unknown'));
       assert.equal(value.sources.status.reason, 'status_unreadable');
-      const running = await createGroupsApi({ workbench: f.service }).running();
-      assert.ok(running.rows.every(row => row.flags.unreadable.reasons.includes('status_unreadable')));
+      const running = await createGroupsApi({ workbench: f.service }).list(new URLSearchParams('side=running'));
+      assert.ok(running.items.every(row => row.flags.unreadable.reasons.includes('status_unreadable')));
     }
     if (failure === 'c4Error') { assert.equal(value.hasOlder, null); assert.equal(value.sources.c4.reason, 'c4_groups_failed'); }
     if (failure === 'queueError') assert.ok(value.rows.every(row => row.queue.known === false));
@@ -682,16 +682,18 @@ for (const range of ['60m', '6h']) test(`single Origin ${range} seeds a legacy t
   assert.equal(value.groups.origin.cells[2], 'none');
 });
 
-test('Core CLI uses bounded argv children, exact envelopes, and serial current-row override batches', async () => {
+test('Core CLI uses bounded argv children, exact envelopes, and the complete runtime override catalog and bounded model batches', async () => {
   const calls = []; let active = 0, peak = 0;
   const cli = createCoreCli({ zylosDir: '/isolated/zylos', env: { PATH: '/fixture', ZYLOS_SESSION_GROUP: 'old' },
     execute: async (file, argv, options) => {
       calls.push({ file, argv, options }); active++; peak = Math.max(peak, active);
       await Promise.resolve(); active--;
-      const secondBatch = calls.length === 3;
+      const secondBatch = calls.length === 5;
       return { stdout: JSON.stringify({ ok: true, data: {
         baseline: { runtime: secondBatch ? 'claude' : 'codex' },
-        runtime: calls.length === 2 ? [{ sessionGroup: 'tg:g0', runtime: 'claude' }] : [],
+        runtime: calls.length === 2 ? [{ sessionGroup: 'tg:g0', runtime: 'claude' }]
+          : calls.length === 3 ? [{ sessionGroup: 'tg:unlisted', runtime: 'codex' }] : [],
+        nextAfter: calls.length === 2 ? 'tg:g0' : null,
         model: secondBatch ? [{ sessionGroup: 'tg:g499', runtime: 'codex', model: 'selected', effort: 'high' }] : [],
       } }) };
     } });
@@ -703,12 +705,14 @@ test('Core CLI uses bounded argv children, exact envelopes, and serial current-r
   assert.equal(Object.hasOwn(calls[0].options.env, 'ZYLOS_SESSION_GROUP'), false);
   const groups = ['origin', ...Array.from({ length: 500 }, (_, i) => `tg:g${i}`)];
   const result = await cli.readOverrides([...groups, null]);
-  assert.equal(result.ok, true); assert.equal(calls.length, 3); assert.equal(peak, 1);
+  assert.equal(result.ok, true); assert.equal(calls.length, 5); assert.equal(peak, 1);
   const requested = calls.slice(1).flatMap(call => call.argv.filter((value, i, all) => all[i - 1] === '--group'));
-  assert.equal(requested.length, 501); assert.equal(new Set(requested).size, 501);
-  assert.equal(requested.includes(null), false); assert.equal(calls[2].argv.filter(v => v === '--group').length, 1);
+  assert.equal(requested.length, 502); assert.equal(new Set(requested).size, 502);
+  assert.equal(requested.includes(null), false); assert.equal(calls[4].argv.filter(v => v === '--group').length, 2);
+  assert.deepEqual(calls[1].argv, ['group', 'overrides', '--json']);
+  assert.deepEqual(calls[2].argv, ['group', 'overrides', '--after', 'tg:g0', '--json']);
   assert.deepEqual(result.data.baseline, { runtime: 'codex' });
-  assert.deepEqual(result.data.runtime, [{ sessionGroup: 'tg:g0', runtime: 'claude' }]);
+  assert.deepEqual(result.data.runtime, [{ sessionGroup: 'tg:g0', runtime: 'claude' }, { sessionGroup: 'tg:unlisted', runtime: 'codex' }]);
   assert.deepEqual(result.data.model, [{ sessionGroup: 'tg:g499', runtime: 'codex', model: 'selected', effort: 'high' }]);
 });
 
@@ -761,7 +765,7 @@ test('read-scoped API authentication permits new routes while unauthenticated re
     cleanupSessions() {}, cleanupExpiredApiSessions() {},
   });
   t.after(() => clearInterval(gate._cleanupTimer));
-  for (const pathname of ['/api/groups/running', '/api/groups/search', '/api/groups/telegram%3Ag0']) {
+  for (const pathname of ['/api/groups?side=running', '/api/groups?q=fixture', '/api/groups/telegram%3Ag0']) {
     for (const authorized of [false, true]) {
       const res = { headers: {}, setHeader(key, value) { this.headers[key] = value; }, getHeader(key) { return this.headers[key]; },
         writeHead(status) { this.status = status; }, end(body) { this.body = body; } };
@@ -796,10 +800,10 @@ test('target overrides include row 101 and model-only rows while desired stays d
     overrideReads++;
     requested = groups;
     return { ok: true, data: { baseline: { runtime: 'claude' },
-      runtime: [{ sessionGroup: 'telegram:g100', runtime: 'codex' }, { sessionGroup: 'telegram:g0', runtime: 'codex' }, { sessionGroup: 'unlisted-group', runtime: 'codex' }],
+      runtime: [{ sessionGroup: 'telegram:g100', runtime: 'codex' }, { sessionGroup: 'telegram:g0', runtime: 'codex' }, { sessionGroup: 'telegram:unlisted', runtime: 'codex' }],
       model: [modelOnly, { sessionGroup: 'telegram:g0', runtime: 'codex', model: 'saved-model', effort: 'low' },
         { sessionGroup: 'telegram:g0', runtime: 'claude', model: 'other-engine', effort: 'high' },
-        { sessionGroup: 'unlisted-group', runtime: 'claude', model: 'unlisted-model', effort: 'high' }] } };
+        { sessionGroup: 'telegram:unlisted', runtime: 'claude', model: 'unlisted-model', effort: 'high' }] } };
   };
   const value = await f.service.getSnapshot(), rows = new Map(value.rows.map(row => [row.sessionGroup, row]));
   assert.equal(rows.get('telegram:g100').target.runtime, 'codex');
@@ -808,17 +812,18 @@ test('target overrides include row 101 and model-only rows while desired stays d
   assert.equal(rows.get('telegram:g0').target.runtime, 'claude');
   assert.deepEqual(rows.get('telegram:g0').desired, { runtime: 'codex', mode: 'override', model: 'saved-model', effort: 'low' });
   assert.equal(requested.length, 103);
-  assert.equal(requested.includes('unlisted-group'), false, 'a real override outside all row sources is not queried');
-  assert.equal(rows.has('unlisted-group'), false);
+  assert.equal(requested.includes('telegram:unlisted'), false, 'the catalog input contains only observed groups');
+  assert.equal(rows.get('telegram:unlisted').presence, 'not_running');
+  assert.equal(rows.get('telegram:unlisted').c4, null);
 
   const config = { runtime: { ok: true }, model: { ok: true } };
   const api = createGroupsApi({ workbench: f.service, groupConfig: { get: async () => config } });
-  const detail = await api.detail('telegram:g0', { include: ['config'] });
+  const detail = await api.detail('telegram:g0', new URLSearchParams('include=config'));
   assert.deepEqual(detail.config, { ...config, modelOverrides: [
     { runtime: 'codex', model: 'saved-model', effort: 'low' },
     { runtime: 'claude', model: 'other-engine', effort: 'high' },
   ] });
-  assert.deepEqual((await api.detail('telegram:g100', { include: ['config'] })).config.modelOverrides, []);
+  assert.deepEqual((await api.detail('telegram:g100', new URLSearchParams('include=config'))).config.modelOverrides, []);
   assert.equal(overrideReads, 1, 'detail reuses the collected override list');
 });
 
@@ -980,9 +985,9 @@ test('snapshot keeps global fences and instance authentication observations with
   assert.deepEqual(row.fence, globalFence);
   assert.equal(row.wait.kind, 'fenced'); assert.equal(row.wait.fenceReason, 'mode_switch');
   assert.equal(snapshot.instance.runtimeHealth.claude.health, 'auth_failed');
-  const projected = (await createGroupsApi({ workbench: f.service }).running()).rows.find(item => item.id === row.sessionGroup);
+  const projected = (await createGroupsApi({ workbench: f.service }).list(new URLSearchParams('side=running'))).items.find(item => item.id === row.sessionGroup);
   assert.equal(projected.state.kind, 'stopping');
-  const detail = await createGroupsApi({ workbench: f.service }).detail(row.sessionGroup, { include: [] });
+  const detail = await createGroupsApi({ workbench: f.service }).detail(row.sessionGroup, new URLSearchParams(row.sessionGroup === 'origin' ? 'include=' : ''));
   assert.equal(Object.hasOwn(detail, 'attention'), false);
 });
 
@@ -1443,7 +1448,7 @@ test('single Origin duration fallback reads hook attribution without widening th
   assert.equal(origin.sessionGroup, null); assert.equal(origin.working.on, true);
   assert.equal(origin.working.since, null, 'only the current command keeps work active');
   assert.equal(origin.duration, 3600);
-  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', { include: [] });
+  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', new URLSearchParams('include='));
   assert.equal(detail.state.kind, 'working'); assert.equal(detail.duration, 3600);
   add('hook-stop', 'origin', 'single-run', 'stop', 100);
   f.advance(2100);

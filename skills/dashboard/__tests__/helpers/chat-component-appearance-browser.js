@@ -26,7 +26,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme, fix
     if (req.method !== 'GET') { res.writeHead(405); return res.end(); }
     if (url.pathname === '/') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(html); }
     if (url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
-    if (url.pathname === '/api/chat/conversations/fixture/attachments/image') {
+    if (url.pathname === '/api/conversations/fixture/attachments/image') {
       res.writeHead(200, { 'content-type': 'image/svg+xml' }); return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="#0f766e"/></svg>');
     }
     const file = url.pathname === '/chat-schema.js' ? schema :

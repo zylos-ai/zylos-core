@@ -5,6 +5,13 @@ import { projectApiTimestamps } from '../../src/lib/wire-time.js';
 
 import { projectGroup, projectListRow } from '../../src/lib/workbench/groups-api.js';
 import { runRestartEffect } from '../../public/js/wb/timeline-rows.js';
+import { keyPage } from './key-pages.js';
+import { memoryBacklogPage, parseBacklogQuery } from '../../src/lib/workbench/memory-backlog.js';
+
+/** Answers GET /api/memory/backlog from every group of a case, through the server's own order, search and paging. */
+export function backlogAnswer({ groups = [], originSync, budgets = null }, url) {
+  return memoryBacklogPage({ groups, ...(originSync ? { originSync } : {}), budgets }, parseBacklogQuery(url.searchParams));
+}
 
 const iso = ms => new Date(ms).toISOString();
 const queue = (pending = 0, running = 0) => ({ pending: { count: pending, oldestAt: null, head: null }, running: { count: running }, fence: null });
@@ -39,10 +46,27 @@ function detailRow(row) {
     displayName: row.displayName ?? row.name?.displayName ?? (id === 'origin' ? 'Origin' : id),
     channel: row.channel ?? row.c4?.componentName ?? (id === 'origin' ? null : id.split(':')[0]),
     runtime: row.runtime ?? row.target?.runtime ?? null, model: row.model ?? row.target?.model ?? null,
+    runtimeOverridden: row.runtimeOverridden ?? false, modelOverridden: row.modelOverridden ?? (row.launchConfig?.mode === 'override'),
     lastActivityAt: row.lastActivityAt ?? (row.c4?.lastActivityAt == null ? null : iso(row.c4.lastActivityAt)),
     ...(offline ? {} : { mainAgent: row.mainAgent ?? (row.state?.kind === 'working' ? 'busy' : 'idle') }) };
 }
-const listRow = row => projectListRow(detailRow(row));
+function groupList(url, values, readAt, listKnown, defaultLimit = 50) {
+  const { searchParams } = url, side = searchParams.get('side'), flag = searchParams.get('flag');
+  const q = searchParams.get('q')?.toLowerCase(), runtime = searchParams.get('runtime');
+  const predicates = ['runtimeOverridden', 'modelOverridden'].filter(key => searchParams.has(key));
+  const matches = values.map(detailRow).filter(row => (!side || row.side === side) && (!flag || row.flags?.[flag]) &&
+    (!runtime || row.runtime === runtime) && (!q || (row.id + '\n' + row.displayName).toLowerCase().includes(q)) &&
+    predicates.every(key => searchParams.get(key) === String(row[key])));
+  const limit = Number(searchParams.get('limit') ?? defaultLimit), start = Number(searchParams.get('cursor') ?? 0);
+  return { readAt, listKnown, items: matches.slice(start, start + limit).map(projectListRow),
+    nextCursor: start + limit < matches.length ? String(start + limit) : null,
+    ...(searchParams.get('include') === 'total' ? { total: matches.length } : {}) };
+}
+
+function detailIncludes(url, raw, config) {
+  const include = url.searchParams.get('include')?.split(',') ?? (url.pathname.endsWith('/origin') ? ['raw', 'config'] : []);
+  return { ...(include.includes('raw') ? { raw } : {}), ...(include.includes('config') ? { config } : {}) };
+}
 
 export function workbenchSnapshot(now) {
   const list = rows(now);
@@ -98,7 +122,8 @@ function memoryTree(now) {
   return { root: dir('', [file('identity.md', 9000), file(LONG_FILE, 12100), file('references.md', 7800), dir('reference', reference),
     dir('session-groups', [dir(`session-groups/${GROUP}`, [file(GROUP_FILE, 2150), file(`session-groups/${GROUP}/handoff.md`, 820)]),
       dir('session-groups/lark:oc_product', [file('session-groups/lark:oc_product/state.md', 1430)])])]),
-  sessionGroups: [{ sessionGroup: GROUP, displayName: 'Telegram direct chat' }, { sessionGroup: 'lark:oc_product', displayName: 'Product weekly' }] };
+  sessionGroups: [{ sessionGroup: GROUP, displayName: 'Telegram direct chat', backlog: { count: 12, syncing: false } },
+    { sessionGroup: 'lark:oc_product', displayName: 'Product weekly', backlog: null }] };
 }
 
 // Longer than a phone screen, so the share of the first screen the open file takes is measured on real text.
@@ -169,20 +194,20 @@ const meta = { runtime: 'claude', current_model: 'opus', current_effort: 'high',
 /** The JSON answer for a GET, or undefined when the case does not serve that path. */
 function workbenchAnswerData(url, now) {
   const p = url.pathname;
-  if (p === '/api/groups/running') return { readAt: now, listKnown: true, rows: rows(now).filter(row => row.state.kind !== 'offline').map(listRow) };
-  if (p === '/api/groups/offline') {
-    const row = rows(now).find(row => row.state.kind === 'offline');
-    if (url.searchParams.has('flag')) return { readAt: now, listKnown: true, rows: row.flags?.[url.searchParams.get('flag')] ? [listRow(row)] : [], nextCursor: null };
-    return { readAt: now, listKnown: true, rows: (url.searchParams.has('cursor') ? [{ ...row, sessionGroup: 'lark:archived', name: { displayName: 'Archived room' } }] : [row]).map(listRow), nextCursor: url.searchParams.has('cursor') ? null : 'second' };
+  if (p === '/api/groups') {
+    const values = rows(now);
+    const archived = values.find(row => row.state.kind === 'offline');
+    values.push({ ...archived, sessionGroup: 'lark:archived', name: { displayName: 'Archived room' } });
+    const regularOffline = url.searchParams.get('side') === 'offline' && !url.searchParams.has('flag');
+    return groupList(url, values, now, true, regularOffline ? 1 : 50);
   }
   if (p === '/api/groups/counts') return { readAt: now, listKnown: true, running: { total: 2, states: { working: 1, idle: 1, starting: 0, stopping: 0, unknown: 0 }, flags: { queued: 1, blocked: 1, waitingSlot: 0, startFailed: 0, unreadable: 0, noResponse: 0 } }, offline: { total: 2, waitingSlot: 0, startFailed: 0 }, pool: { used: 2, capacity: 4 } };
   if (/^\/api\/groups\/[^/]+$/.test(p) && !['search','activity','runtime-overrides','naming-prompt'].includes(p.split('/').at(-1))) {
     const group = decodeURIComponent(p.split('/').at(-1));
     const row = rows(now).find(row => row.sessionGroup === group);
     if (!row) return undefined;
-    return { readAt: now, ...detailRow(row), raw: row.preview?.text ?? null, config: workbenchAnswer(new URL('http://fixture/api/groups/' + encodeURIComponent(group) + '/config'), now), effective: row.target };
+    return { readAt: now, ...detailRow(row), ...detailIncludes(url, row.preview?.text ?? null, workbenchAnswer(new URL('http://fixture/api/groups/' + encodeURIComponent(group) + '/config'), now)), effective: row.target };
   }
-  if (p === '/api/groups/search') return { rows: [] };
   if (p === '/api/groups/activity') return { start: now - 59 * 60e3, cellSeconds: 60, groups: {} };
   if (p === '/api/schedules') return schedule(now);
   if (p.startsWith('/api/schedules/') && p.endsWith('/history')) return { rows: [], next: null };
@@ -193,8 +218,8 @@ function workbenchAnswerData(url, now) {
       text: path === LONG_FILE ? longText : `# ${path}\n\nShort file.\n` };
   }
   if (p === '/api/memory/git') return { commit: null };
-  if (p === '/api/memory/backlog') return { groups: [{ sessionGroup: GROUP, displayName: 'Telegram direct chat', c4: { componentName: 'telegram' },
-    count: 12, firstAt: null, aged: false, syncing: false, threshold: 15 }], hasOlder: false, budgets: { limits: {}, warnings: {} } };
+  if (p === '/api/memory/backlog') return backlogAnswer({ groups: [{ sessionGroup: GROUP, displayName: 'Telegram direct chat', c4: { componentName: 'telegram' },
+    count: 12, firstAt: null, aged: false, syncing: false, threshold: 15 }], budgets: { limits: {}, warnings: {} } }, url);
   if (p.endsWith('/backlog')) return { count: 12, firstAt: null, syncing: false };
   if (p.endsWith('/runs')) return runs(url, now);
   if (p.endsWith('/messages')) return { messages: [] };
@@ -212,11 +237,10 @@ function workbenchAnswerData(url, now) {
   codex: { builtInModels: ['gpt-5.5'], modelPrices: { 'gpt-5.5': { input: 1.25, output: 10, cacheRead: 0.125, cacheCreation: 0 } },
     builtInPriorityModels: [], priorityModelPrices: {}, fastMode: { mode: 'service_tier' } } } };
   if (p === '/api/usage/pricing') return { models: [], unmatched: [] };
-  if (p === '/api/groups/runtime-overrides') return { runtime: [], runtimeTotal: 0, nextAfter: null };
   if (p === '/api/fleet') return { agents: [{ name: 'browser-case', self: true, access: 'admin' }], updated_at: iso(now) };
   if (p === '/api/fleet/agents') return { self: { name: 'browser-case' }, agents: [] };
-  if (p === '/api/keys') return { keys: [] };
-  if (p === '/api/chat/conversations') return { items: [], nextCursor: null };
+  if (p === '/api/keys') return keyPage([], url);
+  if (p === '/api/conversations') return { items: [], nextCursor: null };
   if (p === '/api/settings/timezone') return { tz: 'UTC' };
   if (p === '/api/settings/chat') return { chat_allow_remote: false };
   if (p === '/api/observer/status') return { state: 'not_installed' };
@@ -230,8 +254,7 @@ function workbenchAnswerData(url, now) {
 // Project a scenario snapshot onto the independent object resources requested by the UI.
 function workbenchSnapshotAnswerData(url, value, now) {
   const p = url.pathname;
-  if (p === '/api/groups/running') return { readAt: value.readAt, listKnown: value.listKnown, rows: value.rows.filter(row => detailRow(row).side === 'running').map(listRow) };
-  if (p === '/api/groups/offline') return { readAt: value.readAt, listKnown: value.listKnown, rows: value.rows.filter(row => detailRow(row).side === 'offline' && (!url.searchParams.has('flag') || row.flags?.[url.searchParams.get('flag')])).map(listRow), nextCursor: null };
+  if (p === '/api/groups') return groupList(url, value.rows, value.readAt, value.listKnown);
   if (p === '/api/groups/counts') {
     const active = value.rows.map(detailRow).filter(row => row.side === 'running'), states = Object.fromEntries(['working', 'idle', 'starting', 'stopping', 'unknown'].map(key => [key, 0])), flags = Object.fromEntries(['queued', 'blocked', 'waitingSlot', 'startFailed', 'unreadable', 'noResponse'].map(key => [key, 0]));
     for (const row of active) { states[row.state.kind] = (states[row.state.kind] ?? 0) + 1; for (const flag of Object.keys(row.flags ?? {})) flags[flag] = (flags[flag] ?? 0) + 1; }
@@ -240,7 +263,7 @@ function workbenchSnapshotAnswerData(url, value, now) {
   if (p === '/api/instance') return workbenchInstanceAnswer(value, now);
   if (/^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'runtime-overrides', 'naming-prompt'].includes(p.split('/').at(-1))) {
     const row = value.rows.find(row => row.sessionGroup === decodeURIComponent(p.split('/').at(-1)));
-    return row ? { ...workbenchAnswer(url, now), readAt: value.readAt, ...detailRow(row), raw: row.preview?.text ?? null, effective: row.target } : undefined;
+    return row ? { ...workbenchAnswer(url, now), readAt: value.readAt, ...detailRow(row), ...detailIncludes(url, row.preview?.text ?? null), effective: row.target } : undefined;
   }
   return workbenchAnswer(url, now);
 }

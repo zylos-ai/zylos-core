@@ -8,7 +8,7 @@ const sizeLabel = value => !Number.isFinite(value) || value < 0 ? '' : value < 1
 export function chatAttachmentURL(attachment, { conversationId, endpoint = path => path, external = false } = {}) {
   if (external || attachment?.external || attachment?.available !== true || typeof attachment.id !== 'string'
     || !attachment.id || typeof conversationId !== 'string' || !conversationId) return null;
-  const url = endpoint(`/api/chat/conversations/${encodeURIComponent(conversationId)}/attachments/${encodeURIComponent(attachment.id)}`);
+  const url = endpoint(`/api/conversations/${encodeURIComponent(conversationId)}/attachments/${encodeURIComponent(attachment.id)}`);
   return typeof url === 'string' && url.startsWith('/') && !url.startsWith('//') && !/[\r\n\\]/.test(url) ? url : null;
 }
 

@@ -44,7 +44,7 @@ function originPage(t, { locale = 'en', mode = 'multi', row = originRow(mode), h
     requests.push(path);
     const body = path === '/api/instance' ? { session_mode: { sessionMode: mode }, runtimeHealth: { claude: { health } } }
       : path.split('?')[0] === '/api/groups/origin' ? conversationDetail(row)
-      : path.startsWith('/api/chat/conversations?') ? { items: [otherItem, originItem], nextCursor: null }
+      : path.startsWith('/api/conversations?') ? { items: [originItem, otherItem], nextCursor: null }
       : path.endsWith('/send') ? (sends.push({ path, body: options.body }), { stored: true, conversationId: ORIGIN })
       : path.includes('/messages?') ? { items: path.includes(encodeURIComponent(ORIGIN)) ? messages : [], afterCursor: 'after', nextCursor: null }
       : /\/conversations\/[^/?]+$/.test(path) ? { conversation: path.endsWith(encodeURIComponent(ORIGIN))
@@ -155,13 +155,13 @@ test('single keeps other conversations read-only while Origin sends without a se
   f.root.querySelector('.conversation-composer').dispatch('submit', { preventDefault() {} });
   await tick(); await tick();
   assert.equal(sends.length, 1);
-  assert.equal(sends[0].path, `/api/chat/conversations/${encodeURIComponent(ORIGIN)}/send`);
+  assert.equal(sends[0].path, `/api/conversations/${encodeURIComponent(ORIGIN)}/send`);
 });
 
 test('opening group origin selects the Origin conversation in "mine"', { timeout: 2000 }, async t => {
   const f = originPage(t);
   assert.equal(await f.page.openGroup('origin', { channel: 'internal' }), true);
-  assert.ok(f.requests.some(path => path.startsWith('/api/chat/conversations?') && path.includes('tab=mine')));
+  assert.ok(f.requests.some(path => path.startsWith('/api/conversations?') && path.includes('tab=mine')));
   assert.equal(f.requests.some(path => path.includes('tab=external')), false);
   assert.equal(f.root.querySelector('h2').textContent, 'Origin');
 });

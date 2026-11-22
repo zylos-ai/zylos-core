@@ -20,7 +20,8 @@ const { detailNumbers, renderOverview } = await import('../public/js/wb/detail-o
 const { renderDistribution } = await import('../public/js/wb/board.js');
 const { systemItems } = await import('../public/js/wb/instance-strip.js');
 const { createMemoryScope } = await import('../public/js/wb/memory-scope.js');
-const { modelSaveConfirmation, renderDefaults, runtimeConfirmation } = await import('../public/js/wb/settings-defaults.js');
+const { memoryBacklogPage, parseBacklogQuery } = await import('../src/lib/workbench/memory-backlog.js');
+const { modelSaveConfirmation, renderDefaults, runtimeSaveConfirmation } = await import('../public/js/wb/settings-defaults.js');
 const { mountSchedule } = await import('../public/js/wb/schedule.js');
 
 const en = JSON.parse(readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
@@ -50,34 +51,31 @@ for (const count of [1, 2]) {
   });
   test(`Workbench defaults render English count ${count}`, () => {
     const document = documentFixture(), root = document.createElement('div');
-    const snapshot = { rows: groups(count), baselineRuntime: 'claude', overrides: { runtime: [], model: [] } };
-    const panel = renderDefaults(root, { document, t, snapshot, page: { runtimeTotal: count }, metadata: { claude: { runtime: 'claude', current_model: 'one', current_effort: 'high', models: [{ id: 'one' }], efforts_by_model: { one: ['high'] } } }, read: async () => ({}) });
+    const page = { items: groups(count).map(row => ({ id: row.sessionGroup, displayName: row.name.displayName })), total: count, listKnown: true };
+    const panel = renderDefaults(root, { document, t, instance: { default_runtime: 'claude' }, groupCounts: { followers: count, overrides: count, models: { claude: count } }, metadata: { claude: { runtime: 'claude', current_model: 'one', current_effort: 'high', models: [{ id: 'one' }], efforts_by_model: { one: ['high'] } } }, read: async () => ({}) });
     assert.ok(root.textContent.includes(`Switching interrupts ${count} running group${noun}`));
     assert.ok(root.textContent.includes(`${count} group${noun} ${count === 1 ? 'sets its' : 'set their'} own engine`));
     assert.ok(root.textContent.includes(count === 1 ? 'Show this group' : 'Show these 2 groups'));
     assert.ok(root.textContent.includes(`${count} running group${noun} ${count === 1 ? 'uses' : 'use'} these defaults`), root.textContent);
-    assert.ok(runtimeConfirmation(snapshot, t).includes(`${count} running group${noun} that ${count === 1 ? 'follows' : 'follow'} the default`));
+    assert.ok(runtimeSaveConfirmation('claude', page, t).includes(`${count} running group${noun} that ${count === 1 ? 'follows' : 'follow'} the default`));
     const modelQuestion = modelSaveConfirmation([{ runtime: 'claude', action: 'switch-model', key: 'model', value: 'one' }],
-      t, {}, { ...snapshot, listKnown: true });
+      t, {}, { claude: page });
     assert.ok(modelQuestion.includes(`${count} running group${noun} that ${count === 1 ? 'uses' : 'use'} this default model will restart immediately:`));
     panel.destroy();
   });
   test(`Workbench memory renders English count ${count}`, async () => {
     const document = createDocument(), root = document.createElement('div'), chartsRoot = document.createElement('div'), summaryRoot = document.createElement('div');
     const active = groups(count).map(row => ({ sessionGroup: row.sessionGroup, count, threshold: 15, pendingSummaries: count, syncing: true }));
-    const quiet = groups(count).map(row => ({ sessionGroup: row.sessionGroup + 'quiet', count: 0, threshold: 15, syncing: false }));
-    let rows = [...active, ...quiet], level = 'plain';
-    const controller = createMemoryScope({ document, root, chartsRoot, summaryRoot, t, getTree: () => ({ root: { children: [] }, sessionGroups: [] }), detail: () => level, request: async () => ({ groups: rows, originSync: { count, threshold: 15, pendingSummaries: count, syncing: false } }) });
+    let level = 'plain';
+    const controller = createMemoryScope({ document, root, chartsRoot, summaryRoot, t, getTree: () => ({ root: { children: [] }, sessionGroups: [] }), detail: () => level, request: async path => memoryBacklogPage({ groups: active, originSync: { count, threshold: 15, pendingSummaries: count, syncing: false }, budgets: null },
+      parseBacklogQuery(new URL(path, 'http://dashboard').searchParams)) });
     await controller.load();
     assert.ok(summaryRoot.textContent.includes(`${count} group${noun} being saved`));
     assert.ok(summaryRoot.textContent.includes(`${count} group${noun} ${count === 1 ? 'has' : 'have'} new conversation waiting`));
     level = 'technical'; controller.render();
     assert.ok(chartsRoot.textContent.includes(`${count} unread summar${count === 1 ? 'y' : 'ies'}`));
-    assert.ok(chartsRoot.textContent.includes(`${count} more group${noun} with nothing pending`));
     const tracks = []; const visit = node => { if (node.getAttribute?.('aria-label')?.includes('sync threshold')) tracks.push(node.getAttribute('aria-label')); for (const child of node.children ?? []) visit(child); }; visit(chartsRoot);
     assert.ok(tracks.includes(`${count} message${noun}, sync threshold 15`));
-    rows = quiet; await controller.load();
-    assert.ok(chartsRoot.textContent.includes(count === 1 ? '1 group has nothing pending' : 'All 2 groups have nothing pending'));
     controller.destroy();
   });
 }

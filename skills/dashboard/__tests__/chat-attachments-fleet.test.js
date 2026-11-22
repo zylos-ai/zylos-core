@@ -122,7 +122,7 @@ async function fixture(t, { limit = 20 } = {}) {
     if (rejectedToken && req.headers.authorization === `Bearer ${rejectedToken}`) {
       sendJson(res, 401, { error: 'expired_fixture_session' }); return;
     }
-    if (slowConversation && req.method === 'GET' && /^\/api\/chat\/conversations\/[^/]+$/.test(url.pathname)) await delay(3500);
+    if (slowConversation && req.method === 'GET' && /^\/api\/conversations\/[^/]+$/.test(url.pathname)) await delay(3500);
     if (url.pathname.includes('/attachments/')) downloadResponses.push(res);
     if (url.pathname.includes('/attachments/')) downloadHeaders = req.headers;
     if (corkDownload && url.pathname.includes('/attachments/')) {
@@ -171,10 +171,10 @@ async function fixture(t, { limit = 20 } = {}) {
     await hub.settle(); await target.settle();
     await attachments.close(); store.close(); db.close(); fs.rmSync(root, { recursive: true, force: true });
   });
-  const route = `/api/chat/conversations/${encodeURIComponent(draft.id)}`;
+  const route = `/api/conversations/${encodeURIComponent(draft.id)}`;
   const request = (suffix, { headers = {}, direct = false, conversation = draft.id, ...options } = {}) => {
     const base = direct ? target.origin : hub.origin + '/fleet/Target';
-    return fetch(base + `/api/chat/conversations/${encodeURIComponent(conversation)}` + suffix, {
+    return fetch(base + `/api/conversations/${encodeURIComponent(conversation)}` + suffix, {
       ...options, signal: AbortSignal.timeout(10000), headers: { origin: hub.origin,
         ...(direct ? { authorization: `Bearer ${token}` } : {}), ...headers } });
   };
@@ -496,7 +496,7 @@ test('ordinary writes retain their one MiB limit while exact attachment uploads 
   assert.equal(f.upstreamRequests.length, before, 'unregistered writes never reach the target');
   const registered = workbenchWriteRoutes.find(route => route.attachment);
   assert.equal(registered.method, 'POST');
-  assert.match(registered.path, /\/api\/chat\/conversations\/[^/]+\/uploads$/);
+  assert.match(registered.path, /\/api\/conversations\/[^/]+\/uploads$/);
   const upload = await f.request('/uploads', { method: registered.method,
     headers: { 'content-type': registered.contentType }, body: registered.body });
   assert.equal(upload.status, 201);
@@ -650,7 +650,7 @@ for (const side of ['target', 'local']) {
     assert.ok(received < 10 * MiB, `revocation stops the stream before ten MiB, received ${received}`);
     assert.ok(Date.now() - started < 3000, 'revocation fails before a request timeout could masquerade as enforcement');
     await waitFor(() => f.downloadResponses[0].destroyed);
-    assert.equal(f.upstreamRequests.filter(row => row.method === 'GET' && /^\/api\/chat\/conversations\/[^/]+$/.test(row.path)).length, 0,
+    assert.equal(f.upstreamRequests.filter(row => row.method === 'GET' && /^\/api\/conversations\/[^/]+$/.test(row.path)).length, 0,
       'download never polls the reconciling conversation GET');
   });
 }
@@ -679,7 +679,7 @@ test('local session revalidation is time bounded and slow unrelated conversation
   assert.ok(checks <= Math.floor(elapsed / 1000) + 1, `revalidation count ${checks} is bounded by elapsed time ${elapsed}ms`);
   const times = f.checkTimes.slice(baseline);
   for (let i = 1; i < times.length; i++) assert.ok(times[i] - times[i - 1] >= 1000, 'no more than one local session check per second');
-  assert.equal(f.upstreamRequests.filter(row => row.method === 'GET' && /^\/api\/chat\/conversations\/[^/]+$/.test(row.path)).length, 0);
+  assert.equal(f.upstreamRequests.filter(row => row.method === 'GET' && /^\/api\/conversations\/[^/]+$/.test(row.path)).length, 0);
 });
 
 test('literal credential field words are downloadable locally but blocked by fleet', async t => {

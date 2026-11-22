@@ -1,4 +1,5 @@
 import { SUPPORTED_RUNTIMES } from '../../runtime-descriptors.js';
+import { groupDetailPath } from './group-data.js';
 import { instantSeconds } from './api-time.js';
 import { listen, reconcileChildren } from './detail-update.js';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js';
@@ -306,7 +307,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     if (raw.status !== 'error' && raw.status !== 'idle') { draw(); return; }
     raw.status = 'loading'; draw();
     try {
-      const value = await request(`/api/groups/${encodeURIComponent(row.sessionGroup ?? 'origin')}`);
+      const value = await request(groupDetailPath(row.sessionGroup ?? 'origin', 'raw'));
       if (state.raw !== raw) return;
       raw.status = value?.rawError ? 'error' : 'ok'; raw.error = value?.rawError ? responseError({ error: value.rawError }) : null;
       raw.text = typeof value?.raw === 'string' ? value.raw : null;
@@ -368,7 +369,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     const settingsRead = includeConfig ? ++configRead : null;
     const settingsCurrent = () => includeConfig && settingsRead === configRead;
     try {
-      const row = await request('/api/groups/' + encodeURIComponent(key) + (includeConfig ? '?include=config' : '?include='));
+      const row = await request(groupDetailPath(key, includeConfig ? 'config' : undefined));
       if (!active(gen)) return;
       if (read === rowRead && row?.state?.kind && (row.id ?? row.sessionGroup ?? 'origin') === key) {
         if (state.row.live?.runId !== row.live?.runId) {
@@ -476,7 +477,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
         request(`/api/groups/${encodeURIComponent(key)}/backlog`),
         request(`/api/groups/${encodeURIComponent(key)}/runs?` + runsQuery),
         loadSubagents(),
-        request(`/api/groups/${encodeURIComponent(key)}` + (includeExtras ? '' : '?include=')),
+        request(groupDetailPath(key, includeExtras ? 'raw' : undefined)),
         request(`/api/groups/${encodeURIComponent(key)}/usage`),
       ]);
       if (!active(gen) || state.row.live?.runId !== runId || readLevel() !== level) return;

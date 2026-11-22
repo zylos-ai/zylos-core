@@ -9,6 +9,7 @@ import { dashboardSchemaOwner as owner } from '../src/lib/schema-owner.js';
 import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { Store } from '../src/lib/store.js';
 import { legacy, schema20 } from './fixtures/dashboard-history.js';
+import { SCHEMA_V1 } from './fixtures/schema13.js';
 
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-schema-'));
@@ -459,4 +460,72 @@ test('Store builds an empty database but refuses older or newer data unchanged',
   assert.throws(() => new Store(file), { code: 'SCHEMA_TOO_NEW' });
   assert.ok(fs.readFileSync(file).equals(newerBytes), `${file} changed`);
   assert.deepEqual(sidecars(), []);
+});
+
+test('schema 28 migration adds an empty pin order and preserves conversations, drafts and names', t => {
+  const file = fixture(t);
+  const store = new Store(file);
+  store.db.exec(`
+    DROP TABLE chat_pins;
+    DELETE FROM schema_migrations WHERE version >= 29;
+    INSERT INTO chat_conversations(local_id,namespace,state,created_at,updated_at,first_content)
+      VALUES ('active','dashboard','active',1,2,'first message');
+    INSERT INTO chat_conversations(local_id,display_name,created_at,updated_at,pending_content)
+      VALUES ('draft','Draft name',3,4,'draft content');
+    CREATE TABLE user_items(value TEXT);
+    INSERT INTO user_items VALUES('keep');
+  `);
+  store.writeGroupDisplayName('dashboard:active', 'Active name', 'human');
+  const readExisting = db => [
+    db.prepare('SELECT * FROM chat_conversations ORDER BY local_id').all(),
+    db.prepare('SELECT * FROM group_display_names').all(),
+    db.prepare('SELECT * FROM user_items').all(),
+  ];
+  const before = readExisting(store.db);
+  assert.equal(owner.inspectSchema(store.db).currentVersion, 28);
+  store.close();
+  assertStoreRefuses(file);
+  assert.equal(migrateFile(file).currentVersion, TARGET_SCHEMA_VERSION);
+  const upgraded = new Store(file);
+  t.after(() => upgraded.close());
+  assert.deepEqual(readExisting(upgraded.db), before);
+  assert.deepEqual(upgraded.db.pragma('table_info(chat_pins)').map(column => column.name), ['tab', 'conversation_id', 'position']);
+  assert.deepEqual(upgraded.db.prepare('SELECT * FROM chat_pins').all(), []);
+});
+
+test('the Dashboard migration chain preserves custom objects and columns from schema 1', t => {
+  const db = new Database(fixture(t));
+  t.after(() => db.close());
+  db.exec(SCHEMA_V1);
+  db.exec(`
+    INSERT INTO schema_migrations(version) VALUES (1);
+    ALTER TABLE runtime_events ADD COLUMN user_note TEXT;
+    INSERT INTO runtime_events(id,ingest_id,event_seq,timestamp,event_type,category,user_note)
+      VALUES ('old','old',1,'2026-01-01','sample','test','keep note');
+    CREATE TABLE user_items(value TEXT);
+    INSERT INTO user_items VALUES ('keep row');
+  `);
+  assert.equal(owner.migrate(db).currentVersion, TARGET_SCHEMA_VERSION);
+  assert.equal(db.prepare('SELECT user_note FROM runtime_events WHERE id=?').pluck().get('old'), 'keep note');
+  assert.equal(db.prepare('SELECT value FROM user_items').pluck().get(), 'keep row');
+  assert.deepEqual(db.prepare('SELECT * FROM chat_pins').all(), []);
+});
+
+test('schema 29 carryover preserves a Mine pin and captures the deployment watermark only once', t => {
+  const file = fixture(t);
+  const store = new Store(file);
+  store.db.exec(`
+    DROP TABLE chat_read_positions;
+    DROP TABLE chat_pins;
+    DELETE FROM schema_migrations WHERE version >= 30;
+    CREATE TABLE chat_pins(conversation_id TEXT NOT NULL PRIMARY KEY, position INTEGER NOT NULL UNIQUE);
+    INSERT INTO chat_pins VALUES ('g:41', 0);
+  `);
+  const db = store.db;
+  t.after(() => store.close());
+  assert.equal(owner.inspectSchema(db).currentVersion, 29);
+  assert.equal(owner.migrate(db, { conversationHighwater: () => 912 }).currentVersion, TARGET_SCHEMA_VERSION);
+  assert.deepEqual(db.prepare('SELECT * FROM chat_pins').all(), [{ tab: 'mine', conversation_id: 'g:41', position: 0 }]);
+  assert.deepEqual(db.prepare('SELECT * FROM chat_read_positions').all(), [{ conversation_id: '', last_read: 912 }]);
+  owner.migrate(db, { conversationHighwater: () => assert.fail('watermark changes on re-open') });
 });

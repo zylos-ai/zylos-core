@@ -103,7 +103,7 @@ test('HTTP quote persists, delivers and replays the same source without reviving
       const saved = rowById(api, result.body.messageId);
       assert.equal(saved.content, `[quote c4_id=${original.id}]\n${input}`);
       assert.equal(saved.session_group, original.session_group);
-      const source = '[Dashboard]\n<replying-to>\n[AI]: Earlier &lt;answer&gt; &amp; details.\n（附件：old.txt）\n</replying-to>\n\n<current-message>\nthe owner said: Please expand that.\n</current-message>';
+      const source = '[Dashboard]\n<replying-to>\n[AI]: Earlier &lt;answer&gt; &amp; details.\n(Attachment: old.txt)\n</replying-to>\n\n<current-message>\nthe owner said: Please expand that.\n</current-message>';
       const hint = `\nCharts/choices/forms when useful: node ${shellQuote(path.join(SKILLS_DIR, 'dashboard/scripts/components.js'))} list --json\n`;
       const expected = source + hint + ' ' + replyVia(saved, path.join(SKILLS_DIR, 'comm-bridge/scripts/c4-send.js'));
       const { dispatcher, sent } = dispatcherFixture(sandbox, api, saved.session_group);
@@ -126,7 +126,7 @@ test('HTTP quote persists, delivers and replays the same source without reviving
       assert.equal(item.content, saved.content);
       assert.deepEqual(item.quote, { id: original.id, direction: 'out', timestamp: new Date(original.timestamp.includes('T') ? original.timestamp : original.timestamp.replace(' ', 'T') + 'Z').toISOString(),
         internal: false, preview: 'Earlier <answer> & details.\n[文件] old.txt', available: true });
-      const listing = await api.request('/api/chat/conversations?tab=mine');
+      const listing = await api.request('/api/conversations?tab=mine');
       assert.equal(listing.body.items.find(row => row.id === result.body.conversationId).preview, input);
       api.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run(other.receipt.namespace + ':' + other.draft.localId, original.id);
       const unavailable = await api.request(current.route + '/messages?tab=mine');
@@ -171,7 +171,7 @@ test('HTTP quote with a new upload exposes only that upload after the current me
       const complete = fs.existsSync(spill) ? fs.readFileSync(spill, 'utf8') : sent[0].text;
       const attachments = splitContentAndAttachments(complete).attachments;
       assert.equal(attachments.length, 1); assert.equal(attachments[0].name, 'new.txt');
-      assert.ok(complete.includes('[AI]: Earlier answer.\n（附件：old.txt）\n</replying-to>'));
+      assert.ok(complete.includes('[AI]: Earlier answer.\n(Attachment: old.txt)\n</replying-to>'));
       assert.ok(complete.indexOf('</current-message>') < complete.indexOf('[attachment:file '));
       assert.equal(complete.includes('[quote c4_id='), false);
       assert.equal(complete.includes(path.join(sandbox.paths.zylos, 'old.txt')), false);

@@ -1,3 +1,4 @@
+import { registerHooks } from 'node:module';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
@@ -7,7 +8,19 @@ import zlib from 'node:zlib';
 import test from 'node:test';
 import { publicDir } from '../src/lib/config.js';
 import { FleetProxy } from '../src/lib/fleet-proxy.js';
+import { FleetPoller } from '../src/lib/fleet-poller.js';
 import { acceptObserverWebSocket, connectObserverWebSocket } from '../src/lib/observer-websocket.js';
+import { objectResponse } from './fixtures/fleet-object-api.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { renderAgentFleetHtml } = await import('../public/js/agent-fleet.js');
 
 async function listen(handler) {
   const server = http.createServer(handler);
@@ -74,6 +87,53 @@ test('fleet proxy serves hub static frontend under agent prefix without secrets'
   } finally {
     await hub.close();
   }
+});
+
+test('Fleet blocks an older peer’s page and API until its version is upgraded', async t => {
+  const agent = { name: 'Remote', base_url: 'https://remote.invalid', read_api_key: 'fixture-key' };
+  const config = { fleet: { agents: [agent] } };
+  let installed = '1.0.0-beta.15';
+  const upstream = [];
+  const transport = async url => {
+    const parsed = new URL(url);
+    upstream.push(parsed.pathname + parsed.search);
+    if (parsed.pathname === '/api/auth/token') return Response.json({ token: 'fixture-session' });
+    return objectResponse(url, { instance: { versions: { zylos: { installed } } } });
+  };
+  const poller = new FleetPoller(config, { fetch: transport });
+  const proxy = new FleetProxy({ config, rootDir: publicDir(), poller, fetch: transport });
+  const hub = await listen((req, res) => proxy.handle(req, res, new URL(req.url, 'http://hub.test')));
+  t.after(async () => { poller.stop(); await hub.close(); });
+
+  for (const path of ['/', '/api/groups?side=running']) {
+    const response = await fetch(`${hub.origin}/fleet/Remote${path}`);
+    assert.equal(response.status, 502);
+    assert.equal((await response.json()).error.code, 'version_unsupported');
+  }
+  await poller._probeAgentLatency(agent);
+  await assert.rejects(poller._runSse(agent, poller._streamState(agent), new AbortController().signal), { reason: 'version_unsupported' });
+  assert.deepEqual(upstream, ['/api/auth/token', '/api/instance']);
+  const card = renderAgentFleetHtml(poller.getFleet());
+  assert.match(card, /Version too old/);
+  assert.doesNotMatch(card, /class="agent-open"/);
+
+  installed = '1.0.0-beta.16';
+  await poller.pollOnce();
+  assert.equal(poller.getFleet().agents[0].health_reason, 'idle');
+  assert.match(renderAgentFleetHtml(poller.getFleet()), /class="agent-open"/);
+  const page = await fetch(`${hub.origin}/fleet/Remote/`);
+  assert.equal(page.status, 200);
+  await page.text();
+  const groups = await fetch(`${hub.origin}/fleet/Remote/api/groups?side=running`);
+  assert.equal(groups.status, 200);
+  assert.ok(Array.isArray((await groups.json()).items));
+
+  installed = '1.0.0-beta.15';
+  upstream.length = 0;
+  const downgraded = await fetch(`${hub.origin}/fleet/Remote/`);
+  assert.equal(downgraded.status, 502);
+  assert.equal((await downgraded.json()).error.code, 'version_unsupported');
+  assert.deepEqual(upstream, ['/api/instance'], 'a cached token does not bypass the page-opening version check');
 });
 
 test('fleet proxy prefixes rewritten paths with the reverse-proxy base path (#159)', async () => {
@@ -808,7 +868,8 @@ test('fleet proxy rejects unsafe API methods before reaching upstream', async ()
   }
 });
 
-test('fleet proxy forwards SSE and whitelisted action POSTs with body', async () => {
+test('fleet proxy forwards SSE and whitelisted writes with their bodies', async () => {
+  const readPath = '/api/conversations/g%3A6162/read';
   let sseAuth = null;
   let actionAuth = null;
   let actionBody = null;
@@ -820,7 +881,7 @@ test('fleet proxy forwards SSE and whitelisted action POSTs with body', async ()
       res.end('event: instance\ndata: {"ok":true}\n\n');
       return;
     }
-    if (req.url.startsWith('/api/instance/actions/')) {
+    if (req.url.startsWith('/api/instance/actions/') || req.method === 'PUT' && req.url === readPath) {
       actionAuth = req.headers.authorization;
       actionContentType = req.headers['content-type'];
       req.setEncoding('utf8');
@@ -871,6 +932,15 @@ test('fleet proxy forwards SSE and whitelisted action POSTs with body', async ()
     assert.equal(recheck.status, 200);
     assert.deepEqual(await recheck.json(), { ok: true });
     assert.equal(actionAuth, 'Bearer zylos_st_secret');
+    actionBody = null;
+    const read = await fetch(`${hub.origin}/fleet/Remote${readPath}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ upTo: 42 }),
+    });
+    assert.equal(read.status, 200);
+    assert.deepEqual(await read.json(), { ok: true });
+    assert.equal(actionBody, '{"upTo":42}');
   } finally {
     await hub.close();
     await remote.close();
@@ -1491,7 +1561,7 @@ test('fleet chat language headers preserve legacy remote query contracts', { tim
     proxy.handle(req, res, new URL(req.url, 'http://hub.test'));
   });
   t.after(async () => { hub.server.closeAllConnections(); await hub.close(); });
-  for (const route of ['/api/chat/conversations?tab=mine&limit=50', '/api/chat/conversations/group/messages?tab=mine&limit=50&direction=after']) {
+  for (const route of ['/api/conversations?tab=mine&limit=50', '/api/conversations/group/messages?tab=mine&limit=50&direction=after']) {
     const oldQuery = await fetch(hub.origin + '/fleet/Legacy' + route + '&locale=en');
     assert.equal(oldQuery.status, 400); await oldQuery.arrayBuffer();
     for (const locale of ['zh', 'en']) {
@@ -1782,7 +1852,7 @@ test('fleet migrates object writes and exposes remote chat policy to read caller
     assert.equal(response.status, 200, route);
     assert.deepEqual(seen.at(-1), ['GET', route]);
   }
-  for (const route of ['/api/chat/conversations', '/api/observer/history/sessions?session_group=telegram%3Ateam']) {
+  for (const route of ['/api/conversations', '/api/observer/history/sessions?session_group=telegram%3Ateam']) {
     const count = seen.length;
     const denied = await request(route, 'GET', { 'x-test-scope': 'read' });
     assert.equal(denied.status, 403, route);

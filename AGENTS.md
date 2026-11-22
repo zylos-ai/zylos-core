@@ -53,6 +53,8 @@ Before changing Dashboard CSS, HTML, or frontend components, read [the Dashboard
 
 Any PR changing Dashboard HTTP routes, parameters, response fields, permissions or push events must update `skills/dashboard/docs/api.md` in the same PR. Check each documented method/path against the actual route, including its parameters, field types, errors and minimal example.
 
+A PR adding or changing a Dashboard collection (list) endpoint must follow [the list API standard](skills/dashboard/docs/list-api-standard.md) and check the endpoint against each of its rules.
+
 ## Testing
 
 Tests never touch a live instance. The Node and Jest test runners set `HOME` and

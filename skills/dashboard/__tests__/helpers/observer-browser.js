@@ -58,11 +58,11 @@ export async function runObserverBrowser(t, sandbox, signal) {
         ...(legacy ? {} : { sessionMode: mode, target: running ? { sessionGroup: mode === 'single' ? null : group, runId: 'run-' + (group || 'single'), runtime: 'claude' } : null }),
         runtime: { state: 'idle' }, agentSize: running ? { cols: 120, rows: 40 } : null };
     }
-    if (p.startsWith('/api/observer/history/')) return { sessions: [], entries: [], hasMore: false };
+    if (p === '/api/observer/history/sessions') return { items: [], nextCursor: null, current: null };
     // Two external conversations; the first is not the observed group's, so a return that only reopens the
     // conversation page (which selects the first one on wide screens) does not pass for a return to GROUP's.
-    if (p === '/api/chat/conversations') return { items: url.searchParams.get('tab') === 'external' ? chats.map(chat => chat.row) : [], nextCursor: null, tz: 'UTC' };
-    const chat = chats.find(item => p.startsWith(`/api/chat/conversations/${encodeURIComponent(item.row.id)}`));
+    if (p === '/api/conversations') return { items: url.searchParams.get('tab') === 'external' ? chats.map(chat => chat.row) : [], nextCursor: null, tz: 'UTC' };
+    const chat = chats.find(item => p.startsWith(`/api/conversations/${encodeURIComponent(item.row.id)}`));
     if (chat && p.endsWith('/messages')) return { items: [{ id: 1, direction: 'in', channel: chat.row.channel, status: 'delivered', content: 'Fixture message', timestamp: new Date(now).toISOString() }], nextCursor: null, afterCursor: null, tz: 'UTC' };
     if (chat && /\/(?:questions|activity|status)$/.test(p)) return { items: [], rounds: [], nextCursor: null, afterCursor: null, tz: 'UTC' };
     if (chat) return { conversation: chat.detail, stored: true, conversationId: chat.row.id };
@@ -72,6 +72,13 @@ export async function runObserverBrowser(t, sandbox, signal) {
     value.rows[2] = { ...value.rows[2], sessionGroup: OTHER, name: null, presence: 'running', state: { kind: 'idle' }, live: { runId: 'run-lark', sessionId: 's2' }, launchConfig: { runtime: 'claude', mode: 'default' } };
     if (!groupCount) for (const row of value.rows) { row.presence = 'not_running'; row.live = null; row.state = { kind: 'offline' }; }
 
+    if (scenario === 'paged-targets' && p === '/api/groups' && url.searchParams.get('side') === 'running') {
+      const first = new URL(url);
+      first.searchParams.delete('cursor');
+      const result = workbenchSnapshotAnswer(first, value, now);
+      return url.searchParams.has('cursor') ? { ...result, items: result.items.slice(1), nextCursor: null }
+        : { ...result, items: result.items.slice(0, 1), nextCursor: 'more-targets' };
+    }
     return workbenchSnapshotAnswer(url, value, now);
   }
   const server = http.createServer((req, res) => {
@@ -177,15 +184,34 @@ export async function runObserverBrowser(t, sandbox, signal) {
     await page.locator(`[data-group="${GROUP}"]`).click();
     const button = page.locator(`button[data-observer-group="${GROUP}"]`); await button.waitFor({ state: 'visible' });
     await page.evaluate(() => { document.querySelector('#observer-tab').click = () => { throw new Error('Observer entry must activate the page directly'); }; });
-    const before = writes.length, groupReads = reads.filter(row => row.path === '/api/groups/running').length;
+    const before = writes.length, groupReads = reads.filter(row => row.path === '/api/groups').length;
     const detailReads = reads.filter(row => row.path === '/api/groups/' + encodeURIComponent(GROUP)).length;
     await button.click(); await page.waitForFunction(() => window.__observerSockets.length > 0);
     assert.equal(leaseWrites(before)[0].body.sessionGroup, GROUP);
-    assert.ok(reads.filter(row => row.path === '/api/groups/running').length > groupReads);
+    assert.ok(reads.filter(row => row.path === '/api/groups').length > groupReads);
     assert.equal(reads.filter(row => row.path === '/api/groups/' + encodeURIComponent(GROUP)).length, detailReads,
       'a selected running group is recognized by compact id without a redundant detail request');
     assert.equal(await page.locator('#observer-group-picker').isVisible(), false);
   });
+  scenario = 'paged-targets';
+  await step('the phone picker makes later running groups available on demand', async page => {
+    await openTab(page, 'observer');
+    const more = page.locator('#observer-group-more');
+    const selectGroup = page.locator('#observer-group-select');
+    await more.waitFor();
+    assert.equal(await selectGroup.locator(`option[value="${OTHER}"]`).count(), 0);
+    const cursorReads = () => reads.filter(row => row.scenario === 'paged-targets' && row.path === '/api/groups' &&
+      new URLSearchParams(row.search).get('cursor') === 'more-targets').length;
+    assert.equal(cursorReads(), 0);
+    await more.click();
+    await selectGroup.locator(`option[value="${OTHER}"]`).waitFor({ state: 'attached' });
+    assert.equal(cursorReads(), 1);
+    assert.equal(await more.isVisible(), false);
+    const before = writes.length;
+    await select(page, OTHER);
+    await until(() => leaseWrites(before).some(row => row.body.sessionGroup === OTHER), 'the selected later group receives its own lease');
+  }, 390);
+  scenario = 'normal';
   await step('selected offline observation hydrates canonical detail and retains its history target', async page => {
     await page.locator('.wb-group-sides > button').nth(1).click();
     await page.locator('#wb-board [data-group="origin"]').click();

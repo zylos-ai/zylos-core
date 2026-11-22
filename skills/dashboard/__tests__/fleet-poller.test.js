@@ -5,6 +5,11 @@ import { agentColor } from '../src/lib/agent-color.js';
 import { FleetPoller, SseEventParser, stateToFleetRecord } from '../src/lib/fleet-poller.js';
 import { assertFleetPayloadSafe, buildFleetPayload, buildSafeFleetPayload, redactFleetPayload } from '../src/lib/fleet-payload.js';
 
+function objectApiRoute(url) {
+  const parsed = new URL(url);
+  return parsed.pathname + parsed.search;
+}
+
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -26,12 +31,13 @@ test('fleet health probe accepts both minimal and detailed remote health objects
   ]) {
     const poller = new FleetPoller(makeConfig([
       { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'zylos_ak_secret' }
-    ]), { fetch: async (_url, options) => {
+    ]), { fetch: compatibleHealthTransport(async (_url, options) => {
       assert.equal(options.headers.Authorization, 'Bearer zylos_ak_secret');
       return jsonResponse(body);
-    } });
+    }) });
     await poller._probeAgentLatency(poller.agents[0]);
     assert.equal(poller.getFleet().agents[0].link.quality, 'ok');
+    assert.equal(poller.getFleet().agents[0].latency.samples.length, 1);
   }
 });
 
@@ -43,6 +49,14 @@ function makeConfig(agents, fleet = {}) {
       jitter_ms: 0,
       ...fleet
     }
+  };
+}
+
+function compatibleHealthTransport(onHealth) {
+  return async (url, options) => {
+    if (url.endsWith('/api/auth/token')) return jsonResponse({ token: 'fixture-session' });
+    if (url.endsWith('/api/instance')) return objectResponse(url);
+    return onHealth(url, options);
   };
 }
 
@@ -105,8 +119,9 @@ test('fleet poller exchanges token and derives safe agent records', async () => 
   assert.equal(JSON.stringify(fleet).includes('zylos_st_secret'), false);
   assert.equal(calls[0].authorization, 'Bearer zylos_ak_secret');
   assert.equal(fleet.agents[0].self, false, 'external records must not be flagged self');
-  assert.deepEqual(calls.slice(1).map(call => new URL(call.url).pathname).sort(),
-    ['/dashboard/api/groups/counts', '/dashboard/api/groups/running', '/dashboard/api/instance', '/dashboard/api/usage/summary']);
+  assert.deepEqual(calls.slice(1).map(call => objectApiRoute(call.url)).sort(),
+    ['/dashboard/api/groups/counts', '/dashboard/api/groups?side=running', '/dashboard/api/instance', '/dashboard/api/usage/summary']);
+  assert.equal(objectApiRoute(calls[1].url), '/dashboard/api/instance');
 });
 
 test('fleet poller reports initial not-polled records without down link quality', () => {
@@ -165,7 +180,7 @@ test('fleet poller does not cache stale tokens after same-name remove and re-add
     expires_at: new Date(120000).toISOString(),
     scope: 'admin'
   }));
-  assert.equal(await staleExchange, 'zylos_st_admin');
+  await assert.rejects(staleExchange, { reason: 'unknown_agent' });
   assert.equal(poller.getAgentAccess('Remote'), 'read');
 
   const currentExchange = poller.getSessionToken('Remote');
@@ -326,7 +341,7 @@ test('fleet poller records health-probe latency, p95, and caps the window at 20 
   };
   const poller = new FleetPoller(makeConfig([
     { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'zylos_ak_secret' }
-  ], { slow_threshold_ms: 999 }), { fetch: fetchImpl, now: () => now });
+  ], { slow_threshold_ms: 999 }), { fetch: compatibleHealthTransport(fetchImpl), now: () => now });
   const agent = poller.agents[0];
   poller._setSuccess(agent, { state: 'IDLE' });
 
@@ -341,6 +356,7 @@ test('fleet poller health probe triggers slow while SSE remains healthy without 
   let now = 0;
   let stateFetches = 0;
   const fetchImpl = async (url) => {
+    if (url.endsWith('/api/auth/token')) return jsonResponse({ token: 'fixture-session' });
     if (url.endsWith('/api/health')) {
       now += 120;
       return jsonResponse({ ok: true });
@@ -363,7 +379,7 @@ test('fleet poller health probe triggers slow while SSE remains healthy without 
   assert.equal(record.state, 'BUSY');
   assert.equal(record.link.quality, 'slow');
   assert.equal(record.link.latency_p95_ms, 120);
-  assert.equal(stateFetches, 0, 'probe path must not depend on fallback state polling');
+  assert.equal(stateFetches, 1, 'health probes check the version once per token without doing a Fleet poll');
 });
 
 test('fleet poller health probe falls back to session token when read key is rejected', async () => {
@@ -371,6 +387,7 @@ test('fleet poller health probe falls back to session token when read key is rej
   const calls = [];
   const fetchImpl = async (url, options = {}) => {
     calls.push({ url, authorization: options.headers?.Authorization });
+    if (url.endsWith('/api/instance')) return objectResponse(url);
     if (url.endsWith('/api/health') && options.headers.Authorization === 'Bearer zylos_ak_secret') {
       return jsonResponse({ error: 'direct key rejected' }, 401);
     }
@@ -402,6 +419,7 @@ test('fleet poller health probe refreshes cached token after direct-key auth rej
   const calls = [];
   const fetchImpl = async (url, options = {}) => {
     calls.push({ url, authorization: options.headers?.Authorization });
+    if (url.endsWith('/api/instance')) return objectResponse(url);
     if (url.endsWith('/api/auth/token')) {
       return jsonResponse({ token: 'zylos_st_fresh', expires_at: new Date(120000).toISOString() });
     }
@@ -452,7 +470,7 @@ test('fleet poller degrades after two consecutive probe failures and resets on s
   };
   const poller = new FleetPoller(makeConfig([
     { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'zylos_ak_secret' }
-  ]), { fetch: fetchImpl, now: () => now });
+  ]), { fetch: compatibleHealthTransport(fetchImpl), now: () => now });
   const agent = poller.agents[0];
   poller._setSuccess(agent, { state: 'IDLE' });
 
@@ -543,14 +561,15 @@ test('fleet poller maps token 404 to version_unsupported', async () => {
   assert.equal(record.link.quality, 'down');
 });
 
-test('fleet poller classifies 2xx invalid state payloads as bad_payload', async () => {
+test('fleet poller treats instance responses without a readable version as unsupported', async () => {
   const bodies = [
     { name: 'Empty', response: () => textResponse('', 200) },
     { name: 'Text', response: () => textResponse('not-json', 200) },
     { name: 'Object', response: () => jsonResponse({}) },
     { name: 'Array', response: () => jsonResponse([]) },
     { name: 'Null', response: () => jsonResponse(null) },
-    { name: 'OkOnly', response: () => jsonResponse({ ok: true }) }
+    { name: 'OkOnly', response: () => jsonResponse({ ok: true }) },
+    { name: 'MalformedVersion', response: () => jsonResponse({ versions: { zylos: { installed: 'build 2.0.0' } } }) }
   ];
   const fetchImpl = async (url) => {
     if (url.endsWith('/api/auth/token')) return jsonResponse({ token: 'zylos_st_ok', expires_at: new Date(120000).toISOString() });
@@ -566,9 +585,9 @@ test('fleet poller classifies 2xx invalid state payloads as bad_payload', async 
 
   await poller.pollOnce();
   for (const record of poller.getFleet().agents) {
-    assert.equal(record.health_reason, 'bad_payload', `${record.name} should fail shape validation`);
+    assert.equal(record.health_reason, 'version_unsupported', record.name);
     assert.equal(record.link.quality, 'down');
-    assert.equal(record.link.reason, 'bad_payload');
+    assert.equal(record.link.reason, 'version_unsupported');
   }
 });
 
@@ -1257,7 +1276,7 @@ test('fleet poller first add from empty fleet starts live polling and streaming'
   assert.equal(poller.running, true);
   assert.equal(poller.getFleet().agents[0].name, 'Remote');
   assert.equal(poller.getFleet().agents[0].daily_cost, 12);
-  for (const path of ['/api/instance', '/api/groups/counts', '/api/groups/running', '/api/usage/summary']) assert.ok(calls.some(url => url.endsWith(path)));
+  for (const path of ['/api/instance', '/api/groups/counts', '/api/groups?side=running', '/api/usage/summary']) assert.ok(calls.some(url => url.endsWith(path)));
   assert.ok(calls.some(url => url.endsWith('/api/stream')));
   assert.ok(streamSignal, 'SSE stream should be opened for the first added agent');
   assert.equal(pushedFleet.agents.some(a => a.name === 'Remote'), true);
@@ -1331,7 +1350,7 @@ test('fleet poller rejects a legacy state response instead of using its session 
   await poller.pollOnce();
   const record = poller.getFleet().agents[0];
   assert.equal(Object.hasOwn(record, 'context_pct'), false);
-  assert.equal(record.health_reason, 'bad_payload');
+  assert.equal(record.health_reason, 'version_unsupported');
 });
 
 // --- Fleet identity color and rate limits ---
@@ -1415,12 +1434,12 @@ test('latency gaps stay in order while latest-success values and p95 skip failur
   const durations = [10, null, 30, null, 20];
   const poller = new FleetPoller(makeConfig([
     { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'zylos_ak_secret' }
-  ], { slow_threshold_ms: 1 }), { now: () => now, fetch: async () => {
+  ], { slow_threshold_ms: 1 }), { now: () => now, fetch: compatibleHealthTransport(async () => {
     const ms = durations[probe++];
     now += ms ?? 5;
     if (ms === null) throw new Error('offline');
     return jsonResponse({ ok: true });
-  } });
+  }) });
   const agent = poller.agents[0];
   poller._setSuccess(agent, { state: 'IDLE' });
   for (let i = 0; i < durations.length; i++) await poller._probeAgentLatency(agent);
@@ -1438,11 +1457,11 @@ test('all failed latency samples cap at twenty and retain last-success meaning',
   let now = 1000, failed = false;
   const poller = new FleetPoller(makeConfig([
     { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'zylos_ak_secret' }
-  ]), { now: () => now, fetch: async () => {
+  ]), { now: () => now, fetch: compatibleHealthTransport(async () => {
     now += 10;
     if (failed) throw new Error('offline');
     return jsonResponse({ ok: true });
-  } });
+  }) });
   const agent = poller.agents[0];
   poller._setSuccess(agent, { state: 'IDLE' });
   await poller._probeAgentLatency(agent);
@@ -1468,22 +1487,22 @@ test('fleet keeps only boolean supervisor pause observations and clears on recov
 });
 
 test('object API fetch failures never fall back to a retired remote path', async () => {
-  for (const unavailable of ['/api/instance', '/api/groups/counts', '/api/groups/running', '/api/usage/summary']) {
+  for (const unavailable of ['/api/instance', '/api/groups/counts', '/api/groups?side=running', '/api/usage/summary']) {
     const calls = [];
     const poller = new FleetPoller(makeConfig([
       { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'fixture-key' }
     ]), { now: () => 0, fetch: async url => {
-      const route = new URL(url).pathname;
+      const route = objectApiRoute(url);
       calls.push(route);
       if (route === '/api/auth/token') return jsonResponse({ token: 'fixture-session' });
       if (route === unavailable) return jsonResponse({ error: 'not_found' }, 404);
       return objectResponse(url);
     } });
     await poller.pollOnce();
-    assert.equal(poller.getFleet().agents[0].health_reason, 'unreachable', unavailable);
-    assert.equal(calls.length, 5);
-    assert.equal(calls.some(route => route === '/api/state'), false);
-    for (const route of ['/api/instance', '/api/groups/counts', '/api/groups/running', '/api/usage/summary']) assert.equal(calls.filter(call => call === route).length, 1);
+    const missingInstance = unavailable === '/api/instance';
+    assert.equal(poller.getFleet().agents[0].health_reason, missingInstance ? 'version_unsupported' : 'unreachable', unavailable);
+    assert.deepEqual(calls.slice(0, 2), ['/api/auth/token', '/api/instance']);
+    assert.deepEqual(calls.slice(2).sort(), missingInstance ? [] : ['/api/groups/counts', '/api/groups?side=running', '/api/usage/summary']);
   }
 });
 
@@ -1492,7 +1511,7 @@ test('both instance and group events refresh all object observations without tru
   let working = 0, cost = 1;
   const agent = { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'fixture-key' };
   const poller = new FleetPoller(makeConfig([agent]), { now: () => 0, fetch: async url => {
-    const route = new URL(url).pathname;
+    const route = objectApiRoute(url);
     calls.push(route);
     if (route === '/api/auth/token') return jsonResponse({ token: 'fixture-session' });
     return objectResponse(url, { working, todayCost: cost });
@@ -1508,14 +1527,14 @@ test('both instance and group events refresh all object observations without tru
     const record = poller.getFleet().agents[0];
     assert.equal(record.state, 'BUSY');
     assert.equal(record.daily_cost, cost);
-    assert.deepEqual(calls.sort(), ['/api/groups/counts', '/api/groups/running', '/api/instance', '/api/usage/summary']);
+    assert.deepEqual(calls.sort(), ['/api/groups/counts', '/api/groups?side=running', '/api/instance', '/api/usage/summary']);
   }
 });
 
 test('object reads reject incomplete counts and usage as bad payloads', async () => {
   for (const [path, body] of [
     ['/api/groups/counts', { running: { states: {} } }],
-    ['/api/groups/running', { rows: null }],
+    ['/api/groups?side=running', { items: null }],
     ['/api/usage/summary', {}],
     ['/api/usage/summary', { today: { cost: 'bad' }, sevenDay: { cost: 2 } }],
   ]) {

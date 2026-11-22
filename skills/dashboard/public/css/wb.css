@@ -922,10 +922,6 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-memory-bl-tag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 9px; background: var(--wb-off); color: var(--text-dim); font-size: 11px; line-height: 1.2; white-space: nowrap; }
 .wb-memory-bl-tag.warn { background: color-mix(in srgb, var(--wb-wait) 16%, transparent); color: var(--wb-wait); font-weight: 600; }
 .wb-memory-rows { display: grid; }
-.wb-memory-rest { margin-top: 2px; }
-.wb-memory-rest-h { display: flex; align-items: center; gap: 6px; min-height: 32px; color: var(--text-dim); font-size: 12.5px; cursor: pointer; list-style: none; }
-.wb-memory-rest-h::-webkit-details-marker { display: none; }
-.wb-memory-rest[open] .wb-memory-rest-h .wb-ico { transform: rotate(90deg); }
 .wb-memory-gfilter { display: flex; width: 100%; height: var(--wb-h); margin: 0 0 6px; }
 .wb-memory-gfilter input { flex: 1; width: auto; }
 .memory-layout { grid-template-columns: 300px minmax(0, 1fr); gap: 0; flex: 1; min-height: 640px; border-top: 0; }
@@ -1008,7 +1004,6 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
   .wb-memory-bl-head .wb-memory-chart-label { white-space: normal; overflow-wrap: anywhere; text-align: left; line-height: 1.3; }
   .wb-memory-bl .wb-memory-flags { grid-column: auto; margin-bottom: 4px; }
   .wb-memory-bl .wb-memory-flags:has(> :only-child) { margin-bottom: 0; }
-  .wb-memory-rest-h { min-height: 40px; }
   .memory-layout { grid-template-columns: 1fr; min-height: 0; }
   .memory-tree-card { border-right: 0; }
   .memory-tree { max-height: none; }
@@ -1240,7 +1235,7 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-set-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-dim); font-size: 13px; }
 .wb-set-inline[hidden] { display: none; }
 .wb-nowrap { flex-wrap: nowrap; }
-.wb-set-split { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 12px; }
+.wb-set-split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; margin-top: 12px; }
 .wb-set-fields, .wb-set-fields.modal-body { display: flex; flex-direction: column; gap: 10px; padding: 0; }
 .wb-set-fields .wb-note:empty { display: none; }
 .wb-fld { display: grid; grid-template-columns: 150px minmax(0, 1fr); align-items: center; gap: 4px 12px; }
@@ -1282,20 +1277,17 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-dirty { color: var(--accent); font-size: 11.5px; font-weight: 600; }
 .wb-dirty[hidden] { display: none; }
 .wb-gsum { color: var(--text-dim); font-size: 12.5px; }
-.wb-glist { margin-top: 4px; font-size: 12.5px; }
-.wb-glist summary { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); list-style: none; cursor: pointer; }
+.wb-glist { max-width: 100%; margin-top: 4px; font-size: 12.5px; }
+.wb-glist summary { display: inline-flex; align-items: center; min-height: var(--wb-h); gap: 4px; color: var(--accent); list-style: none; cursor: pointer; }
 .wb-glist summary::-webkit-details-marker { display: none; }
 .wb-glist[open] summary .wb-ico { transform: rotate(90deg); }
-.wb-gl-box { margin-top: 6px; border: 1px solid var(--wb-line); border-radius: var(--wb-r); background: var(--wb-panel); overflow: hidden; }
-.wb-gl-box input[type=search] { width: 100%; padding: 6px 8px; border: 0; border-bottom: 1px solid var(--wb-line); background: transparent; color: var(--text); font: inherit; font-size: 12.5px; }
-.wb-gl-rows { max-height: 180px; overflow: auto; }
-.wb-gl-rows[hidden] { display: none; }
-.wb-gl-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border: 0; background: none; color: var(--text); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.wb-gl-content { margin-top: 6px; }
+.wb-gl-box { border: 1px solid var(--wb-line); border-radius: var(--wb-r); background: var(--wb-panel); overflow: hidden; }
+.wb-gl-box:empty { border-color: transparent; }
+.wb-gl-row { display: flex; align-items: center; gap: 8px; min-height: var(--wb-h); width: 100%; padding: 5px 8px; border: 0; background: none; color: var(--text); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
 .wb-gl-row:hover { background: var(--wb-hover); }
 .wb-gl-row small { margin-left: auto; color: var(--text-muted); }
 .wb-gl-row .wb-status-age { margin-left: 6px; }
-.wb-gl-empty { margin: 0; padding: 6px 8px; color: var(--text-muted); font-size: 12px; }
-.wb-gl-more { margin: 4px 8px 6px; }
 .wb-pref { display: grid; grid-template-columns: 150px minmax(0, 1fr); align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--wb-line); font-size: 13px; }
 .wb-pref:first-of-type, .wb-set-card-h + .wb-pref { border-top: 0; }
 .wb-pref-l { display: flex; align-items: center; gap: 6px; color: var(--text-dim); }
@@ -1625,7 +1617,7 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   .wb-tip-anchor { position: static; }
   .wb-tip-anchor .tip-popover { top: 44px; left: 12px; right: 12px; width: auto; max-width: none; }
   .wb-savebar { margin: 18px -12px 0; padding: 12px; }
-  .wb-set-split { grid-template-columns: 1fr; gap: 12px; }
+  .wb-set-split { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .wb-pref, .wb-fld { grid-template-columns: 1fr; gap: 6px; }
   .wb-model-fields { grid-template-columns: minmax(0, 1fr) 104px; }
   .wb-model-field:first-child { grid-column: 1 / -1; }
@@ -1843,12 +1835,13 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
 
 /* State flags stack below the mutually exclusive primary status without crossing into the next cell. */
 .wb-group-sides { margin: 8px 16px; }
+.wb-board-refresh { display: flex; margin: 8px 16px; }
 .wb-state-stack { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; max-width: 100%; }
 .wb-state-stack > .wb-pill { flex: none; flex-wrap: wrap; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .wb-state-flags { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; }
 .wb-state-flags .wb-tag { white-space: normal; overflow-wrap: anywhere; line-height: 18px; }
 @media (max-width: 760px) {
-  .wb-group-sides { margin: 8px 12px; }
+  .wb-group-sides, .wb-board-refresh { margin: 8px 12px; }
   .wb-row > .wb-state-stack { grid-column: 2; justify-self: end; max-width: 140px; }
 }
 
