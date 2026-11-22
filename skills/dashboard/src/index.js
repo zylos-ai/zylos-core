@@ -1,9 +1,14 @@
 #!/usr/bin/env node
+// This module awaits the Core and Dashboard runtime factories at module scope.
+// The corresponding runtime implementations must not statically import it.
+
 import { createInstalledVersionReader } from './lib/installed-versions.js';
 import { CoreState } from './lib/core-state.js';
 import { createSessionObservations } from './lib/session-observations.js';
 import { createTranscriptSnapshot } from './lib/collectors/transcript-snapshot.js';
 import { loadCoreModule } from './lib/core-modules.js';
+import { getDashboardRuntime } from './lib/runtime/index.js';
+import { UNSUPPORTED } from './lib/runtime/contract.js';
 import { createReadinessCheck } from './lib/readiness.js';
 import { bootId, publishHealthProcess } from './lib/health-process.js';
 import { createCoalescedBroadcast } from './lib/coalesced-broadcast.js';
@@ -34,9 +39,6 @@ import { handleChatAttachments } from './lib/chat/attachment-routes.js';
 import { browserBaseFromRequest } from './lib/browser-base.js';
 import { mutateConfig } from './lib/config-mutation.js';
 import {
-  DEFAULT_RUNTIME_FAST_MODE_MULTIPLIERS,
-  DEFAULT_RUNTIME_SERVICE_TIER_MODEL_PRICES,
-  DEFAULT_RUNTIME_MODEL_PRICES,
   ensureDataDirs,
   fastModeMultiplierForRuntime,
   loadConfig,
@@ -51,9 +53,7 @@ import { Sanitizer } from './lib/sanitizer.js';
 import { CoreLogImporter } from './lib/core-log-importer.js';
 import { PM2Collector } from './lib/collectors/pm2-collector.js';
 import { SystemCollector } from './lib/collectors/system-collector.js';
-import { ConversationCollector } from './lib/collectors/conversation-collector.js';
 import { UsageTranscripts } from './lib/collectors/usage-transcripts.js';
-import { CodexRolloutCollector } from './lib/collectors/codex-rollout-collector.js';
 import { StateEngine } from './lib/state-engine.js';
 import { runMetricMaintenance } from './lib/metric-maintenance.js';
 import { EventLoopMonitor } from './lib/event-loop-monitor.js';
@@ -121,7 +121,9 @@ async function refreshInstalledVersions() {
   }
 }
 
-const config = loadConfig();
+const usageRuntimes = await Promise.all(runtimesWith('usage').map(id => getDashboardRuntime(id)));
+const pricing = Object.fromEntries(usageRuntimes.map(runtime => [runtime.id, runtime.pricing]));
+const config = loadConfig({ pricing });
 ensureDataDirs(config);
 await migratePasswordIfNeeded(config);
 // The instance time zone (.env TZ), read on every call; every date and time the Dashboard shows uses it.
@@ -190,7 +192,10 @@ observerService.ensureCoordinatorOwnership = async () => {
 // 3. Sanitizer
 const sanitizer = new Sanitizer(config.zylosDir);
 const coreLogImporter = new CoreLogImporter({ store, zylosDir: config.zylosDir, sanitizer,
-  onImport: event => { scheduleHistoryBroadcast(); conversationCollector?.afterImport(event); },
+  onImport: event => {
+    scheduleHistoryBroadcast();
+    for (const { instance } of eventDrivenCollectors) instance.afterImport(event);
+  },
 });
 
 // Event-loop delay observability (#260)
@@ -205,11 +210,15 @@ const eventLoopMonitor = new EventLoopMonitor({
 const pm2Collector = new PM2Collector(store, config);
 const systemCollector = new SystemCollector(store, config);
 const usageTranscripts = new UsageTranscripts(store, config, {
+  collectors: Object.fromEntries(usageRuntimes.map(runtime => [runtime.id, runtime.collector])),
   getSnapshot: createTranscriptSnapshot({ zylosDir: config.zylosDir }),
   getSnapshotKey: () => coreState.costKey,
 });
-const conversationCollector = new ConversationCollector(store, config, { transcripts: usageTranscripts });
-const codexRolloutCollector = new CodexRolloutCollector(store, config, { transcripts: usageTranscripts });
+const usageCollectors = usageRuntimes.map(({ collector }) => ({
+  collector,
+  instance: collector.create(store, config, { transcripts: usageTranscripts }),
+}));
+const eventDrivenCollectors = usageCollectors.filter(({ collector }) => collector.eventDriven);
 
 // Wrap the instance entry points, so timer and initial reads have the same
 // attribution, including synchronous continuations after async I/O.
@@ -217,16 +226,16 @@ function timeMethod(target, method, name) {
   const original = target[method].bind(target);
   target[method] = (...args) => eventLoopMonitor.runTask(name, () => original(...args));
 }
-for (const [name, collector] of Object.entries({ pm2: pm2Collector, system: systemCollector,
-  conversation: conversationCollector, codexRollout: codexRolloutCollector })) {
+const collectors = {
+  pm2: pm2Collector,
+  system: systemCollector,
+  ...Object.fromEntries(usageCollectors.map(({ collector, instance }) => [collector.taskName, instance])),
+};
+for (const [name, collector] of Object.entries(collectors)) {
   timeMethod(collector, 'collect', `collector.${name}`);
 }
 timeMethod(coreState, 'refresh', 'core-state.refresh');
 timeMethod(coreLogImporter, 'poll', 'core-log.import');
-
-const collectors = { pm2: pm2Collector, system: systemCollector };
-if (conversationCollector) collectors.conversation = conversationCollector;
-if (codexRolloutCollector) collectors.codexRollout = codexRolloutCollector;
 
 // SSE hub
 const sse = new SseHub(15_000, { onClientCountChange: count => coreState.setWatched(count > 0) });
@@ -325,9 +334,10 @@ systemCollector._onUpdate = (data) => {
   stateEngine.onSystemUpdate(data);
   scheduleFleetStateBroadcast();
 };
-if (conversationCollector) {
-  conversationCollector._onEvent = (event) => stateEngine.onEvent(event);
-  conversationCollector._onMetric = (metric) => {
+// Periodic collectors stay off the synchronous UI/state broadcast path.
+for (const { instance } of eventDrivenCollectors) {
+  instance._onEvent = (event) => stateEngine.onEvent(event);
+  instance._onMetric = (metric) => {
     sse.broadcast('metric_update', {
       metric_name: metric.metric_name,
       value: Number(metric.metric_value),
@@ -338,10 +348,6 @@ if (conversationCollector) {
     });
     scheduleFleetStateBroadcast();
   };
-}
-if (codexRolloutCollector) {
-  // Rollout ingestion writes metrics/source health to SQLite. Keep it off the
-  // synchronous UI/state broadcast path so transcript backfill cannot block HTTP.
 }
 
 // 9b. C4 reader (read-only access to comm-bridge DB)
@@ -918,14 +924,9 @@ async function runInitialCollectors() {
   try { await systemCollector.warmup(); } catch (err) {
     process.stderr.write(`[startup] System collector warmup failed: ${err.message}\n`);
   }
-  if (conversationCollector) {
-    try { await conversationCollector.collect(); } catch (err) {
-      process.stderr.write(`[startup] Conversation collector initial run failed: ${err.message}\n`);
-    }
-  }
-  if (codexRolloutCollector) {
-    try { await codexRolloutCollector.collect(); } catch (err) {
-      process.stderr.write(`[startup] Codex rollout collector initial run failed: ${err.message}\n`);
+  for (const { collector, instance } of usageCollectors) {
+    try { await instance.collect(); } catch (err) {
+      process.stderr.write(`[startup] ${collector.logName} initial run failed: ${err.message}\n`);
     }
   }
 }
@@ -1153,43 +1154,31 @@ async function handleApi(req, res, pathname, url) {
 }
 
 
-function builtInModelsForRuntime(runtime) {
-  return Object.keys(DEFAULT_RUNTIME_MODEL_PRICES[runtime === 'codex' ? 'codex' : 'claude'] || {});
-}
-
-function builtInServiceTierModelsForRuntime(runtime, serviceTier) {
-  const rt = runtime === 'codex' ? 'codex' : 'claude';
-  return Object.keys(DEFAULT_RUNTIME_SERVICE_TIER_MODEL_PRICES[rt]?.[serviceTier] || {});
-}
-
-function supportsFastMode(runtime) {
-  return runtime === 'claude' || runtime === 'codex';
-}
-
 function settingsPayload(runtime) {
-  const priceRuntime = runtime === 'codex' ? 'codex' : 'claude';
-  const fastModeAvailable = supportsFastMode(priceRuntime);
-  const fastModeMultiplier = priceRuntime === 'claude' ? fastModeMultiplierForRuntime(config, priceRuntime) : null;
+  const prices = pricing[runtime];
+  const fastMode = prices.fastMode === UNSUPPORTED ? null : prices.fastMode;
+  const serviceTier = fastMode?.mode === 'service_tier' ? fastMode.serviceTier : null;
+  const fastModeMultiplier = fastMode?.mode === 'multiplier' ? fastModeMultiplierForRuntime(config, prices) : null;
   return {
-    runtime: priceRuntime,
-    builtInModels: builtInModelsForRuntime(priceRuntime),
-    builtInPriorityModels: builtInServiceTierModelsForRuntime(priceRuntime, 'priority'),
-    modelPrices: modelPricesForRuntime(config, priceRuntime),
-    priorityModelPrices: priceRuntime === 'codex' ? modelPricesForRuntime(config, priceRuntime, 'priority') : null,
+    runtime,
+    builtInModels: Object.keys(prices.defaultModelPrices),
+    builtInPriorityModels: serviceTier ? Object.keys(prices.serviceTiers[serviceTier] || {}) : [],
+    modelPrices: modelPricesForRuntime(config, prices),
+    priorityModelPrices: serviceTier ? modelPricesForRuntime(config, prices, serviceTier) : null,
     runtimeModelPrices: config.runtimeModelPrices,
     runtimeServiceTierModelPrices: config.runtimeServiceTierModelPrices,
     fastMode: {
-      available: fastModeAvailable,
-      mode: priceRuntime === 'codex' ? 'service_tier' : 'multiplier',
-      serviceTier: priceRuntime === 'codex' ? 'priority' : null,
+      available: fastMode !== null,
+      mode: fastMode?.mode ?? null,
+      serviceTier,
       multiplier: fastModeMultiplier,
-      configuredMultiplier: config.configuredRuntimeFastModeMultipliers?.[priceRuntime] ?? null
+      configuredMultiplier: config.configuredRuntimeFastModeMultipliers?.[runtime] ?? null
     },
     fastModeMultiplier
   };
 }
 
-function validateModelPrices(modelPrices, runtime, requiredModels = builtInModelsForRuntime(runtime)) {
+function validateModelPrices(modelPrices, requiredModels) {
   const errors = [];
   if (typeof modelPrices !== 'object' || modelPrices === null || Array.isArray(modelPrices)) {
     errors.push('modelPrices must be an object');
@@ -1235,21 +1224,23 @@ function validateModelPrices(modelPrices, runtime, requiredModels = builtInModel
 }
 
 function allSettingsPayload() {
-  return { active: defaultRuntime(), runtimes: Object.fromEntries(runtimesWith('usage').map(runtime => [runtime, settingsPayload(runtime)])) };
+  return { active: defaultRuntime(), runtimes: Object.fromEntries(usageRuntimes.map(({ id }) => [id, settingsPayload(id)])) };
 }
 
 function validateRuntimeSettings(body, runtime) {
+  const prices = pricing[runtime];
+  const fastMode = prices.fastMode === UNSUPPORTED ? null : prices.fastMode;
   const errors = [];
   if (!body || typeof body !== 'object' || Array.isArray(body)) return ['Runtime settings must be an object'];
   const unknown = Object.keys(body).filter(key => !['modelPrices', 'priorityModelPrices', 'fastModeMultiplier'].includes(key));
   if (unknown.length) errors.push(`Unknown keys not allowed: ${unknown.join(', ')}`);
-  if (body.modelPrices !== undefined) errors.push(...validateModelPrices(body.modelPrices, runtime));
+  if (body.modelPrices !== undefined) errors.push(...validateModelPrices(body.modelPrices, Object.keys(prices.defaultModelPrices)));
   if (body.priorityModelPrices !== undefined) {
-    if (runtime !== 'codex') errors.push(`priorityModelPrices is not supported for ${runtime} runtime`);
-    else errors.push(...validateModelPrices(body.priorityModelPrices, runtime, builtInServiceTierModelsForRuntime(runtime, 'priority')));
+    if (fastMode?.mode !== 'service_tier') errors.push(`priorityModelPrices is not supported for ${runtime} runtime`);
+    else errors.push(...validateModelPrices(body.priorityModelPrices, Object.keys(prices.serviceTiers[fastMode.serviceTier])));
   }
   if (body.fastModeMultiplier !== undefined) {
-    if (runtime !== 'claude') errors.push(`fastModeMultiplier is not supported for ${runtime} runtime`);
+    if (fastMode?.mode !== 'multiplier') errors.push(`fastModeMultiplier is not supported for ${runtime} runtime`);
     else if (body.fastModeMultiplier !== null && (!Number.isFinite(body.fastModeMultiplier) || body.fastModeMultiplier <= 0)) {
       errors.push('fastModeMultiplier must be null or a finite number > 0');
     }
@@ -1276,50 +1267,54 @@ async function handleSettingsUpdate(req, res) {
     } else {
       updates = body.runtimes;
       for (const runtime of Object.keys(updates)) {
-        if (!runtimesWith('usage').includes(runtime)) errors.push(`Unknown keys not allowed: ${runtime}`);
+        if (!Object.hasOwn(pricing, runtime)) errors.push(`Unknown keys not allowed: ${runtime}`);
       }
     }
   } else updates = {};
-  for (const [runtime, patch] of Object.entries(updates)) errors.push(...validateRuntimeSettings(patch, runtime));
+  for (const [runtime, patch] of Object.entries(updates)) {
+    if (Object.hasOwn(pricing, runtime)) errors.push(...validateRuntimeSettings(patch, runtime));
+  }
   if (errors.length) { sendJson(res, 400, { error: errors.join('; ') }); return; }
 
   try {
     await mutateConfig(config.configPath, existing => {
       for (const [runtime, patch] of Object.entries(updates)) {
+        const { legacyKeys, fastMode } = pricing[runtime];
         if (patch.modelPrices !== undefined) {
           existing.runtimeModelPrices = { ...(existing.runtimeModelPrices || {}), [runtime]: patch.modelPrices };
-          if (runtime === 'claude') existing.modelPrices = patch.modelPrices;
+          if (legacyKeys !== UNSUPPORTED) existing[legacyKeys.modelPrices] = patch.modelPrices;
         }
         if (patch.fastModeMultiplier !== undefined) {
-          existing.runtimeFastModeMultipliers = { ...(existing.runtimeFastModeMultipliers || {}), claude: patch.fastModeMultiplier };
-          existing.fastModeMultiplier = patch.fastModeMultiplier;
+          existing.runtimeFastModeMultipliers = { ...(existing.runtimeFastModeMultipliers || {}), [runtime]: patch.fastModeMultiplier };
+          if (legacyKeys !== UNSUPPORTED) existing[legacyKeys.fastModeMultiplier] = patch.fastModeMultiplier;
           if (patch.fastModeMultiplier === null) {
-            delete existing.runtimeFastModeMultipliers.claude;
-            delete existing.fastModeMultiplier;
+            delete existing.runtimeFastModeMultipliers[runtime];
+            if (legacyKeys !== UNSUPPORTED) delete existing[legacyKeys.fastModeMultiplier];
           }
         }
         if (patch.priorityModelPrices !== undefined) {
           existing.runtimeServiceTierModelPrices = { ...(existing.runtimeServiceTierModelPrices || {}),
-            codex: { ...(existing.runtimeServiceTierModelPrices?.codex || {}), priority: patch.priorityModelPrices } };
+            [runtime]: { ...(existing.runtimeServiceTierModelPrices?.[runtime] || {}), [fastMode.serviceTier]: patch.priorityModelPrices } };
         }
       }
     });
     for (const [runtime, patch] of Object.entries(updates)) {
+      const { legacyKeys, fastMode } = pricing[runtime];
       if (patch.modelPrices !== undefined) {
         config.runtimeModelPrices = { ...(config.runtimeModelPrices || {}), [runtime]: patch.modelPrices };
-        config.modelPrices = config.runtimeModelPrices.claude;
+        if (legacyKeys !== UNSUPPORTED) config[legacyKeys.modelPrices] = config.runtimeModelPrices[runtime];
       }
       if (patch.fastModeMultiplier !== undefined) {
         config.runtimeFastModeMultipliers = { ...(config.runtimeFastModeMultipliers || {}),
-          claude: patch.fastModeMultiplier ?? DEFAULT_RUNTIME_FAST_MODE_MULTIPLIERS.claude };
+          [runtime]: patch.fastModeMultiplier ?? fastMode.defaultMultiplier };
         config.configuredRuntimeFastModeMultipliers = { ...(config.configuredRuntimeFastModeMultipliers || {}) };
-        if (patch.fastModeMultiplier === null) delete config.configuredRuntimeFastModeMultipliers.claude;
-        else config.configuredRuntimeFastModeMultipliers.claude = patch.fastModeMultiplier;
-        config.fastModeMultiplier = config.runtimeFastModeMultipliers.claude;
+        if (patch.fastModeMultiplier === null) delete config.configuredRuntimeFastModeMultipliers[runtime];
+        else config.configuredRuntimeFastModeMultipliers[runtime] = patch.fastModeMultiplier;
+        if (legacyKeys !== UNSUPPORTED) config[legacyKeys.fastModeMultiplier] = config.runtimeFastModeMultipliers[runtime];
       }
       if (patch.priorityModelPrices !== undefined) {
         config.runtimeServiceTierModelPrices = { ...(config.runtimeServiceTierModelPrices || {}),
-          codex: { ...(config.runtimeServiceTierModelPrices?.codex || {}), priority: patch.priorityModelPrices } };
+          [runtime]: { ...(config.runtimeServiceTierModelPrices?.[runtime] || {}), [fastMode.serviceTier]: patch.priorityModelPrices } };
       }
     }
     sendJson(res, 200, { ok: true, ...allSettingsPayload() });
@@ -1758,8 +1753,7 @@ if (isMain && process.argv.includes('--smoke')) {
         // Start periodic collectors
         pm2Collector.start(60_000);
         systemCollector.start(30_000);
-        if (conversationCollector) conversationCollector.start(5_000);
-        if (codexRolloutCollector) codexRolloutCollector.start(5_000);
+        for (const { instance } of usageCollectors) instance.start(5_000);
 
         // Start snapshot timer
         stateEngine.startSnapshotTimer();
@@ -1795,8 +1789,7 @@ if (isMain && process.argv.includes('--smoke')) {
       const shutdownDeadline = performance.now() + 10_000;
       pm2Collector.stop();
       systemCollector.stop();
-      if (conversationCollector) conversationCollector.stop();
-      if (codexRolloutCollector) codexRolloutCollector.stop();
+      for (const { instance } of usageCollectors) instance.stop();
       stateEngine.stopSnapshotTimer();
       await coreState.stop();
       if (retentionTimer) clearInterval(retentionTimer);

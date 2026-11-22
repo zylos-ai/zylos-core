@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import * as childProcess from 'node:child_process';
 import { StateEngine } from '../src/lib/state-engine.js';
-import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
-import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
+import { ConversationCollector } from '../src/lib/runtime/claude/collector.js';
+import { CodexRolloutCollector } from '../src/lib/runtime/codex/collector.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
 import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
 

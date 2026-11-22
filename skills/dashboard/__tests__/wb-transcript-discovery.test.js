@@ -6,10 +6,17 @@ import path from 'node:path';
 import { Store } from '../src/lib/store.js';
 import { UsageTranscripts } from '../src/lib/collectors/usage-transcripts.js';
 import { createTranscriptSnapshot } from '../src/lib/collectors/transcript-snapshot.js';
-import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
-import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
-import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
-import { CodexHistory } from '../src/lib/history/codex-history.js';
+import { ConversationCollector } from '../src/lib/runtime/claude/collector.js';
+import { CodexRolloutCollector } from '../src/lib/runtime/codex/collector.js';
+import { loadCoreModule as loadTranscriptCore } from '../src/lib/core-modules.js';
+import { CodexHistory } from '../src/lib/runtime/codex/history.js';
+import { getDashboardRuntime as getCollectorRuntime } from '../src/lib/runtime/index.js';
+
+const collectors = Object.fromEntries(await Promise.all(['claude', 'codex'].map(async id =>
+  [id, (await getCollectorRuntime(id)).collector])));
+
+const { getRuntime: getTranscriptRuntime } = await loadTranscriptCore('runtime/index.js');
+const { transcript: claudeTranscript } = (await getTranscriptRuntime('claude')).usage;
 
 // All cases use actual SQLite/files and collectors. Run for transcript discovery,
 // snapshot scheduling or attribution changes; skip unrelated UI changes. The official
@@ -39,7 +46,7 @@ function fixture(t, snapshot = { listKnown: true, rows: [] }) {
   const store = new Store(path.join(root, 'dashboard.db'));
   let clock = Date.parse('2026-11-06T12:00:00Z');
   const inventory = new UsageTranscripts(store, { homeDir: root, zylosDir: root },
-    { now: () => clock,
+    { collectors, now: () => clock,
       getSnapshotKey: () => snapshot instanceof Error ? null : JSON.stringify(snapshot?.rows ?? []),
       getSnapshot: async () => { if (snapshot instanceof Error) throw snapshot; return structuredClone(snapshot); } });
   t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
@@ -68,7 +75,7 @@ test('discovery preserves first attribution, finds subagents and rejects invalid
   assert.equal(f.store.activeUsageTranscripts().length, 5);
   assert.equal(f.store.getUsageTranscript(a).session_group, 'A');
   assert.equal(f.store.getUsageTranscript(path.join(dir, 'agent-one.jsonl')).parent_path, a);
-  assert.equal(f.store.latestCodexRolloutPath(), null);
+  assert.equal(f.store.latestCodexRolloutPath('codex'), null);
   assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM source_health').get().n, 0);
 });
 
@@ -140,7 +147,7 @@ test('legacy discovery adopts saved file offsets and yields to explicit Claude s
   const f = fixture(t), id = 'legacy';
   fs.mkdirSync(path.join(f.root, 'activity-monitor'), { recursive: true });
   fs.writeFileSync(path.join(f.root, 'activity-monitor', 'statusline.json'), JSON.stringify({ session_id: id }));
-  const dir = path.join(f.root, '.claude', 'projects', claudeProjectSlug(f.root)); fs.mkdirSync(dir, { recursive: true });
+  const dir = claudeTranscript.projectDir({ home: f.root, zylosDir: f.root }); fs.mkdirSync(dir, { recursive: true });
   const p = path.join(dir, `${id}.jsonl`); fs.writeFileSync(p, ' '.repeat(1000));
   f.store.upsertSourceHealth('conversation_reader', 'byte_offset', 'tracking', { files: { [p]: 1000 } });
   f.inventory.discover();
@@ -149,7 +156,7 @@ test('legacy discovery adopts saved file offsets and yields to explicit Claude s
   const other = fixture(t), explicit = other.file('explicit');
   fs.mkdirSync(path.join(other.root, 'activity-monitor'), { recursive: true });
   fs.writeFileSync(path.join(other.root, 'activity-monitor', 'statusline.json'), JSON.stringify({ session_id: 'session-A' }));
-  const otherDir = path.join(other.root, '.claude', 'projects', claudeProjectSlug(other.root));
+  const otherDir = claudeTranscript.projectDir({ home: other.root, zylosDir: other.root });
   fs.mkdirSync(otherDir, { recursive: true });
   fs.writeFileSync(path.join(otherDir, 'session-A.jsonl'), '{}\n');
   other.start(explicit, 'A'); other.inventory.discover();
@@ -847,18 +854,18 @@ test('Codex path discovery retains the latest Origin session across repeated dis
   f.start(older, null, 'codex', f.now() - 10000);
   f.start(newer, 'origin', 'codex');
   f.inventory.discover();
-  assert.equal(f.store.latestCodexRolloutPath().transcript_path, newer);
+  assert.equal(f.store.latestCodexRolloutPath('codex').transcript_path, newer);
   const upserts = [];
   const original = f.store.upsertCodexRolloutPath.bind(f.store);
   t.mock.method(f.store, 'upsertCodexRolloutPath', mapping => { upserts.push(mapping); return original(mapping); });
   f.advance(60000); f.inventory.discover();
   assert.equal(upserts.length, 0);
-  assert.equal(f.store.latestCodexRolloutPath().transcript_path, newer);
+  assert.equal(f.store.latestCodexRolloutPath('codex').transcript_path, newer);
 });
 
 test('legacy statusline rotation discovers the new file and only it is current Origin', async t => {
   const f = fixture(t), statusDir = path.join(f.root, 'activity-monitor');
-  const projectDir = path.join(f.root, '.claude', 'projects', claudeProjectSlug(f.root));
+  const projectDir = claudeTranscript.projectDir({ home: f.root, zylosDir: f.root });
   fs.mkdirSync(statusDir, { recursive: true }); fs.mkdirSync(projectDir, { recursive: true });
   const status = path.join(statusDir, 'statusline.json');
   fs.writeFileSync(path.join(projectDir, 'legacy-first.jsonl'), '{}\n');
@@ -884,7 +891,7 @@ test('legacy Origin discovery coexists with an explicit session in another group
     { sessionGroup: 'A', live: { runId: 'run-A' } },
   ] });
   const explicit = f.file('new-group'); f.start(explicit, 'A');
-  const projectDir = path.join(f.root, '.claude', 'projects', claudeProjectSlug(f.root));
+  const projectDir = claudeTranscript.projectDir({ home: f.root, zylosDir: f.root });
   fs.mkdirSync(projectDir, { recursive: true });
   fs.mkdirSync(path.join(f.root, 'activity-monitor'), { recursive: true });
   const legacy = path.join(projectDir, 'legacy-origin.jsonl');
@@ -903,7 +910,7 @@ test('legacy Origin discovery coexists with an explicit session in another group
 
 test('rotated legacy sessions finish after idle EOF while the current legacy remains active', async t => {
   const f = fixture(t, { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: null } }] });
-  const projectDir = path.join(f.root, '.claude', 'projects', claudeProjectSlug(f.root));
+  const projectDir = claudeTranscript.projectDir({ home: f.root, zylosDir: f.root });
   fs.mkdirSync(projectDir, { recursive: true });
   fs.mkdirSync(path.join(f.root, 'activity-monitor'), { recursive: true });
   const status = path.join(f.root, 'activity-monitor', 'statusline.json');

@@ -1,4 +1,13 @@
+// This module awaits the Dashboard runtime factory at module scope.
+// The corresponding runtime implementations must not statically import it.
+
+import { loadCoreModule } from '../core-modules.js';
+import { getDashboardRuntime } from '../runtime/index.js';
+import { UNSUPPORTED } from '../runtime/contract.js';
 import { costRows, summarizeCosts, usageIntervals, usageBounds, usageBucketSql, usageTokenRows } from './cost-query.js';
+
+const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
+const usageRuntimes = await Promise.all(runtimesWith('usage').map(id => getDashboardRuntime(id)));
 
 export { usageBounds } from './cost-query.js';
 
@@ -42,6 +51,13 @@ export function usageSeries(store, c4Reader, options = {}) {
   const costTotals = summarizeCosts(costs);
   // Part of the instance total that no group owns; see costRows.
   const otherCost = summarizeCosts(costRows(store, { ...bounds, bucket: 'total', other: true })).total;
+  const toolWeights = {};
+  for (const { collector } of usageRuntimes) {
+    if (collector.projectWeights === UNSUPPORTED) continue;
+    for (const [project, count] of Object.entries(collector.projectWeights(store, { since, until }))) {
+      toolWeights[project] = (toolWeights[project] || 0) + count;
+    }
+  }
   return { ...bounds, buckets: intervals.map(({ at }) => at), scope: 'all_groups',
     cache,
     totals: { inputTokens, cacheReadTokens, cacheHitRate: inputTokens > 0 ? cacheReadTokens / inputTokens : null, tokens: tokens.reduce((total, row) => total + row.value, 0), cost: costTotals.total,
@@ -50,5 +66,5 @@ export function usageSeries(store, c4Reader, options = {}) {
     costByRuntime: costs, tokensByRuntime: tokens, messages,
     messagesReason: messageSeries.reason ?? null, messagesSampledAt: messageSeries.sampledAt ?? null,
     rotations, tools,
-    runtimeEventsUnknown, projects: store.getProjectDistribution({ since, until }) };
+    runtimeEventsUnknown, projects: store.getProjectDistribution({ since, until, toolWeights }) };
 }

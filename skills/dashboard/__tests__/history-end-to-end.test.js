@@ -5,10 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { HistoryService } from '../src/lib/history/history-service.js';
-import { ClaudeHistory } from '../src/lib/history/claude-history.js';
-import { CodexHistory } from '../src/lib/history/codex-history.js';
-import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
+import { ClaudeHistory } from '../src/lib/runtime/claude/history.js';
+import { CodexHistory } from '../src/lib/runtime/codex/history.js';
+import { loadCoreModule as loadTranscriptCore } from '../src/lib/core-modules.js';
 import { createRedactor } from '../src/lib/redaction/engine.js';
+const { getRuntime: getTranscriptRuntime } = await loadTranscriptCore('runtime/index.js');
+const { transcript: claudeTranscript } = (await getTranscriptRuntime('claude')).usage;
+
 const jsonl = rows => rows.map(row => JSON.stringify(row)).join('\n') + '\n';
 const params = value => new URLSearchParams(value);
 async function snapshot(files) {
@@ -28,7 +31,7 @@ test('read-only Claude files recover full C4 and persisted outputs through redac
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'history-http-')));
   const zylosDir = path.join(root, 'zylos');
   await fs.mkdir(zylosDir);
-  const project = path.join(root, '.claude', 'projects', claudeProjectSlug(zylosDir));
+  const project = claudeTranscript.projectDir({ home: root, zylosDir: zylosDir });
   const c4 = path.join(zylosDir, 'comm-bridge', 'attachments', 'conv-1', 'message.txt');
   const tool = path.join(project, 'session', 'tool-results', 'output.txt');
   await fs.mkdir(path.dirname(c4), { recursive: true });

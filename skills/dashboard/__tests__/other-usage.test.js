@@ -6,10 +6,14 @@ import test from 'node:test';
 import { Store } from '../src/lib/store.js';
 import { CoreLogImporter } from '../src/lib/core-log-importer.js';
 import { UsageTranscripts } from '../src/lib/collectors/usage-transcripts.js';
-import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
-import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
+import { ConversationCollector } from '../src/lib/runtime/claude/collector.js';
+import { CodexRolloutCollector } from '../src/lib/runtime/codex/collector.js';
 import { usageSummary } from '../src/lib/workbench/usage-api.js';
 import { usageSeries } from '../src/lib/workbench/usage-series.js';
+import { getDashboardRuntime as getCollectorRuntime } from '../src/lib/runtime/index.js';
+
+const collectors = Object.fromEntries(await Promise.all(['claude', 'codex'].map(async id =>
+  [id, (await getCollectorRuntime(id)).collector])));
 
 const at = Date.parse('2026-11-17T08:00:00.000Z');
 const timestamp = new Date(at).toISOString();
@@ -31,7 +35,7 @@ function fixture(t) {
       codex: { 'gpt-5.3-codex': { input: 3, output: 12, cacheRead: 0.3, cacheCreation: 0 } },
     },
   };
-  const transcripts = new UsageTranscripts(store, config, {
+  const transcripts = new UsageTranscripts(store, config, { collectors,
     getSnapshot: async () => ({ listKnown: true, rows: [{ sessionGroup: 'g1', live: { runId: 'run-1' } }] }), now: () => at });
   const write = (relative, rows) => {
     const file = path.join(dir, relative);

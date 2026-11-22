@@ -78,6 +78,7 @@ export const RUNTIME_CONTRACT = Object.freeze({
   }) }),
   usage: Object.freeze({ required: false, members: Object.freeze({
     accountQuota: 'optional',
+    transcript: 'optional',
     legacyAccountRecord: 'optional',
     healthQuota: 'optional',
   }) }),

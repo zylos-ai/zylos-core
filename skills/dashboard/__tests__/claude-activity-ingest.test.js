@@ -9,8 +9,12 @@ import { desiredClaudeHooks } from '../../../cli/lib/runtime/claude/hooks.js';
 import { Store } from '../src/lib/store.js';
 import { CoreLogImporter } from '../src/lib/core-log-importer.js';
 import { UsageTranscripts } from '../src/lib/collectors/usage-transcripts.js';
-import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
+import { ConversationCollector } from '../src/lib/runtime/claude/collector.js';
 import { activityBuckets } from '../src/lib/workbench/activity-buckets.js';
+import { getDashboardRuntime as getCollectorRuntime } from '../src/lib/runtime/index.js';
+
+const collectors = Object.fromEntries(await Promise.all(['claude', 'codex'].map(async id =>
+  [id, (await getCollectorRuntime(id)).collector])));
 
 // Isolated integration: generated command -> native-shaped stdin -> Core event log
 // -> unmodified Dashboard importer/collector/activity buckets. Run for hook wiring
@@ -64,7 +68,7 @@ test('registered Claude hooks feed grouped transcript usage and child activity i
   const config = { zylosDir, homeDir: home, runtimeModelPrices: {
     claude: { 'claude-fixture': { input: 2, output: 8, cacheRead: 0, cacheCreation: 0 } } } };
   const rows = [{ sessionGroup: 'chat:claude', live: { runId: 'run-claude' } }];
-  const transcripts = new UsageTranscripts(store, config, { getSnapshot: async () => ({ listKnown: true, rows }) });
+  const transcripts = new UsageTranscripts(store, config, { collectors, getSnapshot: async () => ({ listKnown: true, rows }) });
   const collector = new ConversationCollector(store, config, { transcripts });
   await collector.collect();
   const usage = store.queryMetrics({ name: 'usage_event' });

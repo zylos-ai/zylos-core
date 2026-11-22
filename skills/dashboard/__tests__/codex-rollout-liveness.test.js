@@ -3,10 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
-import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
+import { CodexRolloutCollector } from '../src/lib/runtime/codex/collector.js';
+import { ConversationCollector } from '../src/lib/runtime/claude/collector.js';
 import { Store } from '../src/lib/store.js';
 import { UsageTranscripts } from '../src/lib/collectors/usage-transcripts.js';
+import { getDashboardRuntime as getCollectorRuntime } from '../src/lib/runtime/index.js';
+
+const collectors = Object.fromEntries(await Promise.all(['claude', 'codex'].map(async id =>
+  [id, (await getCollectorRuntime(id)).collector])));
 
 function harness(t, config = {}, { sessionGroup = 'origin' } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-liveness-'));
@@ -16,7 +20,7 @@ function harness(t, config = {}, { sessionGroup = 'origin' } = {}) {
   let clock = Date.now();
   let snapshotError = null;
   let snapshotCalls = 0;
-  const transcripts = new UsageTranscripts(store, { homeDir: dir, zylosDir: dir }, {
+  const transcripts = new UsageTranscripts(store, { homeDir: dir, zylosDir: dir }, { collectors,
     now: () => clock, getSnapshot: async () => {
       snapshotCalls++;
       if (snapshotError) throw snapshotError;

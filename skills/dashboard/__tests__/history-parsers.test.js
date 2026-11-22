@@ -5,10 +5,12 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { SessionLogIndex, SessionLogIndexCache } from '../src/lib/history/session-log-index.js';
-import { ClaudeHistory } from '../src/lib/history/claude-history.js';
-import { CodexHistory } from '../src/lib/history/codex-history.js';
+import { ClaudeHistory } from '../src/lib/runtime/claude/history.js';
+import { CodexHistory } from '../src/lib/runtime/codex/history.js';
 import { parseOutbound, parseInbound, safeFullText } from '../src/lib/history/inbound-parser.js';
-import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
+import { loadCoreModule as loadTranscriptCore } from '../src/lib/core-modules.js';
+const { getRuntime: getTranscriptRuntime } = await loadTranscriptCore('runtime/index.js');
+const { transcript: claudeTranscript } = (await getTranscriptRuntime('claude')).usage;
 
 async function fixture(t) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'history-parser-')));
@@ -16,7 +18,7 @@ async function fixture(t) {
   const homeDir = path.join(root, 'home');
   const zylosDir = path.join(homeDir, 'zylos.test_dir');
   await fs.mkdir(zylosDir, { recursive: true });
-  const projectDir = path.join(homeDir, '.claude', 'projects', claudeProjectSlug(zylosDir));
+  const projectDir = claudeTranscript.projectDir({ home: homeDir, zylosDir: zylosDir });
   await fs.mkdir(projectDir, { recursive: true });
   return { root, homeDir, zylosDir, projectDir };
 }

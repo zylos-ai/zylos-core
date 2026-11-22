@@ -5,8 +5,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../skills/dashboard/src/lib/store.js';
 import { UsageTranscripts } from '../skills/dashboard/src/lib/collectors/usage-transcripts.js';
-import { ConversationCollector } from '../skills/dashboard/src/lib/collectors/conversation-collector.js';
-import { claudeProjectSlug } from '../skills/dashboard/src/lib/claude-project-path.js';
+import { ConversationCollector } from '../skills/dashboard/src/lib/runtime/claude/collector.js';
+import { loadCoreModule as loadTranscriptCore } from '../skills/dashboard/src/lib/core-modules.js';
+import { getDashboardRuntime as getCollectorRuntime } from '../skills/dashboard/src/lib/runtime/index.js';
+
+const collectors = Object.fromEntries(await Promise.all(['claude', 'codex'].map(async id =>
+  [id, (await getCollectorRuntime(id)).collector])));
+
+const { getRuntime: getTranscriptRuntime } = await loadTranscriptCore('runtime/index.js');
+const { transcript: claudeTranscript } = (await getTranscriptRuntime('claude')).usage;
 
 const home = fs.realpathSync(process.env.HOME);
 assert.notEqual(home, fs.realpathSync(os.userInfo().homedir));
@@ -26,7 +33,7 @@ function fixture(t) {
   const store = new Store(path.join(root, 'dashboard.db'));
   let at = Date.now();
   const snapshot = { listKnown: true, rows: [] };
-  const inventory = new UsageTranscripts(store, { homeDir: root, zylosDir: root }, {
+  const inventory = new UsageTranscripts(store, { homeDir: root, zylosDir: root }, { collectors,
     now: () => at, getSnapshot: async () => snapshot, getSnapshotKey: () => 'stable',
   });
   t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
@@ -203,7 +210,7 @@ test('fresh content in a stale legacy transcript is not emitted as an Origin mes
 // legacy discovery changes; skip UI. No services/sockets/children are used.
 test('only a fresh legacy statusline discovers an unregistered transcript', t => {
   const f = fixture(t);
-  const file = path.join(f.root, '.claude', 'projects', claudeProjectSlug(f.root), 'legacy.jsonl');
+  const file = path.join(claudeTranscript.projectDir({ home: f.root, zylosDir: f.root }), 'legacy.jsonl');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, 'line\n');
   f.statusline(31 * MINUTE);

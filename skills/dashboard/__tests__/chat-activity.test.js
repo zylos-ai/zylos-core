@@ -18,7 +18,7 @@ import { sendJson } from '../src/lib/http.js';
 import { migrateDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
-import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
+import { CodexRolloutCollector } from '../src/lib/runtime/codex/collector.js';
 import { CELL_A_LINES, CELL_B_LINES, CELL_C_LINES, CELL_D_LINES, V1_CHILD, V2_TASK, cellEndingAs, cellPolledInNewExec, rebase,
   v1ChildRollout, v1ParentTurn, v2CompletedTurn, v2InterruptedTurn } from './fixtures/codex-multi-agent-rollout.js';
 

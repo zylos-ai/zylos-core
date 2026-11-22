@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { UNSUPPORTED } from '../contract.js';
 import { groupRunDir, zylosRoot } from '../../session-group-paths.js';
 import { readJsonSample } from '../../session-usage-reader.js';
 
@@ -30,7 +31,19 @@ const accountQuota = Object.freeze({
   sampleOnStart: false,
 });
 
+function transcriptRoot({ home }) {
+  return path.join(home, '.claude', 'projects');
+}
+
 export const usage = Object.freeze({
+  transcript: Object.freeze({
+    root: transcriptRoot,
+    projectDir({ home, zylosDir }) {
+      return path.join(transcriptRoot({ home }), fs.realpathSync(zylosDir).replace(/[^a-zA-Z0-9]/g, '-'));
+    },
+    isTranscriptFile: UNSUPPORTED,
+    pathMarker: '/.claude/',
+  }),
   accountQuota,
   legacyAccountRecord({ env }) {
     const sample = readJsonSample(path.join(zylosRoot(env), 'activity-monitor', accountQuota.stateFile), 'status');

@@ -16,7 +16,9 @@ import { loadCoreModule as originalLoadCoreModule } from '../skills/dashboard/sr
 import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
 import { populateSchedulePagination } from '../skills/dashboard/__tests__/fixtures/schedule-pagination.js';
 import { SseHub } from '../skills/dashboard/src/lib/sse.js';
-import { claudeProjectSlug } from '../skills/dashboard/src/lib/claude-project-path.js';
+import { loadCoreModule as loadTranscriptCore } from '../skills/dashboard/src/lib/core-modules.js';
+const { getRuntime: getTranscriptRuntime } = await loadTranscriptCore('runtime/index.js');
+const { transcript: claudeTranscript } = (await getTranscriptRuntime('claude')).usage;
 
 // Real HTTP, auth, SQLite, group projection and usage boundary. Run when these
 // object routes or authorization rules change; skip unrelated presentation work.
@@ -327,7 +329,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     t.mock.method(ObserverCoordinator.prototype, 'historyStatus', async () => ({ state: 'installed', desired: { enabled: true } }));
     writeMode('multi');
     const sessionId = 'offline-history-session';
-    const project = path.join(os.homedir(), '.claude', 'projects', claudeProjectSlug(root));
+    const project = claudeTranscript.projectDir({ home: os.homedir(), zylosDir: root });
     const transcript = path.join(project, `${sessionId}.jsonl`);
     assert.ok(project.startsWith(process.env.HOME + path.sep));
     console.log('History composition fixture:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: root,
