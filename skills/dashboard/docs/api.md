@@ -643,6 +643,7 @@ Schedule `nextRunAt`, `lastRunAt`, `updatedAt`, history `executedAt`/`completedA
 | Method/path | Contract and minimal example |
 |---|---|
 | `GET /api/chat/conversations` | `tab=mine|external`, `limit`, `cursor`. Returns `{items,nextCursor,tz,deletionAllowed,...}`. Example: `GET /api/chat/conversations?tab=mine`. |
+| `PUT /api/chat/pins` | JSON `{ids: string[]}` replaces the complete pin order in one transaction and returns `{ok:true,ids}` (200). Use `[]` to clear the order. Retrying with the same IDs produces the same order. Example body `{"ids":["g:64617368626F6172643A776F726B"]}`. |
 | `GET /api/chat/conversations/:id` | Returns reconciliation receipt plus conversation metadata. Example: `GET /api/chat/conversations/g%3A6F726967696E`. |
 | `POST /api/chat/drafts` | JSON `{displayName?}` → `{ok:true,conversation}` (201). Example body: `{}`. |
 | `PATCH /api/chat/conversations/:id` | JSON `{displayName}` → `{ok:true,conversation}`. Example body: `{"displayName":"Work"}`. |
@@ -657,6 +658,10 @@ Schedule `nextRunAt`, `lastRunAt`, `updatedAt`, history `executedAt`/`completedA
 | `GET /api/chat/conversations/:id/attachments/:attachmentId` | Streams authorized file bytes with safe content type/disposition. Example: `GET /api/chat/conversations/g%3A6F726967696E/attachments/<id>`. |
 | `GET /api/chat/drafts/:id/deletion` | Local-owner-only draft deletion preview. Here `:id` is the bare `conversation.localId` returned by `POST /api/chat/drafts`, also available as `items[].localId` on draft rows in the conversation list. Do not pass the `d:`-prefixed conversation ID. Example: with `localId:"550e8400-e29b-41d4-a716-446655440000"`, `GET /api/chat/drafts/550e8400-e29b-41d4-a716-446655440000/deletion`. |
 | `DELETE /api/chat/drafts/:id` | Local-owner-only; `:id` is the same bare `localId` used for the preview. JSON `{confirmed:true,operationId,cutoffId}` from the preview. Returns `{ok:true,...deletionResult}`. Example: `DELETE /api/chat/drafts/550e8400-e29b-41d4-a716-446655440000` with the preview's confirmation values. Passing `d:<uuid>` returns 404 `chat_conversation_not_found`. |
+
+On the first `mine` page, Origin uses the first slot, all user-pinned conversations follow in pin order, and the remaining slots are filled by recent activity. Only Origin and the ordinary items count toward `limit`. User pins carry a zero-based `pinOrder` and appear only on the first page. Other items omit the field. The `external` tab continues to sort by activity.
+
+`PUT /api/chat/pins` uses the same admin, remote access and browser same-origin checks as rename. Supply established conversation IDs from the `mine` list. Origin, drafts, external and missing conversations, and duplicate IDs are rejected as `invalid_chat_pin` (400). A malformed encoded conversation ID can return `invalid_chat_conversation` (400). An invalid request body or query returns `invalid_chat_parameters` (400). Validation failures leave the previous order intact. Changes reuse the existing `chat_messages_changed` hint for open `mine` lists. Clients see the new order on their next list read.
 
 Chat validation uses HTTP 400 (`invalid_chat_parameters`, invalid conversation/control IDs), missing resources 404, forbidden writes 403, conflicting state 409, upload limits 413 and upstream/unknown outcomes 502. All JSON failures use the common error envelope. Attachment downloads are binary; SSE uses the Push contract below.
 

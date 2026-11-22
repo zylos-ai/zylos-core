@@ -5,7 +5,7 @@ import { validateGroupName, validNamespace } from '../../../../comm-bridge/scrip
 import { ORIGIN, ORIGIN_DISPLAY_NAME, conversationGroup, isOriginRecord } from './origin.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
-const groupId = key => `g:${Buffer.from(key).toString('hex').toUpperCase()}`;
+export const groupId = key => `g:${Buffer.from(key).toString('hex').toUpperCase()}`;
 
 /** Check historical ownership without registering a namespace or creating a Core group. */
 export function isChatLocalIdUsed(c4Reader, localId) {

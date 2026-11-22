@@ -171,31 +171,64 @@ export class ChatHistory {
     )`;
   }
 
+  pinIds() {
+    return this.conversations?.db.prepare('SELECT conversation_id FROM chat_pins ORDER BY position').pluck().all() ?? [];
+  }
+
+  replacePins(ids) {
+    if (!Array.isArray(ids)) throw fail('invalid_chat_parameters');
+    if (ids.some(id => typeof id !== 'string' || !id.startsWith('g:') || id === ORIGIN_CONVERSATION_ID)
+        || new Set(ids).size !== ids.length) throw fail('invalid_chat_pin');
+    const db = this.conversations.db;
+    return db.transaction(() => {
+      for (const id of ids) {
+        const { where, parameters } = this._range('mine', id);
+        // The committed fence remains visible until Core finishes deletion.
+        // Check it together with existence while holding the Dashboard writer lock.
+        const eligible = this._query(`SELECT 1 FROM conversations c WHERE ${visible} AND ${where}
+          AND NOT EXISTS (SELECT 1 FROM drain_fences f WHERE f.session_group=c.session_group AND f.reason='delete')
+          LIMIT 1`, parameters)[0];
+        if (!eligible) throw fail('invalid_chat_pin');
+      }
+      db.prepare('DELETE FROM chat_pins').run();
+      const insert = db.prepare('INSERT INTO chat_pins(conversation_id, position) VALUES (?, ?)');
+      ids.forEach((id, position) => insert.run(id, position));
+      return ids;
+    }).immediate();
+  }
+
   list({ tab = 'mine', limit, cursor, locale = 'zh' } = {}) {
     this._tab(tab);
     limit = this._limit(limit);
     const scope = `list:${tab}`;
     const position = this._cursor(cursor, scope);
-    // The Origin conversation is pinned first on the first page of "mine",
-    // with or without messages, outside the activity order. It takes one of
-    // the page's slots; later pages continue the ordinary conversations.
-    const pinned = tab === 'mine' && !position;
-    limit = pinned ? limit - 1 : limit;
+    const firstMine = tab === 'mine' && !position;
+    // Origin keeps its usual page slot. User pins precede the ordinary page
+    // and never participate in its cursor, just like Origin.
+    if (firstMine) limit--;
+    const pins = tab === 'mine' ? this.pinIds() : [];
+    const cursorFilter = '(@stamp IS NULL OR stamp < @stamp OR (stamp = @stamp AND id COLLATE BINARY > @id))';
+    const hasPins = pins.length > 0;
     let rows = this._query(`${this._source(tab)}, summaries AS (
       SELECT identity AS id, session_group, channel, endpoint_id,
         COALESCE(MAX(julianday(timestamp)), 0) AS stamp, COUNT(*) AS count
       FROM allowed GROUP BY identity
-    ) SELECT * FROM summaries
-      WHERE (@stamp IS NULL OR stamp < @stamp OR (stamp = @stamp AND id COLLATE BINARY > @id))
-      ORDER BY stamp DESC, id COLLATE BINARY LIMIT @limit`, {
-      stamp: position?.stamp ?? null, id: position?.id ?? '', limit: limit + 1,
+    )${hasPins ? ', pins AS MATERIALIZED (SELECT value AS pinned_id, key AS pin_order FROM json_each(@pins))' : ''}
+      SELECT summaries.*${hasPins ? ', pin_order' : ''} FROM summaries ${hasPins ? 'LEFT JOIN pins ON pinned_id=id' : ''}
+      WHERE ${hasPins ? `(pin_order IS NULL AND ${cursorFilter}) OR (@firstMine AND pin_order IS NOT NULL)` : cursorFilter}
+      ORDER BY ${hasPins ? 'pin_order IS NULL, pin_order, ' : ''}stamp DESC, id COLLATE BINARY LIMIT @limit`, {
+      stamp: position?.stamp ?? null, id: position?.id ?? '', limit: limit + 1 + (firstMine ? pins.length : 0),
+      ...(hasPins ? { pins: JSON.stringify(pins), firstMine: Number(firstMine) } : {}),
     });
+    const pinned = rows.filter(row => row.pin_order != null);
+    rows = rows.filter(row => row.pin_order == null);
     if (tab === 'mine' && this.conversations) {
       rows = [...rows, ...this._drafts(limit + 1, position)]
         .sort((a, b) => b.stamp - a.stamp || Buffer.compare(Buffer.from(a.id), Buffer.from(b.id)));
     }
     const more = rows.length > limit;
-    const items = rows.slice(0, limit).map(row => {
+    const page = rows.slice(0, limit);
+    const items = [...pinned, ...page].map(({ pin_order, ...row }, itemIndex) => {
       if (row.draft) return row;
       const { where, parameters } = this._scope(tab, row.session_group === ''
         ? "c.session_group='' AND c.channel=@channel AND c.endpoint_id=@endpoint"
@@ -212,11 +245,12 @@ export class ChatHistory {
       return { ...row, previewDirection: latest?.direction ?? null, preview: conversationPreview(previewContent(latest), { external: tab === 'external', locale }),
         display_name: registered ? name ?? registered.displayName : name ?? (row.session_group === '' ? '旧历史' : tab === 'mine'
           ? row.session_group.slice(row.session_group.indexOf(':') + 1) : row.session_group),
-        ...(registered ? { localId: registered.localId } : {}), draft: false };
+        ...(registered ? { localId: registered.localId } : {}),
+        ...(pin_order != null ? { pinOrder: itemIndex } : {}), draft: false };
     });
-    const last = items.at(-1);
-    if (pinned) items.unshift(this._originItem(locale));
-    // A one-item first page holds only Origin; the next page starts at the beginning.
+    const last = page.at(-1);
+    if (firstMine) items.unshift(this._originItem(locale));
+    // A first page with no ordinary slots continues at the beginning of the activity order.
     const next = last ? { stamp: last.stamp, id: last.id } : { stamp: null, id: '' };
     return { items, nextCursor: more ? this._token({ scope, ...next }) : null };
   }

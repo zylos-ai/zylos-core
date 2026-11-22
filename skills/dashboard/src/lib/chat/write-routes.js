@@ -9,16 +9,17 @@ const deniedResponse = (res, denied) => {
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 /** Only registered Dashboard conversations can be written; routing never comes from the body. */
-export async function handleChatConversations(req, res, url, { auth, config, conversations, sender, readMode }) {
+export async function handleChatConversations(req, res, url, { auth, config, conversations, sender, history, readMode }) {
   const draft = url.pathname === '/api/chat/drafts';
   const match = /^\/api\/chat\/conversations\/([^/]+)(\/send)?$/.exec(url.pathname);
-  if (!draft && !match) return false;
-  const read = !draft && !match[2] && req.method === 'GET';
+  const pins = url.pathname === '/api/chat/pins';
+  if (!draft && !match && !pins) return false;
+  const read = Boolean(match && !match[2] && req.method === 'GET');
   const preflight = read ? requireChatAccess(req, auth, config)
     : draft ? requireChatWrite(req, auth, config, { mode: readMode(), draft: true })
       : requireChatWritePreflight(req, auth, config);
   if (preflight) { deniedResponse(res, preflight); return true; }
-  const allowed = draft ? req.method === 'POST' : match[2] ? req.method === 'POST' : ['GET', 'PATCH'].includes(req.method);
+  const allowed = pins ? req.method === 'PUT' : draft ? req.method === 'POST' : match[2] ? req.method === 'POST' : ['GET', 'PATCH'].includes(req.method);
   if (!allowed) { sendJson(res, 404, { error: 'not_found' }); return true; }
   try {
     if ([...url.searchParams].length) {
@@ -39,6 +40,13 @@ export async function handleChatConversations(req, res, url, { auth, config, con
       return true;
     }
     const body = await readJsonBody(req, 512 * 1024);
+    if (pins) {
+      if (!object(body) || Object.keys(body).length !== 1 || !Array.isArray(body.ids)) {
+        sendJson(res, 400, { error: 'invalid_chat_parameters' }); return true;
+      }
+      sendJson(res, 200, { ids: history.replacePins(body.ids) });
+      return true;
+    }
     const permitted = draft ? ['displayName'] : match[2] ? ['content', 'retry', 'attachments', 'quote'] : ['displayName'];
     if (!object(body) || Object.keys(body).some(key => !permitted.includes(key))
         || (Object.hasOwn(body, 'retry') && typeof body.retry !== 'boolean')

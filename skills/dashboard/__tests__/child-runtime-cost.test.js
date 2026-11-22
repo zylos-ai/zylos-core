@@ -160,7 +160,7 @@ test('the schema migration adds the transcript kind to an existing database', t 
   const db = new Database(file);
   t.after(() => db.close());
   db.exec('ALTER TABLE usage_transcripts DROP COLUMN kind');
-  db.prepare('DELETE FROM schema_migrations WHERE version = 28').run();
+  db.prepare('DELETE FROM schema_migrations WHERE version >= 28').run();
   migrateDatabase(db);
   assert.equal(db.prepare('SELECT kind FROM usage_transcripts WHERE transcript_path = ?').get(transcript).kind, 'session');
   assert.ok(db.prepare('SELECT 1 FROM schema_migrations WHERE version = 28').get());

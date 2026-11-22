@@ -336,6 +336,25 @@ test('list refresh merges the first page without discarding later pages or their
   assert.equal(f.state.snapshot().loading, false);
   f.state.destroy();
 });
+test('quiet first-page refresh clears pins from cached rows omitted by the server', async t => {
+  let firstPage = {
+    items: [{ id: 'g:A', stamp: 1, pinOrder: 0 }, { id: 'g:B', stamp: 2, pinOrder: 1 }, { id: 'g:C', stamp: 3 }],
+    nextCursor: 'more'
+  };
+  const f = fixture(url => url.pathname === '/api/chat/conversations' ? firstPage : undefined);
+  t.after(() => f.state.destroy());
+  await f.state.open();
+  assert.deepEqual(f.state.snapshot().items.map(row => row.id), ['g:A', 'g:B', 'g:C']);
+
+  // Another client unpins A, whose last activity puts it outside the first page.
+  firstPage = { items: [{ id: 'g:B', stamp: 2, pinOrder: 0 }, { id: 'g:C', stamp: 3 }], nextCursor: 'new-more' };
+  await f.timer.advance(30000);
+  const { items, nextCursor } = f.state.snapshot();
+  assert.deepEqual(items.map(row => row.id), ['g:B', 'g:C', 'g:A']);
+  assert.equal(items[0].pinOrder, 0);
+  assert.equal(Object.hasOwn(items[2], 'pinOrder'), false);
+  assert.equal(nextCursor, 'new-more');
+});
 test('new rows merge and update only current preview while question state refresh preserves forms and all loaded pages', async () => {
   let refreshed = false;
   const q1 = {

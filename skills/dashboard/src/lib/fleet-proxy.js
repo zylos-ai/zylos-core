@@ -78,6 +78,7 @@ function isSseResponse(resp) {
 function isAllowedProxyWrite(method, suffix) {
   return method === 'POST' && suffix === '/api/groups/naming-prompt' ||
     method === 'POST' && suffix === '/api/settings/timezone/actions/restart-services' || method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(suffix) ||
+    method === 'PUT' && suffix === '/api/chat/pins' ||
     method === 'POST' && (suffix === '/api/chat/drafts' || /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers|uploads)$/.test(suffix)) ||
     ['PUT', 'DELETE'].includes(method) && /^\/api\/groups\/[^/]+\/name$/.test(suffix) ||
     method === 'PUT' && /^\/api\/groups\/[^/]+\/config$/.test(suffix) ||

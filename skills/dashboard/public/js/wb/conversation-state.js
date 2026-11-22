@@ -11,8 +11,10 @@ const pathFor = id => `${base}/${encodeURIComponent(id)}`;
 /** The fixed Origin conversation: group `origin` encoded like every other group ID. */
 export const ORIGIN_CONVERSATION_ID = 'g:6F726967696E';
 export const isOriginConversation = id => id === ORIGIN_CONVERSATION_ID;
-// Origin stays pinned first; the rest follow recent activity.
+// Origin, then server-ordered pins, then recent activity.
+const pinPosition = row => Number.isInteger(row.pinOrder) ? row.pinOrder : Number.MAX_SAFE_INTEGER;
 const listOrder = (a, b) => Number(isOriginConversation(b.id)) - Number(isOriginConversation(a.id))
+  || pinPosition(a) - pinPosition(b)
   || (conversationStampMs(b.stamp) || 0) - (conversationStampMs(a.stamp) || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const query = values => new URLSearchParams(Object.entries(values).filter(([, v]) => v !== null && v !== undefined)).toString();
 export function createConversationState({
@@ -460,7 +462,16 @@ export function createConversationState({
       };
       readZone(data);
       deletionAllowed = data.deletionAllowed === true;
-      items = more || quiet ? merge(items, data.items) : data.items;
+      // Every current pin is on the first page. An older cached pin that
+      // disappeared from it must no longer sort as pinned.
+      const cached = quiet && !more && currentTab === 'mine'
+        ? items.map(row => {
+          if (!Object.hasOwn(row, 'pinOrder')) return row;
+          const { pinOrder, ...unpinned } = row;
+          return unpinned;
+        })
+        : items;
+      items = more || quiet ? merge(cached, data.items) : data.items;
       items.sort(listOrder);
       // An external conversation's header name comes from its list row, copied
       // when it was opened; a later list carries a renamed or cleared name.

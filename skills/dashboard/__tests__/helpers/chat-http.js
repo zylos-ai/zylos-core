@@ -5,13 +5,14 @@ import { HistoryService } from '../../src/lib/history/history-service.js';
 import { ObserverService } from '../../src/lib/observer-service.js';
 import { FleetProxy } from '../../src/lib/fleet-proxy.js';
 import { sendJson } from '../../src/lib/http.js';
-import { isChatDataRoute, requireChatAccess, requireChatWrite } from '../../src/lib/chat/access.js';
+import { isChatDataRoute, requireChatAccess, requireChatWrite, requireChatWritePreflight } from '../../src/lib/chat/access.js';
 import { handleChatSettings } from '../../src/lib/chat/settings.js';
 
 export const chatRoutes = [
   ...['/api/chat/conversations', ...['messages', 'status', 'questions'].map(kind => `/api/chat/conversations/local-chat/${kind}`)]
     .map(path => ({ method: 'GET', path })),
   { method: 'POST', path: '/api/chat/drafts' },
+  { method: 'PUT', path: '/api/chat/pins' },
   ...['send', 'answers'].map(kind => ({ method: 'POST', path: `/api/chat/conversations/local-chat/${kind}` })),
 ];
 export const tokens = { read: `zylos_st_${'a'.repeat(64)}`, admin: `zylos_st_${'b'.repeat(64)}` };
@@ -64,7 +65,8 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
         }
         if (isChatDataRoute(req.method, url.pathname)) {
           const denied = req.method === 'GET' ? requireChatAccess(req, auth, settings) :
-            requireChatWrite(req, auth, settings, { mode, draft: url.pathname.endsWith('/drafts'),
+            url.pathname === '/api/chat/pins' ? requireChatWritePreflight(req, auth, settings) :
+              requireChatWrite(req, auth, settings, { mode, draft: url.pathname.endsWith('/drafts'),
               conversation: record, namespace: owner.namespace, localId: owner.localId });
           if (denied) { const { status, ...body } = denied; sendJson(res, status, body); return; }
           counts[req.method === 'GET' ? 'reads' : 'receives']++;

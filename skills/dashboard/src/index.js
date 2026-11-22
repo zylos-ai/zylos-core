@@ -1472,7 +1472,7 @@ export function createServer() {
     }
     if (await sessionHostRoutes(req, res, url)) return;
     if (await groupDeletionRoutes(req, res, url)) return;
-    if (await handleChatConversations(req, res, url, { auth, config, conversations, sender,
+    if (await handleChatConversations(req, res, url, { auth, config, conversations, sender, history,
       readMode: () => loadZylosConfig(config.zylosDir).session_mode })) return;
     if (await handleChatHistory(req, res, url, { auth, config, history, activity: chatActivity, instanceTz: scheduleTz })) return;
 
