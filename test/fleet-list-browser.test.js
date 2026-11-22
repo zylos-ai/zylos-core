@@ -256,7 +256,8 @@ test('Fleet reloads the visible page and settings page the configured machines',
         const functional = width === 1280 && locale === 'en' && theme === 'light';
         const data = structuredClone(payload);
         let visible = functional ? [data.agents[0]] : data.agents;
-        let expire = false;
+        let expire = false, holdFleet = false;
+        const heldRead = Promise.withResolvers(), releaseRead = Promise.withResolvers();
         const machines = Array.from({ length: 20 }, (_, i) => ({
           name: `worker-${String(i + 1).padStart(2, '0')}`, base_url: 'https://fixture.example',
           key_masked: '...1234', access: i % 2 ? 'admin' : 'read',
@@ -270,7 +271,13 @@ test('Fleet reloads the visible page and settings page the configured machines',
             expire = false;
             return route.fulfill({ status: 400, json: { ok: false, error: { code: 'invalid_cursor', message: 'fixture restart' } } });
           }
-          await route.fulfill({ json: fleetPageFixture({ ...data, agents: visible }, url.search) });
+          const json = fleetPageFixture({ ...data, agents: visible }, url.search);
+          if (holdFleet) {
+            holdFleet = false;
+            heldRead.resolve();
+            await releaseRead.promise;
+          }
+          await route.fulfill({ json });
         });
         await page.route(url => /^\/api\/fleet\/agents(?:\/.*)?$/.test(url.pathname), async route => {
           const request = route.request(), url = new URL(request.url());
@@ -303,8 +310,14 @@ test('Fleet reloads the visible page and settings page the configured machines',
         if (functional) {
           await page.waitForFunction(() => document.querySelector('.agent-fleet')?.dataset.fleetCount === '1');
           assert.equal(await page.locator('#fleet-view').isVisible(), false);
-          visible = data.agents.slice(0, 2);
-          await push();
+          holdFleet = true;
+          const reload = page.reload();
+          try {
+            await heldRead.promise;
+            visible = data.agents.slice(0, 2);
+            await push();
+          } finally { releaseRead.resolve(); }
+          await reload;
           await waitForCard('Node 02');
           visible = data.agents;
           await push();
