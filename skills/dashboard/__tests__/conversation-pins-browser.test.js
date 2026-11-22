@@ -205,11 +205,12 @@ test('the mounted list moves local sends forward and holds other activity behind
             try {
               await hint.click();
               await listStarted;
-              const readsAtClick = listReads;
               const duringClick = fixture.addOutbound(d.draft.localId, 'Reply during the requested list refresh');
               await page.clock.fastForward(31_000);
               await page.locator(`#wb-chat [data-message-id="${duringClick.id}"]`).waitFor({ state: 'attached' });
-              assert.equal(listReads, readsAtClick, 'background polling does not supersede the pending user list request');
+              assert.deepEqual(await ids(), [origin, bId, aId, dId, cId],
+                'the list applies the order requested by the click while its original response is still pending');
+              assert.equal(await hint.isVisible(), false, 'the completed refresh clears the new-conversation notice');
             } finally {
               releaseList();
             }
