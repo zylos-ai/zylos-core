@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createMemoryBacklog, memoryBacklogPage, parseBacklogQuery } from '../src/lib/workbench/memory-backlog.js';
+import { createMemoryBacklog, memoryBacklogPage, parseBacklogQuery, readBacklogPage } from '../src/lib/workbench/memory-backlog.js';
 import { createGroupBacklog } from '../src/lib/workbench/group-backlog.js';
 import { createOriginBacklog } from '../src/lib/workbench/origin-backlog.js';
 import { AuthGate } from '../src/lib/auth.js';
@@ -445,4 +445,13 @@ test('the backlog pages 120 groups by 50 in one order: long waits, groups needin
   assert.throws(() => parseBacklogQuery(new URLSearchParams('cursor=forged')), error => error.code === 'invalid_cursor');
   assert.throws(() => parseBacklogQuery(new URLSearchParams(`q=dm&cursor=${encodeURIComponent(pages[0].nextCursor)}`)), error => error.code === 'invalid_cursor',
     'a cursor belongs to its own search');
+});
+
+test('an unreadable backlog is 503 unavailable, and a refused query reads no group', async () => {
+  await assert.rejects(readBacklogPage(unavailable, new URLSearchParams('limit=50')),
+    error => error.statusCode === 503 && error.code === 'unavailable');
+  let reads = 0;
+  await assert.rejects(readBacklogPage(async () => { reads++; return { groups: [] }; }, new URLSearchParams('limit=0')),
+    error => error.statusCode === 400 && error.code === 'invalid_parameter' && error.param === 'limit');
+  assert.equal(reads, 0);
 });

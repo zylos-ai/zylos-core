@@ -80,7 +80,7 @@ import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js
 import { createRuns } from './lib/workbench/runs.js';
 import { createGroupConfig } from './lib/workbench/group-config.js';
 import { createGroupBacklog } from './lib/workbench/group-backlog.js';
-import { createMemoryBacklog, memoryBacklogPage, parseBacklogQuery, treeBacklog } from './lib/workbench/memory-backlog.js';
+import { createMemoryBacklog, readBacklogPage, treeBacklog } from './lib/workbench/memory-backlog.js';
 import { createOriginBacklog } from './lib/workbench/origin-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
 import { createSessionHostRoutes } from './lib/session-host-routes.js';
@@ -93,7 +93,7 @@ import { hostSeries } from './lib/workbench/host-series.js';
 import { createNamingRequest } from './lib/workbench/naming-request.js';
 import { createGroupSnapshot } from './lib/workbench/group-snapshot.js';
 import { createScheduleRead, scheduleReadResponse } from './lib/workbench/schedule-read.js';
-import { listErrorBody, listFailure } from './lib/list-query.js';
+import { listErrorBody } from './lib/list-query.js';
 import { apiKeyPayload, apiKeysPage } from './lib/api-key-list.js';
 import { createScheduleWrite } from './lib/workbench/schedule-write.js';
 import { createScheduleTz } from './lib/workbench/schedule-tz.js';
@@ -1036,10 +1036,7 @@ async function handleApi(req, res, pathname, url) {
 
   if (pathname === '/api/memory/backlog') {
     try {
-      const query = parseBacklogQuery(url.searchParams);
-      let value;
-      try { value = await memoryBacklog(); } catch { throw listFailure(503, 'unavailable', 'The memory backlog cannot be read'); }
-      sendJson(res, 200, memoryBacklogPage(value, query));
+      sendJson(res, 200, await readBacklogPage(memoryBacklog, url.searchParams));
     } catch (error) {
       sendJson(res, error.statusCode ?? 500, error.statusCode ? listErrorBody(error) : { error: 'internal_error' });
     }

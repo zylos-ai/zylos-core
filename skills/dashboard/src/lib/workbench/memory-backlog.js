@@ -167,6 +167,17 @@ export function memoryBacklogPage(value, query) {
   };
 }
 
+/**
+ * GET /api/memory/backlog: the query is checked before any group is read, and a backlog that cannot be read is
+ * the standard 503 `unavailable`.
+ */
+export async function readBacklogPage(read, searchParams) {
+  const query = parseBacklogQuery(searchParams);
+  let value;
+  try { value = await read(); } catch { throw listFailure(503, 'unavailable', 'The memory backlog cannot be read'); }
+  return memoryBacklogPage(value, query);
+}
+
 /** Pending count and syncing state for each session group of the memory tree, from the same group reader. */
 export async function treeBacklog(keys, groupBacklog) {
   return (await readEach(keys, groupBacklog)).map(read => read ? { count: known(read.count) ? read.count : null, syncing: read.syncing ?? null } : null);
