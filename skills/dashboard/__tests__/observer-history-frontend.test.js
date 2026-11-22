@@ -10,10 +10,10 @@ function controller() {
   const elements = {
     timeline: { scrollHeight: 1000, scrollTop: 920, clientHeight: 80 },
     sessions: { replaceChildren() {} }, results: { replaceChildren() {} },
-    internal: { checked: false }, older: {}, latest: {}, status: {},
+    internal: { checked: false }, older: {}, latest: {}, status: {}, 'more-sessions': {},
     entries: { append() {}, prepend() {}, replaceChildren() {} }
   };
-  Object.assign(history, { endpoint: path => path, group: () => undefined, active: true, generation: 0, session: 'current', current: 'current', controllers: new Set(), fields: new Map(), entries: new Map(), doc: { hidden: false }, el: key => elements[key], t: key => key });
+  Object.assign(history, { endpoint: path => path, group: () => undefined, active: true, generation: 0, session: 'current', current: 'current', poll: 'signed-poll', controllers: new Set(), fields: new Map(), entries: new Map(), doc: { hidden: false }, el: key => elements[key], t: key => key });
   return { history, elements };
 }
 
@@ -78,8 +78,8 @@ test('older pagination preserves scroll position and merges pending-tool updates
   history.renderEntry = entry => ({ id: entry.id, replaceWith: node => replaced.push(node.id) });
   history.entries.set('o:30', { entry: { id: 'o:30', status: 'running' }, node: history.renderEntry({ id: 'o:30' }) });
   history.json = async (_route, params) => {
-    assert.equal(params.before, 'o:20');
-    return { entries: [{ id: 'o:10' }], updates: [{ id: 'o:30', status: 'success' }, { id: 'o:5', status: 'success' }], before: 'o:10', after: 'o:20', hasOlder: true };
+    assert.deepEqual(params, { session: 'current', internal: false, direction: 'before', cursor: 'o:20' });
+    return { items: [{ id: 'o:10' }], updates: [{ id: 'o:30', status: 'success' }, { id: 'o:5', status: 'success' }], nextCursor: 'o:10', afterCursor: 'o:20' };
   };
   await history.load('before');
   assert.equal(elements.timeline.scrollTop, 1220);
@@ -121,23 +121,23 @@ test('session labels distinguish duplicate titles using the instance time zone, 
   // 03:04 and 04:05 on 2 January in Shanghai.
   const first = new Date(Date.UTC(year, 0, 1, 19, 4)).toISOString();
   const second = new Date(Date.UTC(year, 0, 1, 20, 5)).toISOString();
-  assert.equal(history.sessionLabel({ id: 'a', title: 'Same title', startedAt: first }), '01-02 03:04 · Same title');
-  assert.equal(history.sessionLabel({ id: 'b', title: 'Same title', startedAt: second }), '01-02 04:05 · Same title');
-  assert.equal(history.sessionLabel({ id: 'current', kind: 'subagent', title: 'Same title', startedAt: first }), '↳ observer.history.current · 01-02 03:04 · Same title');
-  assert.equal(history.sessionLabel({ id: 'a', title: 'Old', startedAt: new Date(Date.UTC(year - 1, 11, 31, 15, 59)).toISOString() }), `${year - 1}-12-31 23:59 · Old`);
+  assert.equal(history.sessionLabel({ id: 'a', title: 'Same title', updatedAt: first }), '01-02 03:04 · Same title');
+  assert.equal(history.sessionLabel({ id: 'b', title: 'Same title', updatedAt: second }), '01-02 04:05 · Same title');
+  assert.equal(history.sessionLabel({ id: 'current', kind: 'subagent', title: 'Same title', updatedAt: first }), '↳ observer.history.current · 01-02 03:04 · Same title');
+  assert.equal(history.sessionLabel({ id: 'a', title: 'Old', updatedAt: new Date(Date.UTC(year - 1, 11, 31, 15, 59)).toISOString() }), `${year - 1}-12-31 23:59 · Old`);
   setInstanceZone(null);
-  assert.equal(history.sessionLabel({ id: 'a', title: 'Same title', startedAt: first }), '01-01 19:04 · Same title', 'an unknown zone reads UTC');
+  assert.equal(history.sessionLabel({ id: 'a', title: 'Same title', updatedAt: first }), '01-01 19:04 · Same title', 'an unknown zone reads UTC');
 });
 
 test('session labels omit absent or invalid time without empty separators or duplicated fallback', () => {
   const { history } = controller();
-  for (const startedAt of [undefined, null, '', 'invalid']) {
-    assert.equal(history.sessionLabel({ id: 'a', title: 'Title', startedAt }), 'Title');
+  for (const updatedAt of [undefined, null, '', 'invalid']) {
+    assert.equal(history.sessionLabel({ id: 'a', title: 'Title', updatedAt }), 'Title');
   }
   assert.equal(history.sessionLabel({ id: 'a' }), 'a');
-  assert.equal(history.sessionLabel({ id: 'a', startedAt: 'invalid' }), 'invalid');
-  const startedAt = new Date(new Date().getFullYear(), 0, 2, 3, 4).toISOString();
-  assert.equal(history.sessionLabel({ id: 'a', startedAt }), startedAt);
+  assert.equal(history.sessionLabel({ id: 'a', updatedAt: 'invalid' }), 'invalid');
+  const updatedAt = new Date(new Date().getFullYear(), 0, 2, 3, 4).toISOString();
+  assert.equal(history.sessionLabel({ id: 'a', updatedAt }), updatedAt);
 });
 
 test('history controls align the search row with the session select, not its label', () => {
@@ -197,7 +197,7 @@ test('entry headers use the session label zoned date and minute format', () => {
   try {
     const year = new Date().getUTCFullYear();
     for (const ts of [`${year}-01-01T19:04:59Z`, `${year - 1}-12-31T15:59:59Z`]) {
-      const label = history.sessionLabel({ id: 'a', title: 'Title', startedAt: ts }).replace(' · Title', '');
+      const label = history.sessionLabel({ id: 'a', title: 'Title', updatedAt: ts }).replace(' · Title', '');
       const rendered = history.renderEntry({ kind: 'text', ts });
       assert.ok(rendered.innerHTML.includes(` · ${label}</header>`));
       assert.equal(rendered.innerHTML.includes(ts), false);

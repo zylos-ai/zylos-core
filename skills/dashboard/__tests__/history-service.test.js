@@ -44,13 +44,13 @@ async function request(service, suffix, { method = 'GET', headers = {} } = {}) {
 test('all textual public paths redact decoded strings before previews, totals and searches', async () => {
   const { service } = fixture([{ id: 'o:0', kind: 'tool', name: secret, channel: secret, fields: { input: { password: secret, nested: ['line\n' + secret] }, output: secret + 'a'.repeat(3000) } }]);
   const listing = await service.sessions();
-  assert.equal(listing.sessions[0].title, '[redacted]');
+  assert.equal(listing.items[0].title, '[redacted]');
   assert.ok(!JSON.stringify(listing).includes('privatePath'));
   const result = await service.entries(params());
   assert.ok(!JSON.stringify(result).includes(secret));
-  assert.equal(result.entries[0].fields.output.total, 3010);
-  assert.equal(result.entries[0].fields.output.truncated, true);
-  assert.equal(result.entries[0].redaction.count, 5);
+  assert.equal(result.items[0].fields.output.total, 3010);
+  assert.equal(result.items[0].fields.output.truncated, true);
+  assert.equal(result.items[0].redaction.count, 5);
   const full = await service.content(params({ entry: 'o:0', field: 'input' }));
   assert.deepEqual(JSON.parse(full.text), { password: '[redacted]', nested: ['line\n[redacted]'] });
   assert.deepEqual((await service.search(params({ q: secret }))).matches, []);
@@ -72,7 +72,7 @@ test('content chunks reassemble redacted whole text, including a secret across b
   assert.throws(() => textChunk('😀', 1), /invalid_offset/);
 });
 
-test('stable pagination, around, internal filtering, append and old tool updates', async () => {
+test('signed timeline pagination, anchor, internal filtering and late tool updates', async () => {
   const entries = [
     { id: 'o:0', kind: 'text', fields: { body: 'first' } },
     { id: 'o:10', kind: 'tool', status: 'running', fields: { input: 'cmd' } },
@@ -80,16 +80,22 @@ test('stable pagination, around, internal filtering, append and old tool updates
     { id: 'o:30', kind: 'text', fields: { body: 'last' } },
   ];
   const { service } = fixture(entries);
-  assert.deepEqual((await service.entries(params({ limit: '2' }))).entries.map((e) => e.id), ['o:10', 'o:30']);
-  assert.deepEqual((await service.entries(params({ before: 'o:30', limit: '2' }))).entries.map((e) => e.id), ['o:0', 'o:10']);
-  assert.deepEqual((await service.entries(params({ around: 'o:10', limit: '3' }))).entries.map((e) => e.id), ['o:0', 'o:10', 'o:30']);
-  assert.equal((await service.entries(params({ internal: '1' }))).entries.length, 4);
+  const latest = await service.entries(params({ limit: '2' }));
+  assert.deepEqual(latest.items.map(entry => entry.id), ['o:10', 'o:30']);
+  assert.equal(latest.afterCursor, null);
+  const older = await service.entries(params({ cursor: latest.nextCursor }));
+  assert.deepEqual(older.items.map(entry => entry.id), ['o:0']);
+  assert.equal(older.nextCursor, null);
+  assert.deepEqual((await service.entries(params({ anchor: 'o:10', limit: '3' }))).items.map(entry => entry.id), ['o:0', 'o:10', 'o:30']);
+  assert.equal((await service.entries(params({ internal: 'true' }))).items.length, 4);
   entries[1].status = 'success'; entries[1].updatedOffset = 40; entries[1].fields.output = 'done';
   entries.push({ id: 'o:40', kind: 'internal', fields: { raw: 'tool result' } });
-  const poll = await service.entries(params({ after: 'o:30' }));
-  assert.equal(poll.entries.length, 0); assert.equal(poll.updates[0].status, 'success'); assert.equal(poll.after, 'o:40');
-  await assert.rejects(service.entries(params({ before: 'o:1' })), /invalid_cursor/);
-  await assert.rejects(service.entries(params({ before: 'o:0', after: 'o:10' })), /invalid_parameters/);
+  const poll = await service.entries(params({ direction: 'after', cursor: latest.pollCursor }));
+  assert.equal(poll.items.length, 0); assert.equal(poll.updates[0].status, 'success'); assert.equal(poll.afterCursor, null);
+  assert.notEqual(poll.pollCursor, latest.pollCursor);
+  assert.deepEqual((await service.entries(params({ direction: 'after', cursor: poll.pollCursor }))).updates, []);
+  await assert.rejects(service.entries(params({ cursor: 'o:1' })), { code: 'invalid_cursor' });
+  await assert.rejects(service.entries(params({ cursor: latest.nextCursor, anchor: 'o:10' })), { code: 'invalid_parameter', param: 'anchor' });
 });
 
 test('search continues backwards with stable cursors and sees full text beyond preview', async () => {
@@ -153,7 +159,7 @@ test('production redactor protects HTTP sessions, metadata, previews, content, i
   parser.listSessions = async () => ({ current: 'session', sessions: [{ id: 'session', title: fake }] });
   const service = new HistoryService({ parser });
   try {
-    for (const route of ['sessions', 'entries?session=session&internal=1', 'content?session=session&entry=o:0&field=input', 'content?session=session&entry=o:100&field=raw', 'search?session=session&q=synthetic_sensitive_fixture']) {
+    for (const route of ['sessions', 'entries?session=session&internal=true', 'content?session=session&entry=o:0&field=input', 'content?session=session&entry=o:100&field=raw', 'search?session=session&q=synthetic_sensitive_fixture']) {
       const response = await request(service, route);
       assert.equal(response.status, 200, route);
       assert.ok(!response.body.includes(fake), route);
@@ -179,7 +185,7 @@ test('session title truncation occurs only after redaction, and expanded records
   const service = new HistoryService({ parser });
   try {
     const listing = await service.sessions();
-    assert.ok(!listing.sessions[0].title.includes('zylos_st_B'));
+    assert.ok(!listing.items[0].title.includes('zylos_st_B'));
     const result = await service.content(params({ entry: 'o:0', field: 'body' }));
     assert.ok(!result.text.includes(fake));
     assert.equal(result.expandedEntry.fields.attachment_0.type, 'binary');
@@ -249,7 +255,7 @@ test('history metadata timestamps use ISO while transcript data remains unchange
   const { service } = fixture([{ id: 'o:0', ts: 1700000000000, kind: 'text', fields: { body: { timestamp: 1700000000000, start: 12 } } }]);
   const result = await request(service, 'entries?session=session');
   assert.equal(result.status, 200);
-  assert.equal(result.json().entries[0].ts, '2023-11-14T22:13:20.000Z');
+  assert.equal(result.json().items[0].ts, '2023-11-14T22:13:20.000Z');
   const content = await request(service, 'content?session=session&entry=o:0&field=body');
   assert.deepEqual(JSON.parse(content.json().text), { timestamp: 1700000000000, start: 12 });
 });

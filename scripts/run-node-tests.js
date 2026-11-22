@@ -72,6 +72,7 @@ const ROOT_NODE_TESTS = [
   'test/web-console-process.integration.test.js',
   'test/web-console-caddy.integration.test.js',
   'test/history-reminders.integration.test.js',
+  'test/observer-history-pagination.test.js',
   'test/chat-quote.integration.test.js',
   'test/origin-conversation.integration.test.js',
   'test/test-location.test.js',

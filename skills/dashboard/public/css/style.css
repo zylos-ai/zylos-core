@@ -1020,6 +1020,7 @@ main { padding: var(--space-md) var(--space-lg) var(--space-xl); }
 .history-controls select, .history-controls input[type="search"] { height: 36px; color: var(--text); background: var(--bg-secondary); border: 1px solid var(--border); padding: 0 8px; border-radius: 6px; }
 .history-controls label { display: flex; align-items: center; gap: 6px; min-height: 36px; font-size: 12px; }
 .history-controls .history-session-field { flex: 1 1 220px; min-width: 0; align-items: stretch; flex-direction: column; gap: 4px; color: var(--text-secondary); }
+.history-controls [data-history="more-sessions"] { flex: 0 0 auto; height: 36px; }
 .history-timeline { height: min(70vh, 850px); min-height: 260px; overflow: auto; overflow-anchor: none; border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
 .history-entry { margin-bottom: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); min-width: 0; overflow-wrap: anywhere; }
 .history-entry header, .history-entry summary { font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
