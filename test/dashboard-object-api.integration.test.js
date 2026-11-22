@@ -409,7 +409,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   });
   for (const next of ['single', 'multi']) await t.test(`${next} mode calls each object endpoint over HTTP`, async () => {
     writeMode(next);
-    for (const route of ['/api/memory/tree', '/api/memory/backlog', '/api/schedules', '/api/schedules/once', '/api/schedules/once/history', '/api/schedules/preview?kind=every&value=1h', '/api/settings/pricing', '/api/settings/timezone', '/api/settings/chat']) await request(route);
+    for (const route of ['/api/memory/entries', '/api/memory/backlog', '/api/schedules', '/api/schedules/once', '/api/schedules/once/history', '/api/schedules/preview?kind=every&value=1h', '/api/settings/pricing', '/api/settings/timezone', '/api/settings/chat']) await request(route);
     const file = await request('/api/memory/file?path=example.md', { identity: 'cookie' });
     assert.equal(file.text, '# Fixture memory\n');
     await request('/api/memory/git?path=example.md', { identity: 'cookie' });

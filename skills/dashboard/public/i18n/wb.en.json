@@ -393,7 +393,7 @@
   "wb.memory.filter": "Filter by group",
   "wb.memory.allGroups": "All groups",
   "wb.memory.noGroupFiles": "This group has no memory directory yet.",
-  "wb.memory.invalidGroup": "Directories with invalid group names and files directly under session-groups remain in Shared. Core cannot save these files.",
+  "wb.memory.invalidGroup": "Directories with invalid group names are listed under the groups, marked invalid. Core cannot save their files.",
   "wb.memory.backlog": "Waiting to be saved, by group",
   "wb.memory.overThreshold": "Over threshold",
   "wb.memory.syncing": "Syncing",

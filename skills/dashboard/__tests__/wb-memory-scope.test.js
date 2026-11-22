@@ -4,7 +4,7 @@ import { BUDGETS, WARN_THRESHOLDS, measureMemoryText } from '../../zylos-memory/
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createDocument, allNodes, deferred } from './fixtures/workbench-dom.js';
-import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
+import { memoryEntriesPage } from './fixtures/memory-entries-api.js';
 import { memoryBacklogPage, parseBacklogQuery } from '../src/lib/workbench/memory-backlog.js';
 
 const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
@@ -15,19 +15,35 @@ registerHooks({
     return next(specifier, context);
   },
 });
-const { memoryBacklogView, memoryBacklogAge, memoryBacklogValueWidth, leaveMemoryConflict, memoryFileScope, memoryFlatFiles, memoryUpkeepNotice, memoryScope, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, applyMemorySave, memoryWriteAllowed, applyMemoryWriteAccess, renderMemoryPreservingEditor, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } = await import('../public/js/wb/memory-scope.js');
+const { memoryBacklogView, memoryBacklogAge, memoryBacklogValueWidth, leaveMemoryConflict, memoryFileScope, memoryUpkeepNotice, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, applyMemorySave, memoryWriteAllowed, applyMemoryWriteAccess, renderMemoryPreservingEditor, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } = await import('../public/js/wb/memory-scope.js');
 
 // Direct product imports and injected DOM/request. Run for memory scope, charts,
 // save-result interpretation or selection changes; skip unrelated collectors.
 // Official runner and outer harness isolate HOME, ZYLOS_DIR, PM2_HOME, short
-// TMPDIR and private TMUX_TMPDIR. No database, process, timer or external I/O.
+// TMPDIR and private TMUX_TMPDIR. No database, process or external I/O; the memory
+// entries come from an in-memory stand-in for the server's list.
 const t = (key, params) => key + (params ? ' ' + JSON.stringify(params) : '');
-const file = (path, size_bytes = 100) => ({ path, name: path.split('/').at(-1), type: 'file', size_bytes, renderable: true });
-const dir = (path, children) => ({ path, name: path.split('/').at(-1), type: 'directory', children });
-function tree() {
-  const groups = dir('session-groups', [dir('session-groups/telegram:dm-1001', [file('session-groups/telegram:dm-1001/handoff.md')]), dir('session-groups/bad name', [file('session-groups/bad name/notes.md')])]);
-  const root = dir('', [file('identity.md', 17000), file('references.md', 8000), file('state.md', 33000), dir('users', [file('users/profile.md')]), groups]);
-  return { root, sessionGroups: groups.children.filter(child => parseSessionGroup(child.name)).map(child => ({ sessionGroup: child.name })) };
+const file = (path, size_bytes = 100) => ({ path, name: path.split('/').at(-1), type: 'file', size_bytes, mtime: '2026-11-01T00:00:00.000Z', renderable: true });
+// The memory directory the fake entries server answers from: files by path, with each group's badge.
+function memoryFiles() {
+  return [file('identity.md', 17000), file('references.md', 8000), file('state.md', 33000), file('users/profile.md'),
+    file('session-groups/telegram:dm-1001/handoff.md'), file('session-groups/bad name/notes.md')];
+}
+/**
+ * A stand-in for GET /api/memory/entries over `files`: one level of `dir` (directories first, valid session-group
+ * directories as group rows), or with `q` the shallowest matches below `dir` in the view; `limit` and an opaque
+ * cursor page it. `refuse()` makes the next cursor be refused, as after a Dashboard restart.
+ */
+function entriesServer(files, options = {}) {
+  let refused = false;
+  const reads = [];
+  const serve = async path => {
+    const url = new URL(path, 'http://dashboard');
+    reads.push(path);
+    if (url.searchParams.has('cursor') && refused) { refused = false; throw Object.assign(new Error('invalid_cursor'), { code: 'invalid_cursor' }); }
+    return memoryEntriesPage(files, url, options);
+  };
+  return Object.assign(serve, { reads, refuse: () => { refused = true; } });
 }
 const startupBudgets = () => ({ limits: BUDGETS, warnings: WARN_THRESHOLDS, checks: { 'identity.md': measureMemoryText('identity.md', 'a'.repeat(17000)), 'references.md': measureMemoryText('references.md', 'a'.repeat(8000)) } });
 const nodesOfClass = (root, className) => allNodes(root).filter(node => node.className.split(' ').includes(className));
@@ -35,61 +51,100 @@ const nodesOfClass = (root, className) => allNodes(root).filter(node => node.cla
 const backlogPage = (value, path) => memoryBacklogPage({ groups: value.groups ?? [],
   budgets: value.budgets ?? null, ...(value.originSync ? { originSync: value.originSync } : {}) },
 parseBacklogQuery(new URL(path, 'http://dashboard').searchParams));
-const served = read => async path => {
+const served = (read, entries) => async path => {
+  if (path.startsWith('/api/memory/entries')) return entries(path);
   const value = await read(path);
   return path.startsWith('/api/memory/backlog') ? backlogPage(value, path) : value;
 };
-// The backlog filter asks the server once typing pauses.
+// The backlog filter, the file search and the group picker ask the server once typing pauses.
 const typed = () => new Promise(resolve => setTimeout(resolve, 350));
+// Lets the entries reads the drawing started settle.
+const settled = async () => { for (let index = 0; index < 5; index++) await new Promise(resolve => setTimeout(resolve, 0)); };
 function fixture(options = {}) {
-  const document = createDocument(), root = document.createElement('div'), chartsRoot = document.createElement('div');
-  const groups = [], files = [], changes = [];
-  let data = tree();
-  const controller = createMemoryScope({ document, root, chartsRoot, t, getTree: () => data,
-    onGroup: path => groups.push(path), onFile: path => files.push(path),
+  const document = options.document ?? createDocument(), root = document.createElement('div'), chartsRoot = document.createElement('div');
+  const listRoot = options.listRoot ?? document.createElement('div');
+  const files = [], changes = [];
+  const entries = options.entries ?? entriesServer(options.files ?? memoryFiles(), options.server);
+  const controller = createMemoryScope({ document, root, chartsRoot, listRoot, t, onFile: path => files.push(path),
     onChange: () => { changes.push(true); controller.render(); }, ...options,
-    request: served(options.request ?? (async () => ({ groups: [] }))) });
+    request: served(options.request ?? (async () => ({ groups: [] })), entries) });
   controller.render();
-  return { document, root, chartsRoot, groups, files, changes, controller, setTree: value => { data = value; } };
+  const paths = () => allNodes(listRoot).filter(node => node.dataset?.path).map(node => node.dataset.path);
+  const heads = () => [...nodesOfClass(listRoot, 'wb-memory-dir-h'), ...nodesOfClass(listRoot, 'wb-memory-group-h')];
+  return { document, root, chartsRoot, listRoot, files, changes, controller, entries, paths, heads };
 }
 
-test('memory scopes separate canonical group directories and retain invalid names under shared with diagnostics', () => {
-  const value = tree(), scope = memoryScope(value);
-  assert.equal(scope.groups.length, 1);
-  assert.equal(scope.groups[0].sessionGroup, 'telegram:dm-1001');
-  assert.equal(scope.shared.children.find(node => node.path === 'session-groups').children[0].name, 'bad name');
-  assert.equal(scope.shared.children.find(node => node.path === 'session-groups').children[0].diagnostic, 'invalid_session_group');
-  assert.equal(scope.shared.children.some(node => node.path === 'users'), true);
-  assert.equal(value.root.children.at(-1).children.length, 2, 'input tree remains intact');
-  assert.equal(memoryGroupLabel(scope.groups[0], t), 'wb.platform.telegram · dm-1001');
+test('the file list starts folded: the root files, folders and group headings, invalid group directories marked', async () => {
+  const f = fixture({ server: { badges: { 'telegram:dm-1001': { count: 12, syncing: false } } } });
+  await settled();
+  assert.deepEqual(f.entries.reads, ['/api/memory/entries', '/api/memory/entries?dir=session-groups'], 'only the root and the groups are read');
+  assert.deepEqual(f.paths(), ['identity.md', 'references.md', 'state.md']);
+  assert.deepEqual(f.heads().map(node => [node.textContent.split(' ')[0], node.attributes['aria-expanded']]),
+    [['users/', 'false'], ['bad', 'false'], ['wb.platform.telegram', 'false']]);
+  assert.match(nodesOfClass(f.listRoot, 'wb-memory-dir-h')[1].textContent, /wb.memory.scopeInvalid/);
+  assert.match(f.root.textContent, /wb.memory.invalidGroup/);
+  assert.deepEqual(nodesOfClass(f.listRoot, 'wb-memory-count').map(node => node.textContent), [t('wb.memory.pending', { count: 12 })],
+    'the group shows its badge from its own row');
+  assert.equal(memoryGroupLabel({ sessionGroup: 'telegram:dm-1001' }, t), 'wb.platform.telegram · dm-1001');
   assert.equal(memoryGroupLabel({ sessionGroup: 'x', displayName: '<img>' }, t), '<img>');
   assert.equal(memoryGroupLabel({ sessionGroup: 'origin' }, t), 'wb.term.origin');
-  assert.equal(memoryScope(null).groups.length, 0);
-});
-
-test('scope controls filter groups and group jumps select the directory without opening an unrelated file', () => {
-  const f = fixture();
-  assert.equal(f.controller.tree(tree()).children.some(node => node.path === 'identity.md'), true);
-  f.controller.selectGroup('telegram:dm-1001');
-  const filtered = f.controller.tree(tree());
-  assert.equal(filtered.children.length, 1); assert.equal(filtered.children[0].path, 'session-groups/telegram:dm-1001');
-  assert.equal(f.groups.at(-1), 'session-groups/telegram:dm-1001'); assert.equal(f.files.length, 0);
-  assert.equal(f.controller.initialPath(tree(), 'identity.md', root => root.children[0]?.children[0]?.path ?? null), 'session-groups/telegram:dm-1001/handoff.md');
-  const select = allNodes(f.root).find(node => node.tagName === 'SELECT');
-  assert.equal(select.value, 'telegram:dm-1001');
-  select.value = ''; select.dispatch('change');
-  assert.equal(f.controller.tree(tree()).children.length, 1); assert.equal(f.groups.at(-1), null);
-  f.controller.selectGroup('openmax:missing');
-  assert.equal(f.controller.tree(tree()).children.length, 0); assert.match(f.root.textContent, /wb.memory.noGroupFiles/);
-  assert.equal(f.controller.initialPath(tree(), 'identity.md', () => null), null);
+  // The shared view has no groups; the groups view has no shared files.
+  allNodes(f.root).find(node => node.textContent === 'wb.memory.shared').dispatch('click');
+  assert.deepEqual(f.heads().length, 1); assert.doesNotMatch(f.listRoot.textContent, /wb.memory.groupsTitle/);
+  allNodes(f.root).find(node => node.textContent === 'wb.memory.groups').dispatch('click');
+  assert.deepEqual(f.paths(), []); assert.match(f.listRoot.textContent, /wb.memory.groupsTitle/);
   f.controller.destroy();
 });
 
+test('the group picker searches the server for groups and a group jump opens only that group', async () => {
+  const f = fixture({ detail: () => 'technical' });
+  await settled();
+  const picker = allNodes(f.root).find(node => node.tagName === 'INPUT' && node.className.includes('wb-input'));
+  const options = () => nodesOfClass(f.root, 'wb-memory-picker-item').map(node => node.textContent);
+  picker.dispatch('focus'); await settled();
+  assert.deepEqual(options(), [], 'tabbing onto the picker does not open its choices, so Tab moves on to the next field');
+  // The filter row stays in the page while the picker's read settles and redraws it, so the field keeps focus.
+  const removed = [], removeChild = f.root.removeChild.bind(f.root);
+  f.root.removeChild = node => { removed.push(node); return removeChild(node); };
+  picker.dispatch('click'); await settled();
+  assert.ok(f.changes.length > 0 && !removed.includes(picker.parentNode.parentNode), 'the redraw keeps the filter row mounted');
+  assert.deepEqual(options(), ['wb.memory.allGroups', 'wb.platform.telegram · dm-1001telegram:dm-1001']);
+  assert.ok(f.entries.reads.includes('/api/memory/entries?view=groups&limit=8'), 'a few groups at a time');
+  picker.value = 'no-such-group'; picker.dispatch('input'); await typed(); await settled();
+  assert.deepEqual(nodesOfClass(f.root, 'wb-memory-picker-list')[0].children.slice(1).map(node => node.textContent), ['wb.noMatch'],
+    'no match says no matching groups, not files');
+  picker.value = 'DM-10'; picker.dispatch('input'); await typed(); await settled();
+  assert.ok(f.entries.reads.includes('/api/memory/entries?view=groups&q=DM-10&limit=8'));
+  nodesOfClass(f.root, 'wb-memory-picker-item')[1].dispatch('click'); await settled();
+  assert.deepEqual(f.paths(), ['session-groups/telegram:dm-1001/handoff.md'], 'the chosen group opens on its own');
+  assert.equal(f.heads()[0].attributes['aria-expanded'], 'true');
+  assert.equal(f.files.length, 0, 'no file is opened');
+  // "All groups" lists every group again, folded.
+  picker.dispatch('click'); await settled();
+  nodesOfClass(f.root, 'wb-memory-picker-item')[0].dispatch('click');
+  assert.deepEqual(f.heads().map(node => node.textContent.split(' ')[0]), ['bad', 'wb.platform.telegram']);
+  // A group with no memory directory is looked up by name and reported.
+  f.controller.selectGroup('openmax:missing'); await settled();
+  assert.match(f.root.textContent, /wb.memory.noGroupFiles/);
+  assert.ok(f.entries.reads.includes('/api/memory/entries?view=groups&q=openmax%3Amissing&limit=100'));
+  f.controller.destroy();
+  // Without C4 the groups list is unavailable (503): the picker says so instead of reporting no match.
+  const down = fixture({ entries: Object.assign(async path => {
+    if (path.includes('view=groups')) throw Object.assign(new Error('unavailable'), { code: 'unavailable' });
+    return f.entries(path);
+  }, { reads: [] }) });
+  await settled();
+  allNodes(down.root).find(node => node.tagName === 'INPUT' && node.className.includes('wb-input')).dispatch('click'); await settled();
+  assert.deepEqual(nodesOfClass(down.root, 'wb-memory-picker-list')[0].children.slice(1).map(node => node.textContent), ['memory.error_generic']);
+  down.controller.destroy();
+});
+
 test('budget rows use Core supplied thresholds and give state size without a budget', () => {
-  const rows = memoryBudgetRows(tree(), startupBudgets());
+  const rows = memoryBudgetRows(memoryFiles(), startupBudgets());
   assert.ok(rows[0].over > 0); assert.equal(rows[1].warned, true);
   assert.equal(rows[2].limit, null); assert.equal(rows[2].warning, null); assert.equal(rows[2].size, 33000);
-  assert.equal(memoryBudgetRows(tree(), null)[0].limit, null);
+  assert.equal(memoryBudgetRows(memoryFiles(), null)[0].limit, null);
+  assert.deepEqual(memoryBudgetRows(null, startupBudgets()), [], 'nothing before the root is read');
 });
 
 test('technical charts show each threshold, unknown readings, age, Core budgets and clickable destinations safely', async () => {
@@ -100,7 +155,7 @@ test('technical charts show each threshold, unknown readings, age, Core budgets 
       { sessionGroup: 'other', count: null, threshold: null, syncing: false, reason: '<script>' },
     ], budgets: startupBudgets(),
   }) });
-  await f.controller.load();
+  await f.controller.load(); await settled();
   assert.equal(f.chartsRoot.hidden, false);
   assert.match(f.chartsRoot.textContent, /wb.memory.aged/); assert.match(f.chartsRoot.textContent, /wb.memory.syncing/);
   assert.match(f.chartsRoot.textContent, /wb.memory.syncUnknown/); assert.match(f.chartsRoot.textContent, /wb.unknown/);
@@ -109,7 +164,8 @@ test('technical charts show each threshold, unknown readings, age, Core budgets 
   assert.equal(nodesOfClass(f.chartsRoot, 'excess').length, 1);
   assert.equal(allNodes(f.chartsRoot).some(node => node.tagName === 'SCRIPT'), false);
   const buttons = allNodes(f.chartsRoot).filter(node => node.tagName === 'BUTTON');
-  buttons[0].dispatch('click'); assert.equal(f.groups.at(-1), 'session-groups/telegram:dm-1001');
+  buttons[0].dispatch('click'); await settled();
+  assert.deepEqual(f.paths(), ['session-groups/telegram:dm-1001/handoff.md'], 'the group name opens the group');
   buttons.find(node => node.textContent === 'state.md').dispatch('click'); assert.equal(f.files.at(-1), 'state.md');
   f.controller.destroy();
 });
@@ -394,6 +450,20 @@ test('stale backlog requests cannot populate a different instance or a destroyed
   const next = deferred(), g = fixture({ request: () => next.promise });
   const stopped = g.controller.load(); g.controller.destroy(); next.resolve({ groups: [] }); await stopped;
   assert.equal(g.root.children.length, 0);
+  // The same for the file list: instance a's root read answers, and its groups read fails, only after switching to b.
+  let viewed = 'a'; const held = deferred(), heldGroups = deferred(), bServer = entriesServer(memoryFiles());
+  const entries = Object.assign(path => viewed !== 'a' ? bServer(path) : path.includes('dir=session-groups') ? heldGroups.promise : held.promise,
+    { reads: bServer.reads, refuse: bServer.refuse });
+  const h = fixture({ identity: () => viewed, entries });
+  await settled();
+  viewed = 'b'; h.controller.render(); await settled();
+  held.resolve(memoryEntriesPage([file('A-ONLY.md')], new URL('/api/memory/entries', 'http://dashboard')));
+  heldGroups.reject(Object.assign(new Error('unavailable'), { code: 'unavailable' })); await settled();
+  h.controller.render();
+  assert.deepEqual(h.paths(), ['identity.md', 'references.md', 'state.md'], "only b's rows");
+  assert.equal(h.heads().length, 3, "b's folders and group are kept");
+  assert.doesNotMatch(h.listRoot.textContent, /memory.error_generic/, "a's failed read shows no error on b");
+  h.controller.destroy();
 });
 
 test('unknown save result reads disk once and compares returned text without resubmitting', async () => {
@@ -467,10 +537,11 @@ test('a redraw after the detail level changes shows or hides the memory charts w
   f.controller.destroy();
 });
 
-test('group navigation after an instance change keeps the requested group selection', () => {
+test('group navigation after an instance change keeps the requested group selection', async () => {
   let owner = 'a'; const f = fixture({ identity: () => owner });
-  owner = 'b'; f.controller.selectGroup('telegram:dm-1001');
-  assert.equal(f.controller.tree(tree()).children[0].path, 'session-groups/telegram:dm-1001');
+  await settled();
+  owner = 'b'; f.controller.selectGroup('telegram:dm-1001'); await settled();
+  assert.deepEqual(f.paths(), ['session-groups/telegram:dm-1001/handoff.md']);
   f.controller.destroy();
 });
 
@@ -525,7 +596,7 @@ test('post-save history readback requires the same applied file while allowing n
 });
 
 test('the references warning follows Core on both sides of its token threshold', () => {
-  const value = tree();
+  const value = memoryFiles();
   const edge = Math.ceil(WARN_THRESHOLDS['references.md'].estimatedTokens);
   for (const tokens of [edge - 1, edge, edge + 1]) {
     const check = measureMemoryText('references.md', 'a'.repeat(tokens * 4));
@@ -592,23 +663,25 @@ test('backlog chart names come from the active snapshot even for groups without 
   f.controller.destroy();
 });
 
-test('invalid group directories and files directly under session-groups explain their read-only status', () => {
-  const value = tree(), sessionGroups = value.root.children.find(node => node.path === 'session-groups');
-  sessionGroups.children.push(file('session-groups/direct.md'));
-  assert.equal(memoryWriteAllowed(value, 'session-groups/bad name/notes.md'), false);
-  assert.equal(memoryWriteAllowed(value, 'session-groups/direct.md'), false);
-  assert.equal(memoryWriteAllowed(value, 'session-groups/telegram:dm-1001/handoff.md'), true);
-  assert.equal(memoryWriteAllowed(value, 'identity.md'), true);
+test('invalid group directories and files directly under session-groups explain their read-only status', async () => {
   const document = createDocument(), edit = document.createElement('button'), save = document.createElement('button');
-  document.querySelector = selector => selector === '#memory-edit-btn' ? edit : selector === '#memory-save-btn' ? save : null;
   let selected = 'session-groups/bad name/notes.md';
-  const f = fixture({ document, getFile: () => ({ path: selected }) }); f.setTree(value); f.controller.render();
-  applyMemoryWriteAccess(edit, save, value, selected);
+  const f = fixture({ document, getFile: () => ({ path: selected }), files: [...memoryFiles(), file('session-groups/direct.md')] });
+  await settled();
+  const known = f.controller.known();
+  assert.equal(memoryWriteAllowed(known, 'session-groups/bad name/notes.md'), false);
+  assert.equal(memoryWriteAllowed(known, 'session-groups/direct.md'), false);
+  assert.equal(memoryWriteAllowed(known, 'session-groups/telegram:dm-1001/handoff.md'), true);
+  assert.equal(memoryWriteAllowed(known, 'identity.md'), true);
+  assert.equal(memoryWriteAllowed(known, 'session-groups/telegram:not-loaded/state.md'), false, 'a group not loaded yet stays read-only');
+  f.controller.render();
+  applyMemoryWriteAccess(edit, save, known, selected);
   assert.equal(edit.hidden, true); assert.equal(edit.disabled, true); assert.equal(save.disabled, true);
   assert.match(f.root.textContent, /wb.memory.invalidGroupFile/);
   selected = 'session-groups/direct.md'; edit.hidden = false; edit.disabled = false; save.disabled = false;
-  f.controller.render(); applyMemoryWriteAccess(edit, save, value, selected); assert.equal(edit.hidden, true); assert.equal(save.disabled, true);
-  assert.equal(memoryScope(value).shared.children.find(node => node.path === 'session-groups').children.length, 2);
+  f.controller.render(); applyMemoryWriteAccess(edit, save, known, selected); assert.equal(edit.hidden, true); assert.equal(save.disabled, true);
+  assert.deepEqual(f.paths(), ['identity.md', 'references.md', 'state.md', 'session-groups/direct.md'],
+    'a file directly under session-groups is listed with the groups, not hidden');
   f.controller.destroy();
 });
 
@@ -649,14 +722,16 @@ test('a conflict latest-version readback is fenced while the same path reloads',
   assert.equal(memorySaveCurrent(captured, state), false); assert.equal(state.conflict, null);
 });
 
-test('saved metadata updates tree sizes without reopening the editor and preserves typed selection during rendering', () => {
-  const value = tree(), state = { selectedPath: 'identity.md', file: { path: 'identity.md', sha256: 'old' }, draft: 'submitted', editing: true, dirty: true, tree: value };
+test('saved metadata updates the loaded file rows without reopening the editor and preserves typed selection during rendering', async () => {
+  const f = fixture(); await settled();
+  const state = { selectedPath: 'identity.md', file: { path: 'identity.md', sha256: 'old' }, draft: 'submitted', editing: true, dirty: true };
   const captured = captureMemorySave(state); state.draft = 'submitted plus newer typing';
   const saved = { path: 'identity.md', text: 'submitted', sha256: 'new', size_bytes: 9, mtime: 'saved-time' };
-  assert.equal(applyMemorySave(captured, state, saved), true);
-  const node = value.root.children.find(node => node.path === 'identity.md');
+  assert.equal(applyMemorySave(captured, state, saved, f.controller.updateFile), true);
+  const node = f.controller.known().rootFiles.find(row => row.path === 'identity.md');
   assert.equal(node.size_bytes, 9); assert.equal(node.mtime, 'saved-time');
   assert.equal(Object.hasOwn(node, 'text'), false); assert.equal(Object.hasOwn(node, 'sha256'), false);
+  f.controller.destroy();
   let editor = { value: state.draft, selectionStart: 13, selectionEnd: 18, selectionDirection: 'forward' }, renders = 0;
   const document = { activeElement: editor, querySelector: () => editor };
   renderMemoryPreservingEditor(() => {
@@ -684,7 +759,8 @@ test('a rejected save re-render restores the editor scroll position and selectio
 });
 
 test('repeated action renders keep invalid group drafts read-only', () => {
-  const value = tree(), edit = {}, save = {};
+  const value = { groups: new Map([['telegram:dm-1001', { sessionGroup: 'telegram:dm-1001' }]]), invalid: new Set(['bad name']), rootFiles: [] };
+  const edit = {}, save = {};
   for (const path of ['session-groups/bad name/notes.md', 'session-groups/direct.md']) {
     for (let render = 0; render < 3; render++) {
       Object.assign(edit, { hidden: false, disabled: false }); Object.assign(save, { disabled: false });
@@ -697,58 +773,102 @@ test('repeated action renders keep invalid group drafts read-only', () => {
   assert.equal(edit.hidden, false); assert.equal(edit.disabled, false); assert.equal(save.disabled, true, 'ordinary pending/clean restrictions remain in force');
 });
 
-test('memory files list flat per section, skip dot files and know their scope', () => {
-  const value = tree();
-  value.root.children.push(file('.gitkeep'), dir('reference', [file('reference/decisions.md'), file('reference/.gitkeep')]));
-  const shared = memoryFlatFiles(memoryScope(value).shared).map(node => node.path);
-  assert.deepEqual(shared.filter(path => !path.startsWith('session-groups/')),
-    ['identity.md', 'references.md', 'state.md', 'users/profile.md', 'reference/decisions.md']);
-  assert.equal(shared.some(path => path.split('/').at(-1).startsWith('.')), false);
-  assert.deepEqual(memoryFileScope(value, 'state.md'), { kind: 'shared' });
-  assert.equal(memoryFileScope(value, 'session-groups/telegram:dm-1001/handoff.md').kind, 'group');
-  assert.equal(memoryFileScope(value, 'session-groups/telegram:dm-1001/handoff.md').group.sessionGroup, 'telegram:dm-1001');
-  assert.deepEqual(memoryFileScope(value, 'session-groups/bad name/notes.md'), { kind: 'invalid' });
-  assert.deepEqual(memoryFileScope(value, 'session-groups/telegram:dm-1001'), { kind: 'invalid' });
+test('a file\'s scope comes from the loaded groups: shared, a valid group, invalid, or unknown until loaded', () => {
+  const group = { sessionGroup: 'telegram:dm-1001' };
+  const known = { groups: new Map([['telegram:dm-1001', group]]), invalid: new Set(['bad name']), rootFiles: [] };
+  assert.deepEqual(memoryFileScope(known, 'state.md'), { kind: 'shared' });
+  assert.deepEqual(memoryFileScope(known, 'session-groups/telegram:dm-1001/handoff.md'), { kind: 'group', group });
+  assert.deepEqual(memoryFileScope(known, 'session-groups/bad name/notes.md'), { kind: 'invalid' });
+  assert.deepEqual(memoryFileScope(known, 'session-groups/telegram:dm-1001'), { kind: 'invalid' });
+  assert.deepEqual(memoryFileScope(known, 'session-groups/direct.md'), { kind: 'invalid' });
+  assert.deepEqual(memoryFileScope(known, 'session-groups/telegram:other/state.md'), { kind: 'unknown' });
 });
 
-test('the file list folds by section, keeps search results open and names the folding state', async () => {
-  const collapsed = new Set(), toggled = [], listRoot = createDocument().createElement('div');
-  // The tree answers with each group's badge; loading the backlog card reads only the backlog.
+test('opening a folder or group reads its first page, folding all closes them, and the search asks the server', async () => {
   const requested = [];
-  const f = fixture({ listRoot, isCollapsed: key => collapsed.has(key), toggleCollapsed: key => toggled.push(key),
-    request: async path => { requested.push(path.split('?')[0]); return { groups: [{ sessionGroup: 'telegram:dm-1001', count: 12, threshold: 15, syncing: false }] }; } });
-  const value = tree();
-  value.sessionGroups[0].backlog = { count: 12, syncing: false };
-  f.setTree(value);
-  assert.deepEqual(f.controller.sectionKeys(), ['shared', 'session-groups/telegram:dm-1001']);
-  f.controller.renderList();
-  const heads = () => nodesOfClass(listRoot, 'wb-memory-section-h').concat(nodesOfClass(listRoot, 'wb-memory-group-h'));
-  assert.deepEqual(nodesOfClass(listRoot, 'wb-memory-count').map(node => node.textContent), [t('wb.memory.pending', { count: 12 })],
-    'the group shows the tree\'s pending count as soon as the tree is drawn');
+  const f = fixture({ request: async path => { requested.push(path.split('?')[0]); return { groups: [] }; } });
+  await settled();
   await f.controller.load();
-  assert.deepEqual(requested, ['/api/memory/backlog'], 'the backlog card does not read the tree again');
-  assert.deepEqual(nodesOfClass(listRoot, 'wb-memory-count').map(node => node.textContent), [t('wb.memory.pending', { count: 12 })]);
-  assert.deepEqual(heads().map(node => node.attributes['aria-expanded']), ['true', 'true']);
-  const paths = () => allNodes(listRoot).filter(node => node.dataset.path).map(node => node.dataset.path);
-  assert.ok(paths().includes('state.md') && paths().includes('session-groups/telegram:dm-1001/handoff.md'));
-  heads()[1].dispatch('click'); assert.deepEqual(toggled, ['session-groups/telegram:dm-1001']);
-  collapsed.add('shared'); collapsed.add('session-groups/telegram:dm-1001'); f.controller.renderList();
-  assert.deepEqual(heads().map(node => node.attributes['aria-expanded']), ['false', 'false']);
-  assert.deepEqual(paths(), []);
-  // A search shows matches inside folded sections; no match says so.
-  const search = allNodes(f.root).find(node => node.type === 'search');
-  search.value = 'handoff'; search.dispatch('input');
-  assert.deepEqual(paths(), ['session-groups/telegram:dm-1001/handoff.md']);
-  search.value = 'nothing-here'; search.dispatch('input');
-  assert.match(listRoot.textContent, /wb\.memory\.noMatch/);
-  // The shared scope has no group sections to fold.
-  allNodes(f.root).find(node => node.textContent === 'wb.memory.shared').dispatch('click');
-  assert.deepEqual(f.controller.sectionKeys(), ['shared']);
+  assert.deepEqual(requested, ['/api/memory/backlog'], 'the backlog card reads only the backlog');
+  assert.equal(f.controller.anyExpanded(), false);
+  nodesOfClass(f.listRoot, 'wb-memory-group-h')[0].dispatch('click'); await settled();
+  assert.ok(f.entries.reads.includes('/api/memory/entries?dir=session-groups%2Ftelegram%3Adm-1001'));
+  assert.ok(f.paths().includes('session-groups/telegram:dm-1001/handoff.md'));
+  nodesOfClass(f.listRoot, 'wb-memory-dir-h')[0].dispatch('click'); await settled();
+  assert.ok(f.paths().includes('users/profile.md'));
+  assert.equal(f.controller.anyExpanded(), true);
+  f.controller.collapseAll();
+  assert.deepEqual(f.paths(), ['identity.md', 'references.md', 'state.md']);
+  assert.equal(f.controller.anyExpanded(), false);
+  // A search is one flat list of the server's matches in the current view; no match says so.
+  const search = allNodes(f.root).find(node => node.type === 'search' && node.className !== 'wb-input');
+  search.value = 'handoff'; search.dispatch('input'); await typed(); await settled();
+  assert.ok(f.entries.reads.includes('/api/memory/entries?q=handoff'));
+  assert.deepEqual(f.paths(), ['session-groups/telegram:dm-1001/handoff.md']);
+  assert.match(nodesOfClass(f.listRoot, 'memory-file-dir')[0].textContent, /session-groups\/telegram:dm-1001\//);
+  allNodes(f.root).find(node => node.textContent === 'wb.memory.shared').dispatch('click'); await settled();
+  assert.ok(f.entries.reads.includes('/api/memory/entries?view=shared&q=handoff'));
+  assert.match(f.listRoot.textContent, /wb\.memory\.noMatch/);
   f.controller.destroy();
 });
 
-test('memory list redraws restore files and folding headers by stable identity without scrolling', () => {
-  for (const kind of ['file', 'shared', 'group']) {
+test('a list past its first page loads more without repeats, and a refused cursor reads the first page again silently', async () => {
+  const files = [...memoryFiles(), ...Array.from({ length: 120 }, (_, index) => file(`session-groups/telegram:dm-1001/sessions/d${String(index).padStart(3, '0')}.md`))];
+  // A file saved between two reads comes back on the next page: the server's second page repeats one of the first.
+  const server = entriesServer(files);
+  let firstRow = null, repeated = false;
+  const entries = Object.assign(async path => {
+    const page = await server(path);
+    if (!new URL(path, 'http://dashboard').searchParams.get('dir')?.endsWith('/sessions')) return page;
+    if (!path.includes('cursor=')) { firstRow ??= page.items[0]; return page; }
+    if (repeated) return page;
+    repeated = true;
+    return { ...page, items: [firstRow, ...page.items] };
+  }, { reads: server.reads, refuse: server.refuse });
+  const f = fixture({ files, entries });
+  await settled();
+  f.controller.selectGroup('telegram:dm-1001'); await settled();
+  nodesOfClass(f.listRoot, 'wb-memory-dir-h')[0].dispatch('click'); await settled();
+  const sessions = () => f.paths().filter(path => path.includes('/sessions/'));
+  assert.equal(sessions().length, 50);
+  nodesOfClass(f.listRoot, 'wb-memory-more')[0].dispatch('click'); await settled();
+  assert.equal(repeated, true);
+  assert.equal(sessions().length, 100, 'the repeated path is shown once');
+  assert.equal(new Set(sessions()).size, 100);
+  f.entries.refuse();
+  nodesOfClass(f.listRoot, 'wb-memory-more')[0].dispatch('click'); await settled();
+  assert.equal(sessions().length, 50, 'the first page again');
+  assert.doesNotMatch(f.listRoot.textContent, /memory.error_generic/, 'no error is shown');
+  nodesOfClass(f.listRoot, 'wb-memory-more')[0].dispatch('click'); await settled();
+  nodesOfClass(f.listRoot, 'wb-memory-more')[0].dispatch('click'); await settled();
+  assert.equal(sessions().length, 120); assert.equal(new Set(sessions()).size, 120);
+  assert.equal(nodesOfClass(f.listRoot, 'wb-memory-more').length, 0);
+  f.controller.destroy();
+});
+
+test('a linked file opens its folders and is added to its folder when past the first page', async () => {
+  const files = [...memoryFiles(), ...Array.from({ length: 60 }, (_, index) => file(`session-groups/telegram:dm-1001/sessions/d${String(index).padStart(3, '0')}.md`))];
+  const f = fixture({ files, getFile: () => ({ path: 'session-groups/telegram:dm-1001/sessions/d059.md' }),
+    selectedPath: () => 'session-groups/telegram:dm-1001/sessions/d059.md' });
+  await settled();
+  await f.controller.revealFile({ path: 'session-groups/telegram:dm-1001/sessions/d059.md', name: 'd059.md', size_bytes: 3, mtime: 'now' });
+  assert.deepEqual(f.heads().filter(node => node.attributes['aria-expanded'] === 'true').map(node => node.dataset.collapseKey).sort(),
+    ['session-groups/telegram:dm-1001', 'session-groups/telegram:dm-1001/sessions']);
+  const active = nodesOfClass(f.listRoot, 'memory-file').filter(node => node.className.includes('active'));
+  assert.deepEqual(active.map(node => node.dataset.path), ['session-groups/telegram:dm-1001/sessions/d059.md']);
+  assert.equal(f.paths().filter(path => path.includes('/sessions/')).length, 51, 'the first page plus the linked file');
+  // A group past the first page of groups is looked up by name and added.
+  const many = [...memoryFiles(), ...Array.from({ length: 55 }, (_, index) => file(`session-groups/lark:g${String(index).padStart(2, '0')}/state.md`)),
+    file('session-groups/telegram:zz/state.md')];
+  const g = fixture({ files: many }); await settled();
+  await g.controller.revealFile({ path: 'session-groups/telegram:zz/state.md', name: 'state.md', size_bytes: 1, mtime: 'now' });
+  assert.ok(g.paths().includes('session-groups/telegram:zz/state.md'));
+  assert.equal(g.controller.known().groups.has('telegram:zz'), true);
+  f.controller.destroy(); g.controller.destroy();
+});
+
+test('memory list redraws restore files, folders and group headers by stable identity without scrolling', async () => {
+  for (const kind of ['file', 'directory', 'group']) {
     const document = createDocument(), listRoot = document.createElement('div'), calls = [];
     const create = document.createElement;
     document.createElement = tag => {
@@ -757,8 +877,9 @@ test('memory list redraws restore files and folding headers by stable identity w
       return node;
     };
     const f = fixture({ document, listRoot });
+    await settled();
     const target = () => kind === 'file' ? nodesOfClass(listRoot, 'memory-file')[1]
-      : nodesOfClass(listRoot, kind === 'shared' ? 'wb-memory-section-h' : 'wb-memory-group-h')[0];
+      : nodesOfClass(listRoot, kind === 'directory' ? 'wb-memory-dir-h' : 'wb-memory-group-h')[0];
     const original = target(); original.focus(); calls.length = 0;
     f.controller.renderList();
     assert.ok(target() !== original, `${kind} rows were really rebuilt`);
@@ -769,13 +890,14 @@ test('memory list redraws restore files and folding headers by stable identity w
   }
 });
 
-test('memory list redraws do not take focus from search or editor controls', () => {
+test('memory list redraws do not take focus from search or editor controls', async () => {
   const document = createDocument(), listRoot = document.createElement('div');
   const f = fixture({ document, listRoot });
+  await settled();
   for (const tag of ['input', 'textarea']) {
     const external = document.createElement(tag);
     external.dataset.path = nodesOfClass(listRoot, 'memory-file')[0].dataset.path;
-    external.dataset.collapseKey = 'shared';
+    external.dataset.collapseKey = 'users';
     external.focus();
     f.controller.renderList();
     assert.ok(document.activeElement === external, `${tag} focus stays outside the list`);
@@ -783,20 +905,20 @@ test('memory list redraws do not take focus from search or editor controls', () 
   f.controller.destroy();
 });
 
-test('memory list redraws do not redirect focus when the focused row disappears', () => {
-  for (const reason of ['filtered', 'collapsed', 'removed', 'missing-tree']) {
-    const document = createDocument(), listRoot = document.createElement('div'), collapsed = new Set();
-    const f = fixture({ document, listRoot, isCollapsed: key => collapsed.has(key) });
-    const original = nodesOfClass(listRoot, 'memory-file')[0]; original.focus();
+test('memory list redraws do not redirect focus when the focused row disappears', async () => {
+  for (const reason of ['filtered', 'folded', 'reloaded']) {
+    const document = createDocument(), listRoot = document.createElement('div');
+    const f = fixture({ document, listRoot });
+    await settled();
+    if (reason === 'folded') { nodesOfClass(listRoot, 'wb-memory-dir-h')[0].dispatch('click'); await settled(); }
+    const original = reason === 'folded' ? nodesOfClass(listRoot, 'memory-file').find(node => node.dataset.path === 'users/profile.md')
+      : nodesOfClass(listRoot, 'memory-file')[0];
+    original.focus();
     if (reason === 'filtered') {
-      const search = allNodes(f.root).find(node => node.type === 'search');
-      search.value = 'no-matching-path'; search.dispatch('input');
-    } else {
-      if (reason === 'collapsed') collapsed.add('shared');
-      if (reason === 'removed') f.setTree({ root: dir('', []) });
-      if (reason === 'missing-tree') f.setTree(null);
-      f.controller.renderList();
-    }
+      const search = allNodes(f.root).find(node => node.type === 'search' && node.className !== 'wb-input');
+      search.value = 'no-matching-path'; search.dispatch('input'); await typed();
+    } else if (reason === 'folded') f.controller.collapseAll();
+    else f.controller.reload();
     assert.equal(listRoot.contains(original), false);
     assert.ok(document.activeElement === original, `${reason}: injected DOM records no fallback focus call`);
     f.controller.destroy();
@@ -810,17 +932,9 @@ test('later in the conflict dialog closes it and keeps the unsaved draft', () =>
 });
 
 test('the editor warns about background upkeep only on instances with session groups', () => {
-  assert.equal(memoryUpkeepNotice(tree()), true);
-  assert.equal(memoryUpkeepNotice({ root: tree().root, sessionGroups: [] }), false);
+  assert.equal(memoryUpkeepNotice({ groups: new Map([['telegram:dm-1001', {}]]) }), true);
+  assert.equal(memoryUpkeepNotice({ groups: new Map(), invalid: new Set(['bad name']) }), false);
   assert.equal(memoryUpkeepNotice(null), false);
-});
-
-test('the shared list leads with the core files even though the server lists directories first', () => {
-  // The memory tree from the server puts directories before files at each level.
-  const value = { root: dir('', [dir('reference', [file('reference/decisions.md')]), dir('users', [dir('users/owner', [file('users/owner/profile.md')])]),
-    file('identity.md'), file('references.md'), file('state.md')]) };
-  assert.deepEqual(memoryFlatFiles(memoryScope(value).shared).map(node => node.path),
-    ['identity.md', 'references.md', 'state.md', 'reference/decisions.md', 'users/owner/profile.md']);
 });
 
 test('the cross-group row name keeps the label layout without the link cursor or hover underline', async () => {
@@ -840,12 +954,12 @@ test('the backlog subtitle names the gathering threshold even when no group thre
 });
 
 test('memory budget labels and tooltips use B KB MB with 1024 based values', async () => {
-  const f = fixture({ detail: () => 'technical', getTree: () => ({ root: dir('', [
+  const f = fixture({ detail: () => 'technical', files: [
     file('identity.md', 1023), file('references.md', 1024), file('state.md', 1024 * 1024),
-  ]) }), request: async () => ({ groups: [], budgets: {
+  ], request: async () => ({ groups: [], budgets: {
     limits: { 'identity.md': 10240, 'references.md': 1536 }, warnings: { 'identity.md': 512 },
   } }) });
-  await f.controller.load();
+  await f.controller.load(); await settled();
   const values = nodesOfClass(f.chartsRoot, 'wb-memory-chart-value').map(node => node.textContent);
   assert.deepEqual(values, ['1023 B / 10 KB', '1.0 KB / 1.5 KB', '1.0 MB']);
   const warning = nodesOfClass(f.chartsRoot, 'wb-memory-threshold')[0];

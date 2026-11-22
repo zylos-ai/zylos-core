@@ -35,6 +35,7 @@ export async function setupMemoryHttp(t) {
   const c4 = new Database(path.join(root, 'comm-bridge/c4.db'));
   // The columns and tables Core's unsummarized calculation reads, beside the legacy rows (with no group) the single view lists.
   c4.exec(`CREATE TABLE conversations(id INTEGER PRIMARY KEY, session_group TEXT, direction TEXT, channel TEXT, timestamp TEXT, content TEXT, status TEXT DEFAULT 'delivered');
+    CREATE INDEX idx_conv_group_id ON conversations(session_group, id);
     CREATE TABLE checkpoints(id INTEGER PRIMARY KEY, session_group TEXT, end_conversation_id INTEGER, no_content INTEGER DEFAULT 0);
     CREATE TABLE mode_transitions(phase TEXT)`);
   const put = c4.prepare('INSERT INTO conversations(id,session_group,direction,channel,timestamp,content) VALUES(?,?,?,?,?,?)');

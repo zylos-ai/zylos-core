@@ -6,6 +6,7 @@ import { projectApiTimestamps } from '../../src/lib/wire-time.js';
 import { projectGroup, projectListRow } from '../../src/lib/workbench/groups-api.js';
 import { eventTypesFor, runRestartEffect } from '../../public/js/wb/timeline-rows.js';
 import { keyPage } from './key-pages.js';
+import { memoryEntriesPage } from './memory-entries-api.js';
 import { memoryBacklogPage, parseBacklogQuery } from '../../src/lib/workbench/memory-backlog.js';
 
 /** Answers GET /api/memory/backlog from every group of a case, through the server's own order, search and paging. */
@@ -116,17 +117,14 @@ function schedule(now) {
     timelineTasks: tasks.filter(item => item.nextRuns.in24h.length).map(({ id, name, priority, nextRuns }) => ({ id, name, priority, nextRuns: { in24h: nextRuns.in24h } })) };
 }
 
-function memoryTree(now) {
+function memoryFiles(now) {
   const file = (path, size) => ({ type: 'file', name: path.split('/').at(-1), path, size_bytes: size, mtime: iso(now - 7200e3), renderable: true });
-  const dir = (path, children) => ({ type: 'directory', name: path.split('/').at(-1), path, mtime: iso(now), children });
   // Enough shared files that the list is taller than a phone screen, so opening a file from below the fold is checked.
   const reference = Array.from({ length: 14 }, (_, i) => file(`reference/note-${String(i + 1).padStart(2, '0')}.md`, 2000 + i));
-  return { root: dir('', [file('identity.md', 9000), file(LONG_FILE, 12100), file('references.md', 7800), dir('reference', reference),
-    dir('session-groups', [dir(`session-groups/${GROUP}`, [file(GROUP_FILE, 2150), file(`session-groups/${GROUP}/handoff.md`, 820)]),
-      dir('session-groups/lark:oc_product', [file('session-groups/lark:oc_product/state.md', 1430)])])]),
-  sessionGroups: [{ sessionGroup: GROUP, displayName: 'Telegram direct chat', backlog: { count: 12, syncing: false } },
-    { sessionGroup: 'lark:oc_product', displayName: 'Product weekly', backlog: null }] };
+  return [file('identity.md', 9000), file(LONG_FILE, 12100), file('references.md', 7800), ...reference,
+    file(GROUP_FILE, 2150), file(`session-groups/${GROUP}/handoff.md`, 820), file('session-groups/lark:oc_product/state.md', 1430)];
 }
+const MEMORY_GROUPS = { names: { [GROUP]: 'Telegram direct chat', 'lark:oc_product': 'Product weekly' }, badges: { [GROUP]: { count: 12, syncing: false } } };
 
 // Longer than a phone screen, so the share of the first screen the open file takes is measured on real text.
 const longText = '# Current state\n\n## Doing now\n- Second prototype round, settings and memory pages\n- Re-review after the next round\n'
@@ -215,7 +213,7 @@ function workbenchAnswerData(url, now) {
   if (p === '/api/groups/activity') return { start: now - 59 * 60e3, cellSeconds: 60, groups: {} };
   if (p === '/api/schedules') return schedule(now);
   if (p.startsWith('/api/schedules/') && p.endsWith('/history')) return { items: [], nextCursor: null };
-  if (p === '/api/memory/tree') return memoryTree(now);
+  if (p === '/api/memory/entries') return memoryEntriesPage(memoryFiles(now), url, MEMORY_GROUPS);
   if (p === '/api/memory/file') {
     const path = url.searchParams.get('path');
     return { path, name: path.split('/').at(-1), size_bytes: 12100, mtime: iso(now - 7200e3), sha256: '7c1e9a2d'.padEnd(64, '0'), markdown: true,
