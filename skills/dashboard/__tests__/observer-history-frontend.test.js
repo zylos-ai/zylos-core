@@ -13,7 +13,7 @@ function controller() {
     internal: { checked: false }, older: {}, latest: {}, status: {}, 'more-sessions': {},
     entries: { append() {}, prepend() {}, replaceChildren() {} }
   };
-  Object.assign(history, { endpoint: path => path, group: () => undefined, active: true, generation: 0, session: 'current', current: 'current', poll: 'signed-poll', controllers: new Set(), fields: new Map(), entries: new Map(), doc: { hidden: false }, el: key => elements[key], t: key => key });
+  Object.assign(history, { endpoint: path => path, group: () => undefined, active: true, generation: 0, session: 'current', current: 'current', after: 'signed-after', controllers: new Set(), fields: new Map(), entries: new Map(), doc: { hidden: false }, el: key => elements[key], t: key => key });
   return { history, elements };
 }
 
@@ -78,7 +78,7 @@ test('older pagination preserves scroll position and merges pending-tool updates
   history.renderEntry = entry => ({ id: entry.id, replaceWith: node => replaced.push(node.id) });
   history.entries.set('o:30', { entry: { id: 'o:30', status: 'running' }, node: history.renderEntry({ id: 'o:30' }) });
   history.json = async (_route, params) => {
-    assert.deepEqual(params, { session: 'current', internal: false, direction: 'before', cursor: 'o:20' });
+    assert.deepEqual(params, { session: 'current', internal: false, limit: 50, direction: 'before', cursor: 'o:20' });
     return { items: [{ id: 'o:10' }], updates: [{ id: 'o:30', status: 'success' }, { id: 'o:5', status: 'success' }], nextCursor: 'o:10', afterCursor: 'o:20' };
   };
   await history.load('before');

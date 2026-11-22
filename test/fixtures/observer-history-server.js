@@ -20,7 +20,9 @@ const server = http.createServer((req, res) => {
     document.documentElement.lang = lang;
     document.documentElement.dataset.theme = params.get('theme');
     const labels = await (await fetch('/i18n/' + lang + '.json')).json();
-    new ObserverHistory({ root: document.querySelector('main'), endpoint: path => path, t: key => labels[key] ?? key }).setActive(true);
+    const history = new ObserverHistory({ root: document.querySelector('main'), endpoint: path => path, t: key => labels[key] ?? key });
+    window.addEventListener('history-fixture-reactivate', () => { history.setActive(false); history.setActive(true); });
+    history.setActive(true);
   </script></body></html>`);
   if (!serveStatic(req, res, assets)) { res.writeHead(404); res.end(); }
 });

@@ -79,7 +79,7 @@ export class ObserverHistory {
       item.node.replaceWith(node); item.node = node;
     }
     for (const option of this.el('sessions').options) {
-      const session = this.sessions?.find(s => s.id === option.value);
+      const session = this.sessions?.find(s => s.id === option.value) ?? this.retainedSession;
       if (session) option.textContent = this.sessionLabel(session);
     }
     this.el('query').placeholder = this.label('search_placeholder');
@@ -100,13 +100,13 @@ export class ObserverHistory {
     if (scope !== this.scope) {
       this.scope = scope;
       this.session = this.current = null;
-      this.sessions = this.sessionCursor = this.anchor = null;
+      this.sessions = this.sessionCursor = this.anchor = this.retainedSession = null;
       this.entries.clear(); this.fields.clear();
       this.el('sessions').replaceChildren();
       this.el('entries').replaceChildren();
       this.el('results').replaceChildren();
       this.el('results').hidden = true;
-      this.before = this.after = this.poll = null;
+      this.before = this.after = null;
       this.el('more-sessions').hidden = true;
       this.el('older').hidden = this.el('latest').hidden = true;
     }
@@ -141,7 +141,7 @@ export class ObserverHistory {
     this.el('status').textContent = this.label('loading');
     await this.loadSessions();
   }
-  async loadSessions(cursor = null) {
+  async loadSessions(cursor = null, refreshTimeline = true) {
     if (this.loadingSessions || !this.active || this.doc.hidden) return;
     const generation = this.generation;
     const more = this.el('more-sessions');
@@ -149,25 +149,29 @@ export class ObserverHistory {
     try {
       const data = await this.json('sessions', cursor ? { cursor } : {});
       this.current = data.current;
+      const previous = this.sessions?.find(session => session.id === this.session)
+        ?? (this.retainedSession?.id === this.session ? this.retainedSession : null);
       const sessions = new Map((cursor ? this.sessions : []).map(session => [session.id, session]));
       for (const session of data.items) if (!sessions.has(session.id)) sessions.set(session.id, session);
       this.sessions = [...sessions.values()];
+      this.retainedSession = previous && !sessions.has(previous.id) ? previous : null;
       this.sessionCursor = data.nextCursor;
       more.hidden = !this.sessionCursor;
-      this.el('sessions').replaceChildren(...this.sessions.map(s => {
+      const options = this.retainedSession ? [...this.sessions, this.retainedSession] : this.sessions;
+      this.el('sessions').replaceChildren(...options.map(s => {
         const option = this.doc.createElement('option'); option.value = s.id;
         option.textContent = this.sessionLabel(s);
         return option;
       }));
-      if (!cursor) {
-        this.el('status').textContent = sessions.size ? '' : this.label('empty');
-        const selected = sessions.has(this.session) ? this.session : sessions.has(data.current) ? data.current : this.sessions[0]?.id;
+      if (!cursor && (refreshTimeline || !this.session)) {
+        this.el('status').textContent = options.length ? '' : this.label('empty');
+        const selected = this.session ?? (sessions.has(data.current) ? data.current : this.sessions[0]?.id);
         await this.select(selected ?? null, selected === this.session ? this.anchor : null);
       } else this.el('sessions').value = this.session;
     } catch (error) {
       if (cursor && error.code === 'invalid_cursor' && generation === this.generation) {
         this.loadingSessions = false;
-        await this.loadSessions();
+        await this.loadSessions(null, false);
       } else this.error(error);
     } finally {
       if (generation === this.generation) this.loadingSessions = more.disabled = false;
@@ -181,19 +185,19 @@ export class ObserverHistory {
     this.entries.clear(); this.fields.clear();
     this.el('entries').replaceChildren();
     this.el('results').hidden = true;
-    this.before = this.after = this.poll = null;
+    this.before = this.after = null;
     this.el('older').hidden = this.el('latest').hidden = true;
     if (session) await this.load(anchor ? 'anchor' : 'latest');
   }
   atBottom() { const el = this.el('timeline'); return el.scrollHeight - el.scrollTop - el.clientHeight < 80; }
-  schedule() {
+  schedule(delay = 3000) {
     clearTimeout(this.timer);
-    if (this.active && !this.doc.hidden && (this.after || this.poll) && this.atBottom()) this.timer = setTimeout(() => this.load('after'), 3000);
+    if (this.active && !this.doc.hidden && this.after && this.atBottom()) this.timer = setTimeout(() => this.load('after'), delay);
   }
   async load(direction) {
     if (this.loading || !this.active || this.doc.hidden || !this.session) return;
     const paging = direction === 'before' || direction === 'after';
-    const cursor = direction === 'before' ? this.before : this.after ?? this.poll;
+    const cursor = direction === 'before' ? this.before : this.after;
     if (paging && !cursor) return;
     this.loading = true;
     const generation = this.generation;
@@ -201,7 +205,9 @@ export class ObserverHistory {
     const oldHeight = timeline.scrollHeight;
     const oldTop = timeline.scrollTop;
     const wasBottom = this.atBottom();
-    const params = { session: this.session, internal: Boolean(this.el('internal').checked) };
+    const limit = 50;
+    const params = { session: this.session, internal: Boolean(this.el('internal').checked), limit };
+    let delay;
     if (paging) Object.assign(params, { direction, cursor });
     else if (direction === 'anchor') params.anchor = this.anchor;
     try {
@@ -218,7 +224,8 @@ export class ObserverHistory {
       const container = this.el('entries');
       if (direction === 'before') container.prepend(...additions); else container.append(...additions);
       if (direction !== 'after') this.before = data.nextCursor;
-      if (direction !== 'before') { this.after = data.afterCursor; this.poll = data.pollCursor; }
+      if (direction !== 'before') this.after = data.afterCursor;
+      if (direction === 'after' && data.items.length === limit) delay = 0;
       this.refreshOverflow();
       this.el('older').hidden = !this.before;
       this.el('status').textContent = this.entries.size ? '' : this.label('empty');
@@ -229,7 +236,7 @@ export class ObserverHistory {
     } catch (error) {
       if (paging && error.code === 'invalid_cursor' && generation === this.generation) await this.select(this.session, this.anchor);
       else this.error(error);
-    } finally { if (generation === this.generation) { this.loading = false; this.schedule(); } }
+    } finally { if (generation === this.generation) { this.loading = false; this.schedule(delay); } }
   }
   renderEntry(entry, oldNode) {
     const node = this.doc.createElement('article');

@@ -77,23 +77,26 @@ test('signed timeline pagination, anchor, internal filtering and late tool updat
     { id: 'o:0', kind: 'text', fields: { body: 'first' } },
     { id: 'o:10', kind: 'tool', status: 'running', fields: { input: 'cmd' } },
     { id: 'o:20', kind: 'internal', fields: { raw: { developer: secret } } },
-    { id: 'o:30', kind: 'text', fields: { body: 'last' } },
+    { id: 'o:30', kind: 'tool', status: 'running', fields: { input: 'last' } },
   ];
   const { service } = fixture(entries);
   const latest = await service.entries(params({ limit: '2' }));
   assert.deepEqual(latest.items.map(entry => entry.id), ['o:10', 'o:30']);
-  assert.equal(latest.afterCursor, null);
+  assert.equal(latest.items.at(-1).status, 'running');
+  assert.ok(latest.afterCursor);
   const older = await service.entries(params({ cursor: latest.nextCursor }));
   assert.deepEqual(older.items.map(entry => entry.id), ['o:0']);
   assert.equal(older.nextCursor, null);
   assert.deepEqual((await service.entries(params({ anchor: 'o:10', limit: '3' }))).items.map(entry => entry.id), ['o:0', 'o:10', 'o:30']);
   assert.equal((await service.entries(params({ internal: 'true' }))).items.length, 4);
   entries[1].status = 'success'; entries[1].updatedOffset = 40; entries[1].fields.output = 'done';
+  entries[3].status = 'success'; entries[3].updatedOffset = 40; entries[3].fields.output = 'last result';
   entries.push({ id: 'o:40', kind: 'internal', fields: { raw: 'tool result' } });
-  const poll = await service.entries(params({ direction: 'after', cursor: latest.pollCursor }));
-  assert.equal(poll.items.length, 0); assert.equal(poll.updates[0].status, 'success'); assert.equal(poll.afterCursor, null);
-  assert.notEqual(poll.pollCursor, latest.pollCursor);
-  assert.deepEqual((await service.entries(params({ direction: 'after', cursor: poll.pollCursor }))).updates, []);
+  const poll = await service.entries(params({ direction: 'after', cursor: latest.afterCursor }));
+  assert.equal(poll.items.length, 0);
+  assert.deepEqual(poll.updates.map(({ id, status }) => [id, status]), [['o:10', 'success'], ['o:30', 'success']]);
+  assert.notEqual(poll.afterCursor, latest.afterCursor);
+  assert.deepEqual((await service.entries(params({ direction: 'after', cursor: poll.afterCursor }))).updates, []);
   await assert.rejects(service.entries(params({ cursor: 'o:1' })), { code: 'invalid_cursor' });
   await assert.rejects(service.entries(params({ cursor: latest.nextCursor, anchor: 'o:10' })), { code: 'invalid_parameter', param: 'anchor' });
 });

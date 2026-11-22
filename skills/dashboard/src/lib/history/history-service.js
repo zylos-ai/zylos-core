@@ -38,7 +38,7 @@ function historyListQuery(route, params) {
     extras.anchor = entryId;
     if (!normalized.has('internal')) normalized.set('internal', 'false');
   }
-  const query = parseListQuery(`observer/history/${route}`, normalized, { filters, extras, include: ['total'] });
+  const query = parseListQuery(`observer/history/${route}`, normalized, { filters, extras });
   if (route === 'entries' && !query.filters.session) throw listFailure(400, 'invalid_parameter', 'session is required', 'session');
   if (query.after !== null && query.extras.anchor) throw listFailure(400, 'invalid_parameter', 'anchor is only allowed on the first page', 'anchor');
   return query;
@@ -179,8 +179,7 @@ export class HistoryService {
       }
       items.push({ ...out, updatedAt: updatedAt || null });
     }
-    return { runtime, current, items, nextCursor: more ? query.nextCursor(page.at(-1).key) : null,
-      ...(query.include.has('total') ? { total: matches.length } : {}) };
+    return { runtime, current, items, nextCursor: more ? query.nextCursor(page.at(-1).key) : null };
   }
 
   async session(params) {
@@ -217,9 +216,7 @@ export class HistoryService {
     }
     const selected = visible.slice(start, end);
     const project = entry => this.publicEntry(entry, session.id, session.generation);
-    const lastId = selected.at(-1)?.id ?? query.after;
-    const hasNewer = end < visible.length;
-    const tail = all.at(-1)?.id ?? '';
+    const afterId = end < visible.length ? selected.at(-1)?.id ?? query.after : all.at(-1)?.id ?? '';
     // Tool results may arrive after the call's original page was fetched. Send
     // replacements by stable id as well as the newly appended records.
     const updates = direction === 'after' && query.after !== null ? all.filter(entry =>
@@ -228,9 +225,7 @@ export class HistoryService {
       items: await Promise.all(selected.map(project)),
       updates: await Promise.all(updates.map(project)),
       nextCursor: start > 0 ? query.nextCursor(selected[0]?.id ?? query.after) : null,
-      afterCursor: hasNewer ? query.nextCursor(lastId) : null,
-      pollCursor: hasNewer ? null : query.nextCursor(tail),
-      ...(query.include.has('total') ? { total: visible.length } : {}),
+      afterCursor: query.nextCursor(afterId),
     };
   }
 
