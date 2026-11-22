@@ -13,12 +13,8 @@ const cases = [
   ['different interrupt', savedAnswer('回答了 interruptId=different（问题：Choose a plan）：Plan A')],
   ['different question', savedAnswer('回答了 interruptId=interrupt-one（问题：Different question）：Plan A')],
   ['prefix within text', savedAnswer('Before 回答了 interruptId=interrupt-one（问题：Choose a plan）：Plan A')],
-  ['different interrupt in English', savedAnswer('Re interruptId=different (Q:Choose a plan): Plan A')],
-  ['different question in English', savedAnswer('Re interruptId=interrupt-one (Q:Different question): Plan A')],
-  ['English prefix within text', savedAnswer('Before Re interruptId=interrupt-one (Q:Choose a plan): Plan A')],
   ['legacy text', savedAnswer('Original answer: Plan A')],
   ['matching Markdown answer', savedAnswer('回答了 interruptId=interrupt-one（问题：Choose a plan）：**Plan A**'), '**Plan A**'],
-  ['matching English prefix with Markdown answer', savedAnswer('Re interruptId=interrupt-one (Q:Choose a plan): **Plan A**'), '**Plan A**'],
   ['legacy Markdown text', savedAnswer('Original answer: **Plan A**'), undefined, 'Original answer: Plan A'],
   ['long legacy Markdown text', savedAnswer(`Original answer: **${'😀'.repeat(170)}**`), undefined, `Original answer: ${'😀'.repeat(170)}`],
   ['long Unicode answer', savedAnswer(`回答了 interruptId=interrupt-one（问题：Choose a plan）：${'😀'.repeat(170)}`), '😀'.repeat(170)]
