@@ -214,12 +214,12 @@ test('catalog-backed Chinese, hyphen and percent groups load real details and ti
     const base = '/api/groups/' + encodeURIComponent(group);
     const detail = await request(base);
     assert.equal(detail.id, group);
-    const events = await request(base + '/events');
-    assert.ok(events.events.length > 0, group + ' retains its event data');
+    const events = await request(base + '/events?level=technical');
+    assert.ok(events.items.length > 0, group + ' retains its event data');
     const runs = await request(base + '/runs');
     assert.ok(runs.runs?.length > 0 || runs.items?.length > 0, JSON.stringify(runs));
     const messages = await request(base + '/messages');
-    assert.equal(messages.messages.length, 1, group + ' reads exact C4 history');
+    assert.equal(messages.items.length, 1, group + ' reads exact C4 history');
     const backlog = await request(base + '/backlog');
     assert.equal(backlog.count, 1);
     assert.ok(backlog.firstAt, 'real C4 backlog retains oldest timestamp');
