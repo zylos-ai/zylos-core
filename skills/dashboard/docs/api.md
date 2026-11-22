@@ -350,7 +350,7 @@ Example historical observation: `GET /api/groups/telegram%3A%E8%BF%90%E7%BB%B4%E
 
 Conversation status is an optional consumer of this detail. A newly created chat group absent from the snapshot returns `not_found`. The Origin Operations Interface retains `GROUP_NOT_FOUND`. Chat remains usable without a status reading and retries on the existing status cadence.
 
-Example: `GET /api/groups/telegram%3Aexample?include=`.
+Example: `GET /api/groups/telegram%3Aexample`.
 
 ### GET /api/groups/:id/usage
 
