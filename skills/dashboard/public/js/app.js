@@ -9,6 +9,7 @@ import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb
 import { createPricingPanel } from './wb/settings-pricing.js';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js';
 import { renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js';
+import { runtimeNotFound } from './wb/settings-defaults.js';
 import { keyStillListed, wireSettingsConfirmations } from './wb/settings-wiring.js';
 import { coreVersion, renderBrandVersion, renderCoreUpdate, renderEngineVersion } from './wb/settings-version.js';
 import { mountConversationPage } from './wb/conversation-page.js';
@@ -2291,14 +2292,19 @@ function renderCreatedApiKey(createdKey) {
 /** Settings confirmations share the dashboard's own dialog instead of the browser prompt. */
 function settingsWiring() {
   return settingsWiring.value ??= wireSettingsConfirmations({
-    document, t, runner: pageActions(), setBusy: setModalBodyDisabled, remoteTarget: viewedRemoteTarget,
+    document, t, runner: pageActions(),
+    recheck: () => requestAgentJson('/api/instance/actions/recheck-runtime-cli', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }),
+    setBusy: setModalBodyDisabled, remoteTarget: viewedRemoteTarget,
     keyPage: {
       request: async (method, path) => { const resp = await fetch(api(path), { method }); return { ok: resp.ok, data: await resp.json() }; },
       reload: () => keyList?.refresh(), renderCreated: renderCreatedApiKey, createdKey: () => fleetManageModal?._createdKey ?? null,
       status: (text, kind) => fleetManageStatus(text, kind, '#api-key-list'), busy: setApiKeyBusy, errorText: fleetManageError,
     },
     writable: () => !remoteIsReadOnly(), onGroup: openWorkbenchGroup,
-    engineVersion: (root, runtime) => renderEngineVersion(root, state.dashboardState?.versions, { runtime, upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly() }),
+    engineVersion: (root, runtime) => renderEngineVersion(root, state.dashboardState?.versions, {
+      runtime, upgrade: runtimeNotFound({ instance: state.dashboardState }, runtime) ? null : settingsUpgrade,
+      t, readOnly: remoteIsReadOnly(),
+    }),
   });
 }
 function confirmSetting(body, options) {

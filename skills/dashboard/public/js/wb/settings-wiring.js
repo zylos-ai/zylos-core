@@ -49,7 +49,7 @@ export async function keyStillListed(readPage, name) {
  *   (the one shown now, or null), `status(text, kind)`, `busy(on)` and `errorText(code, fallback)`. The page
  *   decides nothing about which request an action makes or what its answer shows.
  */
-export function wireSettingsConfirmations({ document, t, runner, keyPage, remoteTarget = () => null, setBusy = () => {}, writable, onGroup, engineVersion }) {
+export function wireSettingsConfirmations({ document, t, runner, keyPage, remoteTarget = () => null, setBusy = () => {}, writable, onGroup, engineVersion, recheck }) {
   const confirm = (body, { title = t('wb.settings.confirmTitle'), ok = t('btn.confirm'), danger = true } = {}) =>
     confirmDialog(document, { title, body, ok, cancel: t('btn.cancel'), danger });
   // Default-setting changes name the remote machine they act on and keep the page locked while asking.
@@ -84,7 +84,7 @@ export function wireSettingsConfirmations({ document, t, runner, keyPage, remote
     return request ? sendKeyRequest(request, name) : undefined;
   };
   const keyTableOptions = () => ({ t, confirm, onAction });
-  const defaultsOptions = (value, read) => ({ ...value, t, read, writable, onGroup, version: engineVersion, confirm: confirmChange, execute });
+  const defaultsOptions = (value, read) => ({ ...value, t, read, recheck, writable, onGroup, version: engineVersion, confirm: confirmChange, execute });
   return {
     confirm,
     /** The key table: rotating, revoking and deleting each ask first. */

@@ -56,6 +56,12 @@ const defaultsValue = () => ({
   groups: [],
 });
 
+async function selectEngine(root, runtime) {
+  const select = root.querySelector('#settings-engine');
+  select.value = runtime;
+  await select.dispatch('change');
+}
+
 function readDefaults(value) {
   return async path => {
     const url = new URL(path, 'http://fixture');
@@ -193,22 +199,26 @@ test('key requests: revoking keeps the key, deleting removes it for good, rotati
   assert.equal(keyActionRequest('purge', 'a'), null, 'an unknown action sends nothing');
 });
 
-test('saving model and effort for both engines asks once, then runs every change without asking again', async () => {
+test('saving an engine’s model and effort asks once and runs both actions without asking again', async () => {
   const p = page(), sent = [], busy = [], asked = [];
   const wiring = wired(p, { runner: recordingRunner(sent, asked), setBusy: value => busy.push(value) });
   const root = node(p.document, 'div');
   const value = defaultsValue();
   wiring.renderDefaults(root, value, readDefaults(value));
   for (const runtime of ['claude', 'codex']) {
+    await selectEngine(root, runtime);
     const model = root.querySelector('#settings-model-' + runtime); model.value = 'two'; await model.dispatch('change');
     const effort = root.querySelector('#settings-effort-' + runtime); effort.value = runtime === 'codex' ? 'minimal' : 'low'; await effort.dispatch('change');
+    await root.querySelector('#settings-save-models').dispatch('click');
+    assert.deepEqual(sent.slice(-2).map(({ action, body }) => [action, body.runtime]), [['switch-model', runtime], ['switch-effort', runtime]]);
   }
-  await root.querySelector('#settings-save-models').dispatch('click');
-  assert.equal(p.dialogs.length, 1, 'one .wb-modal for the whole card, none per action');
-  assert.match(p.dialogs[0].body, /^wb\.settings\.confirmModels/);
-  assert.deepEqual([p.dialogs[0].title, p.dialogs[0].danger], ['wb.settings.confirm.models', false], 'saving models interrupts nothing');
-  assert.deepEqual(busy, [true, false], 'the page is locked only while asking');
-  assert.deepEqual(sent.map(item => item.action).sort(), ['switch-effort', 'switch-effort', 'switch-model', 'switch-model']);
+  assert.equal(p.dialogs.length, 2, 'one dialog per save');
+  for (const dialog of p.dialogs) {
+    assert.match(dialog.body, /^wb\.settings\.confirmModels/);
+    assert.deepEqual([dialog.title, dialog.danger], ['wb.settings.confirm.models', false], 'saving these models interrupts nothing');
+  }
+  assert.deepEqual(busy, [true, false, true, false], 'the page is locked only while asking');
+  assert.equal(sent.length, 4);
   assert.deepEqual(asked, [], 'the card hands its confirmed changes to the runner\'s no-ask path');
 });
 
@@ -232,8 +242,15 @@ test('switching the default engine asks once and names the remote machine it act
   const value = defaultsValue();
   value.groups = [{ id: 'origin', runtime: 'claude' }];
   wiring.renderDefaults(root, value, readDefaults(value));
-  await root.querySelector('#settings-use-codex').dispatch('click');
-  await root.querySelector('#settings-save-runtime').dispatch('click');
+  const engine = root.querySelector('#settings-engine');
+  assert.equal(engine.value, 'claude');
+  assert.deepEqual(engine.children.map(option => [option.value, option.textContent]), [
+    ['claude', 'Claude · wb.settings.health.available · wb.settings.defaultEngineBadge'],
+    ['codex', 'Codex · wb.settings.health.available'],
+    ['agy', 'Antigravity · wb.settings.health.unknown'],
+  ]);
+  await selectEngine(root, 'codex');
+  await root.querySelector('#settings-set-default').dispatch('click');
   assert.equal(p.dialogs.length, 1, 'one .wb-modal');
   assert.match(p.dialogs[0].body, /^confirm\.switch_runtime:\{"value":"Codex"\}/);
   assert.deepEqual([p.dialogs[0].title, p.dialogs[0].danger], ['wb.settings.confirm.runtime', true], 'switching the engine interrupts running work');
@@ -252,8 +269,9 @@ test('default engine and model confirmations include a session that started afte
   await loader.open();
   try {
     value.groups.push({ id: 'chat:late', displayName: 'Started after opening', runtime: 'claude' });
-    await root.querySelector('#settings-use-codex').dispatch('click');
-    await root.querySelector('#settings-save-runtime').dispatch('click');
+    await selectEngine(root, 'codex');
+    await root.querySelector('#settings-set-default').dispatch('click');
+    await selectEngine(root, 'claude');
     const model = root.querySelector('#settings-model-claude');
     model.value = 'two'; await model.dispatch('change');
     await root.querySelector('#settings-save-models').dispatch('click');

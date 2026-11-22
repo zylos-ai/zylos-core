@@ -183,7 +183,7 @@ test('the settings page keeps its sections in order, offers the right upgrades a
       const upgrade = page.locator('#settings-engine-version [data-action="upgrade-cc"]');
       await upgrade.waitFor();
       assert.match(await page.locator('#settings-engine-version').textContent(), /Claude · v2\.1\.0/);
-      await page.locator('#settings-use-codex').click();
+      await page.locator('#settings-engine').selectOption('codex');
       await page.locator('#settings-engine-version').getByText(/Codex · v0\.50\.0 ↑0\.51\.0/).waitFor();
       assert.match(await upgrade.textContent(), /Codex/);
       await upgrade.click();
@@ -412,8 +412,10 @@ test('setting the default engine and model updates the open cards and reports re
         let navigations = 0;
         page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations++; });
         const card = page.locator('#settings-current-runtime');
-        const save = card.locator('#settings-save-runtime');
-        const select = engine => card.locator('#settings-use-' + engine);
+        const save = card.locator('#settings-set-default');
+        const select = card.locator('#settings-engine');
+        const option = engine => select.locator(`option[value="${engine}"]`);
+        const defaultBadge = card.locator('.wb-default-badge');
         const dialog = page.locator('.wb-modal[role="alertdialog"]');
         const submit = async () => {
           await save.click();
@@ -425,10 +427,12 @@ test('setting the default engine and model updates the open cards and reports re
           }
           await dialog.locator('.wb-modal-acts button').last().click();
         };
-        await select('claude').waitFor();
-        assert.equal(await select('claude').getAttribute('aria-pressed'), 'true');
-        assert.equal(await select('claude').locator('.wb-tag').textContent(), badge);
-        await select('codex').click();
+        await select.waitFor();
+        assert.equal(await select.inputValue(), 'claude');
+        assert.equal(await defaultBadge.textContent(), badge);
+        assert.equal(await defaultBadge.isVisible(), true);
+        assert.ok((await option('claude').textContent()).endsWith(' · ' + badge));
+        await select.selectOption('codex');
         await save.click();
         await dialog.locator('.wb-modal-acts button').first().click();
         await dialog.waitFor({ state: 'hidden' });
@@ -436,7 +440,8 @@ test('setting the default engine and model updates the open cards and reports re
         await submit();
         await card.getByText(rejection).waitFor();
         assert.equal(await save.isVisible(), true);
-        assert.equal(await select('claude').locator('.wb-tag').textContent(), badge);
+        assert.equal(await defaultBadge.isVisible(), false);
+        assert.ok((await option('claude').textContent()).endsWith(' · ' + badge));
         const shot = async suffix => {
           if (!evidence) return;
           await page.evaluate(() => document.activeElement?.blur());
@@ -448,13 +453,16 @@ test('setting the default engine and model updates the open cards and reports re
         await card.getByText(saved).waitFor();
         await card.getByText(/Origin.*fence_conflict/).waitFor();
         await save.waitFor({ state: 'hidden' });
-        assert.equal(await select('codex').getAttribute('aria-pressed'), 'true');
-        assert.equal(await select('codex').locator('.wb-tag').textContent(), badge);
-        assert.equal(await select('claude').locator('.wb-tag').count(), 0);
+        assert.equal(await select.inputValue(), 'codex');
+        assert.equal(await defaultBadge.isVisible(), true);
+        assert.equal(await defaultBadge.textContent(), badge);
+        assert.ok((await option('codex').textContent()).endsWith(' · ' + badge));
+        assert.ok(!(await option('claude').textContent()).endsWith(' · ' + badge));
         assert.equal(navigations, 0);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
         assert.deepEqual(writes, Array.from({ length: 2 }, () => ({ runtime: 'codex', confirmed: true })));
         await shot('saved');
+        await select.selectOption('claude');
         await page.locator('#settings-model-claude').selectOption('sonnet');
         const modelSave = page.locator('#settings-save-models');
         const confirmModel = async () => {
@@ -551,7 +559,8 @@ test('Settings loads group pages on demand and searches the server by group disp
         await page.goto(base + '/');
         await openDashboardTab(page, 'settings');
         await page.locator('[data-settings-section="defaults"]').click();
-        const engineLists = page.locator('#settings-current-runtime .wb-glist');
+        await page.locator('#settings-engine').selectOption('codex');
+        const engineLists = page.locator('#settings-current-runtime .wb-set-split .wb-glist');
         const codexGroup = page.locator('#settings-model-codex').locator('xpath=ancestor::div[contains(@class, "wb-pref-c")]');
         const lists = [
           ['followers', engineLists.nth(0), 17, 'runtimeOverridden'],
@@ -559,7 +568,7 @@ test('Settings loads group pages on demand and searches the server by group disp
           ['models', codexGroup.locator('.wb-glist'), 9, 'modelOverridden'],
         ];
         await engineLists.first().waitFor();
-        assert.equal(pageReads.filter(query => query.get('limit') === '1').length, 6);
+        assert.equal(pageReads.filter(query => query.get('limit') === '1').length, 7);
         assert.equal(pageReads.filter(query => query.get('limit') === '8').length, 0);
         const pageText = (current, pages) => locale === 'zh' ? `第 ${current} / ${pages} 页` : `Page ${current} / ${pages}`;
         const noMatch = locale === 'zh' ? '没有匹配的结果' : 'No matching results';
