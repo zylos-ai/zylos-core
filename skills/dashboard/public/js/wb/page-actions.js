@@ -6,7 +6,7 @@ export function actionConfirmText(action, body, { t, runtime = null, effortLabel
   const labels = {
     'switch-mode': () => t('confirm.switch_mode', { mode: ['single', 'multi'].includes(body?.mode) ? t('wb.settings.session.' + body.mode) : t('wb.unknown') }),
     'restart-session': () => t('confirm.restart'),
-    'switch-runtime': () => body?.runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: body?.runtime }),
+    'switch-runtime': () => t('confirm.switch_runtime', { value: runtimeName(body?.runtime) || t('wb.unknown') }),
     'switch-model': () => t('confirm.switch_model', { value: body?.model }),
     'switch-effort': () => t('confirm.switch_effort', { value: effortLabel(body?.effort) }),
     'upgrade-cc': () => t('confirm.upgrade_runtime', { runtime: runtimeName(body?.runtime ?? runtime) || t('wb.unknown') }),

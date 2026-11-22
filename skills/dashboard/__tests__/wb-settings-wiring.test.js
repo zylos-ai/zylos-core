@@ -227,7 +227,7 @@ test('switching the default engine asks once and names the remote machine it act
   await root.querySelector('#settings-use-codex').dispatch('click');
   await root.querySelector('#settings-save-runtime').dispatch('click');
   assert.equal(p.dialogs.length, 1, 'one .wb-modal');
-  assert.match(p.dialogs[0].body, /confirm\.switch_runtime_codex/);
+  assert.match(p.dialogs[0].body, /^confirm\.switch_runtime:\{"value":"Codex"\}/);
   assert.deepEqual([p.dialogs[0].title, p.dialogs[0].danger], ['wb.settings.confirm.runtime', true], 'switching the engine interrupts running work');
   assert.match(p.dialogs[0].body, /\nconfirm\.remote_target:\{"agent":"lab"\}$/);
   assert.deepEqual(sent, [{ action: 'switch-runtime', body: { runtime: 'codex', confirmed: true } }]);

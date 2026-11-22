@@ -84,7 +84,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
     return value;
   }
   return {
-    state, load, loadMeta, loadThreshold, redraw: publish,
+    key, state, load, loadMeta, loadThreshold, redraw: publish,
     async save(changes, { confirm } = {}) {
       if (!active() || confirming || state.busy || !changes.length) return;
       if (!changes.every(validConfigChange)) {
@@ -196,7 +196,8 @@ function savedPair(value, runtime) {
 }
 
 export function renderGroupConfig(root, controller, { document = root.ownerDocument, t = key => key, writable = true,
-  defaultRuntime, rotationThreshold = null, onSave = controller.save, onCancel = () => {} } = {}) {
+  defaultRuntime, rotationThreshold = null, onSave = controller.save, onCancel = () => {},
+  notFound = [], onRecheck = async () => {} } = {}) {
   const { state } = controller;
   state.draft ??= {};
   const engine = state.value?.runtime;
@@ -227,6 +228,7 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   const runtime = select(runtimeLabel, ['inherit', ...SUPPORTED_RUNTIMES].map(value => ({
     value, label: value === 'inherit' ? t('wb.config.followGlobal') : runtimeName(value),
   })), state.draft.runtime ?? savedRuntime);
+  const blocked = notFound.includes(runtime.value) && runtime.value !== savedRuntime;
   runtime.disabled = locked;
   const resolved = engine?.data?.resolved?.runtime;
   const target = runtime.value === 'inherit' ? defaultRuntime ?? (savedRuntime === 'inherit' ? resolved : null) : runtime.value;
@@ -291,7 +293,7 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   save.type = 'button';
   const syncSave = () => {
     const edits = changes();
-    save.disabled = locked || edits.length === 0 || !edits.every(validConfigChange);
+    save.disabled = locked || blocked || edits.length === 0 || !edits.every(validConfigChange);
   };
   const rememberPair = () => { Object.assign(state.draft, { modelRuntime: target, model: modelId(), effort: effort.value }); };
   runtime.addEventListener('change', () => {
@@ -319,8 +321,26 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   modelRow.append(field(modelLabel, model), field(effortLabel, effort));
   const actions = element(document, 'div', undefined, 'wb-cfg-controls wb-cfg-actions');
   actions.append(save, cancel);
-  form.append(engineRow, modelRow, !supportsModelOverride
-    ? element(document, 'p', t('wb.config.modelUnavailable'), 'wb-note') : threshold, actions);
+  form.append(engineRow);
+  if (blocked) {
+    const message = t('wb.runtimeNotFound', {
+      runtime: runtimeName(runtime.value),
+      command: `zylos group runtime set --group ${controller.key} --runtime ${runtime.value}`,
+    });
+    const note = element(document, 'p', undefined, 'wb-note wb-note-act');
+    const recheck = element(document, 'button', t('wb.recheck'), 'wb-btn wb-btn-sm');
+    recheck.type = 'button';
+    recheck.disabled = locked;
+    recheck.addEventListener('click', async () => {
+      if (recheck.disabled) return;
+      recheck.disabled = true;
+      await onRecheck();
+    });
+    note.append(element(document, 'span', message), recheck);
+    form.append(note);
+  }
+  form.append(modelRow, !supportsModelOverride
+    ? element(document, 'p', t('wb.config.modelUnavailable', { runtime: runtimeName(target) }), 'wb-note') : threshold, actions);
   root.append(form);
   if (!writable) root.append(element(document, 'p', t('wb.readOnly'), 'wb-note'));
   const feedback = element(document, 'div');

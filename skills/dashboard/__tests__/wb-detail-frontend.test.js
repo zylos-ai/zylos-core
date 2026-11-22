@@ -1021,15 +1021,52 @@ test('a failed engine switch shows the staged model and retry sends only the eng
 
 test('switching to Antigravity disables model and effort and saves only the engine', async context => {
   const f = await groupConfigFixture(context);
+  const view = () => f.document.createElement('div');
+  const controller = createGroupConfig({ key: 'telegram:a', request: async () => ({}) });
+  controller.state.value = { runtime: { data: { desired: { runtime: 'claude' } } }, modelOverrides: [] };
+  let rechecks = 0;
+  const options = { t, notFound: ['agy'], onRecheck: async () => { rechecks++; } };
+  const initial = view();
+  renderGroupConfig(initial, controller, options);
+  assert.equal(initial.querySelectorAll('.wb-note-act').length, 0);
+  const draft = configControl(initial, 'wb.term.runtime');
+  draft.value = 'agy';
+  draft.dispatch('change');
+  const blocked = view();
+  renderGroupConfig(blocked, controller, options);
+  assert.equal(blocked.querySelectorAll('.wb-cfg-actions')[0].children[0].disabled, true);
+  const note = blocked.querySelectorAll('.wb-note-act')[0];
+  assert.equal(note.children[0].textContent,
+    'wb.runtimeNotFound {"runtime":"Antigravity","command":"zylos group runtime set --group telegram:a --runtime agy"}');
+  const recheck = note.children[1];
+  await recheck.dispatch('click');
+  await recheck.dispatch('click');
+  assert.equal(rechecks, 1);
+  const select = configControl(blocked, 'wb.term.runtime');
+  select.value = 'inherit';
+  select.dispatch('change');
+  const inherited = view();
+  renderGroupConfig(inherited, controller, options);
+  assert.equal(inherited.querySelectorAll('.wb-note-act').length, 0);
+  assert.equal(inherited.querySelectorAll('.wb-cfg-actions')[0].children[0].disabled, false);
+
   await f.choose('wb.term.runtime', 'agy');
   const model = f.control('wb.config.model');
   assert.equal(model.disabled, true);
   assert.deepEqual(model.children.map(option => option.textContent), ['wb.config.followGlobal']);
   assert.equal(f.control('wb.term.effort').disabled, true);
+  assert.match(f.root.textContent, /wb\.config\.modelUnavailable \{"runtime":"Antigravity"\}/);
   f.saveButton().dispatch('click');
   f.confirmSave();
   await tick();
   assert.deepEqual(f.writes.filter(write => write.method === 'PUT').map(write => write.body), [{ kind: 'runtime', value: 'agy', confirmed: true }]);
+
+  controller.state.draft = {};
+  controller.state.value.runtime.data.desired.runtime = 'agy';
+  const saved = view();
+  renderGroupConfig(saved, controller, options);
+  assert.equal(configControl(saved, 'wb.term.runtime').value, 'agy');
+  assert.equal(saved.querySelectorAll('.wb-note-act').length, 0);
 });
 
 test('a replacement run observed while the save dialog is open needs a fresh confirmation', async context => {
@@ -1951,6 +1988,62 @@ test('timeline refresh updates keyed run and activity nodes in the mounted body'
     assert.equal(allNodes(f.root).filter(node => node.classList.contains('wb-timeline-event')).length, 2);
     assert.match(heading.textContent, /"count":2/, 'the reused run header receives its new count');
   } finally { f.controller.destroy(); }
+});
+
+test('rechecking a missing engine reports failure and unlocks group settings after installation', async context => {
+  const current = row('a');
+  const versions = { agy: { installed: null }, codex: { installed: null }, claude: { installed: null } };
+  const installed = { versions: { ...versions, agy: { installed: '1.5.11' } } };
+  const requests = [], instances = [], successfulPost = deferred();
+  const config = { runtime: { data: { desired: {}, resolved: { runtime: 'claude' } } }, modelOverrides: [] };
+  const f = detailScrollFixture(async (path, options) => {
+    if (path === '/api/instance/actions/recheck-runtime-cli') {
+      requests.push([options.method, options.body]);
+      return requests.length === 1 ? response({ error: 'x' }, 500) : successfulPost.promise;
+    }
+    if (path === '/api/instance') return response(installed);
+    if (isGroupDetail(path)) return response({ config });
+    return response(defaultRead(path));
+  }, { onInstance: instance => instances.push(instance) });
+  context.after(() => f.controller.destroy());
+  const snapshot = { rows: [current], listKnown: true, instance: { versions } };
+  await f.controller.open(current, snapshot);
+  const button = label => allNodes(f.root).find(node => node.tagName === 'BUTTON' && node.textContent === label);
+  button('wb.detail.modify').dispatch('click');
+  await tick();
+  const choose = async value => {
+    const runtime = configControl(f.root, 'wb.term.runtime');
+    runtime.value = value;
+    runtime.dispatch('change');
+    await tick();
+  };
+  await choose('codex');
+  assert.equal(button('wb.config.save').disabled, false);
+  assert.equal(button('wb.recheck'), undefined);
+  await choose('claude');
+  assert.equal(button('wb.config.save').disabled, false);
+  assert.equal(button('wb.recheck'), undefined);
+  await choose('agy');
+  assert.equal(button('wb.config.save').disabled, true);
+  button('wb.recheck').dispatch('click');
+  await tick();
+  assert.equal(f.root.querySelector('.wb-config-error').textContent, 'status.failed {"error":"x"}');
+  assert.equal(button('wb.config.save').disabled, true);
+  const retry = button('wb.recheck');
+  retry.dispatch('click');
+  retry.dispatch('click');
+  assert.deepEqual(requests, [['POST', '{}'], ['POST', '{}']]);
+  successfulPost.resolve(response({ ok: true }));
+  await tick();
+  assert.equal(button('wb.config.save').disabled, false);
+  assert.equal(button('wb.recheck'), undefined);
+  assert.equal(f.root.querySelector('.wb-config-error'), undefined);
+  assert.deepEqual(instances, [installed]);
+
+  await f.controller.updateSnapshot(snapshot);
+  assert.equal(button('wb.config.save').disabled, true);
+  await f.controller.updateSnapshot({ ...snapshot, instance: installed });
+  assert.equal(button('wb.config.save').disabled, false, 'a board snapshot can unlock the mounted form');
 });
 
 // Catalog arrival fills the model choices. Subsequent edits and save must use the mounted controls.

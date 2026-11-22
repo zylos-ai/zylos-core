@@ -120,23 +120,8 @@
     "reason": "legacy: Preserves strict catalog behavior for older fleet peers that do not return catalog_strict."
   },
   {
-    "file": "skills/dashboard/public/js/wb/page-actions.js",
-    "text": "'switch-runtime': () => body?.runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: body?.runtime }),",
-    "reason": "dispatch:dashboard: Chooses the dedicated Codex switch confirmation."
-  },
-  {
     "file": "skills/dashboard/public/js/wb/settings-defaults.js",
     "text": "const runtimes = ['claude', 'codex'];",
     "reason": "gap: Default-engine settings currently offer only Claude and Codex."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-defaults.js",
-    "text": "const engineName = runtime => runtime === 'codex' ? 'Codex' : 'Claude Code';",
-    "reason": "text: The default-engine controls use the existing Claude Code and Codex labels."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-defaults.js",
-    "text": "return [runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: engineName(runtime) }), runtimeConfirmation(snapshot, t)].join('\\n');",
-    "reason": "dispatch:dashboard: Uses a dedicated confirmation when saving Codex as the default engine."
   }
 ]
