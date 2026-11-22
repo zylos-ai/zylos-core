@@ -8,7 +8,7 @@ import { startPage } from './helpers/workbench-browser.js';
 import { openDashboardTab } from './helpers/browser-navigation.js';
 import { GROUP, workbenchAnswer } from './fixtures/workbench-browser-api.js';
 import { keyPage } from './fixtures/key-pages.js';
-import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
+import { fleetSettingsPageFixture } from './helpers/fleet-page-fixture.js';
 import { parseListQuery } from '../src/lib/list-query.js';
 import { pageFleetRows } from '../src/lib/fleet-list.js';
 
@@ -71,10 +71,8 @@ test('the settings page keeps its sections in order, offers the right upgrades a
         if (url.pathname === '/api/instance/actions/upgrade-runtime') return route.fulfill({ json: { ok: true } });
         if (url.pathname === '/api/keys' && method === 'GET') return route.fulfill({ json: keyPage(fixtures.keys, url) });
         if (url.pathname === '/api/fleet/agents' && method === 'GET') {
-          const { items, nextCursor, total } = fleetPageFixture({ agents: fixtures.machines }, url.search);
-          return route.fulfill({ json: { self: { name: 'browser-case' }, items: items.map(agent => ({
-            ...agent, connection: { kind: 'unknown' },
-          })), nextCursor, total } });
+          const machines = fixtures.machines.map(agent => ({ ...agent, connection: { kind: 'unknown' } }));
+          return route.fulfill({ json: fleetSettingsPageFixture(machines, url.search, 'browser-case') });
         }
         if (url.pathname === '/api/settings/pricing' && method === 'PUT') return route.fulfill({ json: { ok: true } });
         if (url.pathname === '/api/settings/pricing' && method === 'GET') return route.fulfill({ json: { active: 'claude', runtimes: {
