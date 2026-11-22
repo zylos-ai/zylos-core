@@ -765,8 +765,106 @@ export function mountConversationPage({
   // is still, it follows new content only if the user stayed at the bottom; a user who left it is not pulled back,
   // but the content that moved under them meanwhile (an older page, an opened attachment) is moved back by the same
   // amount, so what they were reading stays in view.
+  const phone = () => view?.matchMedia?.('(max-width: 760px)')?.matches === true;
+  const copyMenu = node('div', undefined, 'conversation-copy-menu');
+  const copyMenuPanel = node('div', undefined, 'conversation-copy-menu-panel');
+  const copyMenuButton = node('button');
+  const selectTextButton = node('button');
+  copyMenuButton.type = selectTextButton.type = 'button';
+  copyMenuButton.append(icon(document, 'copy'), node('span'));
+  selectTextButton.append(icon(document, 'file'), node('span'));
+  copyMenuPanel.append(copyMenuButton, selectTextButton);
+  copyMenu.append(copyMenuPanel);
+  copyMenu.hidden = true;
+  page.append(copyMenu);
+  let menuRecord = null;
+  let ignoreHoldClick = false;
+  function closeCopyMenu() {
+    copyMenu.hidden = true;
+    menuRecord = null;
+  }
+  function showCopyMenu(article, target) {
+    const record = messages.get(article.dataset.messageId);
+    if (!record) return;
+    menuRecord = record;
+    ignoreHoldClick = true;
+    text(copyMenuButton.lastElementChild, t('chat.copy.button'));
+    text(selectTextButton.lastElementChild, t('chat.copy.select'));
+    const bubble = target.closest('.chat-message-content').getBoundingClientRect();
+    copyMenu.hidden = false;
+    const panel = copyMenuPanel.getBoundingClientRect();
+    const space = 8;
+    const top = bubble.bottom + space + panel.height <= view.innerHeight
+      ? bubble.bottom + space : bubble.top - panel.height - space;
+    copyMenuPanel.style.top = `${Math.max(space, top)}px`;
+    copyMenuPanel.style.right = `${Math.max(space, view.innerWidth - bubble.right)}px`;
+  }
+  copyMenu.addEventListener('pointerdown', () => { ignoreHoldClick = false; });
+  copyMenu.addEventListener('click', event => {
+    // The release that follows a long press can synthesize a click on the newly opened popup.
+    if (ignoreHoldClick && event.detail > 0) {
+      event.stopPropagation();
+      return;
+    }
+    if (event.target === copyMenu) closeCopyMenu();
+  }, true);
+  copyMenuButton.addEventListener('click', () => {
+    const record = menuRecord;
+    closeCopyMenu();
+    if (record) void copyMessage(record, true);
+  });
+
+  const selectTextDialog = node('dialog', undefined, 'conversation-select-text');
+  const selectTextHeader = node('header', undefined, 'conversation-select-text-header');
+  const selectTextBack = node('button', undefined, 'conversation-select-text-back');
+  const selectTextTitle = node('h2');
+  const selectTextBody = node('div', undefined, 'conversation-select-text-body');
+  selectTextBack.type = 'button';
+  selectTextBack.append(icon(document, 'back'));
+  selectTextTitle.id = 'conversation-select-text-title';
+  selectTextDialog.setAttribute('aria-labelledby', selectTextTitle.id);
+  selectTextHeader.append(selectTextBack, selectTextTitle);
+  selectTextDialog.append(selectTextHeader, selectTextBody);
+  page.append(selectTextDialog);
+  let selectionEntry = null;
+  function leaveTextSelection() {
+    if (selectTextDialog.open) selectTextDialog.close();
+    selectTextBody.replaceChildren();
+    selectionEntry = null;
+  }
+  function backFromTextSelection() {
+    if (selectionEntry && view.history.state?.conversationSelectText === selectionEntry.id) view.history.back();
+    else leaveTextSelection();
+  }
+  selectTextBack.addEventListener('click', backFromTextSelection);
+  selectTextDialog.addEventListener('cancel', event => {
+    event.preventDefault();
+    backFromTextSelection();
+  });
+  selectTextButton.addEventListener('click', () => {
+    const record = menuRecord;
+    closeCopyMenu();
+    if (!record) return;
+    selectionEntry = {
+      id: view.crypto.getRandomValues(new Uint32Array(1))[0],
+      url: view.location.href,
+    };
+    view.history.pushState({ ...view.history.state, conversationSelectText: selectionEntry.id }, '', selectionEntry.url);
+    selectTextBack.setAttribute('aria-label', t('chat.page.backToConversation'));
+    text(selectTextTitle, t('chat.copy.select'));
+    const messageText = record.resource.querySelectorAll('.chat-message-text');
+    selectTextBody.replaceChildren(...Array.from(messageText, part => part.cloneNode(true)));
+    // Keep links readable in the selection view without navigating away.
+    for (const link of selectTextBody.querySelectorAll('a[href]')) link.removeAttribute('href');
+    selectTextBody.scrollTop = 0;
+    selectTextDialog.showModal();
+  });
   const quoteGesture = createQuoteGesture({ list: messageList, document, enabled: () => quotable(currentSnapshot),
     onQuote: id => quoteMessage(id),
+    canHold: (article, target) => phone() && touchFirst(view) && !page.hidden && Boolean(
+      article.matches('.chat-in:not(.conversation-internal)') && target.closest('.chat-message-content')
+      && !target.closest('a, button, input, textarea, select, summary, [contenteditable]')),
+    onHold: showCopyMenu,
     setTimeout: (fn, ms) => view?.setTimeout ? view.setTimeout(fn, ms) : globalThis.setTimeout(fn, ms),
     clearTimeout: id => view?.clearTimeout ? view.clearTimeout(id) : globalThis.clearTimeout(id) });
   const gesture = createScrollGesture(stream, {
@@ -851,7 +949,16 @@ export function mountConversationPage({
       meta.append(timeNode);
     }
     const quoteButton = quoteAction(row);
-    meta.append(quoteButton);
+    const copyButton = node('button', undefined, 'conversation-copy-button');
+    copyButton.type = 'button';
+    copyButton.dataset.action = 'copy';
+    const copyAction = node('span', undefined, 'conversation-copy-action');
+    copyAction.append(copyButton);
+    const copyFeedback = node('span', undefined, 'conversation-copy-feedback');
+    const copyBubbleFeedback = node('span', undefined, 'conversation-copy-feedback conversation-copy-bubble-feedback');
+    copyFeedback.setAttribute('role', 'status');
+    copyBubbleFeedback.setAttribute('role', 'status');
+    meta.append(quoteButton, copyAction, copyFeedback);
     const questions = [];
     const content = renderConversationContent({
       document,
@@ -891,7 +998,7 @@ export function mountConversationPage({
       if (!destroyed && !statusButton.disabled) void state.refreshStatus();
     });
     status.append(statusIcon, statusText, statusButton);
-    body.append(meta, content, status);
+    body.append(meta, content, copyBubbleFeedback, status);
     article.append(avatar, body);
     const record = {
       node: article,
@@ -909,11 +1016,51 @@ export function mountConversationPage({
       content: row.content,
       quoteKey: JSON.stringify(row.quote ?? null),
       quoteButton,
+      copyButton,
+      copyFeedback,
+      copyBubbleFeedback,
       time: timeNode,
       date
     };
+    copyButton.addEventListener('click', () => { void copyMessage(record); });
     patchMessage(record, row, s);
     return record;
+  }
+  function renderCopyFeedback(record) {
+    const { copyButton, copyResult, copyFromMenu } = record;
+    const copied = copyResult === 'copied';
+    const copyLabel = t(copied ? 'chat.copy.copied' : 'chat.copy.button');
+    const title = copied ? copyLabel : t('chat.copy.title');
+    copyButton.title = title;
+    copyButton.setAttribute('aria-label', title);
+    if (copyButton.dataset.copied !== String(copied)) {
+      copyButton.dataset.copied = String(copied);
+      copyButton.replaceChildren(icon(document, copied ? 'check' : 'copy'), node('span'));
+    }
+    text(copyButton.lastElementChild, copyLabel);
+    const feedback = copyResult === 'failed' ? t('chat.copy.failed') : copied ? copyLabel : '';
+    text(record.copyFeedback, copyFromMenu ? '' : feedback);
+    record.copyFeedback.classList.toggle('conversation-copy-feedback-announcement', copied);
+    text(record.copyBubbleFeedback, copyFromMenu ? feedback : '');
+  }
+  async function copyMessage(record, fromMenu = false) {
+    let result;
+    try {
+      if (!view.navigator.clipboard?.writeText) throw new Error('clipboard_unavailable');
+      await view.navigator.clipboard.writeText(readableText(record.row));
+      result = 'copied';
+    } catch {
+      result = 'failed';
+    }
+    if (!record.node.isConnected) return;
+    view.clearTimeout(record.copyTimer);
+    record.copyResult = result;
+    record.copyFromMenu = fromMenu;
+    renderCopyFeedback(record);
+    record.copyTimer = view.setTimeout(() => {
+      record.copyResult = null;
+      if (record.node.isConnected) renderCopyFeedback(record);
+    }, result === 'copied' ? 2000 : 4000);
   }
   // Quoting: the hover button beside the time, a left swipe (touch, pen, trackpad) or a click on the history's quote.
   const quotable = s => !!s && s.tab === 'mine' && s.canWrite && !s.sending && !s.pending && !isDraft(s);
@@ -1057,6 +1204,8 @@ export function mountConversationPage({
       record.resource.update(row, { showTechnicalDetails: technicalDetails() === true, external: s.tab === 'external' });
       return;
     }
+    record.row = row;
+    renderCopyFeedback(record);
     const avatarSymbol = messageAvatar(row, s);
     if (record.avatarSymbol !== avatarSymbol) {
       record.avatar.replaceChildren(icon(document, avatarSymbol));
@@ -1412,6 +1561,8 @@ export function mountConversationPage({
     input.setAttribute('aria-label', t('chat.input'));
     renameInput.setAttribute('aria-label', t('chat.name'));
     if (s.blocked) {
+      closeCopyMenu();
+      leaveTextSelection();
       annotations.hide();
       uploadTray.clear();
       input.value = '';
@@ -1437,6 +1588,8 @@ export function mountConversationPage({
     const key = `${s.tab}:${s.selectedId ?? ''}`;
     const switched = selectedKey !== key;
     if (switched || s.blocked) {
+      closeCopyMenu();
+      leaveTextSelection();
       closeConversationMenu(false);
       selectedKey = key;
       annotations.hide();
@@ -1794,7 +1947,15 @@ export function mountConversationPage({
       await selectFirstDesktop();
     },
     openGroup,
+    popstate() {
+      if (!selectionEntry) return false;
+      const sameConversationPage = view.location.href === selectionEntry.url && !page.hidden;
+      leaveTextSelection();
+      return sameConversationPage;
+    },
     close() {
+      closeCopyMenu();
+      leaveTextSelection();
       autoSelectPending = false;
       opened = false;
       deletion.invalidate();
@@ -1809,6 +1970,8 @@ export function mountConversationPage({
     redraw() { redraw(); groupSide?.redraw(); quickConfig?.redraw(); },
     clearDrafts(scope) { uploadTray.clearForAuthentication(scope?.instance ? { instance: scope.instance } : undefined); state.clearDrafts(scope); },
     destroy() {
+      closeCopyMenu();
+      leaveTextSelection();
       closeConversationMenu(false);
       document.documentElement.dataset.conversationFocus = 'false';
       deletion.invalidate();

@@ -112,9 +112,8 @@ function buildLinkChip(link, labels) {
 
 export function defaultAgentFleetLabels() {
   return {
-    title: 'Machines',
+    title: 'Agent Fleet',
     subtitle: 'Every machine you can view; the ones with a problem come first.',
-    manage: 'Manage',
     busy: 'Working',
     idle: 'Idle',
     unknown: 'Unknown',
@@ -140,7 +139,7 @@ export function defaultAgentFleetLabels() {
     shortAuth: 'Key no longer valid',
     shortDown: 'Cannot connect',
     shortVersion: 'Version too old',
-    fixAuth: 'Ask the other side for a new key and add it again under Settings · This machine and others.',
+    fixAuth: 'Ask the other side for a new key and add it again under Settings · Other machines.',
     fixDown: 'The other Dashboard may be off or its address changed.',
     fixVersion: 'The other Dashboard needs an upgrade.',
     lastSeen: 'last reachable {time}',

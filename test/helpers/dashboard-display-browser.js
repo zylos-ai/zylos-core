@@ -141,8 +141,6 @@ export async function runDashboardDisplayBrowser(t, sandbox) {
         await openDashboardTab(page, 'settings');
         const model = page.locator('#settings-model-claude');
         await model.waitFor({ state: 'attached' });
-        // Navigate to Defaults through the actual mobile drawer when necessary.
-        if (width === 390) await page.locator('.wb-set-drawer-btn').click();
         await page.locator('[data-settings-section="defaults"]').click();
         await model.scrollIntoViewIfNeeded();
         await model.selectOption('haiku');
