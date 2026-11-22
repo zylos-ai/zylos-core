@@ -8,7 +8,8 @@ import { createScheduleRead, scheduleReadResponse } from '../../src/lib/workbenc
 import { sendHtml, sendJson, serveStatic } from '../../src/lib/http.js';
 import { workbenchAnswer } from '../fixtures/workbench-browser-api.js';
 import { listErrorBody } from '../../src/lib/list-query.js';
-import { populateSchedulePagination, SHARED_NEEDLE, listOrder } from '../fixtures/schedule-pagination.js';
+import { populateSchedulePagination, SHARED_NEEDLE, listOrder, pickerGroupPage, pickerGroups, pickerSnapshotRows,
+  populateTargetGroupTasks, TARGET_GROUP } from '../fixtures/schedule-pagination.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 
@@ -20,7 +21,10 @@ export async function runSchedulePaginationBrowser(t, sandbox) {
   console.log('Schedule browser isolation:', JSON.stringify(sandbox.assertIsolation(proof)));
   const db = sandbox.openDatabase(dbFile, filename => new Database(filename), proof);
   const fixture = populateSchedulePagination(db);
-  const reader = createScheduleRead({ zylosDir: sandbox.paths.zylos, scheduleTz: async () => ({ tz: 'UTC' }) });
+  const groups = pickerGroups(fixture.now);
+  const reader = createScheduleRead({ zylosDir: sandbox.paths.zylos, scheduleTz: async () => ({ tz: 'UTC' }),
+    getSnapshot: async () => ({ rows: pickerSnapshotRows(groups) }),
+    displayNames: { listAll: () => new Map(groups.map(group => [group.id, { displayName: group.displayName }])) } });
   const reads = [];
   // A Dashboard restart changes the cursor key. Here each cursor sent out carries the fixture's epoch; after
   // restart() a cursor of an earlier epoch is altered on arrival, so the real route refuses it with invalid_cursor.
@@ -33,7 +37,7 @@ export async function runSchedulePaginationBrowser(t, sandbox) {
       res.apiPath = url.pathname;
       if (url.pathname.startsWith('/api/schedules')) {
         if (req.method === 'GET') {
-          if (reads.length < 100) reads.push(url.pathname + url.search);
+          if (reads.length < 1000) reads.push(url.pathname + url.search);
           if (url.searchParams.has('cursor')) {
             const [issued, cursor] = url.searchParams.get('cursor').split('~');
             url.searchParams.set('cursor', Number(issued) === epoch ? cursor : `${cursor}x`);
@@ -46,6 +50,10 @@ export async function runSchedulePaginationBrowser(t, sandbox) {
         firstWrite ??= `${req.method} ${url.pathname}`.slice(0, 300);
         req.resume();
         return sendJson(res, 405, { error: 'read_only_fixture' });
+      }
+      if (url.pathname === '/api/groups') {
+        if (reads.length < 1000) reads.push(url.pathname + url.search);
+        return sendJson(res, 200, pickerGroupPage(groups, url));
       }
       if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (url.pathname.startsWith('/api/')) {
@@ -197,6 +205,83 @@ export async function runSchedulePaginationBrowser(t, sandbox) {
         failed = true;
         console.log('Schedule browser failure:', JSON.stringify({ errors, reads, text: (await page?.locator('body').textContent())?.slice(0, 2000) }));
         if (evidence && page) await page.screenshot({ path: path.join(evidence, `${width}-${theme}-failure.png`) });
+        throw error;
+      }
+      finally { await context.close(); }
+    });
+    if (failed) return;
+  }
+  // A group whose tasks all come after the third page: the picker lists the recently active groups, finds the
+  // group by name, and choosing it fills the first page with that group's tasks only, paged without gaps.
+  const added = populateTargetGroupTasks(db, fixture);
+  const order = listOrder([...fixture.rows, ...added]);
+  assert.equal(order.length, 205);
+  assert.ok(order.findIndex(row => row.group === TARGET_GROUP.id) >= 150, 'the group\'s tasks start after page three');
+  const groupNames = order.filter(row => row.group === TARGET_GROUP.id).map(row => row.name);
+  for (const width of [390, 1280]) for (const theme of ['light', 'dark']) {
+    await t.test(`${width}px ${theme} target group picker`, async () => {
+      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, locale: 'zh-CN',
+        timezoneId: 'UTC', colorScheme: theme, ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
+      sandbox.addCleanup(() => context.close());
+      let page;
+      const errors = [];
+      try {
+        await context.route('**/*', route => route.request().url().startsWith(base + '/') ? route.continue() : route.abort());
+        await context.addInitScript(({ theme }) => {
+          if (window.top !== window) return;
+          localStorage.setItem('zylos-dashboard-locale', 'zh');
+          localStorage.setItem('zylos-dashboard-detail-level', 'plain');
+          localStorage.setItem('zylos-dashboard-theme', theme);
+        }, { theme });
+        page = await context.newPage();
+        page.setDefaultTimeout(12_000);
+        page.on('pageerror', error => { if (errors.length < 5) errors.push(error.message); });
+        await page.goto(base + '/schedule');
+        const rows = page.locator('.wb-sched-row');
+        const titles = () => rows.locator('.wb-sched-title').allTextContents();
+        const rowCount = count => page.waitForFunction(n => document.querySelectorAll('.wb-sched-row').length === n, count);
+        const more = page.getByRole('button', { name: '加载更多', exact: true });
+        await rows.first().waitFor();
+        assert.equal((await titles()).some(name => name.startsWith('X 组任务')), false);
+        const picker = page.getByRole('searchbox', { name: '全部目标组' });
+        const options = page.locator('.wb-sched-picker-item');
+        await picker.focus();
+        assert.equal(await page.locator('.wb-sched-picker-list').isVisible(), false, 'focus alone does not open the choices');
+        // No input: "All target groups", Origin, then the seven most recently active groups.
+        await picker.click();
+        await page.waitForFunction(() => document.querySelectorAll('.wb-sched-picker-item').length === 9);
+        assert.deepEqual(await options.allTextContents(), ['全部目标组', 'Origin', ...groups.slice(1, 8).map(group => group.displayName)]);
+        assert.ok(reads.includes('/api/groups?limit=8'));
+        if (evidence) await page.screenshot({ path: path.join(evidence, `${width}-${theme}-picker-recent.png`) });
+        await picker.fill('项目 X');
+        await page.waitForFunction(() => [...document.querySelectorAll('.wb-sched-picker-item')].map(node => node.textContent).join('|') === '全部目标组|项目 X 群');
+        assert.ok(reads.includes(`/api/groups?limit=8&q=${encodeURIComponent('项目 X').replace(/%20/g, '+')}`));
+        await options.filter({ hasText: '项目 X 群' }).click();
+        await rowCount(50);
+        assert.equal(await picker.inputValue(), '项目 X 群');
+        assert.deepEqual(await titles(), groupNames.slice(0, 50));
+        assert.ok(reads.some(url => url === `/api/schedules?target=${encodeURIComponent(TARGET_GROUP.id)}`));
+        if (evidence) await page.screenshot({ path: path.join(evidence, `${width}-${theme}-picker-group.png`) });
+        await more.scrollIntoViewIfNeeded();
+        await more.click();
+        await rowCount(55);
+        assert.deepEqual(await titles(), groupNames, 'every task of the group once, in list order');
+        assert.equal(await more.count(), 0);
+        assert.ok(reads.some(url => url.startsWith(`/api/schedules?target=${encodeURIComponent(TARGET_GROUP.id)}&cursor=`)));
+        // "All target groups" lists every task again.
+        await page.evaluate(() => scrollTo(0, 0));
+        await picker.click();
+        await options.first().waitFor();
+        await options.first().click();
+        await rowCount(50);
+        assert.equal(await picker.inputValue(), '');
+        assert.deepEqual(await titles(), order.slice(0, 50).map(row => row.name));
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width, 'page fits viewport');
+        assert.equal(errors.length, 0, errors.join('\n'));
+      } catch (error) {
+        failed = true;
+        console.log('Schedule picker failure:', JSON.stringify({ errors, reads, text: (await page?.locator('body').textContent())?.slice(0, 2000) }));
+        if (evidence && page) await page.screenshot({ path: path.join(evidence, `${width}-${theme}-picker-failure.png`) });
         throw error;
       }
       finally { await context.close(); }

@@ -699,6 +699,7 @@
   "wb.schedule.day.today": "Today {time}",
   "wb.schedule.day.tomorrow": "Tomorrow {time}",
   "wb.schedule.day.yesterday": "Yesterday {time}",
+  "wb.schedule.filter.allTargets": "All target groups",
   "wb.schedule.filter.label": "Filter by status",
   "wb.schedule.col.task": "Task",
   "wb.schedule.col.rule": "Schedule",

@@ -19,6 +19,9 @@ const RESULT_CLASS = { success: 'wb-ok', timeout: 'wb-timeout', failed: 'wb-bad'
 const RESULT_ICON = { success: 'check', timeout: 'clock', failed: 'x', started: 'loader' };
 const STATE_CLASS = { pending: 'wb-on', running: 'wb-run', paused: 'wb-off', failed: 'wb-bad', completed: 'wb-done' };
 const FILTERS = ['all', 'enabled', 'paused', 'failed', 'completed'];
+// The target-group picker asks the group list for a few groups at a time once typing pauses.
+const PICKER_LIMIT = 8;
+const PICKER_DELAY = 300;
 
 export const statusKey = status => 'wb.schedule.status.' + (['pending', 'paused', 'running', 'completed', 'failed']
   .includes(status) ? status : 'unknown');
@@ -26,6 +29,19 @@ export const resultKey = status => 'wb.schedule.result.' + (['success', 'timeout
   .includes(status) ? status : 'unknown');
 
 const platform = (component, t) => fallbackName({ sessionGroup: component, c4: { componentName: component } }, t);
+
+/** A row of GET /api/groups as the target it filters by: Origin, or the group's name. */
+export function pickerLabel(group, { t = key => key, level = 'plain' } = {}) {
+  if (group.id === 'origin') return targetLabel({ kind: 'origin' }, { t, level });
+  return level === 'technical' ? group.id : group.displayName || group.id;
+}
+
+/** Puts `nodes` into `parent` in order without detaching a node already there, so a focused field keeps focus. */
+function placeChildren(parent, nodes) {
+  const keep = new Set(nodes);
+  for (const child of [...parent.children]) if (!keep.has(child)) child.remove();
+  nodes.forEach((node, index) => { if (parent.children[index] !== node) parent.insertBefore(node, parent.children[index] ?? null); });
+}
 
 /** Where a task runs: the dispatch target resolved by the server. */
 export function targetLabel(target, { t = key => key, level = 'plain' } = {}) {
@@ -268,7 +284,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   if (!root) return () => {};
   const guard = createFetchGuard();
   let data = null, error = false, selected = null, history = null, historyGen = 0, form = null, confirmFor = null,
-    filter = { status: 'all', query: '' }, owner = identity(), stopped = false, notice = null,
+    filter = { status: 'all', query: '', target: null }, owner = identity(), stopped = false, notice = null,
     fullPrompt = null, detailTask = null, detailError = false, detailGen = 0, listBusy = false, pageCount = 1;
   // The page, the drawer and the dialog layer stay mounted across redraws, so a refresh keeps the drawer's
   // scroll position and an open form keeps its focus and typed text.
@@ -299,7 +315,8 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     detailError = false;
     listBusy = false;
     pageCount = 1;
-    filter = { status: 'all', query: '' };
+    filter = { status: 'all', query: '', target: null };
+    closePicker();
     form = null;
     confirmFor = null;
     notice = null;
@@ -307,15 +324,109 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     mounted = false;
     return true;
   }
-  async function read(path) {
+  async function readJson(path) {
     const captured = identity();
     const response = await fetch(endpoint(path));
     if (captured !== identity() || stopped) throw Error('view_changed');
     const value = await response.json();
     if (!response.ok) throw Object.assign(new Error(value?.error?.message || 'read_failed'), { status: response.status, code: value?.error?.code });
     if (captured !== identity() || stopped) throw Error('view_changed');
-    return scheduleTimes(value);
+    return value;
   }
+  const read = async path => scheduleTimes(await readJson(path));
+  // The target-group picker: a search field over the group list (GET /api/groups, latest activity first, so an
+  // empty search shows the recently active groups). It stays mounted across redraws so typing keeps focus; the
+  // choices open on a click, typing or ArrowDown, not on keyboard focus alone, so tabbing past it never enters them.
+  const picker = { open: false, query: '', items: [], loading: false, failed: false, gen: 0, timer: null };
+  const pickerWrap = element(document, 'div', undefined, 'wb-sched-picker');
+  const pickerInput = element(document, 'input', undefined, 'wb-input');
+  pickerInput.type = 'search';
+  pickerInput.autocomplete = 'off';
+  const pickerList = element(document, 'div', undefined, 'wb-sched-picker-list');
+  pickerList.setAttribute('role', 'listbox');
+  pickerList.hidden = true;
+  pickerWrap.append(pickerInput, pickerList);
+  // Pressing a choice keeps focus in the field (Safari does not focus a pressed button), so the list is still
+  // there when the click arrives.
+  pickerList.addEventListener('mousedown', event => event.preventDefault?.());
+  async function loadPicker() {
+    const gen = ++picker.gen;
+    picker.loading = true;
+    renderPicker();
+    const params = new URLSearchParams({ limit: String(PICKER_LIMIT) });
+    if (picker.query) params.set('q', picker.query);
+    try {
+      const value = await readJson('/api/groups?' + params);
+      if (gen !== picker.gen) return;
+      picker.items = Array.isArray(value?.items) ? value.items : [];
+      picker.failed = false;
+    } catch {
+      if (gen !== picker.gen) return;
+      picker.items = [];
+      picker.failed = true;
+    }
+    picker.loading = false;
+    renderPicker();
+  }
+  function openPicker() {
+    if (picker.open) return;
+    picker.open = true;
+    pickerInput.select?.();
+    loadPicker();
+  }
+  function closePicker() {
+    clearTimeout(picker.timer);
+    picker.gen++;
+    Object.assign(picker, { open: false, query: '', items: [], loading: false, failed: false });
+    renderPicker();
+  }
+  function chooseTarget(target) {
+    closePicker();
+    pickerInput.blur?.();
+    if ((target?.id ?? null) !== (filter.target?.id ?? null)) changeList({ target });
+  }
+  function renderPicker() {
+    const label = filter.target?.label ?? '';
+    pickerInput.placeholder = t('wb.schedule.filter.allTargets');
+    pickerInput.setAttribute('aria-label', t('wb.schedule.filter.allTargets'));
+    pickerInput.setAttribute('aria-expanded', String(picker.open));
+    if (!picker.open) pickerInput.value = label;
+    pickerList.hidden = !picker.open;
+    pickerList.replaceChildren();
+    if (!picker.open) return;
+    const all = button(document, t('wb.schedule.filter.allTargets'), () => chooseTarget(null), 'wb-sched-picker-item' + (filter.target ? '' : ' active'));
+    all.setAttribute('role', 'option');
+    pickerList.append(all);
+    for (const group of picker.items) {
+      const item = button(document, undefined, () => chooseTarget({ id: group.id, label: pickerLabel(group, { t }) }),
+        'wb-sched-picker-item' + (group.id === filter.target?.id ? ' active' : ''));
+      item.setAttribute('role', 'option');
+      item.append(element(document, 'span', pickerLabel(group, { t })));
+      if (level() === 'technical' && group.id !== 'origin') item.append(element(document, 'span', group.id, 'wb-mono'));
+      pickerList.append(item);
+    }
+    if (picker.loading) pickerList.append(element(document, 'p', t('chat.loading'), 'wb-sched-note'));
+    else if (picker.failed) pickerList.append(element(document, 'p', t('wb.readFailed'), 'wb-sched-note wb-txt-warn'));
+    else if (!picker.items.length) pickerList.append(element(document, 'p', t('wb.noMatch'), 'wb-sched-note'));
+  }
+  pickerInput.addEventListener('click', openPicker);
+  pickerInput.addEventListener('input', () => {
+    picker.open = true;
+    clearTimeout(picker.timer);
+    picker.timer = setTimeout(() => { picker.query = pickerInput.value.trim().slice(0, 64); loadPicker(); }, PICKER_DELAY);
+  });
+  pickerInput.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && picker.open && !event.isComposing) {
+      // Closes only the choices; the page's own Esc (closing the drawer) waits for the next press.
+      event.stopPropagation?.();
+      closePicker();
+    } else if (event.key === 'ArrowDown' && !picker.open) { event.preventDefault?.(); openPicker(); }
+  });
+  pickerWrap.addEventListener('focusout', event => {
+    if (pickerWrap.contains(event.relatedTarget)) return;
+    closePicker();
+  });
+  const filterBar = element(document, 'div', undefined, 'wb-sched-filters');
   const visible = () => {
     reset();
     return document.visibilityState !== 'hidden' && document.querySelector('#tab-schedule')?.classList.contains('active') &&
@@ -325,6 +436,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const query = new URLSearchParams();
     if (filter.status !== 'all') query.set('status', filter.status);
     if (filter.query.trim()) query.set('q', filter.query.trim());
+    if (filter.target) query.set('target', filter.target.id);
     if (cursor !== null) query.set('cursor', cursor);
     return '/api/schedules' + (query.size ? `?${query}` : '');
   }
@@ -619,7 +731,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     return box;
   }
   function renderFilters() {
-    const bar = element(document, 'div', undefined, 'wb-sched-filters');
+    const bar = filterBar;
     const counts = data.counts ?? {};
     const seg = element(document, 'div', undefined, 'wb-seg');
     seg.setAttribute('role', 'group');
@@ -645,12 +757,14 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     search.addEventListener('change', apply);
     search.addEventListener('search', apply);
     searchWrap.append(icon(document, 'search', 'xs'), search);
-    bar.append(seg, searchWrap);
+    renderPicker();
+    const parts = [seg, pickerWrap, searchWrap];
     if (writable()) {
       const create = button(document, t('wb.schedule.new'), () => openForm(null), 'wb-btn wb-btn-primary wb-sched-new');
       create.replaceChildren(icon(document, 'plus', 'xs'), element(document, 'span', t('wb.schedule.new')));
-      bar.append(create);
+      parts.push(create);
     }
+    placeChildren(bar, parts);
     return bar;
   }
   function renderTarget(task) {
@@ -910,7 +1024,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       top.append(renderKpi(), renderWeek(), renderTimeline());
       notes.push(top, renderFilters(), renderList());
     }
-    main.replaceChildren(...notes);
+    placeChildren(main, notes);
     const showForm = data?.available && form && (form.taskId === null || form.taskId === task?.id);
     const key = showForm ? form : selected;
     if (showForm) {
@@ -1010,6 +1124,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   return () => {
     stopped = true;
     clearInterval(timer);
+    clearTimeout(picker.timer);
     guard.invalidate();
     previewer.destroy();
     observer?.disconnect();

@@ -545,6 +545,7 @@ function chooseFilter(h, name) {
     node.textContent.startsWith(t('wb.schedule.filter.' + name))).dispatch('click');
 }
 const listRows = h => allNodes(h.root).filter(node => node.classList.contains('wb-sched-select'));
+const taskSearch = h => allNodes(h.root).find(node => node.type === 'search' && node.placeholder === t('wb.schedule.search'));
 
 // Mounted contract cases below use only the injected DOM/fetch/timers. Run for
 // list pagination, server search, detail loading or lifecycle changes; skip for
@@ -578,7 +579,7 @@ test('completed pages keep server counts and timeline and follow fresh cursors o
   assert.equal(listRows(h).length, 60, 'poll retains the expanded page depth');
   assert.ok(h.calls.some(call => call.path.includes('cursor=page-2')), 'poll follows the newly issued cursor');
   assert.equal(allNodes(h.root).filter(node => node.classList.contains('wb-sched-dot')).length, 1);
-  const search = allNodes(h.root).find(node => node.type === 'search');
+  const search = taskSearch(h);
   search.value = 'needle'; search.dispatch('change');
   await tick();
   assert.equal(listRows(h).length, 30, 'new search resets the completed cursor');
@@ -681,6 +682,45 @@ test('execution history loads more with its cursor and reloads its first page af
   assert.equal(history().length, 100);
 });
 
+test('the target picker lists groups from the group list and the server filters the tasks by the chosen group', async context => {
+  const groups = [{ id: 'origin', displayName: 'Origin' }, { id: 'telegram:recent', displayName: '最近的群' }, { id: 'telegram:group-x', displayName: '项目 X 群' }];
+  const inGroup = task({ id: 'x-1', name: 'X task', target: { kind: 'group', sessionGroup: 'telegram:group-x', componentName: 'telegram', displayName: '项目 X 群' } });
+  const h = harness(context, path => {
+    const url = new URL(path, 'http://fixture.invalid');
+    if (url.pathname === '/api/groups') {
+      const q = url.searchParams.get('q')?.toLowerCase() ?? '';
+      return { items: groups.filter(group => group.displayName.toLowerCase().includes(q)).slice(0, Number(url.searchParams.get('limit'))), nextCursor: null };
+    }
+    return page(url.searchParams.get('target') === 'telegram:group-x' ? [inGroup] : [task()]);
+  });
+  await tick();
+  const picker = allNodes(h.root).find(node => node.tagName === 'INPUT' && node.parentNode?.classList.contains('wb-sched-picker'));
+  const options = () => allNodes(h.root).filter(node => node.classList.contains('wb-sched-picker-item')).map(node => node.textContent);
+  const groupReads = () => h.calls.filter(call => call.path.startsWith('/api/groups')).map(call => call.path);
+  picker.dispatch('focus'); await tick();
+  assert.deepEqual([groupReads(), options()], [[], []], 'focus alone neither reads groups nor opens the choices');
+  picker.dispatch('click'); await tick();
+  assert.deepEqual(groupReads(), ['/api/groups?limit=8'], 'an empty search lists the most recently active groups');
+  assert.deepEqual(options(), ['全部目标组', 'Origin', '最近的群', '项目 X 群']);
+  picker.value = '项目 X'; picker.dispatch('input');
+  await new Promise(resolve => setTimeout(resolve, 350)); await tick();
+  assert.equal(groupReads().at(-1), '/api/groups?limit=8&q=%E9%A1%B9%E7%9B%AE+X');
+  assert.deepEqual(options(), ['全部目标组', '项目 X 群']);
+  allNodes(h.root).find(node => node.classList.contains('wb-sched-picker-item') && node.textContent === '项目 X 群').dispatch('click');
+  await tick();
+  assert.equal(h.calls.filter(call => call.path.startsWith('/api/schedules')).at(-1).path, '/api/schedules?target=telegram%3Agroup-x');
+  assert.deepEqual([listRows(h).length, picker.value, options()], [1, '项目 X 群', []]);
+  // A poll redraws the page around the same field; "All target groups" drops the filter again.
+  await h.poll(); await tick();
+  assert.equal(allNodes(h.root).find(node => node.tagName === 'INPUT' && node.parentNode?.classList.contains('wb-sched-picker')), picker);
+  assert.ok(h.calls.at(-1).path.includes('target=telegram%3Agroup-x'), 'the poll keeps the chosen group');
+  picker.dispatch('click'); await tick();
+  allNodes(h.root).find(node => node.classList.contains('wb-sched-picker-item') && node.textContent === '全部目标组').dispatch('click');
+  await tick();
+  assert.equal(h.calls.filter(call => call.path.startsWith('/api/schedules')).at(-1).path, '/api/schedules');
+  assert.equal(picker.value, '');
+});
+
 test('server search results are shown as returned, without filtering the loaded rows again', async context => {
   const match = task({ prompt: 'Only the summary is sent.', promptTruncated: true });
   const h = harness(context, path => {
@@ -688,7 +728,7 @@ test('server search results are shown as returned, without filtering the loaded 
     return page(query.get('q') === 'tail phrase' ? [match] : [task()]);
   });
   await tick();
-  const search = allNodes(h.root).find(node => node.type === 'search');
+  const search = taskSearch(h);
   search.value = 'tail phrase'; search.dispatch('search');
   await tick();
   assert.ok(h.calls.some(call => call.path.includes('q=tail+phrase')));
@@ -804,7 +844,7 @@ test('all search pages combine active and completed matches without repeating ac
     return { ...page([active, ...completed.slice(start, start + 30)]), timelineTasks: [active], nextCursor: 'next-completed' };
   });
   await tick();
-  const search = allNodes(h.root).find(node => node.type === 'search');
+  const search = taskSearch(h);
   search.value = 'match'; search.dispatch('change'); await tick();
   assert.equal(listRows(h).length, 31);
   assert.match(listRows(h)[0].textContent, /Active match/);

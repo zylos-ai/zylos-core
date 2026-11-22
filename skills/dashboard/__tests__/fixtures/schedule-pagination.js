@@ -50,3 +50,46 @@ export function listOrder(rows) {
   const key = row => SECTION[row.status] === 0 ? row.nextRunAt : -row.updatedAt;
   return rows.slice().sort((a, b) => SECTION[a.status] - SECTION[b.status] || key(a) - key(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
+
+/**
+ * Groups for the target-group picker, newest activity first after Origin, as GET /api/groups lists them, and the
+ * snapshot rows the schedule list resolves targets with. `telegram:group-x` is the one the tasks below run in.
+ */
+export const TARGET_GROUP = { id: 'telegram:group-x', displayName: '项目 X 群' };
+export function pickerGroups(now) {
+  const recent = Array.from({ length: 10 }, (_, i) => ({ id: `telegram:recent-${i + 1}`, displayName: `最近活动群 ${i + 1}` }));
+  const all = [{ id: 'origin', displayName: 'Origin' }, ...recent, TARGET_GROUP];
+  return all.map((group, index) => ({ ...group, channel: group.id === 'origin' ? null : 'telegram',
+    lastActivityAt: new Date((now - index * 600) * 1000).toISOString() }));
+}
+export const pickerSnapshotRows = groups => groups.filter(group => group.id !== 'origin')
+  .map(group => ({ sessionGroup: group.id, c4: { componentName: 'telegram' } }));
+
+/** GET /api/groups over `groups`: name or ID search, latest activity first, the first `limit` rows. */
+export function pickerGroupPage(groups, url) {
+  const q = (url.searchParams.get('q') ?? '').toLowerCase(), limit = Number(url.searchParams.get('limit') ?? 50);
+  const items = groups.filter(group => !q || group.id.toLowerCase().includes(q) || group.displayName.toLowerCase().includes(q));
+  return { readAt: new Date().toISOString(), listKnown: true, items: items.slice(0, limit), nextCursor: null };
+}
+
+/**
+ * Brings the list to 205 tasks: 30 more completed tasks, then the 55 of `TARGET_GROUP`, all older, so in the
+ * list order every task of the group comes after the first three pages.
+ */
+export function populateTargetGroupTasks(db, fixture) {
+  const insert = db.prepare(`INSERT INTO tasks
+    (id, name, prompt, type, next_run_at, priority, status, require_idle, miss_threshold, created_at, updated_at,
+     session_component, session_group_name)
+    VALUES (?, ?, ?, 'one-time', ?, 3, 'completed', 0, 300, ?, ?, ?, ?)`);
+  const rows = [];
+  const oldest = Math.min(...fixture.rows.map(row => row.updatedAt));
+  const add = (id, name, group) => {
+    const row = { id, name, status: 'completed', nextRunAt: fixture.now, updatedAt: oldest - 1 - rows.length };
+    insert.run(id, name, '汇总进展。', row.nextRunAt, fixture.now - 20 * 86400, row.updatedAt,
+      group ? 'telegram' : null, group ? group.slice('telegram:'.length) : null);
+    rows.push({ ...row, group });
+  };
+  for (let i = 0; i < 30; i++) add(`filler-${String(i).padStart(2, '0')}`, `其他已完成任务 ${i + 1}`, null);
+  for (let i = 0; i < 55; i++) add(`group-x-${String(i).padStart(2, '0')}`, `X 组任务 ${String(i + 1).padStart(2, '0')}`, TARGET_GROUP.id);
+  return rows;
+}

@@ -714,6 +714,16 @@ main:has(> #tab-schedule.active) { padding: 0 0 var(--space-xl); }
 .wb-sched-filters { position: sticky; top: var(--wb-header-h); z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--wb-line); background: var(--bg); }
 .wb-sched-filters .wb-search { height: var(--wb-h); }
 .wb-sched-filters .wb-search input { width: 170px; font-size: 12.5px; }
+.wb-sched-picker { position: relative; flex: 0 0 200px; min-width: 0; }
+.wb-sched-picker .wb-input { width: 100%; height: var(--wb-h); }
+.wb-sched-picker-list { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: max(100%, 260px); max-height: 340px; overflow: auto; padding: 4px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); box-shadow: 0 8px 24px rgba(0, 0, 0, .12); }
+.wb-sched-picker-list[hidden] { display: none; }
+.wb-sched-picker-list > p { margin: 0; padding: 6px 8px; }
+.wb-sched-picker-item { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--wb-r); background: transparent; color: var(--text); font-size: 12.5px; text-align: left; cursor: pointer; }
+.wb-sched-picker-item:hover, .wb-sched-picker-item:focus-visible { background: var(--wb-hover); }
+.wb-sched-picker-item.active { background: var(--wb-accent-soft); }
+.wb-sched-picker-item > span:not(.wb-mono) { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-sched-picker-item .wb-mono { flex: 1 1 0; min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .wb-sched-new { margin-left: auto; height: var(--wb-h); }
 .wb-sched-table { --wb-sched-cols: minmax(220px, 2.3fr) minmax(120px, 1.3fr) 118px 160px minmax(110px, 1fr) minmax(72px, max-content); }
 .wb-sched-th, .wb-sched-row, .wb-sched-select { display: grid; grid-template-columns: var(--wb-sched-cols); align-items: center; column-gap: 16px; }
@@ -841,7 +851,8 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
   /* The five filters share the full width; a thin scrollbar remains only if counts grow past it. */
   .wb-sched-filters .wb-seg { display: flex; flex: 1 1 100%; max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
   .wb-sched-filters .wb-seg button { flex: 1 0 auto; justify-content: center; padding: 0 6px; font-size: 12px; }
-  .wb-sched-filters .wb-search { flex: 1 1 140px; width: auto; }
+  .wb-sched-picker, .wb-sched-filters .wb-search { flex: 1 1 140px; width: auto; }
+  .wb-sched-picker-item { min-height: 40px; }
   .wb-sched-filters .wb-search input { width: 100%; }
   .wb-sched-new { margin-left: 0; flex: 1 1 100%; justify-content: center; }
   .wb-sched-th { display: none; }

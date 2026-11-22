@@ -699,6 +699,7 @@
   "wb.schedule.day.today": "今天 {time}",
   "wb.schedule.day.tomorrow": "明天 {time}",
   "wb.schedule.day.yesterday": "昨天 {time}",
+  "wb.schedule.filter.allTargets": "全部目标组",
   "wb.schedule.filter.label": "按状态筛选",
   "wb.schedule.col.task": "任务",
   "wb.schedule.col.rule": "时间规则",
