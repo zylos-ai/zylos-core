@@ -490,17 +490,24 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     writeMode('multi');
     const db = new Database(path.join(root, 'comm-bridge/c4.db'));
     const text = n => new Date(clock - 2000 + n).toISOString();
+    const receivedSecond = Math.floor((clock - 5000) / 1000) * 1000;
+    const originAt = new Date(receivedSecond - 1000).toISOString();
+    const workingAt = new Date(receivedSecond).toISOString();
+    const childAt = new Date(receivedSecond + 1000).toISOString();
     const groups = '/api/groups';
     const list = filter => request(groups + '?' + filter);
     const seed = db.prepare("INSERT INTO conversations(timestamp,direction,channel,endpoint_id,content,session_group,status) VALUES(?,?,?,'fixture','fixture message',?,'delivered')");
     try {
-      seed.run(text(1), 'in', 'telegram', 'telegram:working');
-      seed.run(text(2), 'in', 'telegram', 'telegram:child');
+      seed.run(originAt, 'in', 'telegram', 'origin');
+      seed.run(workingAt.slice(0, 19).replace('T', ' '), 'in', 'telegram', 'telegram:working');
+      seed.run(childAt, 'in', 'telegram', 'telegram:child');
       seed.run(text(3), 'out', 'telegram', 'telegram:working');
       seed.run(text(4), 'in', 'control', 'telegram:working');
       const before = await list('side=running&limit=3&include=total');
       assert.deepEqual(before.items.slice(0, 3).map(row => row.id), ['origin', 'telegram:child', 'telegram:working']);
-      assert.equal(before.items[2].lastActivityAt, text(1));
+      assert.equal(before.items[0].lastActivityAt, originAt);
+      assert.equal(before.items[1].lastActivityAt, childAt);
+      assert.equal(before.items[2].lastActivityAt, workingAt);
       const scheduledAt = text(5);
       seed.run(scheduledAt, 'in', 'system', 'telegram:working'); clock += 3000;
       const after = await list('side=running&limit=3');

@@ -2164,8 +2164,12 @@ test('an inbound message updates the group in place until the new-message notice
   });
   const a = row('a', first, 'Previous newest'), c = row('c', previous, 'Previous message');
   let items = [a, c];
-  const h = workbenchHarness(context, (path, fallback) =>
-    path === '/api/groups?side=running' ? { items, nextCursor: null, listKnown: true } : fallback(path), {
+  let groupDetail = { ...c, state: { kind: 'offline' } };
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (path === '/api/groups?side=running') return { items, nextCursor: null, listKnown: true };
+    if (path === '/api/groups/c') return groupDetail;
+    return fallback(path);
+  }, {
     t: (key, vars) => key === 'wb.groups.newMessages' ? `${vars.n} groups have new messages`
       : key === 'wb.groups.newMessagesOne' ? `${vars.n} group has new messages`
       : key === 'wb.board.lastReceived' ? vars.text : key,
@@ -2188,6 +2192,25 @@ test('an inbound message updates the group in place until the new-message notice
   notice.dispatch('click'); await wbTick(); await wbTick();
   assert.deepEqual(order(), ['c', 'a']);
   assert.equal(notice.hidden, true);
+
+  const newA = row('a', '2026-04-10T12:04:00.000Z', 'Newer group message');
+  items = [newA, items[0]];
+  await h.poll(5000); await wbTick();
+  assert.deepEqual(order(), ['c', 'a']);
+  assert.equal(notice.hidden, false);
+  h.navigate(false);
+  h.navigate(true);
+  await wbTick(); await wbTick();
+  assert.deepEqual(order(), ['a', 'c']);
+  assert.equal(notice.hidden, true);
+
+  items = [newA];
+  await h.poll(5000); await wbTick();
+  assert.deepEqual(order(), ['a', 'c']);
+  assert.ok(board.children[1].textContent.includes('wb.state.offline'));
+  groupDetail = { ok: false, status: 404, json: async () => ({ error: { code: 'not_found' } }) };
+  await h.poll(5000); await wbTick();
+  assert.deepEqual(order(), ['a']);
 });
 
 test('running groups request the next page only on demand and recover a stale cursor', async context => {

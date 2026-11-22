@@ -14,4 +14,8 @@ test('isNewerVersion only accepts strictly newer versions', () => {
   assert.equal(isNewerVersion('2.1.148', '2.1.150'), false);
   assert.equal(isNewerVersion('2.1.150', '2.1.150'), false);
   assert.equal(compareVersions('0.5.10', '0.5.2'), 1);
+  const releaseOrder = { prerelease: true };
+  assert.equal(compareVersions('1.0.0-beta.9', '1.0.0-beta.16', releaseOrder), -1);
+  assert.equal(compareVersions('1.0.0', '1.0.0-beta.16', releaseOrder), 1);
+  assert.equal(compareVersions('1.0.0-beta.15', '1.0.0-beta.16', releaseOrder), -1);
 });

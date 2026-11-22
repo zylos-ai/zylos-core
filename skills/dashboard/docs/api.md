@@ -486,7 +486,7 @@ Example: `POST /api/groups/telegram%3Aexample/actions/restart` with `{"runId":"o
 
 Returns `requestId:string`, `completion:string` (supervisor lookup result, or `unknown`), and `group:{id:string,runId:string|null,sessionId:string|null,ready:boolean,state:object}`. This works for any group, including Origin; group identity and current state are observations, not proof that a particular restart caused them.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_REQUEST_ID`; 404 `GROUP_NOT_FOUND`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; common read errors.
+**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_REQUEST_ID`; 404 `not_found` for groups and `GROUP_NOT_FOUND` for Origin; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; common read errors.
 
 Example: `GET /api/groups/origin/restarts/00000000-0000-4000-8000-000000000001`.
 
