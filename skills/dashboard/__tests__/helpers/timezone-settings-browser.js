@@ -9,7 +9,7 @@ import { workbenchAnswer } from '../fixtures/workbench-browser-api.js';
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const serviceList = [{ name: 'scheduler', status: 'online' }, { name: 'activity-monitor', status: 'online' }, { name: 'c4-dispatcher', status: 'online' }];
 async function startPage(sandbox) {
-  const writes = [], restarts = [], reads = [], zones = new Map(), now = Date.now();
+  const writes = [], restarts = [], reads = [], fleetReads = [], zones = new Map(), now = Date.now();
   const state = { initialTimezone: 'Asia/Calcutta', partialRestart: false, unavailableAfterProgress: false, rejectTimezone: false };
   const server = http.createServer(async (req, res) => {
     try {
@@ -39,6 +39,13 @@ async function startPage(sandbox) {
           sendJson(res, 200, { ok: false, restarted: ['activity-monitor'], failed: [{ name: 'scheduler', error: 'restart_failed' }], restart_services: [serviceList[0]] });
         } else sendJson(res, 200, { ok: true, restarted: body.services, failed: [], restart_services: [] }); return;
       }
+      if (route === '/api/fleet' && url.searchParams.has('name')) {
+        const name = url.searchParams.get('name');
+        fleetReads.push(original.pathname + original.search);
+        const items = ['admin', 'reader'].includes(name) ? [{ name, access: name === 'admin' ? 'admin' : 'read' }] : [];
+        sendJson(res, 200, { items, nextCursor: null, summary: { count: 20 }, updated_at: new Date(now).toISOString() });
+        return;
+      }
       if (route === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (route.startsWith('/api/')) {
         let value = req.method === 'GET' ? workbenchAnswer(url, now) : undefined;
@@ -55,7 +62,7 @@ async function startPage(sandbox) {
       sendJson(res, 404, { error: 'not_found' });
     } catch (error) { sendJson(res, 500, { error: error.message }); }
   });
-  return { base: await sandbox.startHttp(server), writes, restarts, reads, state };
+  return { base: await sandbox.startHttp(server), writes, restarts, reads, fleetReads, state };
 }
 
 function measure() {
@@ -94,6 +101,7 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     const page = await context.newPage(), errors = [];
     page.setDefaultTimeout(8000);
     page.on('pageerror', error => { if (errors.length < 4) errors.push(error.message); });
+    const beforeFleet = api.fleetReads.length;
     await page.goto(api.base + prefix + '/settings');
     if (prefix && width === 390) {
       const list = page.locator('.wb-set-nav');
@@ -104,6 +112,7 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     await page.locator('[data-settings-section="machine"]').click();
     await page.locator('#settings-timezone-value').waitFor({ state: 'visible' });
     await page.waitForFunction(() => document.querySelector('#settings-timezone-value').value !== '');
+    if (prefix) assert.deepEqual(api.fleetReads.slice(beforeFleet), [`/api/fleet?name=${prefix.split('/').at(-1)}&limit=1`]);
     await page.locator('#settings-timezone').scrollIntoViewIfNeeded();
     assert.equal(await page.locator('#settings-timezone h4 .wb-ico-clock[aria-hidden="true"]').count(), 1);
     const layout = await page.evaluate(measure);

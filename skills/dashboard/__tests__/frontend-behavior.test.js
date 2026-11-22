@@ -3,13 +3,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
-import { afterSentence, buildAgentFleetView, fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+import { afterSentence, buildAgentFleetView as buildAgentFleetViewPage, fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderAgentFleetHtml as renderAgentFleetHtmlPage } from '../public/js/agent-fleet.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
 import { validAgentSize, validObserverSize } from '../public/js/observer-size.js';
 import { agentColor } from '../src/lib/agent-color.js';
 import { markCurrentTab, tabForPath } from '../public/js/wb/view-mode.js';
 import { createRemoteAccess } from '../public/js/wb/remote-access.js';
 import { observerPageUsable, observerRecoveryReason, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide } from '../public/js/wb/observer-page.js';
+import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
+
+const buildAgentFleetView = (payload, options) => buildAgentFleetViewPage(fleetPageFixture(payload), options);
+const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
 
 function deferred() {
   let resolve;
@@ -144,6 +148,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     connectSse() {},
     transitionView() {},
     refreshFleet: async () => {},
+    refreshViewedMachineAccess: async () => {},
     scheduleFleetFallback() {},
     clearFleetFallback() {},
     syncFleetSubscription() {},
@@ -312,13 +317,6 @@ function fleetFixture() {
   };
 }
 
-test('Fleet returns to the last available page when machines are removed', () => {
-  const fleet = { agents: Array.from({ length: 8 }, (_, i) => ({ name: `machine-${i}`, state: 'IDLE' })) };
-  const view = buildAgentFleetView(fleet, { page: 2 });
-  assert.equal(view.page, 1);
-  assert.deepEqual(view.pageTiles.map(tile => tile.name), fleet.agents.map(agent => agent.name));
-});
-
 test('Machines page renders one card per machine with state, quota, cost and host, problems first', () => {
   const view = buildAgentFleetView(fleetFixture(), { basePath: '/dash' });
   const html = renderAgentFleetHtml(fleetFixture(), { basePath: '/dash' });
@@ -472,10 +470,10 @@ test('multi-agent vs single mode landing view is gated on fleet size', () => {
   // multiAgent is true when the fleet (self + at least one external) has >= 2
   // agents — but never in remote-proxy context, where the remote's own fleet
   // config must not hijack the landing view.
-  assert.match(app, /function hasFleetWall\(fleet\)/);
-  assert.match(app, /return !REMOTE_AGENT && \(fleet\?\.agents\?\.length \|\| 0\) >= 2;/);
-  assert.match(app, /function syncLiveFleetMode\(fleet\)/);
-  assert.match(app, /const modeChanged = state\.fleetModeInitialized \? syncLiveFleetMode\(payload\) : false;/);
+  assert.match(app, /function hasFleetWall\(summary\)/);
+  assert.match(app, /return !REMOTE_AGENT && \(summary\?\.count \?\? 0\) >= 2;/);
+  assert.match(app, /function syncLiveFleetMode\(summary\)/);
+  assert.match(app, /const modeChanged = state\.fleetModeInitialized \? syncLiveFleetMode\(payload\.summary\) : false;/);
   // Remote context is derived from the proxy-injected base path.
   assert.match(app, /BASE_PATH\.match\(/);
   // Multi-agent mode lands on Agent Fleet; single mode shows the agent dashboard,
@@ -662,12 +660,12 @@ test('fleet wall pauses re-render on hover so native tooltips can appear', () =>
   // Fleet payload applications still go through the hover gate after the sound
   // tracker and live view-mode reconciliation; a 0<->1 remote transition is
   // allowed to pierce hover pause so the page changes mode immediately.
-  assert.match(app, /function setFleet\(payload\) \{\n(.*\n)*?  fleetSounds\?\.handleFleet\(payload\);\n  state\.fleet = payload;\n  const modeChanged = state\.fleetModeInitialized \? syncLiveFleetMode\(payload\) : false;\n  if \(state\.fleetHoverPaused && !modeChanged\) \{/);
+  assert.match(app, /state\.fleetRenderPending = hovering && !modeChanged && !force;/);
   assert.doesNotMatch(app, /state\.fleet = data;\n\s*renderFleet\(\)/);
-  // ...armed by pointer enter/leave on the grid root, flushing pending data on leave.
-  assert.match(app, /addEventListener\('mouseenter', \(\) => \{ state\.fleetHoverPaused = true; \}\)/);
+  // Read the actual hover state and flush the pending page when the pointer leaves.
+  assert.match(app, /matches\(':hover'\)/);
   assert.match(app, /addEventListener\('mouseleave'/);
-  assert.match(app, /if \(pending\) setFleet\(pending\)/);
+  assert.match(app, /if \(state\.fleetRenderPending\) renderFleet\(\)/);
 });
 
 test('fleet summary shows state dots with dimmed zeros and aggregated cost tiers', () => {
@@ -717,7 +715,7 @@ test('in-page remote viewing rewrites agent data paths through the fleet proxy',
   assert.match(app, /const r = await draftFetch\(api\(agentPath\(path\)\), \{ cache: 'no-store' \}\);/);
   // Only /api/* paths are re-rooted; /api/fleet (our own wall) and non-API
   // paths like /login always stay on the local dashboard root.
-  assert.match(app, /if \(!path\.startsWith\('\/api\/'\) \|\| path === '\/api\/fleet'\) return path;/);
+  assert.match(app, /if \(!path\.startsWith\('\/api\/'\) \|\| path\.startsWith\('\/api\/fleet\?'\)\) return path;/);
   assert.match(app, /return `\$\{remotePrefix\(\)\}\$\{path\}`;/);
   // Remote prefix URL-encodes the agent name.
   assert.match(app, /`\/fleet\/\$\{encodeURIComponent\(state\.remoteAgent\)\}`/);
@@ -729,7 +727,7 @@ test('SSE stream follows the viewed agent and remote fleet events never clobber 
   // Reconnect probe targets the same agent the stream does.
   assert.match(app, /await fetch\(api\(agentPath\('\/api\/instance'\)\), \{ cache: 'no-store' \}\);/);
   // A remote agent's stream describes its own fleet — drop those events.
-  assert.match(app, /if \(name === 'fleet' && state\.remoteAgent\) return;/);
+  assert.match(app, /if \(name === 'fleet' && \(state\.remoteAgent \|\| REMOTE_AGENT\)\) return;/);
 });
 
 test('entering and exiting a remote agent resets per-agent state and resubscribes SSE', () => {
@@ -739,7 +737,7 @@ test('entering and exiting a remote agent resets per-agent state and resubscribe
   for (const fn of [enter, exit]) {
     assert.match(fn, /resetAgentData\(\);/);
     assert.match(fn, /connectSse\(\);/);
-    assert.match(fn, /return Promise\.allSettled\(\[refreshAll\(\), refreshObserverStatus/);
+    assert.match(fn, /return Promise\.allSettled\(\[(?:refreshViewedMachineAccess\(name\), )?refreshAll\(\), refreshObserverStatus/);
   }
   assert.match(enter, /showAgentDetail\(\{ navigation: false \}\);/);
   assert.match(exit, /showFleetView\(\{ navigation: false \}\);/);
@@ -782,7 +780,7 @@ test('remote Actions/Settings are gated by access and routed through the viewed 
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
   const version = fs.readFileSync(new URL('../public/js/wb/settings-version.js', import.meta.url), 'utf8');
   // Which access the viewed machine has is decided by viewedAccess (wb-observer-page tests); the app hands it what it knows.
-  assert.match(app, /viewedAccess\(\{ remoteAgent: state\.remoteAgent, fleetAgents: state\.fleet\?\.agents \?\? \[\], pageRemoteAgent: REMOTE_AGENT, pageRemoteAccess: REMOTE_ACCESS \}\)/);
+  assert.match(app, /viewedAccess\(\{ remoteAgent: state\.remoteAgent, remoteAccess: state\.remoteMachineAccess, pageRemoteAgent: REMOTE_AGENT \}\)/);
   assert.match(app, /const REMOTE_ACCESS = document\.documentElement\.dataset\.remoteAccess === 'admin' \? 'admin' : 'read';/);
   assert.match(version, /upgrade\.disabled = readOnly/);
   assert.match(version, /remote\.actions_read_only_tooltip/);
@@ -1285,10 +1283,10 @@ test('Observer view transitions invalidate pending popstate across fleet entry p
         target: { closest: selector => selector === '.agent-open' ? { dataset: { self: 'true' } } : null }, preventDefault() {}
       });
       if (route === 'back-local') h.context.openFleetFromIcon();
-      const fleet = { agents: [{ name: 'self' }, { name: 'alpha' }] };
+      const fleet = { summary: { count: 2 } };
       if (route === 'live-mode') {
         h.context.state.multiAgent = false;
-        h.context.syncLiveFleetMode(fleet);
+        h.context.syncLiveFleetMode(fleet.summary);
       }
       if (route.startsWith('apply-')) {
         h.context.prefersReducedMotion = () => route === 'apply-reduced';
@@ -1518,10 +1516,10 @@ test('fleet management entry stays local and its controls are retained in settin
 
   // Fleet management configures the local consumer even while viewing a remote
   // agent in-page, so these calls intentionally avoid agentPath().
-  assert.match(app, /fetch\(api\('\/api\/fleet\/agents'\), \{ cache: 'no-store' \}\)/);
+  assert.match(app, /draftFetch\(api\(`\/api\/fleet\/agents\?\$\{settingsListParams\(page\)\}`\)/);
   assert.match(app, /fetch\(api\('\/api\/fleet\/agents\/test'\), \{/);
   assert.match(app, /fetch\(api\('\/api\/instance\/name'\), \{/);
-  assert.match(app, /fetch\(api\(`\/api\/keys\?\$\{params\}`\), \{ cache: 'no-store' \}\)/);
+  assert.match(app, /fetch\(api\(`\/api\/keys\?\$\{settingsListParams\(page\)\}`\), \{ cache: 'no-store' \}\)/);
   assert.match(app, /fetch\(api\('\/api\/keys'\), \{/);
   // Which request each key action makes is decided by keyActionRequest (wb-settings-wiring tests); the app sends it as built,
   // to this machine's own keys (no agentPath).
@@ -1536,9 +1534,9 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.doesNotMatch(render, /fleetManageModal\.remove\(\)/);
   assert.match(app, /settingsModal = root; fleetManageModal = root; actionsModal = settingsPage\.actionsScope/);
   assert.match(app, /composeSettings\(root, \{ settings: oldSettings, fleet: oldFleet, actions: oldActions/);
-  assert.match(app, /function renderFleetManage\(data, draft = null\)/);
-  assert.match(app, /if \(!draft\) fleetManageModal\.querySelector\('#fleet-self-name'\)\.value = selfName;/);
-  assert.match(app, /renderFleetManage\(value\)/);
+  assert.match(app, /function renderFleetManage\(agents, data = null\)/);
+  assert.match(app, /if \(fleetManageModal\.querySelector\('#fleet-self-edit'\)\.hidden\) fleetManageModal\.querySelector\('#fleet-self-name'\)\.value = selfName;/);
+  assert.match(app, /render: renderFleetManage/);
   assert.match(app, /function setFleetAddBusy\(isBusy\)/);
   assert.match(app, /fleetManageModal\?\.querySelector\('#fleet-test'\)\?\.toggleAttribute\('disabled', isBusy\);/);
   assert.match(app, /function setApiKeyBusy\(isBusy\)/);

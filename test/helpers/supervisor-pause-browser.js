@@ -1,3 +1,4 @@
+import { fleetPageFixture } from '../../skills/dashboard/__tests__/helpers/fleet-page-fixture.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -75,8 +76,8 @@ export async function runSupervisorPauseBrowser(sandbox) {
           const record = (name, self, supervisorPaused) => stateToFleetRecord({ name },
             { state: 'IDLE', supervisor_paused: supervisorPaused }, { self, access: 'admin', nowMs: now });
           // Local live snapshot wins over a stale healthy Fleet record; remote state comes from Fleet.
-          return route.fulfill({ json: { agents: [record('browser-case', true, false),
-            record('remote-case', false, paused)], updated_at: new Date(now).toISOString() } });
+          return route.fulfill({ json: fleetPageFixture({ agents: [record('browser-case', true, false),
+            record('remote-case', false, paused)], updated_at: new Date(now).toISOString() }, url.search) });
         }
         if (url.pathname === '/api/instance') {
           const snapshot = workbenchAnswer(url, now);

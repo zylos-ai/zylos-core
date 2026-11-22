@@ -226,8 +226,8 @@ test('first cue after unmute is not dropped by a suspended context', async (t) =
   const sounds = createFleetSounds({});
   assert.equal(sounds.isMuted(), false);
 
-  sounds.handleFleet({ agents: [{ name: 'a', state: 'IDLE' }] }); // seed
-  sounds.handleFleet({ agents: [{ name: 'a', state: 'BUSY' }] }); // start cue, ctx suspended
+  sounds.handleFleet({ items: [{ name: 'a', state: 'IDLE' }] }); // seed
+  sounds.handleFleet({ items: [{ name: 'a', state: 'BUSY' }] }); // start cue, ctx suspended
   await flushMicrotasks();
   assert.equal(ctx.oscillatorStarts, 4, 'start cue plays two strikes (2 oscillators each) after resume() settles');
 });
@@ -237,12 +237,12 @@ test('start cue has two notes and finish cue has three notes', async (t) => {
   const { createFleetSounds } = await import('../public/js/fleet-sounds.js');
   const sounds = createFleetSounds({ mediaDevices: null, doc: null });
 
-  sounds.handleFleet({ agents: [{ name: 'a', state: 'IDLE' }] });
-  sounds.handleFleet({ agents: [{ name: 'a', state: 'BUSY' }] });
+  sounds.handleFleet({ items: [{ name: 'a', state: 'IDLE' }] });
+  sounds.handleFleet({ items: [{ name: 'a', state: 'BUSY' }] });
   await flushMicrotasks();
   assert.equal(contexts[0].oscillatorStarts, 4, 'start cue is two strikes (2 oscillators each)');
 
-  sounds.handleFleet({ agents: [{ name: 'a', state: 'IDLE' }] });
+  sounds.handleFleet({ items: [{ name: 'a', state: 'IDLE' }] });
   await flushMicrotasks();
   assert.equal(contexts[0].oscillatorStarts, 10, 'finish cue adds three strikes (2 oscillators each)');
 });
@@ -277,8 +277,8 @@ test('new contexts are pinned to the default sink when setSinkId exists', async 
   const { createFleetSounds } = await import('../public/js/fleet-sounds.js');
   const sounds = createFleetSounds({ mediaDevices: null, doc: null });
 
-  sounds.handleFleet({ agents: [{ name: 'a', state: 'IDLE' }] });
-  sounds.handleFleet({ agents: [{ name: 'a', state: 'BUSY' }] });
+  sounds.handleFleet({ items: [{ name: 'a', state: 'IDLE' }] });
+  sounds.handleFleet({ items: [{ name: 'a', state: 'BUSY' }] });
   assert.equal(contexts.length, 1);
   assert.deepEqual(contexts[0].sinkIds, ['']);
 });
@@ -289,15 +289,15 @@ test('devicechange closes the context and rebinds to the new default', async (t)
   const { createFleetSounds } = await import('../public/js/fleet-sounds.js');
   const sounds = createFleetSounds({ mediaDevices: devices, doc: null });
 
-  sounds.handleFleet({ agents: [{ name: 'a', state: 'IDLE' }] });
-  sounds.handleFleet({ agents: [{ name: 'a', state: 'BUSY' }] }); // creates ctx 1
+  sounds.handleFleet({ items: [{ name: 'a', state: 'IDLE' }] });
+  sounds.handleFleet({ items: [{ name: 'a', state: 'BUSY' }] }); // creates ctx 1
   assert.equal(contexts.length, 1);
 
   devices.dispatch('devicechange');
   assert.equal(contexts[0].closed, true, 'stale context is closed');
   assert.equal(contexts.length, 2, 'unmuted page rebinds eagerly');
 
-  sounds.handleFleet({ agents: [{ name: 'a', state: 'IDLE' }] }); // finish cue
+  sounds.handleFleet({ items: [{ name: 'a', state: 'IDLE' }] }); // finish cue
   await flushMicrotasks();
   assert.equal(contexts[1].oscillatorStarts > 0, true, 'cue plays on the fresh context');
   assert.equal(contexts[0].oscillatorStarts, 0, 'nothing plays on the closed context');
@@ -345,8 +345,8 @@ test('mute cancels fleet cues parked behind a pending resume()', async (t) => {
   const button = fakeButton();
   const sounds = createFleetSounds({ button, mediaDevices: null, doc: null });
 
-  sounds.handleFleet({ agents: [{ name: 'a', state: 'IDLE' }] }); // seed
-  sounds.handleFleet({ agents: [{ name: 'a', state: 'BUSY' }] }); // cue queued, ctx suspended
+  sounds.handleFleet({ items: [{ name: 'a', state: 'IDLE' }] }); // seed
+  sounds.handleFleet({ items: [{ name: 'a', state: 'BUSY' }] }); // cue queued, ctx suspended
   button.click(); // mute before resume() settles
   assert.equal(sounds.isMuted(), true);
 

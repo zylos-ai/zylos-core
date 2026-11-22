@@ -989,7 +989,7 @@
   "wb.settings.fleet.addHint": "Name: 1–32 letters, digits, underscores, dots or hyphens. The key is created on the other machine under its own API keys.",
   "wb.settings.fleet.auth": "Authentication failed: the key was revoked or mistyped",
   "wb.settings.fleet.count": "{count} in total",
-  "wb.settings.fleet.search": "Search names or addresses",
+  "wb.settings.fleet.search": "Search machine names",
   "wb.settings.fleet.down": "Unreachable",
   "wb.settings.fleet.keyPlaceholder": "API key they gave you",
   "wb.settings.fleet.pending": "Waiting for the first probe",

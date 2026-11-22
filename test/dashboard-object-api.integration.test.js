@@ -692,8 +692,8 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       await request('/api/groups?side=offline', { expected: 503 });
       await request('/api/groups?q=fixture', { expected: 503 });
       const fleet = await request('/api/fleet');
-      assert.ok(fleet.agents.some(agent => agent.name === 'remote-fixture'), 'other Fleet records survive local catalog failure');
-      assert.equal(fleet.agents.find(agent => agent.self).group_summary.listKnown, false);
+      assert.ok(fleet.items.some(agent => agent.name === 'remote-fixture'), 'other Fleet records survive local catalog failure');
+      assert.equal(fleet.items.find(agent => agent.self).group_summary.listKnown, false);
       const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 3000);
       const response = await fetch(`${origin}/api/stream`, { headers: { Cookie: cookie }, signal: controller.signal });
       assert.equal(response.status, 200);
@@ -745,7 +745,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     let row = running.items.find(row => row.id === 'origin');
     assert.ok(row.flags.noResponse.since); assert.equal(counts.running.flags.noResponse, 1);
     const fleet = await request('/api/fleet');
-    const summary = fleet.agents.find(agent => agent.self).group_summary;
+    const summary = fleet.items.find(agent => agent.self).group_summary;
     assert.equal(summary.noResponse.count, counts.running.flags.noResponse);
     assert.ok(summary.problems.find(row => row.reason === 'no_response').durationSeconds >= 3);
     insert('assistant_message', { agent_id: 'child' }); clock += 3000;

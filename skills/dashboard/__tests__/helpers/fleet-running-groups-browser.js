@@ -1,3 +1,4 @@
+import { fleetPageFixture } from './fleet-page-fixture.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -45,7 +46,7 @@ const CASES = [
 // Keep the pre-existing workbench snapshot deliberately smaller than the summary (three old rows versus
 // nine running groups). A card derived from that snapshot instead of /api/fleet must fail this case.
 function fixtureAnswer(url, now, scenario, fleet) {
-  if (url.pathname === '/api/fleet') return fleet;
+  if (url.pathname === '/api/fleet') return fleetPageFixture(fleet, url.search);
   const snapshot = workbenchSnapshot(now);
   snapshot.rows = snapshot.rows.map(row => {
     const issue = scenario.summary?.problems.find(item => item.sessionGroup === row.sessionGroup);

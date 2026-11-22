@@ -66,13 +66,13 @@ const state = {
   sourceUpdatedAt: null,
   pollTimer: null,
   fleetFallbackTimer: null,
-  fleetHoverPaused: false,
-  pendingFleet: null,
+  fleetRenderPending: false,
   eventSource: null,
   multiAgent: false,
   fleetViewActive: false,
   fleetModeInitialized: false,
   remoteAgent: null,
+  remoteMachineAccess: REMOTE_AGENT ? REMOTE_ACCESS : 'read',
   navigationGeneration: 0,
   observer: {
     status: null,
@@ -131,7 +131,7 @@ function remotePrefix() {
 
 function agentPath(path) {
   if (!state.remoteAgent) return path;
-  if (!path.startsWith('/api/') || path === '/api/fleet') return path;
+  if (!path.startsWith('/api/') || path.startsWith('/api/fleet?')) return path;
   return `${remotePrefix()}${path}`;
 }
 
@@ -141,7 +141,7 @@ function observerEndpoint(path) {
 
 // The machine being viewed and its key's access; read-only state and the observer page both come from here.
 function viewedMachine() {
-  return viewedAccess({ remoteAgent: state.remoteAgent, fleetAgents: state.fleet?.agents ?? [], pageRemoteAgent: REMOTE_AGENT, pageRemoteAccess: REMOTE_ACCESS });
+  return viewedAccess({ remoteAgent: state.remoteAgent, remoteAccess: state.remoteMachineAccess, pageRemoteAgent: REMOTE_AGENT });
 }
 
 const remoteAccess = createRemoteAccess({
@@ -284,20 +284,30 @@ function syncAccessControls() {
 // any agent is busy (#188) and renderFleet() rebuilds the grid's DOM. Freeze
 // rendering while the pointer is over the grid; apply the newest payload on
 // leave. Side benefit: tiles don't jump while being read.
-function setFleet(payload) {
-  // Sound cues track the data path, not the render path: they must fire even
-  // while hover-pause defers rendering. Re-applying a pending payload after
-  // mouseleave is a no-op here (the mood map is already up to date).
+function setFleet(payload, { force = false } = {}) {
   fleetSounds?.handleFleet(payload);
   state.fleet = payload;
-  const modeChanged = state.fleetModeInitialized ? syncLiveFleetMode(payload) : false;
-  if (state.fleetHoverPaused && !modeChanged) {
-    state.pendingFleet = payload;
-    return;
-  }
-  renderFleet();
-  // Settings shows each remote machine's connection state from the same poller records.
-  if (fleetManageModal?._agents) renderFleetManage({ self: { name: fleetManageModal.querySelector('#fleet-self-label').textContent }, agents: fleetManageModal._agents }, true);
+  const modeChanged = state.fleetModeInitialized ? syncLiveFleetMode(payload.summary) : false;
+  const hovering = window.matchMedia('(hover: hover)').matches && $('#agent-fleet-root')?.matches(':hover');
+  state.fleetRenderPending = hovering && !modeChanged && !force;
+  if (!state.fleetRenderPending) renderFleet();
+}
+
+let fleetAccessRequest = 0;
+async function refreshViewedMachineAccess(name) {
+  const request = ++fleetAccessRequest;
+  try {
+    const params = new URLSearchParams({ name, limit: '1' });
+    const root = PARENT_DASHBOARD_PATH ?? api('/');
+    const response = await draftFetch(`${root}api/fleet?${params}`, { cache: 'no-store' });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (request !== fleetAccessRequest || (state.remoteAgent ?? REMOTE_AGENT) !== name) return;
+    state.remoteMachineAccess = data.items[0]?.access === 'admin' ? 'admin' : 'read';
+    refreshSettingsLocks();
+    syncAccessControls();
+    renderObserverPage();
+  } catch { /* Keep the last known access. The proxy enforces authorization. */ }
 }
 
 let fleetSounds = null;
@@ -315,27 +325,29 @@ function initFleetSounds() {
 function initFleetHoverPause() {
   const root = $('#agent-fleet-root');
   if (!root) return;
-  root.addEventListener('mouseenter', () => { state.fleetHoverPaused = true; });
   root.addEventListener('mouseleave', () => {
-    state.fleetHoverPaused = false;
-    const pending = state.pendingFleet;
-    state.pendingFleet = null;
-    if (pending) setFleet(pending);
+    if (state.fleetRenderPending) renderFleet();
+    state.fleetRenderPending = false;
   });
 }
 
 const fleetLayoutStorageKey = 'zylos-dashboard-fleet-view';
 let fleetLayout = 'cards';
+const FLEET_PAGE_SIZE = 8;
 let fleetPage = 1;
+let fleetCursors = [null];
+let fleetRequest = null;
+let fleetPaging = false;
+let fleetRefreshPending = false;
+let latestFleetPush = null;
 
 function renderFleet() {
   const container = $('#agent-fleet-root');
   if (!container) return;
-  const view = renderFleetPage(container, state.fleet, {
+  renderFleetPage(container, state.fleet, {
     t, fmtAge, basePath: BASE_PATH, labels: agentFleetLabels(), self: state.fleetSelf,
     layout: fleetLayout, page: fleetPage
   });
-  fleetPage = view.page;
   $('#fleet-layout')?.setAttribute('aria-label', t('wb.fleet.layout'));
   for (const button of document.querySelectorAll('#fleet-layout button')) {
     button.setAttribute('aria-pressed', String(button.dataset.fleetLayout === fleetLayout));
@@ -1053,10 +1065,47 @@ async function refreshState() {
   renderObserverPage();
 }
 
-async function refreshFleet() {
-  const [fleet] = await Promise.all([fetchJson('/api/fleet'), state.fleetViewActive ? refreshFleetSelf() : null]);
-  setFleet(fleet);
-  return fleet;
+function refreshFleet({ self = true } = {}) {
+  if (REMOTE_AGENT) return Promise.resolve(null);
+  if (fleetPaging) return Promise.resolve(state.fleet);
+  if (!fleetRequest) {
+    const current = fleetPage;
+    fleetRequest = Promise.all([readFleetPage(current), self && state.fleetViewActive ? refreshFleetSelf() : null])
+      .then(([page]) => {
+        setFleet(page, { force: current !== fleetPage });
+        return page;
+      }).finally(() => {
+        fleetRequest = null;
+        if (fleetRefreshPending) refreshPushedFleet();
+      });
+  }
+  return fleetRequest;
+}
+
+function refreshPushedFleet() {
+  if (!shouldReceiveFleetEvents()) { fleetRefreshPending = false; return; }
+  fleetRefreshPending = Boolean(fleetPaging || fleetRequest);
+  if (!fleetRefreshPending) void refreshFleet({ self: false }).catch(() => {});
+}
+
+async function readFleetPage(target) {
+  while (true) {
+    const params = new URLSearchParams({ limit: String(FLEET_PAGE_SIZE) });
+    const cursor = fleetCursors[target - 1];
+    if (cursor) params.set('cursor', cursor);
+    try {
+      const pushAtStart = latestFleetPush;
+      const page = await requestAgentJson(`/api/fleet?${params}`);
+      if (target > 1 && page.items.length === 0) { target--; continue; }
+      fleetPage = target;
+      fleetCursors.length = target;
+      // A push that arrived during this read owns the newer fleet totals.
+      return latestFleetPush === pushAtStart ? page : { ...page, ...latestFleetPush };
+    } catch (error) {
+      if (!cursor || error.code !== 'invalid_cursor') throw error;
+      target = 1;
+    }
+  }
 }
 
 function setObserverNotice(message, status = 'idle') {
@@ -1637,7 +1686,7 @@ const chatPush = createConversationPush({
 function applySse(name, data) {
   if (!data || typeof data !== 'object') return;
   // A remote agent's stream describes its own fleet; never let it clobber ours.
-  if (name === 'fleet' && state.remoteAgent) return;
+  if (name === 'fleet' && (state.remoteAgent || REMOTE_AGENT)) return;
   if (name === 'instance') {
     const previousState = state.dashboardState;
     // Preserve the separately read Origin details while applying instance metadata.
@@ -1651,8 +1700,12 @@ function applySse(name, data) {
   } else if (name === 'groups') {
     void workbench?.refresh?.(data);
   } else if (name === 'fleet') {
-    setFleet(data);
-    clearFleetFallback();
+    latestFleetPush = { summary: data.summary, updated_at: data.updated_at };
+    if (state.fleetModeInitialized) syncLiveFleetMode(data.summary);
+    refreshPushedFleet();
+    if (!document.hidden && activeTabName() === 'settings' && settingsPage?.sections.fleet.hidden === false && !machineReads) {
+      void machineList?.refresh();
+    }
     scheduleFleetFallback();
   }
 }
@@ -1900,12 +1953,12 @@ function initMemoryControls() {
 // ─── Fleet mode init ───
 // Decide landing view based on fleet size. The self record is always present,
 // so length >= 2 means at least one external agent is configured.
-function hasFleetWall(fleet) {
-  return !REMOTE_AGENT && (fleet?.agents?.length || 0) >= 2;
+function hasFleetWall(summary) {
+  return !REMOTE_AGENT && (summary?.count ?? 0) >= 2;
 }
 
-function syncLiveFleetMode(fleet) {
-  const nextMultiAgent = hasFleetWall(fleet);
+function syncLiveFleetMode(summary) {
+  const nextMultiAgent = hasFleetWall(summary);
   if (nextMultiAgent === state.multiAgent) return false;
   state.multiAgent = nextMultiAgent;
   if (nextMultiAgent) {
@@ -1922,7 +1975,7 @@ function applyFleetMode(fleet) {
   // Remote context: always the agent-detail view (the remote's own fleet
   // size is irrelevant here); the header's machines icon returns to the wall
   // the viewer drilled down from.
-  state.multiAgent = hasFleetWall(fleet);
+  state.multiAgent = hasFleetWall(fleet?.summary);
   mobileNavigation?.sync();
   const fleetView = $('#fleet-view');
   const agentDetail = $('#agent-detail');
@@ -2005,12 +2058,13 @@ function enterRemoteAgent(name, { push = true } = {}) {
   if (!name || state.remoteAgent === name) return;
   if (push) state.navigationGeneration += 1;
   state.remoteAgent = name;
+  state.remoteMachineAccess = 'read';
   resetAgentData();
   connectSse();
   showAgentDetail({ navigation: false });
   const targetKey = observerTargetKey();
   if (push) window.history.pushState({ remoteAgent: name }, '', api(`${remotePrefix()}/`));
-  return Promise.allSettled([refreshAll(), refreshObserverStatus({ quiet: true })]).then(() => {
+  return Promise.allSettled([refreshViewedMachineAccess(name), refreshAll(), refreshObserverStatus({ quiet: true })]).then(() => {
     if (observerTargetKey() !== targetKey) return;
     if (activeTabName() === 'trends') refreshUsage();
     refreshChat();
@@ -2052,14 +2106,26 @@ function initFleetMode() {
     renderFleet();
   });
   const root = $('#agent-fleet-root');
-  root?.addEventListener('click', event => {
+  root?.addEventListener('click', async event => {
     const pageButton = event.target.closest('button[data-fleet-page]');
     if (pageButton) {
-      if (pageButton.disabled) return;
+      if (pageButton.disabled || fleetPaging) return;
       const step = pageButton.dataset.fleetPage;
       const restoreFocus = document.activeElement === pageButton;
-      fleetPage += Number(step);
-      renderFleet();
+      fleetPaging = true;
+      try {
+        await fleetRequest?.catch(() => {});
+        if (step === '1') {
+          if (!state.fleet?.nextCursor) return;
+          fleetCursors[fleetPage] = state.fleet.nextCursor;
+        } else if (fleetPage === 1) return;
+        const page = await readFleetPage(fleetPage + Number(step));
+        setFleet(page, { force: true });
+      } catch { /* Keep showing the last successful page. */ }
+      finally {
+        fleetPaging = false;
+        if (fleetRefreshPending) refreshPushedFleet();
+      }
       if (restoreFocus) {
         const next = root.querySelector(`button[data-fleet-page="${step}"]:enabled`) ??
           root.querySelector('button[data-fleet-page]:enabled');
@@ -2270,16 +2336,17 @@ function updateApiKeyScopeWarning() {
   if (warning) warning.hidden = apiKeyScope() !== 'admin';
 }
 
-function renderFleetManage(data, draft = null) {
-  const selfName = data?.self?.name || viewedAgentName();
-  fleetManageModal.querySelector('#fleet-self-label').textContent = selfName;
-  if (!draft) fleetManageModal.querySelector('#fleet-self-name').value = selfName;
-  const agents = data?.agents || [];
+function renderFleetManage(agents, data = null) {
+  if (data) {
+    const selfName = data.self.name || viewedAgentName();
+    fleetManageModal.querySelector('#fleet-self-label').textContent = selfName;
+    if (fleetManageModal.querySelector('#fleet-self-edit').hidden) fleetManageModal.querySelector('#fleet-self-name').value = selfName;
+    if (Number.isSafeInteger(data.total)) fleetManageModal._agentTotal = data.total;
+  }
   fleetManageModal._agents = agents;
-  fleetManageModal.querySelector('#fleet-agent-count').textContent = t('wb.settings.fleet.count', { count: agents.length });
-  renderRemoteAgents(fleetManageModal.querySelector('#fleet-agent-list'), agents, { t, records: state.fleet?.agents ?? [],
+  fleetManageModal.querySelector('#fleet-agent-count').textContent = t('wb.settings.fleet.count', { count: fleetManageModal._agentTotal ?? 0 });
+  renderRemoteAgents(fleetManageModal.querySelector('#fleet-agent-list'), agents, { t,
     technical: document.documentElement.dataset.detail === 'technical', latency: (root, samples) => renderLatency(root, samples, { t }), onRemove: removeFleetAgent });
-  machineList?.refresh();
 }
 
 /** One page of keys from the server, with the counts of all active and revoked keys for the card header. */
@@ -2330,12 +2397,16 @@ async function copyCreatedApiKey() {
 }
 
 /** One page of the key list (GET /api/keys); a refused request throws an error carrying the response's code. */
-async function readApiKeys({ q, cursor, limit, total }) {
+function settingsListParams({ q, cursor, limit, total }) {
   const params = new URLSearchParams({ limit: String(limit) });
   if (q) params.set('q', q);
   if (cursor) params.set('cursor', cursor);
   if (total) params.set('include', 'total');
-  const resp = await fetch(api(`/api/keys?${params}`), { cache: 'no-store' });
+  return params;
+}
+
+async function readApiKeys(page) {
+  const resp = await fetch(api(`/api/keys?${settingsListParams(page)}`), { cache: 'no-store' });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw Object.assign(new Error(fleetManageError(data.error?.code, t('fleet_manage.keys_load_failed'))), { code: data.error?.code });
   return data;
@@ -2380,7 +2451,7 @@ async function saveFleetAgent() {
     fleetManageModal.querySelector('#fleet-add-name').value = '';
     fleetManageModal.querySelector('#fleet-add-url').value = '';
     fleetManageModal.querySelector('#fleet-add-key').value = '';
-    renderFleetManage(data.agents ? data : await (await fetch(api('/api/fleet/agents'), { cache: 'no-store' })).json());
+    await machineList?.refresh({ first: true });
     fleetManageStatus(t('fleet_manage.saved'), 'success', '#fleet-add-form');
     await refreshFleet();
     return true;
@@ -2399,7 +2470,7 @@ async function removeFleetAgent(name) {
     const resp = await fetch(api(`/api/fleet/agents/${encodeURIComponent(name)}`), { method: 'DELETE' });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error?.message || t('fleet_manage.remove_failed'));
-    renderFleetManage(data);
+    await machineList?.refresh({ first: true });
     fleetManageStatus(t('fleet_manage.removed'), 'success', '#fleet-agent-list');
     await refreshFleet();
   } catch (err) {
@@ -2752,6 +2823,7 @@ async function runObserverLifecycle(action) {
 let settingsPage = null;
 let keyList = null;
 let machineList = null;
+let machineReads = 0;
 const settingsLists = [];
 /** One of the settings page's long lists: search above, one page of rows, the pager below. */
 function mountSettingsList(list, rowSelector, placeholderKey, server = null) {
@@ -2782,7 +2854,19 @@ function initSettingsPage() {
   keyList = mountSettingsList(root.querySelector('#api-key-list'), 'tbody tr', 'wb.settings.keys.search', {
     readPage: readApiKeys, render: renderApiKeys, onError: err => fleetManageStatus(err.message, 'error', '#api-key-list'),
   });
-  machineList = mountSettingsList(root.querySelector('#fleet-agent-list'), '.wb-agent-row', 'wb.settings.fleet.search');
+  machineList = mountSettingsList(root.querySelector('#fleet-agent-list'), '.wb-agent-row', 'wb.settings.fleet.search', {
+    async readPage(page) {
+      machineReads++;
+      try {
+        const response = await draftFetch(api(`/api/fleet/agents?${settingsListParams(page)}`), { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok) throw Object.assign(new Error(data.error?.message ?? 'read_failed'), { code: data.error?.code });
+        return data;
+      } finally { machineReads--; }
+    },
+    render: renderFleetManage,
+    onError: error => fleetManageStatus(error.message, 'error', '#fleet-agent-list'),
+  });
   settingsModal = root; fleetManageModal = root; actionsModal = settingsPage.actionsScope;
   // The upgrade button is drawn into the default engine card each time that card renders.
   settingsUpgrade = oldActions.querySelector('[data-action="upgrade-cc"]');
@@ -2798,7 +2882,7 @@ function initSettingsPage() {
   });
   settingsHosts = mountSessionHostSettings(settingsPage.slots.hosts, { t, locale: getLocale, confirm: confirmSetting,
     local: () => !REMOTE_AGENT && !state.remoteAgent,
-    read: () => requestAgentJson('/api/session-hosts'),
+    read: page => requestAgentJson(`/api/session-hosts?${settingsListParams(page)}`),
     readChannels: () => requestAgentJson('/api/session-hosts/channels'),
     write: body => requestAgentJson('/api/session-hosts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   });
@@ -2823,7 +2907,7 @@ function initSettingsPage() {
   } });
   $('#wb-detail-toggle').addEventListener('change', () => {
     refreshSettingsVersion();
-    if (fleetManageModal?._agents) renderFleetManage({ self: { name: fleetManageModal.querySelector('#fleet-self-label').textContent }, agents: fleetManageModal._agents }, true);
+    if (fleetManageModal?._agents) renderFleetManage(fleetManageModal._agents);
   });
   refreshSettingsVersion();
 }
@@ -2873,8 +2957,7 @@ function refreshSettingsPage() {
   refreshModeStatus().catch(() => {});
   refreshCoreUpdate();
   if (!REMOTE_AGENT) {
-    const identity = observerTargetKey();
-    fetch(api('/api/fleet/agents'), { cache: 'no-store' }).then(async response => { if (!response.ok) throw Error('read_failed'); return response.json(); }).then(value => { if (identity === observerTargetKey()) renderFleetManage(value); }).catch(error => { if (identity === observerTargetKey()) fleetManageStatus(error.message, 'error', '#fleet-agent-list'); });
+    machineList?.refresh({ first: true });
     keyList?.refresh({ first: true });
   }
   // Another machine opened through this one: its keys and its own list of machines stay on that machine.
@@ -3145,6 +3228,7 @@ const startupDeadline = Date.now() + 6000;
 await Promise.all([
   initI18n(undefined, { deadline: startupDeadline }),
   waitUntilDeadline(refreshObserverStatus({ quiet: true }), startupDeadline),
+  REMOTE_AGENT ? waitUntilDeadline(refreshViewedMachineAccess(REMOTE_AGENT), startupDeadline) : null,
 ]);
 initSettingsPage();
 initTabs();
