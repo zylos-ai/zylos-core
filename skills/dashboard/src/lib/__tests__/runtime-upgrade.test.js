@@ -33,6 +33,30 @@ test('CLI upgrades invoke the requested runtime and preserve existing results', 
   assert.equal(recorded[0].auto, 'true');
 });
 
+// A configured <ID>_BIN names the program to upgrade even when PATH has another one.
+test('CLI upgrade runs the configured runtime binary instead of the same name on PATH', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-upgrade-bin-'));
+  const calls = path.join(root, 'calls');
+  const saved = { PATH: process.env.PATH, CLAUDE_BIN: process.env.CLAUDE_BIN };
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  for (const dir of ['path', 'configured']) {
+    fs.mkdirSync(path.join(root, dir));
+    fs.writeFileSync(path.join(root, dir, 'claude'),
+      `#!${process.execPath}\nimport fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(calls)}, ${JSON.stringify(dir)} + '\\n'); console.log('updated');`, { mode: 0o755 });
+  }
+  process.env.PATH = path.join(root, 'path');
+  process.env.CLAUDE_BIN = path.join(root, 'configured', 'claude');
+  const result = await handleAction('upgrade-cc', { runtime: 'claude', case: 'configured-bin' }, { zylosDir: root });
+  assert.equal(result.ok, true);
+  assert.deepEqual(fs.readFileSync(calls, 'utf8').trim().split('\n'), ['configured']);
+});
+
 test('Antigravity nonzero exit preserves the error without success or restart', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-upgrade-failure-'));
   const saved = process.env.PATH;

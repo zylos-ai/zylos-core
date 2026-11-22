@@ -205,7 +205,6 @@ export const hooks = Object.freeze({
   optedIn: ({ home }) => hasAgyZylosHooks(home),
   ready: async options => isAgyConfigReady(options),
   trust: UNSUPPORTED,
-  features: UNSUPPORTED,
   stage: UNSUPPORTED,
   writeConfig: UNSUPPORTED,
   installHooks: UNSUPPORTED,

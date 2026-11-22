@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict';
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import { objectResponse, isObjectApi, flushObjectReads } from './fixtures/fleet-object-api.js';
 import { agentColor } from '../src/lib/agent-color.js';
 import { FleetPoller, SseEventParser, stateToFleetRecord } from '../src/lib/fleet-poller.js';
 import { assertFleetPayloadSafe, buildFleetPayload, buildSafeFleetPayload, redactFleetPayload } from '../src/lib/fleet-payload.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
 
 function objectApiRoute(url) {
   const parsed = new URL(url);

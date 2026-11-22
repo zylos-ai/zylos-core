@@ -12,12 +12,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const runtimeRoots = ['cli/lib/runtime', 'skills/dashboard/src/lib/runtime'];
 const factories = new Set(runtimeRoots.map(dir => `${dir}/index.js`));
 const excludedDirectories = new Set(['node_modules', '__tests__', 'test', 'tests']);
-const reasons = [
-  'dispatch:upgrade', 'dispatch:auth', 'dispatch:launch', 'dispatch:instructions',
-  'dispatch:delivery', 'dispatch:hooks', 'dispatch:context', 'dispatch:usage',
-  'dispatch:health', 'dispatch:dashboard', 'else-fallback', 'gap', 'inconsistent',
-  'legacy', 'text', 'sql-check', 'tool-use', 'hook-entry',
-];
+const reasons = ['legacy', 'sql-check', 'tool-use', 'hook-entry'];
 const nativeHookEntries = new Map([
   ['skills/activity-monitor/scripts/agy-hooks.js', "agyRuntime = await getRuntime('agy');"],
   ['skills/activity-monitor/scripts/agy-tool-guard.js', "return getRuntime('agy');"],
