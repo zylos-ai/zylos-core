@@ -31,7 +31,8 @@ export class ChatChangeObserver {
     this.timer = null;
     this.version = null;
     this.names = null;
-    this.pins = null;
+    this.pins = new Map();
+    this.reads = null;
     this.metadataVersion = null;
     this.closed = false;
   }
@@ -104,7 +105,8 @@ export class ChatChangeObserver {
       return;
     }
     this._recover(version);
-    let namesChanged = false, pinsChanged = false;
+    let namesChanged = false, readsChanged = false;
+    const pinsChanged = new Set();
     const metadataDb = this.history.conversations?.db;
     if (metadataDb) {
       // data_version sees other connections; total_changes sees this service's
@@ -116,9 +118,14 @@ export class ChatChangeObserver {
           ORDER BY 1`).all());
         namesChanged = this.names !== null && this.names !== nextNames;
         this.names = nextNames;
-        const nextPins = JSON.stringify(this.history.pinIds());
-        pinsChanged = this.pins !== null && this.pins !== nextPins;
-        this.pins = nextPins;
+        for (const tab of ['mine', 'external']) {
+          const nextPins = JSON.stringify(this.history.pinIds(tab));
+          if (this.pins.has(tab) && this.pins.get(tab) !== nextPins) pinsChanged.add(tab);
+          this.pins.set(tab, nextPins);
+        }
+        const nextReads = JSON.stringify(this.history.readPositions());
+        readsChanged = this.reads !== null && this.reads !== nextReads;
+        this.reads = nextReads;
         this.metadataVersion = metadataVersion;
       }
     }
@@ -126,7 +133,8 @@ export class ChatChangeObserver {
     const snapshots = new Map();
     for (const record of [...this.subscriptions]) {
       if (this.closed || !this.subscriptions.has(record)) continue;
-      const metadataChanged = namesChanged || pinsChanged && record.options.tab === 'mine';
+      const metadataChanged = namesChanged || pinsChanged.has(record.options.tab)
+        || (readsChanged && record.options.tab === 'mine');
       if (!changed && !metadataChanged && record.snapshot) continue;
       try {
         record.generation = version.generation;

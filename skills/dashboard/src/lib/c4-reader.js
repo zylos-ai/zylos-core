@@ -3,6 +3,14 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { originVisible, visible } from './chat/visibility.js';
 
+// Keep this predicate aligned for list ordering and incremental invalidation.
+export const receivedMessage = "c.direction='in' AND c.channel<>'' AND c.channel NOT IN ('void','control')";
+
+export function prepareLatestReceived(db) {
+  return db.prepare(`SELECT c.id, c.timestamp FROM conversations c INDEXED BY idx_conv_group_id
+    WHERE c.session_group=? AND ${receivedMessage} ORDER BY c.id DESC LIMIT 1`);
+}
+
 export class C4Reader {
   constructor(zylosDir) {
     this._dbPath = path.join(zylosDir, 'comm-bridge', 'c4.db');
@@ -83,9 +91,7 @@ export class C4Reader {
     if (!db) throw new Error('Group message order unavailable');
     if (this._groupSort?.db !== db) {
       this._groupSort = { db,
-        received: db.prepare(`SELECT c.id, c.timestamp FROM conversations c INDEXED BY idx_conv_group_id
-          WHERE c.session_group=? AND c.direction='in' AND c.channel <> '' AND c.channel NOT IN ('void','control')
-          ORDER BY c.id DESC LIMIT 1`),
+        received: prepareLatestReceived(db),
         first: db.prepare(`SELECT c.id, c.timestamp FROM conversations c INDEXED BY idx_conv_group_id
           WHERE c.session_group=? AND ((c.session_group='origin' AND ${originVisible}) OR (${visible}))
           ORDER BY c.id LIMIT 1`) };

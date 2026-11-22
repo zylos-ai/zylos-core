@@ -81,19 +81,19 @@ async function fixture(t) {
 test('write routes deny read keys, closed remote access, cross-origin and single mode before writes', async t => {
   const f = await fixture(t);
   for (const options of [{ identity: 'read' }, { identity: 'admin' }, { origin: 'https://outside.invalid' }]) {
-    assert.equal((await f.request('/api/chat/drafts', options)).status, 403);
+    assert.equal((await f.request('/api/conversations/drafts', options)).status, 403);
   }
   f.setMode('single');
-  assert.equal((await f.request('/api/chat/drafts')).status, 403);
+  assert.equal((await f.request('/api/conversations/drafts')).status, 403);
   assert.equal(f.conversations.db.prepare('SELECT COUNT(*) n FROM chat_conversations').get().n, 0);
   assert.equal(f.calls(), 0);
 });
 
 test('draft create, open and rename use the registered record and reject caller routing fields', async t => {
   const f = await fixture(t);
-  const created = await f.request('/api/chat/drafts', { body: { displayName: 'First name' } });
+  const created = await f.request('/api/conversations/drafts', { body: { displayName: 'First name' } });
   assert.equal(created.status, 201);
-  const row = created.body.conversation, route = `/api/chat/conversations/${encodeURIComponent(row.id)}`;
+  const row = created.body.conversation, route = `/api/conversations/${encodeURIComponent(row.id)}`;
   assert.equal((await f.request(route, { method: 'GET' })).body.conversation.localId, row.localId);
   assert.equal((await f.request(route, { method: 'PATCH', body: { displayName: 'Renamed' } })).body.conversation.displayName, 'Renamed');
   for (const field of ['channel', 'endpoint', 'endpoint_id', 'group', 'groupName', 'targetGroup', 'namespace', 'localId']) {
@@ -108,24 +108,24 @@ test('draft create, open and rename use the registered record and reject caller 
   assert.deepEqual(conflict.body, { ok: false, error: { code: 'chat_conversation_started', message: 'chat_conversation_started' }, conversationId: 'g:6F776E65643A6C6F63616C', preserveInput: true });
   assert.equal((await f.request(route, { method: 'DELETE' })).status, 404);
   assert.equal((await f.request(route + '?channel=telegram', { method: 'GET' })).status, 400);
-  assert.equal((await f.request('/api/chat/conversations/%ZZ', { method: 'GET' })).status, 400);
+  assert.equal((await f.request('/api/conversations/%ZZ', { method: 'GET' })).status, 400);
 });
 
 test('remote admin writes require the data instance switch and stored ownership', async t => {
   const f = await fixture(t); f.config.chat.allowRemote = true;
-  const created = await f.request('/api/chat/drafts', { identity: 'admin' });
+  const created = await f.request('/api/conversations/drafts', { identity: 'admin' });
   assert.equal(created.status, 201);
-  const route = `/api/chat/conversations/${encodeURIComponent(created.body.conversation.id)}`;
+  const route = `/api/conversations/${encodeURIComponent(created.body.conversation.id)}`;
   assert.equal((await f.request(route, { method: 'PATCH', identity: 'read', body: { displayName: 'bad' } })).status, 403);
   assert.equal((await f.request(route, { method: 'PATCH', identity: 'admin', body: { displayName: 'remote name' } })).status, 200);
-  assert.equal((await f.request('/api/chat/conversations/g:74673A6F74686572/send', { body: { content: 'wrong group' } })).status, 403);
+  assert.equal((await f.request('/api/conversations/g:74673A6F74686572/send', { body: { content: 'wrong group' } })).status, 403);
   assert.equal(f.calls(), 0);
 });
 
 test('write routes forward the optional quote field to the sender', async t => {
   const f = await fixture(t);
-  const created = await f.request('/api/chat/drafts');
-  const route = `/api/chat/conversations/${encodeURIComponent(created.body.conversation.id)}/send`;
+  const created = await f.request('/api/conversations/drafts');
+  const route = `/api/conversations/${encodeURIComponent(created.body.conversation.id)}/send`;
   const response = await f.request(route, { body: { content: 'quoted body', quote: 42 } });
   assert.equal(response.status, 200);
   assert.equal(response.body.quote, 42);
@@ -134,7 +134,7 @@ test('write routes forward the optional quote field to the sender', async t => {
 
 test('fleet proxy allowlists draft rename and still checks both admin and remote switch', async t => {
   const f = await chatHttpFixture(t, { chat: { allowRemote: true } });
-  const route = { method: 'PATCH', path: '/api/chat/conversations/d%3Alocal-chat' };
+  const route = { method: 'PATCH', path: '/api/conversations/d%3Alocal-chat' };
   // This helper's receiver does not implement registration: its access gate is
   // sufficient to prove the new allowlist reaches the protected data instance.
   assert.equal((await f.request(route, { fleet: true })).status, 200);

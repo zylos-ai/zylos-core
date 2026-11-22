@@ -8,7 +8,7 @@ import * as childProcess from 'node:child_process';
 import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { StateEngine } from '../../src/lib/state-engine.js';
 import { AuthGate, hashApiKey } from '../../src/lib/auth.js';
-import { C4Reader } from '../../src/lib/c4-reader.js';
+import { C4Reader, prepareLatestReceived, receivedMessage } from '../../src/lib/c4-reader.js';
 import { EventLoopMonitor } from '../../src/lib/event-loop-monitor.js';
 import { VersionChecker } from '../../src/lib/version-checker.js';
 import { createGroupBacklog } from '../../src/lib/workbench/group-backlog.js';
@@ -120,6 +120,7 @@ export async function setupMemoryHttp(t) {
     AuthGate: class extends AuthGate { constructor(...args) { super(...args); auth = this; } },
   } });
   t.mock.module('../../src/lib/c4-reader.js', { namedExports: {
+    prepareLatestReceived, receivedMessage,
     C4Reader: class extends C4Reader { constructor(...args) { super(...args); reader = this; } },
   } });
   const snapshot = () => ({ view, rows: [{ sessionGroup: view === 'single' ? null : 'origin',

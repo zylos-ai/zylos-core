@@ -136,12 +136,12 @@ try {
     fs.writeFileSync(temporary, JSON.stringify(payload)); fs.renameSync(temporary, payloadFile);
   };
   const createDraft = async name => {
-    const response = await api.request('/api/chat/drafts', { method: 'POST', body: { displayName: name } });
+    const response = await api.request('/api/conversations/drafts', { method: 'POST', body: { displayName: name } });
     check(response.status === 201, 'Draft accepted through real HTTP');
     return response.body.conversation;
   };
   const sendText = async (conversation, content) => {
-    const response = await api.request(`/api/chat/conversations/${encodeURIComponent(conversation.id)}/send`, { method: 'POST', body: { content }, timeoutMs: 45000 });
+    const response = await api.request(`/api/conversations/${encodeURIComponent(conversation.id)}/send`, { method: 'POST', body: { content }, timeoutMs: 45000 });
     check(response.status === 200, 'Inbound message committed through real HTTP/Core');
     return api.conversations.get(conversation.localId);
   };
@@ -167,7 +167,7 @@ try {
   let current = await sendText(conversation, `FIXTURE_BEGIN:${conversation.localId}`);
   coreDb.setSessionRuntimeConfig({ sessionGroup: current.sessionGroup, runtime });
   await wait(() => outbound(current.sessionGroup).some(row => row.content.includes(`FIXTURE_SUPPLEMENT:${current.localId}`)), 'real model structured sends', 180000);
-  const route = `/api/chat/conversations/${encodeURIComponent(current.id)}`;
+  const route = `/api/conversations/${encodeURIComponent(current.id)}`;
   const beforeAnswer = await api.request(`${route}/questions`);
   check(beforeAnswer.status === 200, 'Refreshed question state is readable');
   check(beforeAnswer.body.items.length === 4, 'All action categories registered');

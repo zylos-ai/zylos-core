@@ -216,11 +216,11 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
     return row;
   }
   async function createConversation(content = 'isolated first text') {
-    const draft = await request('/api/chat/drafts', { method: 'POST', body: { displayName: name } });
+    const draft = await request('/api/conversations/drafts', { method: 'POST', body: { displayName: name } });
     assert.equal(draft.status, 201);
-    const first = await request(`/api/chat/conversations/${encodeURIComponent(draft.body.conversation.id)}/send`, { method: 'POST', body: { content } });
+    const first = await request(`/api/conversations/${encodeURIComponent(draft.body.conversation.id)}/send`, { method: 'POST', body: { content } });
     assert.equal(first.status, 200);
-    return { draft: draft.body.conversation, receipt: first.body, route: `/api/chat/conversations/${encodeURIComponent(first.body.conversationId)}` };
+    return { draft: draft.body.conversation, receipt: first.body, route: `/api/conversations/${encodeURIComponent(first.body.conversationId)}` };
   }
   fixture = { sandbox, base, request, rawRequest, attachments, auth, config, configPath, store, db, c4, reader, history, conversations, sender, get answers() { return answers; }, get delivery() { return delivery; },
     addOutbound, createConversation, realReceive, readMode, modePath, cookie, tokens, counts,
@@ -341,9 +341,9 @@ export async function createRemoteChatApiFixture(t, sandbox, { timeoutMs = 45000
       return { status: response.status, body: value, text };
     },
     async createConversation(content = 'isolated remote first text') {
-      const draft = await remote.request('/api/chat/drafts', { method: 'POST', body: {} }); assert.equal(draft.status, 201);
-      const first = await remote.request(`/api/chat/conversations/${encodeURIComponent(draft.body.conversation.id)}/send`, { method: 'POST', body: { content } }); assert.equal(first.status, 200);
-      return { draft: draft.body.conversation, receipt: first.body, route: `/api/chat/conversations/${encodeURIComponent(first.body.conversationId)}` };
+      const draft = await remote.request('/api/conversations/drafts', { method: 'POST', body: {} }); assert.equal(draft.status, 201);
+      const first = await remote.request(`/api/conversations/${encodeURIComponent(draft.body.conversation.id)}/send`, { method: 'POST', body: { content } }); assert.equal(first.status, 200);
+      return { draft: draft.body.conversation, receipt: first.body, route: `/api/conversations/${encodeURIComponent(first.body.conversationId)}` };
     },
     question(name = 'single') {
       const envelope = structuredClone(protocolFixtures.valid.find(item => item.name === name).envelope);

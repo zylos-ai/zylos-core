@@ -205,6 +205,14 @@ export async function execute(input) {
     const db=new Database(file,{readonly:true,fileMustExist:true,timeout:5000});
     try {return await inspectDashboard(owner,db);} finally {db.close();}
   };
+  const conversationHighwater = () => {
+    const corePath = path.join(input.zylosDir, 'comm-bridge/c4.db');
+    if (missing(corePath)) return 0;
+    const Database = driver(input);
+    const core = new Database(corePath, {readonly:true,fileMustExist:true,timeout:5000});
+    try { return core.prepare('SELECT COALESCE(MAX(id),0) FROM conversations').pluck().get(); }
+    finally { core.close(); }
+  };
   const skipDashboard=item=>input.dashboardOwnerManaged===false && item.owner==='dashboard';
   if(input.action==='version-probe') {
     if (!input.schemaRoot || !input.driverRoot) throw Error('Version probe requires target schema and installed driver roots');
@@ -269,7 +277,7 @@ export async function execute(input) {
           step('rehearsal');
           const copy=new Database(target,{fileMustExist:true,timeout:5000});
           let after;
-          try {await mod.migrate(copy);after=await inspectDashboard(mod,copy);}
+          try {await mod.migrate(copy,{conversationHighwater});after=await inspectDashboard(mod,copy);}
           catch(error) {throw schemaError(`SCHEMA_MIGRATION_FAILED dashboard rehearsal: ${error.message}`,'SCHEMA_MIGRATION_FAILED',error);}
           finally {copy.close();}
           if(after.needsMigration) throw schemaError('SCHEMA_MIGRATION_FAILED dashboard rehearsal remains incomplete','SCHEMA_MIGRATION_FAILED');
@@ -359,7 +367,7 @@ export async function execute(input) {
         await inspectDashboardFile(mod,source);
         const Database=driver(input),db=new Database(source,{fileMustExist:true,timeout:5000});
         let state;
-        try {await mod.migrate(db);state=await inspectDashboard(mod,db);}
+        try {await mod.migrate(db,{conversationHighwater});state=await inspectDashboard(mod,db);}
         catch(error) {throw schemaError(`SCHEMA_MIGRATION_FAILED ${item.source}: ${error.message}`,'SCHEMA_MIGRATION_FAILED',error);}
         finally {db.close();}
         if(state.needsMigration) throw schemaError('SCHEMA_MIGRATION_FAILED dashboard migration remains incomplete','SCHEMA_MIGRATION_FAILED');

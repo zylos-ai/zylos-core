@@ -21,17 +21,17 @@ async function startPage(sandbox, signal) {
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://fixture'), route = url.pathname;
-      if (route === '/api/chat/drafts' && req.method === 'POST') {
+      if (route === '/api/conversations/drafts' && req.method === 'POST') {
         assert.ok(writes.length < 8, 'write evidence is bounded');
         const body = await readJsonBody(req, 4096); writes.push({ route, body });
         row = { id: draftId, localId: 'browser-create', session_group: '', channel: 'dashboard',
           display_name: null, draft: true, state: 'draft', stamp: 2461354, preview: '' };
         sendJson(res, 201, { conversation: detail() }); return;
       }
-      if (route === '/api/chat/conversations') {
+      if (route === '/api/conversations') {
         sendJson(res, 200, { items: row ? [row] : [], nextCursor: null, tz: 'Asia/Singapore' }); return;
       }
-      if (/^\/api\/chat\/conversations\/[^/]+\/send$/.test(route) && req.method === 'POST') {
+      if (/^\/api\/conversations\/[^/]+\/send$/.test(route) && req.method === 'POST') {
         assert.ok(writes.length < 8, 'write evidence is bounded');
         const body = await readJsonBody(req, 4096); writes.push({ route, body });
         row = { ...row, id: activeId, session_group: group, draft: false, state: 'active' };
@@ -39,14 +39,14 @@ async function startPage(sandbox, signal) {
           timestamp: '2026-11-11T06:00:00Z' }];
         sendJson(res, 200, { stored: true, conversationId: activeId, localId: 'browser-create', c4Id: 1 }); return;
       }
-      if (/^\/api\/chat\/conversations\/[^/]+$/.test(route)) {
+      if (/^\/api\/conversations\/[^/]+$/.test(route)) {
         sendJson(res, 200, { conversation: detail(), stored: true, conversationId: row?.id }); return;
       }
-      if (/^\/api\/chat\/conversations\/[^/]+\/messages$/.test(route)) {
+      if (/^\/api\/conversations\/[^/]+\/messages$/.test(route)) {
         sendJson(res, 200, { items: messages, nextCursor: null, afterCursor: messages.length ? 'after-reply' : null,
           tz: 'Asia/Singapore' }); return;
       }
-      if (/^\/api\/chat\/conversations\/[^/]+\/(?:questions|activity|status)$/.test(route)) {
+      if (/^\/api\/conversations\/[^/]+\/(?:questions|activity|status)$/.test(route)) {
         sendJson(res, 200, { items: [], rounds: [], nextCursor: null, afterCursor: null, tz: 'Asia/Singapore' }); return;
       }
       if (route === '/api/stream') {
@@ -136,7 +136,7 @@ export async function runConversationCreateBrowser(t, sandbox, { signal }) {
     assert.equal(await page.locator('.conversation-create-form').count(), 0, 'there is no create-name form');
     await page.locator('.conversation-header h2:visible').filter({ hasText: '未命名对话' }).waitFor();
     assert.equal(api.writes.length, 1, 'one click issues exactly one draft creation');
-    assert.equal(api.writes[0].route, '/api/chat/drafts');
+    assert.equal(api.writes[0].route, '/api/conversations/drafts');
     await page.locator('.conversation-input').focus();
     assert.equal(await page.locator('.conversation-config-button').isVisible(), false);
     assert.equal(Object.keys(api.writes[0].body).length, 0, 'creation does not supply a name');

@@ -40,11 +40,11 @@ async function startApi(sandbox) {
   const answer = url => {
     const p = url.pathname;
     if (['/api/groups', '/api/groups/counts'].includes(p) || /^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'counts', 'offline'].includes(p.split('/').at(-1)) || p === '/api/instance') { counts.groups++; return workbenchSnapshotAnswer(url, snapshot(url), NOW); }
-    if (p === '/api/chat/conversations') {
+    if (p === '/api/conversations') {
       if (url.searchParams.get('tab') === 'external') return { items: [], nextCursor: null, tz: 'UTC' };
       return { items: [{ ...conversation, session_group: GROUP, display_name: '计时示例' }], nextCursor: null, tz: 'UTC' };
     }
-    if (p.startsWith('/api/chat/conversations/')) {
+    if (p.startsWith('/api/conversations/')) {
       if (p.endsWith('/messages')) return { items: state.messages, nextCursor: null, afterCursor: 'after-' + state.messages.at(-1).id, tz: 'UTC' };
       if (p.endsWith('/activity')) {
         counts.activity++;

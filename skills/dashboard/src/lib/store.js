@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import { inspectDatabase, migrateDatabase } from './schema.js';
 
 export class Store {
-  constructor(dbPath) {
+  constructor(dbPath, schemaOptions) {
     // History attribution and transcript discovery stay warm between imports.
     // This generation is process-local; opening the store always starts cold.
     this.historyRevision = 0;
@@ -19,7 +19,7 @@ export class Store {
     }
     this.db.pragma('busy_timeout = 5000');
     try {
-      this.checkSchema();
+      this.checkSchema(schemaOptions);
       this.db.pragma('journal_mode = WAL');
       this._prepareStatements();
     } catch (error) {
@@ -30,9 +30,9 @@ export class Store {
 
   // Opening only checks. Existing data is migrated by the upgrade transaction
   // or the first Dashboard takeover; an empty file is built at the current layout.
-  checkSchema() {
+  checkSchema(schemaOptions) {
     const empty = this.db.prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get() === undefined;
-    if (empty) { migrateDatabase(this.db); return; }
+    if (empty) { migrateDatabase(this.db, schemaOptions); return; }
     const { currentVersion, targetVersion, needsMigration } = inspectDatabase(this.db);
     if (currentVersion > targetVersion) {
       throw Object.assign(new Error(`Dashboard schema ${currentVersion} is newer than supported ${targetVersion}`), { code: 'SCHEMA_TOO_NEW' });

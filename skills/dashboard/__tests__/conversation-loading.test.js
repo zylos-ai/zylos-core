@@ -23,7 +23,7 @@ const options = { timeout: 2000 };
 for (const settle of ['resolve', 'reject']) test(`a quiet list poll releases an overlapping foreground refresh before its stale ${settle}`, options, async t => {
   const pending = deferred(); let lists = 0;
   const f = loadingFixture(t, createConversationState, url => {
-    if (url.pathname !== '/api/chat/conversations') return;
+    if (url.pathname !== '/api/conversations') return;
     if (++lists === 2) return pending.promise;
     return { items: [{ id: 'g:AA', displayName: lists >= 3 ? 'Latest list' : 'Initial list' }], nextCursor: null };
   });
@@ -69,7 +69,7 @@ for (const entry of ['initial', 'manual']) test(`a quiet message-triggered quest
 
 test('an old identity foreground list cannot clear a newer identity loading owner', options, async t => {
   const old = deferred(), latest = deferred(); let lists = 0;
-  const f = loadingFixture(t, createConversationState, url => url.pathname === '/api/chat/conversations' ? ++lists === 1 ? old.promise : latest.promise : undefined);
+  const f = loadingFixture(t, createConversationState, url => url.pathname === '/api/conversations' ? ++lists === 1 ? old.promise : latest.promise : undefined);
   const first = f.state.open(); await flush();
   f.state.close(); f.setIdentity('remote'); const second = f.state.open(); await flush();
   old.resolve({ items: [{ id: 'g:BB' }], nextCursor: null }); await first;
@@ -82,7 +82,7 @@ test('an old identity foreground list cannot clear a newer identity loading owne
 test('a foreground list releases its loader while a newer quiet list is still pending', options, async t => {
   const foreground = deferred(), quiet = deferred(); let lists = 0;
   const f = loadingFixture(t, createConversationState, url => {
-    if (url.pathname !== '/api/chat/conversations') return;
+    if (url.pathname !== '/api/conversations') return;
     if (++lists === 2) return foreground.promise;
     if (lists === 3) return quiet.promise;
   });
@@ -118,7 +118,7 @@ test('a foreground question read releases its loader while a newer quiet read is
 test('an older foreground list cannot release the loading owner of a newer tab list', options, async t => {
   const older = deferred(), newer = deferred(); let lists = 0;
   const f = loadingFixture(t, createConversationState, url => {
-    if (url.pathname !== '/api/chat/conversations') return;
+    if (url.pathname !== '/api/conversations') return;
     if (++lists === 2) return older.promise;
     if (lists === 3) return newer.promise;
   });
@@ -172,10 +172,10 @@ test('a stale foreground question error cannot overwrite a newer successful resu
 test('a detail name cannot replace the name just returned by the list', options, async t => {
   let changed = false;
   const f = loadingFixture(t, createConversationState, url => {
-    if (url.pathname === '/api/chat/conversations') return {
+    if (url.pathname === '/api/conversations') return {
       items: [{ id: 'g:AA', displayName: changed ? 'Latest list name' : 'Initial name' }], nextCursor: null
     };
-    if (decodeURIComponent(url.pathname) === '/api/chat/conversations/g:AA') return {
+    if (decodeURIComponent(url.pathname) === '/api/conversations/g:AA') return {
       conversation: { id: 'g:AA', state: 'active', displayName: changed ? 'Older detail name' : 'Initial name' }
     };
   });
@@ -188,11 +188,11 @@ test('a detail name cannot replace the name just returned by the list', options,
 test('a list completed during an off-page detail read keeps its newer name', options, async t => {
   const detail = deferred(); let phase = 'initial';
   const f = loadingFixture(t, createConversationState, url => {
-    if (url.pathname === '/api/chat/conversations') return {
+    if (url.pathname === '/api/conversations') return {
       items: phase === 'detail' ? [] : [{ id: 'g:AA', displayName: phase === 'latest' ? 'Latest list name' : 'Initial name' }],
       nextCursor: phase === 'detail' ? 'next-page' : null
     };
-    if (decodeURIComponent(url.pathname) === '/api/chat/conversations/g:AA') return phase === 'initial'
+    if (decodeURIComponent(url.pathname) === '/api/conversations/g:AA') return phase === 'initial'
       ? { conversation: { id: 'g:AA', state: 'active', displayName: 'Initial name' } } : detail.promise;
   });
   await f.open(); phase = 'detail';
@@ -211,10 +211,10 @@ test('a list completed during an off-page detail read keeps its newer name', opt
 test('a manual rename during an off-page detail read keeps the user name', options, async t => {
   const detail = deferred(); let waiting = false;
   const f = loadingFixture(t, createConversationState, (url, request) => {
-    if (url.pathname === '/api/chat/conversations') return {
+    if (url.pathname === '/api/conversations') return {
       items: waiting ? [] : [{ id: 'g:AA', displayName: 'Initial name' }], nextCursor: null
     };
-    if (decodeURIComponent(url.pathname) === '/api/chat/conversations/g:AA') {
+    if (decodeURIComponent(url.pathname) === '/api/conversations/g:AA') {
       if (request?.method === 'PATCH') return { conversation: { id: 'g:AA', state: 'active', displayName: request.body.displayName } };
       return waiting ? detail.promise : { conversation: { id: 'g:AA', state: 'active', displayName: 'Initial name' } };
     }

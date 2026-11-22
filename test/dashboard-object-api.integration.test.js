@@ -346,14 +346,14 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   const retired = ['/api/health?probe=ready', '/api/state', '/api/restart-status', '/api/session-mode', '/api/instance-status', '/api/timeline', '/api/system', '/api/summary', '/api/communication',
     '/api/metrics/history/cpu_pct', '/api/metrics/aggregate', '/api/metrics/cpu_pct', '/api/metrics/series', '/api/actions/meta', '/api/actions/interrupt', '/api/actions/chop-chop',
     '/api/workbench/groups', '/api/workbench/groups/search', '/api/workbench/activity', '/api/workbench/groups/telegram%3Aworking/raw', '/api/workbench/groups/telegram%3Aworking/config',
-    '/api/workbench/usage', '/api/workbench/host', '/api/workbench/pricing', '/api/workbench/name-prompt', '/api/workbench/runtime-overrides', '/api/agent/name', '/api/settings', '/api/settings?all=1', '/api/workbench/schedule', '/api/workbench/schedule/preview', '/api/workbench/schedule/once', '/api/workbench/schedule/once/history', '/api/workbench/memory/backlog', '/api/chat/settings'];
+    '/api/workbench/usage', '/api/workbench/host', '/api/workbench/pricing', '/api/workbench/name-prompt', '/api/workbench/runtime-overrides', '/api/agent/name', '/api/settings', '/api/settings?all=1', '/api/workbench/schedule', '/api/workbench/schedule/preview', '/api/workbench/schedule/once', '/api/workbench/schedule/once/history', '/api/workbench/memory/backlog', '/api/chat/settings', '/api/chat/conversations'];
   await t.test('retired reads and actions return 404', async () => {
     for (const route of retired) await request(route, { identity: 'cookie', expected: 404 });
     for (const path of ['running', 'offline', 'search', 'runtime-overrides']) {
       const retiredList = await request('/api/groups/' + path, { identity: 'cookie', expected: 404 });
       assert.equal(retiredList.error.code, 'not_found');
     }
-    for (const route of ['/api/actions/interrupt', '/api/actions/chop-chop', '/api/workbench/schedule', '/api/workbench/schedule/once/pause', '/api/workbench/schedule/once/resume', '/api/chat/settings', '/api/settings']) for (const identity of ['cookie', 'read']) await request(route, { method: 'POST', body: {}, identity, expected: 404 });
+    for (const route of ['/api/actions/interrupt', '/api/actions/chop-chop', '/api/workbench/schedule', '/api/workbench/schedule/once/pause', '/api/workbench/schedule/once/resume', '/api/chat/settings', '/api/chat/drafts', '/api/settings']) for (const identity of ['cookie', 'read']) await request(route, { method: 'POST', body: {}, identity, expected: 404 });
   });
   const writes = [
     ['/api/settings/pricing', 'PUT', { runtimes: { claude: { fastModeMultiplier: 2.5 } } }],
@@ -378,8 +378,8 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       ['/api/instance/actions/upgrade-runtime', 'POST', { runtime: 'codex' }],
       ['/api/keys', 'POST', {}], ['/api/keys/reader/rotate', 'POST', {}], ['/api/keys/reader', 'DELETE'], ['/api/keys/purge-revoked', 'POST', {}],
       ['/api/fleet/agents', 'POST', {}], ['/api/fleet/agents/test', 'POST', {}], ['/api/fleet/agents/remote-fixture', 'DELETE'],
-      ['/api/chat/drafts', 'POST', {}], ['/api/chat/conversations/origin', 'PATCH', {}], ['/api/chat/conversations/origin/send', 'POST', {}],
-      ['/api/chat/conversations/origin/answers', 'POST', {}], ['/api/chat/conversations/origin/uploads', 'POST', {}], ['/api/chat/drafts/fixture', 'DELETE', {}],
+      ['/api/conversations/drafts', 'POST', {}], ['/api/conversations/origin', 'PATCH', {}], ['/api/conversations/origin/send', 'POST', {}],
+      ['/api/conversations/origin/answers', 'POST', {}], ['/api/conversations/origin/uploads', 'POST', {}], ['/api/conversations/drafts/fixture', 'DELETE', {}],
       ...['install', 'enable', 'disable', 'agent-size', 'leases', 'leases/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/renew', 'leases/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/release']
         .map(action => [`/api/observer/${action}`, 'POST', {}]), ['/api/observer/install', 'DELETE'],
     ];

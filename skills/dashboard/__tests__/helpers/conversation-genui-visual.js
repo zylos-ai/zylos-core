@@ -88,7 +88,7 @@ export async function runConversationGenuiVisual(t, sandbox) {
       root.dataset.ready='true';
       </script></html>`); return true;
     }
-    if (url.pathname.startsWith('/api/chat/') || !url.pathname.startsWith('/api/')) return false;
+    if (url.pathname.startsWith('/api/conversations') || !url.pathname.startsWith('/api/')) return false;
     if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return true; }
     const values = {
       '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: '隔离浏览器' } },
@@ -126,7 +126,7 @@ export async function runConversationGenuiVisual(t, sandbox) {
   page.on('response', response => {
     const url = new URL(response.url());
     if (url.pathname.endsWith('/messages')) reads++;
-    if (response.status() >= 400 && url.pathname !== '/favicon.ico' && !(simulatedAnswerError && url.pathname.endsWith('/answers') && response.status() === 400) && !(simulatedRemoteUnauthorized && url.pathname.startsWith('/fleet/Remote/api/chat/') && response.status() === 401) && !errors.length) errors.push(`${response.status()} ${url.pathname}`);
+    if (response.status() >= 400 && url.pathname !== '/favicon.ico' && !(simulatedAnswerError && url.pathname.endsWith('/answers') && response.status() === 400) && !(simulatedRemoteUnauthorized && url.pathname.startsWith('/fleet/Remote/api/conversations') && response.status() === 401) && !errors.length) errors.push(`${response.status()} ${url.pathname}`);
   });
   const choose = async name => {
     const scene = scenes[name];
@@ -192,7 +192,7 @@ export async function runConversationGenuiVisual(t, sandbox) {
     await chooseType(root, 'company');
     assert.equal(await field(root, 'company_name').inputValue(), '保留的企业名称');
     root = await choose('form-error'); await formValues(root);
-    const answersPattern = '**/api/chat/conversations/*/answers';
+    const answersPattern = '**/api/conversations/*/answers';
     simulatedAnswerError = true;
     await context.route(answersPattern, route => route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'invalid_chat_answer', fields: [{ key: 'company_name', reason: 'range' }] }) }));
     await root.locator('[data-action="answer"]').click();
@@ -339,12 +339,12 @@ export async function runConversationGenuiVisual(t, sandbox) {
   assert.ok((await remoteDrafts()).some(record => record.values.company_name === '示例科技'), 'remote draft contains retained inactive input before authentication loss');
   let unauthorizedReads = 0;
   simulatedRemoteUnauthorized = true;
-  const remoteHistoryPattern = '**/fleet/Remote/api/chat/conversations/*/messages?*';
+  const remoteHistoryPattern = '**/fleet/Remote/api/conversations/*/messages?*';
   await context.route(remoteHistoryPattern, route => {
     if (unauthorizedReads++) return route.continue();
     return route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'chat_auth_required' }) });
   });
-  const unauthorizedResponse = page.waitForResponse(response => new URL(response.url()).pathname.startsWith('/fleet/Remote/api/chat/') && response.status() === 401);
+  const unauthorizedResponse = page.waitForResponse(response => new URL(response.url()).pathname.startsWith('/fleet/Remote/api/conversations') && response.status() === 401);
   await unauthorizedResponse;
   await page.waitForFunction(() => [...document.querySelectorAll('[data-interrupt-id="controls_interrupt"] [data-field-key] input,[data-interrupt-id="controls_interrupt"] [data-field-key] select,[data-interrupt-id="controls_interrupt"] [data-field-key] textarea')].every(control => control.disabled && control.value === ''));
   assert.equal((await remoteDrafts()).length, 0, 'remote 401 clears that instance persistent drafts through the actual application fetch adapter');

@@ -136,7 +136,7 @@ test('failed external outbound history renders its text without a page error',
       const id = 'g:' + Buffer.from(outbound.session_group).toString('hex').toUpperCase();
       await page.locator(`#wb-chat .conversation-list-item[data-conversation-id="${id}"]`).click();
       await page.locator(`#wb-chat [data-message-id="${outbound.id}"]`).waitFor();
-      const history = await fixture.request(`/api/chat/conversations/${encodeURIComponent(id)}/messages?tab=external`);
+      const history = await fixture.request(`/api/conversations/${encodeURIComponent(id)}/messages?tab=external`);
       assert.equal(history.body.items.find(row => row.id === outbound.id).deliveryState, 'pending_reconciliation');
       assert.equal(await page.locator(`#wb-chat [data-message-id="${outbound.id}"] .chat-message-status`).isVisible(), false);
       assert.match(await page.locator('#wb-chat').innerText(), /Reply could not be sent/);

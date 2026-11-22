@@ -148,12 +148,12 @@ test('history HTTP exposes bounded refresh and rejects repeated or misplaced ref
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   const base = `http://127.0.0.1:${server.address().port}`;
-  const route = `/api/chat/conversations/${groupId('dash-owned:a')}/messages`;
+  const route = `/api/conversations/${groupId('dash-owned:a')}/messages`;
   const good = await fetch(`${base}${route}?recheckIds=1`);
   assert.equal(good.status, 200);
   assert.equal((await good.json()).attachmentUpdates[0].id, 1);
   for (const target of [`${route}?recheckIds=1&recheckIds=2`, `${route}?recheckIds=`,
-    '/api/chat/conversations?recheckIds=1', route.replace('/messages', '/status') + '?ids=1&recheckIds=1']) {
+    '/api/conversations?recheckIds=1', route.replace('/messages', '/status') + '?ids=1&recheckIds=1']) {
     assert.equal((await fetch(base + target)).status, 400);
   }
 });

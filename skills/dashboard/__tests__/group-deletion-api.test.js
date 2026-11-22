@@ -86,8 +86,8 @@ test('Origin and malformed group targets never reach Core', async t => {
 
 test('draft targets let Core distinguish uploaded drafts from actual groups', async t => {
   const f = fixture(t);
-  await call(f.handler, '/api/chat/drafts/empty/deletion');
-  await call(f.handler, '/api/chat/drafts/bound/deletion');
+  await call(f.handler, '/api/conversations/drafts/empty/deletion');
+  await call(f.handler, '/api/conversations/drafts/bound/deletion');
   assert.deepEqual(f.calls.map(x => x.target), [{ draftLocalId: 'empty' }, { draftLocalId: 'bound' }]);
 });
 
@@ -115,7 +115,7 @@ test('missing draft registration still reaches Core for an idempotent completed 
       return { ok: true, pending: false, operationId: options.operationId };
     },
   });
-  const res = await call(handler, '/api/chat/drafts/removed', {
+  const res = await call(handler, '/api/conversations/drafts/removed', {
     method: 'DELETE', body: { confirmed: true, operationId: 'completed-operation', ...boundary },
   });
   assert.equal(res.status, 200);
@@ -146,7 +146,7 @@ test('unknown child outcomes are never turned into successful deletion', async (
 test('Fleet never relays group or draft deletion preview and writes', async () => {
   let calls = 0, tokenCalls = 0;
   const proxy = new FleetProxy({ config: { fleet: { agents: [] } }, poller: { getSessionToken: async () => { tokenCalls++; return 'private'; } }, fetch: async () => { calls++; throw new Error('must not relay'); } });
-  for (const suffix of ['/api/groups/dashboard%3Ax/deletion-preview', '/api/groups/dashboard%3Ax', '/api/chat/drafts/x/deletion', '/api/chat/drafts/x']) {
+  for (const suffix of ['/api/groups/dashboard%3Ax/deletion-preview', '/api/groups/dashboard%3Ax', '/api/conversations/drafts/x/deletion', '/api/conversations/drafts/x']) {
     const req = { method: (suffix.endsWith('/deletion-preview') || suffix.endsWith('/deletion')) ? 'GET' : 'DELETE', headers: owner, _authContext: { kind: 'cookie', scope: 'admin' } };
     const res = { writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
     await proxy.proxyApi(req, res, { name: 'remote' }, suffix, '');
@@ -161,7 +161,7 @@ test('conversation list exposes deletion capability only to the local password o
   const f = fixture(t);
   for (const [headers, allowed] of [[owner, true], [{ authorization: `Bearer ${api}` }, false]]) {
     const req = { method: 'GET', headers }, res = { writeHead() {}, end(body) { this.body = JSON.parse(body); } };
-    await handleChatHistory(req, res, new URL('http://fixture/api/chat/conversations'), { ...f,
+    await handleChatHistory(req, res, new URL('http://fixture/api/conversations'), { ...f,
       config: { ...f.config, chat: { allowRemote: true } }, history: { list: () => ({ items: [] }) } });
     assert.equal(res.body.deletionAllowed, allowed);
   }
@@ -170,7 +170,7 @@ test('conversation list exposes deletion capability only to the local password o
 
 test('unmatched group read routes fall through without deletion authorization or Core calls', async t => {
   const f = fixture(t);
-  for (const path of ['/api/groups', '/api/groups/telegram%3Aexample', '/api/chat/drafts/example']) {
+  for (const path of ['/api/groups', '/api/groups/telegram%3Aexample', '/api/conversations/drafts/example']) {
     const req = { method: 'GET', headers: {} };
     const res = { writeHead() { assert.fail('Must leave the response to the existing read route'); } };
     assert.equal(await f.handler(req, res, new URL(path, 'http://fixture')), false);
@@ -183,11 +183,11 @@ test('Core storage errors preserve their HTTP status through the bridge response
   for (const status of [404, 503]) {
     const handler = createGroupDeletionRoutes({ ...f, core: async () => ({ ok: false,
       error: { code: status === 404 ? 'chat_conversation_not_found' : 'group_delete_dashboard_unavailable', status } }) });
-    const res = await call(handler, '/api/chat/drafts/missing/deletion');
+    const res = await call(handler, '/api/conversations/drafts/missing/deletion');
     assert.equal(res.status, status);
     assert.deepEqual(res.body.error, { code: status === 404 ? 'chat_conversation_not_found' : 'group_delete_dashboard_unavailable',
       message: status === 404 ? 'chat_conversation_not_found' : 'group_delete_dashboard_unavailable' });
-    const deleted = await call(handler, '/api/chat/drafts/d%3Amissing', { method: 'DELETE',
+    const deleted = await call(handler, '/api/conversations/drafts/d%3Amissing', { method: 'DELETE',
       body: { confirmed: true, operationId: 'private-operation', ...boundary } });
     assert.equal(deleted.status, status);
     assert.deepEqual(deleted.body, res.body);

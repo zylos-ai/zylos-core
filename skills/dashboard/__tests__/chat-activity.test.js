@@ -677,16 +677,16 @@ test('the activity route uses the chat access rules and accepts only tab and sub
     observations.push({ method: 'GET', route, withCookie, ...result, fixtureBoundary: 'Real AuthGate, ChatHistory, ChatActivity, C4Reader and isolated SQLite databases; injected group observation.' });
     return result;
   };
-  const ok = await request(`/api/chat/conversations/${ID}/activity?tab=mine`);
+  const ok = await request(`/api/conversations/${ID}/activity?tab=mine`);
   assert.equal(ok.status, 200);
   assert.equal(ok.body.working.on, true); assert.equal(ok.body.steps[0].label.arg, 'a');
   assert.deepEqual(ok.body.subtasks.map(item => item.label), [{ key: 'memorySync' }]);
-  const open = await request(`/api/chat/conversations/${ID}/activity?tab=mine&subtask=${subtaskKey('sync-1')}`);
+  const open = await request(`/api/conversations/${ID}/activity?tab=mine&subtask=${subtaskKey('sync-1')}`);
   assert.equal(open.status, 200); assert.equal(open.body.subtask.id, subtaskKey('sync-1'));
-  assert.equal((await request(`/api/chat/conversations/${ID}/activity?tab=mine`, false)).status, 401);
+  assert.equal((await request(`/api/conversations/${ID}/activity?tab=mine`, false)).status, 401);
   for (const suffix of ['tab=mine&extra=1', 'tab=mine&ids=1', 'tab=mine&tab=mine', 'tab=mine&subtask=a&subtask=b', 'tab=mine&subtask=bad%20id',
     'tab=external'])
-    assert.ok((await request(`/api/chat/conversations/${ID}/activity?${suffix}`)).status >= 400, suffix);  if (process.env.DASHBOARD_CHAT_ACTIVITY_EVIDENCE) {
+    assert.ok((await request(`/api/conversations/${ID}/activity?${suffix}`)).status >= 400, suffix);  if (process.env.DASHBOARD_CHAT_ACTIVITY_EVIDENCE) {
     fs.mkdirSync(path.dirname(process.env.DASHBOARD_CHAT_ACTIVITY_EVIDENCE), { recursive: true });
     fs.writeFileSync(process.env.DASHBOARD_CHAT_ACTIVITY_EVIDENCE, JSON.stringify(observations, null, 2));
   }

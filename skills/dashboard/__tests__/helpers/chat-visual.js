@@ -25,7 +25,7 @@ export async function runVisualCase(t, sandbox) {
   if (output) fs.mkdirSync(output, { recursive: true });
   const { chromium } = await import(pathToFileURL(modulePath));
   const fixture = await createChatApiFixture(t, sandbox, { name: 'Visual conversation', extraHandler(req, res, url, f) {
-    if (!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/chat/')) return false;
+    if (!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/conversations')) return false;
     const values = {
       '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Isolated browser' } },
       '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
@@ -72,7 +72,10 @@ export async function runVisualCase(t, sandbox) {
   }
   // More than 50 registered questions whose messages are older than the newest
   // body page: page loading must not fabricate unregistered status.
-  for (let index = 0; index < 52; index++) fixture.addOutbound(localId, questionContent(make('single', `extra_${index}`)));
+  let newestId;
+  for (let index = 0; index < 52; index++) newestId = fixture.addOutbound(localId, questionContent(make('single', `extra_${index}`))).id;
+  const read = await fixture.request(first.route + '/read', { method: 'PUT', body: { upTo: newestId } });
+  assert.equal(read.status, 200, read.text);
   fixture.c4.insertConversation('out', 'telegram', 'external-history', questionContent(make('single', 'external')),
     { groupName: 'external-history' });
   sandbox.assertIsolation();
@@ -96,7 +99,7 @@ export async function runVisualCase(t, sandbox) {
   page.on('response', response => {
     const pathname = new URL(response.url()).pathname;
     if (response.status() >= 400 && pathname !== '/favicon.ico'
-      && !(expectedChatDenial && response.status() === 403 && pathname.includes('/api/chat/'))) firstError(`${response.status()} ${pathname}`);
+      && !(expectedChatDenial && response.status() === 403 && pathname.includes('/api/conversations'))) firstError(`${response.status()} ${pathname}`);
   });
   page.setDefaultTimeout(10_000);
   async function save(name, fullPage = true) {
@@ -108,6 +111,17 @@ export async function runVisualCase(t, sandbox) {
     assert.equal(overflow.nodes.length, 0, JSON.stringify(overflow));
     if (output) { const target = path.join(output, `${name}.png`); await page.screenshot({ path: target, fullPage }); screenshotPaths.push(target); }
   }
+  async function finishListPaging() {
+    const rows = page.locator('[data-conversation-id]');
+    await page.waitForFunction(() => document.querySelectorAll('[data-conversation-id]').length === 51);
+    await page.locator('.conversation-items').evaluate(list => {
+      list.scrollTop = list.scrollHeight;
+      list.dispatchEvent(new Event('scroll'));
+    });
+    // 52 drafts and the first conversation, plus Origin.
+    await page.waitForFunction(() => document.querySelectorAll('[data-conversation-id]').length === 54);
+    assert.equal(await rows.first().getAttribute('data-conversation-id'), ORIGIN_CONVERSATION_ID);
+  }
   try {
     for (const width of [390, 1440]) for (const theme of ['light', 'dark']) {
       await page.setViewportSize({ width, height: 1000 });
@@ -115,26 +129,14 @@ export async function runVisualCase(t, sandbox) {
       await page.goto(fixture.base + '/chat');
       await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
       assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), theme);
-      await page.locator('[data-action="loadMore"]').waitFor({ state: 'visible' });
-      let groupPages = 0;
-      // Pagination controls stay mounted; cursor exhaustion hides them.
-      while (await page.locator('[data-action="loadMore"]').isVisible()) {
-        assert.ok(++groupPages <= 3, 'Group pagination must terminate');
-        const before = await page.locator('[data-conversation-id]').count();
-        await page.locator('[data-action="loadMore"]').click();
-        await page.waitForFunction(before => document.querySelectorAll('[data-conversation-id]').length > before, before);
-      }
-      assert.ok(groupPages > 0, 'Group pagination must load another page');
-      // 52 drafts and the first conversation, after the Origin conversation pinned first.
-      assert.equal(await page.locator('[data-conversation-id]').count(), 54);
-      assert.equal(await page.locator('[data-conversation-id]').first().getAttribute('data-conversation-id'), ORIGIN_CONVERSATION_ID);
+      await finishListPaging();
       const selectedConversation = page.locator(`[data-conversation-id="${first.receipt.conversationId}"]`);
       // The list may already have auto-selected this conversation. Reselecting
       // would start another initial question read behind the visible controls.
       if (await selectedConversation.getAttribute('aria-current') !== 'true') await selectedConversation.click();
       await page.locator('#wb-chat .chat-message').first().waitFor();
       assert.equal(await page.locator('[data-action="loadOlder"]').count(), 0);
-      assert.equal(await page.locator('[data-action="loadMore"]').isVisible(), false);
+      assert.equal(await page.locator('[data-action="loadMore"]').count(), 0);
       await page.locator('[data-action="loadMoreQuestions"]').waitFor({ state: 'visible' });
       // Check readiness and click in one page task: an in-flight initial read
       // can disable the button after Playwright's actionability check.
@@ -241,11 +243,7 @@ export async function runVisualCase(t, sandbox) {
       await toggle(true);
       await page.goto(fixture.base + '/fleet/Remote/chat');
       await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
-      for (let n = 0; n < 3 && await page.locator('[data-action="loadMore"]').isVisible(); n++) {
-        const before = await page.locator('[data-conversation-id]').count();
-        await page.locator('[data-action="loadMore"]').click();
-        await page.waitForFunction(before => document.querySelectorAll('[data-conversation-id]').length > before, before);
-      }
+      await finishListPaging();
       await page.locator(`[data-conversation-id="${first.receipt.conversationId}"]`).click();
       await page.locator('.chat-message').first().waitFor();
       expectedChatDenial = true;
@@ -269,11 +267,7 @@ export async function runVisualCase(t, sandbox) {
     await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
     assert.equal(await page.locator('[data-action="create"]').isVisible(), true);
     assert.equal(await page.locator('[data-action="create"]').isEnabled(), false);
-    for (let n = 0; n < 3 && await page.locator('[data-action="loadMore"]').isVisible(); n++) {
-      const before = await page.locator('[data-conversation-id]').count();
-      await page.locator('[data-action="loadMore"]').click();
-      await page.waitForFunction(before => document.querySelectorAll('[data-conversation-id]').length > before, before);
-    }
+    await finishListPaging();
     await page.locator(`[data-conversation-id="${first.receipt.conversationId}"]`).click();
     await page.locator('.chat-message').first().waitFor();
     assert.equal(await page.locator('.chat-question button').count(), 0);

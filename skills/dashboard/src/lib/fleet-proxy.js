@@ -1,3 +1,4 @@
+import { isConversationApiPath, isRetiredConversationApiPath } from './api-routes.js';
 import { isSameOriginRequest } from './request-origin.js';
 import { SESSION_HOST_CHANNELS_PATH, SESSION_HOST_PATH } from './session-host-routes.js';
 import { CHAT_SETTINGS_PATH } from './chat/access.js';
@@ -77,9 +78,9 @@ function isSseResponse(resp) {
 
 function isAllowedProxyWrite(method, suffix) {
   return method === 'POST' && suffix === '/api/groups/naming-prompt' ||
-    method === 'POST' && suffix === '/api/settings/timezone/actions/restart-services' || method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(suffix) ||
-    method === 'PUT' && suffix === '/api/chat/pins' ||
-    method === 'POST' && (suffix === '/api/chat/drafts' || /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers|uploads)$/.test(suffix)) ||
+    method === 'POST' && suffix === '/api/settings/timezone/actions/restart-services' || method === 'PATCH' && /^\/api\/conversations\/[^/]+$/.test(suffix) ||
+    method === 'PUT' && (suffix === '/api/conversations/pins' || /^\/api\/conversations\/[^/]+\/read$/.test(suffix)) ||
+    method === 'POST' && (suffix === '/api/conversations/drafts' || /^\/api\/conversations\/[^/]+\/(?:send|answers|uploads)$/.test(suffix)) ||
     ['PUT', 'DELETE'].includes(method) && /^\/api\/groups\/[^/]+\/name$/.test(suffix) ||
     method === 'PUT' && /^\/api\/groups\/[^/]+\/config$/.test(suffix) ||
     method === 'POST' && /^\/api\/groups\/[^/]+\/actions\/(?:interrupt|chop-chop|restart)$/.test(suffix) ||
@@ -311,13 +312,18 @@ export class FleetProxy {
       return true;
     }
 
+    if (isRetiredConversationApiPath(normalizedSuffix)) {
+      sendJson(res, 404, { error: 'not_found' });
+      return true;
+    }
+
     if (!validateMemoryProxyQuery(normalizedSuffix, url.search)) {
       sendJson(res, 400, { error: 'invalid_memory_path' });
       return true;
     }
 
     if (suffix === '/api/stream' || suffix.startsWith('/api/') || suffix === '/observer/frame') {
-      await this.proxyApi(req, res, agent, suffix, url.search);
+      await this.proxyApi(req, res, agent, suffix, url.search, normalizedSuffix);
       return true;
     }
 
@@ -365,7 +371,7 @@ export class FleetProxy {
     return true;
   }
 
-  async proxyApi(req, res, agent, suffix, search) {
+  async proxyApi(req, res, agent, suffix, search, normalizedSuffix = suffix) {
     if (isGroupDeletionRoute(suffix) && (req.method === 'DELETE' || suffix.endsWith('/deletion-preview') || suffix.endsWith('/deletion'))) {
       sendJson(res, 403, { error: 'remote_deletion_forbidden' }); return;
     }
@@ -375,7 +381,7 @@ export class FleetProxy {
       if (context?.kind === 'cookie' && !isSameOriginRequest(req)) { sendJson(res, 403, { error: 'same_origin_required' }); return; }
     }
     const chatStream = suffix === '/api/stream' && new URLSearchParams(search).has('chat');
-    if (suffix.startsWith('/api/chat/') || chatStream) {
+    if (isConversationApiPath(normalizedSuffix) || chatStream) {
       const context = req._authContext;
       if (context?.scope !== 'admin' || chatStream && this.authGate?.resolveAuthContext(req, { touch: false })?.scope !== 'admin') {
         sendJson(res, 403, { error: 'admin_required' });
@@ -422,7 +428,7 @@ export class FleetProxy {
       return;
     }
 
-    const attachment = /^(\/api\/chat\/conversations\/[^/]+)\/(uploads|attachments\/[^/]+)$/.exec(suffix);
+    const attachment = /^(\/api\/conversations\/[^/]+)\/(uploads|attachments\/[^/]+)$/.exec(suffix);
     if (attachment && (req.method === 'POST' && attachment[2] === 'uploads' ||
         req.method === 'GET' && attachment[2].startsWith('attachments/'))) {
       await this._relayAttachment(req, res, agent, suffix, search, token, attachment[1], attachment[2] === 'uploads');

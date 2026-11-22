@@ -138,9 +138,11 @@ config.runtime = defaultRuntime();
 
 // 1-2. Store
 const dbPath = path.join(config.dataDir, 'dashboard.db');
+const c4Reader = new C4Reader(config.zylosDir);
 let store;
 try {
-  store = new Store(dbPath);
+  store = new Store(dbPath, { conversationHighwater: () => c4Reader._open()
+    ?.prepare('SELECT COALESCE(MAX(id),0) FROM conversations').pluck().get() ?? 0 });
 } catch (err) {
   console.error(`[dashboard] Failed to open database: ${err.message}`);
   process.exit(1);
@@ -351,7 +353,6 @@ if (codexRolloutCollector) {
 }
 
 // 9b. C4 reader (read-only access to comm-bridge DB)
-const c4Reader = new C4Reader(config.zylosDir);
 const displayNames = createDisplayNames({ store, zylosDir: config.zylosDir, sanitizer });
 const workbench = createGroupSnapshot({ zylosDir: config.zylosDir, store, c4Reader, sanitizer, displayNames, sessionObservations,
   readConfigRuntime: () => loadZylosConfig(config.zylosDir).runtime ?? null,
@@ -1444,7 +1445,7 @@ export function createServer() {
     } })) return;
     if (await handleChatAttachments(req, res, url, { auth, config, sender, attachments,
       readMode: () => loadZylosConfig(config.zylosDir).session_mode })) return;
-    if (pathname.startsWith('/api/chat/conversations/')) {
+    if (pathname.startsWith('/api/conversations/')) {
       await answersReady;
       if (await handleChatAnswers(req, res, url, { auth, config, answers, delivery: answerDelivery, sender,
         readMode: () => loadZylosConfig(config.zylosDir).session_mode })) return;

@@ -74,7 +74,7 @@ for (const stored of [false, null, true]) {
       const input = f.root.querySelector('.chat-composer textarea'); input.value = 'Message A'; input.dispatch('input');
       f.root.querySelector('.chat-composer').dispatch('submit', { preventDefault() {} }); await f.settle();
       const request = f.calls.find(call => call.url.endsWith('/send'));
-      assert.equal(request.url, `/origin-A/api/chat/conversations/${encodeURIComponent(sourceId)}/send`);
+      assert.equal(request.url, `/origin-A/api/conversations/${encodeURIComponent(sourceId)}/send`);
       assert.deepEqual(JSON.parse(request.options.body).attachments, ['ready-A']);
       await f.select('g:B'); assert.equal(f.items().length, 0);
       const conversationId = promoted ? 'g:C' : 'g:A';
@@ -84,7 +84,7 @@ for (const stored of [false, null, true]) {
       assert.deepEqual(f.items().map(node => node.dataset.uploadState), stored === true ? ['failed'] : ['ready', 'failed']);
       const remaining = f.items().find(node => node.dataset.uploadState === 'failed');
       remaining.querySelector('[data-action="retryUpload"]').dispatch('click'); await f.settle();
-      assert.equal(f.uploads.at(-1).url, `/origin-A/api/chat/conversations/${encodeURIComponent(conversationId)}/uploads`, 'retry uses the originating instance and authoritative canonical group');
+      assert.equal(f.uploads.at(-1).url, `/origin-A/api/conversations/${encodeURIComponent(conversationId)}/uploads`, 'retry uses the originating instance and authoritative canonical group');
     });
   }
 }
@@ -96,7 +96,7 @@ for (const status of [409, 503]) test(`known canonical failure ${status} retains
   assert.equal(f.items().length, 0);
   await f.select('g:C'); assert.deepEqual(f.items().map(node => node.dataset.uploadState), ['ready', 'failed']);
   f.items()[1].querySelector('[data-action="retryUpload"]').dispatch('click'); await f.settle();
-  assert.equal(f.uploads.at(-1).url, '/origin-A/api/chat/conversations/g%3AC/uploads');
+  assert.equal(f.uploads.at(-1).url, '/origin-A/api/conversations/g%3AC/uploads');
 });
 test('unknown transport outcome without canonical authority leaves all attachments in the source group', async t => {
   const f = await fixture(t, 'd:A');
@@ -127,7 +127,7 @@ test('unstored draft promotion moves retained attachments to its canonical group
   await f.tab('mine'); await f.select('g:C');
   assert.deepEqual(f.items().map(node => node.dataset.uploadState), ['ready', 'failed']);
   f.items()[1].querySelector('[data-action="retryUpload"]').dispatch('click'); await f.settle();
-  assert.equal(f.uploads.at(-1).url, '/origin-A/api/chat/conversations/g%3AC/uploads');
+  assert.equal(f.uploads.at(-1).url, '/origin-A/api/conversations/g%3AC/uploads');
   await f.select('d:A'); assert.equal(f.items().length, 0, 'the old draft scope must no longer hold the promoted tray');
 });
 
@@ -160,6 +160,6 @@ for (const status of [409, 503]) test(`known canonical failure ${status} retains
   await f.page.open(); await f.select('g:C');
   assert.deepEqual(f.items().map(node => node.dataset.uploadState), ['ready', 'failed']);
   f.items()[1].querySelector('[data-action="retryUpload"]').dispatch('click'); await f.settle();
-  assert.equal(f.uploads.at(-1).url, '/origin-A/api/chat/conversations/g%3AC/uploads');
+  assert.equal(f.uploads.at(-1).url, '/origin-A/api/conversations/g%3AC/uploads');
   await f.select('d:A'); assert.equal(f.items().length, 0);
 });

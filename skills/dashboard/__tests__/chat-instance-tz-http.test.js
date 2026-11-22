@@ -13,7 +13,7 @@ import { scheduleEnv } from './fixtures/schedule-env.js';
 mock.method(VersionChecker.prototype, 'start', () => {});
 
 // HTTP integration. Covers: the real server entry wires the instance .env TZ reader into
-// GET /api/chat/conversations/:id/messages (login cookie, real c4.db, real scheduler tz.js), and a changed .env
+// GET /api/conversations/:id/messages (login cookie, real c4.db, real scheduler tz.js), and a changed .env
 // shows on the next page without a restart. Run when the server wiring, the chat history route or the time zone
 // reader changes; changes limited to chart drawing may skip it. Isolation: HOME, PM2_HOME and TMPDIR are isolated
 // by the test runner; this test only points the process's ZYLOS_DIR at the temporary installation from scheduleEnv
@@ -73,9 +73,9 @@ test('the server answers message pages with the instance time zone from .env', {
     return body;
   };
 
-  const list = await get('/api/chat/conversations?tab=external');
+  const list = await get('/api/conversations?tab=external');
   assert.equal(list.items.length, 1);
-  const messages = `/api/chat/conversations/${encodeURIComponent(list.items[0].id)}/messages?tab=external`;
+  const messages = `/api/conversations/${encodeURIComponent(list.items[0].id)}/messages?tab=external`;
   const first = await get(messages);
   assert.ok(first.items.some(row => row.id === 1));
   assert.equal(first.tz, 'Asia/Shanghai', 'the page reads daily chart dates in the instance .env TZ');

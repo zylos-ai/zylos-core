@@ -23,12 +23,12 @@ async function startPage(sandbox) {
       const route = full.pathname.slice(prefix.length) || '/';
       const url = new URL(route + full.search, full.origin);
       if (route === '/api/settings/chat') { sendJson(res, 200, { chat_allow_remote: true }); return; }
-      if (route === '/api/chat/conversations') {
+      if (route === '/api/conversations') {
         const items = url.searchParams.get('tab') === 'external' ? [origin, external] : [active, draft].filter(item => !state.removed.has(item.id));
         // Deliberately true for a Fleet response too: the app's local-view guard must still hide deletion.
         sendJson(res, 200, { items, nextCursor: null, tz: 'Asia/Singapore', deletionAllowed: state.deletionAllowed }); return;
       }
-      if ((route.startsWith('/api/groups/') || route.startsWith('/api/chat/drafts/')) && (route.endsWith('/deletion-preview') || route.endsWith('/deletion'))) {
+      if ((route.startsWith('/api/groups/') || route.startsWith('/api/conversations/drafts/')) && (route.endsWith('/deletion-preview') || route.endsWith('/deletion'))) {
         if (state.previewFailure) {
           sendJson(res, 409, { ok: false, error: { code: 'group_delete_path_unavailable', message: '/private/do-not-render' } }); return;
         }
@@ -37,7 +37,7 @@ async function startPage(sandbox) {
         sendJson(res, 200, { ok: true, operationId: 'browser-operation', cutoffId: draftTarget ? 0 : 8,
           messages: 8, attachments: 2, draft: draftTarget }); return;
       }
-      if (req.method === 'DELETE' && (route.startsWith('/api/groups/') || route.startsWith('/api/chat/drafts/'))) {
+      if (req.method === 'DELETE' && (route.startsWith('/api/groups/') || route.startsWith('/api/conversations/drafts/'))) {
         const body = await readJsonBody(req, 4096); writes.push({ route, body });
         if (state.deleteFailure) sendJson(res, 500, { ok: false, error: { code: 'cleanup_unavailable' } });
         else if (state.stale) sendJson(res, 409, { ok: false, error: { code: 'DELETION_PREVIEW_STALE' } });
@@ -50,12 +50,12 @@ async function startPage(sandbox) {
         }
         return;
       }
-      if (/^\/api\/chat\/conversations\/[^/]+$/.test(route)) {
+      if (/^\/api\/conversations\/[^/]+$/.test(route)) {
         const id = decodeURIComponent(route.split('/').at(-1));
         const item = [active, draft, origin, external].find(item => item.id === id);
         sendJson(res, 200, { conversation: item, stored: true }); return;
       }
-      if (/^\/api\/chat\/conversations\/[^/]+\/(?:messages|questions|activity|status)$/.test(route)) {
+      if (/^\/api\/conversations\/[^/]+\/(?:messages|questions|activity|status)$/.test(route)) {
         sendJson(res, 200, { items: [], rounds: [], nextCursor: null, afterCursor: null, tz: 'Asia/Singapore' }); return;
       }
       if (route === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
@@ -320,7 +320,7 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     api.state.retainedMessages = 0; api.state.countsEstimated = false;
     await startDelete(draft); await dialog.waitFor(); await dialog.locator('button').last().click();
     await page.waitForFunction(id => !document.querySelector(`[data-conversation-id="${id}"]`), draft.id);
-    assert.match(api.writes.at(-1).route, /^\/api\/chat\/drafts\//);
+    assert.match(api.writes.at(-1).route, /^\/api\/conversations\/drafts\//);
     assert.deepEqual(api.writes.at(-1).body, { confirmed: true, operationId: 'browser-operation', cutoffId: 0 });
     for (const { body } of api.writes) assert.deepEqual(Object.keys(body).sort(), ['confirmed', 'cutoffId', 'operationId']);
     assert.equal(await page.locator('.conversation-deletion-notice').isVisible(), false, 'zero retained messages and exact counts need no completion warning');

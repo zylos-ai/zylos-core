@@ -48,7 +48,7 @@ function fixture(t, override = () => undefined) {
     assert.ok(calls.length < 250, 'bounded request log'); calls.push({ url, u, options, at: timer.now() });
     const result = override(u, options, timer.now()); if (result !== undefined) return result;
     if (url === '/api/instance') return { session_mode: { sessionMode: 'multi' } };
-    if (u.pathname === '/api/chat/conversations') return { items: [{ id: 'g:AA' }], nextCursor: null };
+    if (u.pathname === '/api/conversations') return { items: [{ id: 'g:AA' }], nextCursor: null };
     if (u.pathname.endsWith('/messages')) return { items: u.searchParams.get('direction') === 'before' ? [{ id: 1, direction: 'in', content: 'hello', status: 'pending' }] : [], afterCursor: 'cursor', nextCursor: null };
     if (u.pathname.endsWith('/questions') || u.pathname.endsWith('/status')) return { items: [], nextCursor: null };
     if (u.pathname.endsWith('/send')) return { stored: true, conversationId: 'g:AA', deliveryState: 'pending' };
@@ -99,7 +99,7 @@ test('a live message stream still refreshes running activity every two seconds a
   assert.equal(f.state.snapshot().activity.data.working.on, false);
   assert.equal(f.state.snapshot().streamState, 'live', 'activity polling retains the existing live message stream');
   const messageReads = f.reads().length;
-  const listAt = f.calls.filter(call => call.u.pathname === '/api/chat/conversations').at(-1).at;
+  const listAt = f.calls.filter(call => call.u.pathname === '/api/conversations').at(-1).at;
   await f.timer.advance(listAt + 30000 - f.timer.now() - 1);
   assert.equal(f.reads().length, messageReads, 'finished activity no longer schedules two-second reads');
   await f.timer.advance(1);
@@ -211,7 +211,7 @@ test('an old selection activity result cannot shorten the newly selected convers
   let resolveFirst;
   const f = fixture(t, (url, _options, now) => {
     if (url.pathname.endsWith('/messages')) return followUpMessages(url);
-    if (url.pathname === '/api/chat/conversations/g%3ABB') return { conversation: { id: 'g:BB', state: 'active' }, conversationId: 'g:BB', stored: true };
+    if (url.pathname === '/api/conversations/g%3ABB') return { conversation: { id: 'g:BB', state: 'active' }, conversationId: 'g:BB', stored: true };
     if (!url.pathname.endsWith('/activity')) return;
     if (url.pathname.includes('g%3AAA')) return new Promise(resolve => { resolveFirst = resolve; });
     return liveActivity(now, false, []);
@@ -568,7 +568,7 @@ test('visibility and reconnect transitions rearm the absolute backoff deadline',
 
 for (const first of ['foreground', 'quiet']) test(`a ready catchup clears foreground loading when ${first} list resolves first`, async t => {
   const resolvers = [];
-  const f = fixture(t, u => u.pathname === '/api/chat/conversations' ? new Promise(resolve => { resolvers.push(resolve); }) : undefined);
+  const f = fixture(t, u => u.pathname === '/api/conversations' ? new Promise(resolve => { resolvers.push(resolve); }) : undefined);
   const opening = f.state.open(); await flush();
   assert.equal(f.state.snapshot().loading, true);
   f.state.streamStatus('connecting'); await f.event('chat_ready');
@@ -591,7 +591,7 @@ for (const first of ['foreground', 'quiet']) test(`a ready catchup clears foregr
 
 test('a previous identity list cannot clear a new foreground loading token', async t => {
   const resolvers = [];
-  const f = fixture(t, u => u.pathname === '/api/chat/conversations' ? new Promise(resolve => { resolvers.push(resolve); }) : undefined);
+  const f = fixture(t, u => u.pathname === '/api/conversations' ? new Promise(resolve => { resolvers.push(resolve); }) : undefined);
   const oldOpening = f.state.open(); await flush();
   f.state.close(); f.setIdentity('remote'); const newOpening = f.state.open(); await flush();
   assert.equal(resolvers.length, 2);
@@ -679,7 +679,7 @@ for (const initiallyLive of [false, true]) for (const accelerated of [false, tru
 test('a failed dirty list catchup retries that list at its backoff deadline', { timeout: 2000 }, async t => {
   let lists = 0;
   const f = fixture(t, url => {
-    if (url.pathname !== '/api/chat/conversations') return;
+    if (url.pathname !== '/api/conversations') return;
     if (++lists === 2) throw { code: 'temporary_list_failure' };
   });
   await f.open(); assert.equal(lists, 1);
@@ -695,7 +695,7 @@ for (const held of ['list', 'detail']) test(`readiness catchup survives same-con
   let resolve, hold = false, heldOnce = false;
   const pending = new Promise(done => { resolve = done; });
   const f = fixture(t, u => {
-    if (hold && !heldOnce && (held === 'list' ? u.pathname === '/api/chat/conversations' : u.pathname === '/api/chat/conversations/g%3AAA')) {
+    if (hold && !heldOnce && (held === 'list' ? u.pathname === '/api/conversations' : u.pathname === '/api/conversations/g%3AAA')) {
       heldOnce = true; return pending;
     }
     if (u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'after') return {
@@ -723,11 +723,11 @@ test('readiness catchup does not follow selection into another conversation', { 
   let resolve, hold = false, heldOnce = false;
   const pending = new Promise(done => { resolve = done; });
   const f = fixture(t, u => {
-    if (u.pathname === '/api/chat/conversations') {
+    if (u.pathname === '/api/conversations') {
       if (hold && !heldOnce) { heldOnce = true; return pending; }
       return rows;
     }
-    if (u.pathname === '/api/chat/conversations/g%3ABB') return {
+    if (u.pathname === '/api/conversations/g%3ABB') return {
       conversation: { id: 'g:BB', state: 'active' }, conversationId: 'g:BB', stored: true
     };
   });
@@ -737,9 +737,9 @@ test('readiness catchup does not follow selection into another conversation', { 
   assert.equal(heldOnce, true, 'ready consumed its hint before the list read was suspended');
   await f.state.select('g:BB'); await flush();
   const counts = () => ({
-    list: f.calls.filter(call => call.u.pathname === '/api/chat/conversations').length,
-    detail: f.calls.filter(call => call.u.pathname === '/api/chat/conversations/g%3ABB').length,
-    messages: f.calls.filter(call => call.u.pathname === '/api/chat/conversations/g%3ABB/messages').length
+    list: f.calls.filter(call => call.u.pathname === '/api/conversations').length,
+    detail: f.calls.filter(call => call.u.pathname === '/api/conversations/g%3ABB').length,
+    messages: f.calls.filter(call => call.u.pathname === '/api/conversations/g%3ABB/messages').length
   });
   assert.deepEqual(counts(), { list: 2, detail: 1, messages: 1 }, 'the new conversation has only its selection reads');
   assert.equal(f.state.snapshot().selectedId, 'g:BB');
