@@ -132,6 +132,41 @@ function publishActiveRecoveryCue(root) {
     "exports.bootstrap = () => ({active:true, blocked:false, prompt:'cleanup task'});\n", {mode:0o600});
 }
 
+test('shared runtime launch creates the workspace skills symlink', async t => {
+  const f = setup(t, ClaudeAdapter);
+  const root = fs.realpathSync(f.root);
+  const skillsDir = path.join(root, '.claude', 'skills');
+  const agentsDir = path.join(root, '.agents');
+  fs.mkdirSync(skillsDir, { recursive: true });
+  assert.throws(() => fs.lstatSync(agentsDir), { code: 'ENOENT' });
+
+  await f.launch();
+  assert.equal(fs.readlinkSync(path.join(agentsDir, 'skills')), skillsDir);
+});
+
+test('shared runtime launch preserves an existing workspace skills symlink', async t => {
+  const f = setup(t, ClaudeAdapter);
+  const skillsLink = path.join(f.root, '.agents', 'skills');
+  const customTarget = path.join(f.root, 'custom-skills');
+  fs.mkdirSync(path.dirname(skillsLink));
+  fs.symlinkSync(customTarget, skillsLink);
+  const original = fs.lstatSync(skillsLink);
+
+  await f.launch();
+  assert.equal(fs.lstatSync(skillsLink).ino, original.ino);
+  assert.equal(fs.readlinkSync(skillsLink), customTarget);
+});
+
+test('shared runtime launch continues when the workspace skills symlink cannot be created', async t => {
+  const f = setup(t, ClaudeAdapter);
+  const agentsPath = path.join(f.root, '.agents');
+  fs.writeFileSync(agentsPath, 'blocks directory creation');
+
+  const launched = await f.launch();
+  assert.equal(launched.result.tmuxName, tmuxNameForGroup('origin'));
+  assert.equal(fs.readFileSync(agentsPath, 'utf8'), 'blocks directory creation');
+});
+
 for (const Cls of [ClaudeAdapter, CodexAdapter]) {
   test(`${Cls.name}: default launch observes actual exec, cwd and fresh single-session F2`, async t => {
     const f = setup(t, Cls); const p = await f.launch();
