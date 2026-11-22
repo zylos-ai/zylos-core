@@ -72,9 +72,9 @@ export async function runDashboardDisplayBrowser(t, sandbox) {
           } else if (url.pathname === '/api/observer/status') value = { state: 'installed', desired: { enabled: true }, agentSize: { cols: 100, rows: 30 } };
           else if (url.pathname === '/api/observer/history/sessions') value = { current: 'sample', items: [{ id: 'sample', kind: 'main', title: 'History sample', updatedAt: recorded }], nextCursor: null };
           else if (url.pathname === '/api/observer/history/entries') value = { items: [{ id: 'entry', kind: 'inbound', ts: recorded, fields: { body: { type: 'text', preview: 'Example history message', total: 23 } } }], updates: [], nextCursor: null, afterCursor: 'fixture-cursor' };
-          else if (url.pathname === '/api/memory/tree') {
+          else if (url.pathname === '/api/memory/entries') {
             value = structuredClone(value);
-            for (const node of value.root.children) if (node.type === 'file') node.size_bytes = ({ 'identity.md': 512, 'references.md': 2048, 'state.md': 2097152 })[node.path] ?? node.size_bytes;
+            for (const node of value.items) if (node.type === 'file') node.size_bytes = ({ 'identity.md': 512, 'references.md': 2048, 'state.md': 2097152 })[node.path] ?? node.size_bytes;
           } else if (url.pathname === '/api/memory/file') {
             value = { ...value, size_bytes: ({ 'identity.md': 512, 'references.md': 2048, 'state.md': 2097152 })[url.searchParams.get('path')] ?? value.size_bytes };
           } else if (url.pathname === '/api/usage/series') {

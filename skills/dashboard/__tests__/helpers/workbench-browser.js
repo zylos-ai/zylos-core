@@ -8,6 +8,11 @@ import { sendHtml, sendJson, sendCommandJson, serveStatic } from '../../src/lib/
 import { GROUP, GROUP_FILE, LONG_FILE, workbenchAnswer } from '../fixtures/workbench-browser-api.js';
 import { keyPage } from '../fixtures/key-pages.js';
 
+// Opens the memory list's reference folder (fourteen notes), so the list is taller than a phone screen.
+async function openReference(page) {
+  await page.locator('#memory-tree .wb-memory-dir-h[data-collapse-key="reference"]').click();
+  await page.locator('#memory-tree .memory-file[data-path="reference/note-14.md"]').waitFor();
+}
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const PAGES = ['/', '/index.html', '/memory', '/schedule', '/usage', '/settings'];
 // Share of the memory page (the screen under the app header and page tabs) that an open file's text fills on a
@@ -548,9 +553,13 @@ export async function runWorkbenchBrowser(t, sandbox) {
       await shot(name);
       return layout;
     };
-    // Memory: the list fills the screen; a file opened from further down starts at the top of its own screen.
+    // Memory: the list starts folded; with the reference folder open it fills the screen, and a file opened from
+    // further down starts at the top of its own screen.
     await page.locator('#memory-tree .memory-file').first().waitFor();
+    await page.waitForFunction(() => document.querySelector('#memory-content')?.textContent.includes('Short file.'));
+    assert.equal(await page.evaluate(() => location.search), '', 'the default file is not named in the address, so a refresh stays on the list');
     await check('memory-list');
+    await openReference(page);
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     assert.ok(await page.evaluate(() => scrollY) > 100, 'the file list is taller than the screen');
     await page.locator(`#memory-tree .memory-file[data-path="${LONG_FILE}"], #memory-tree .memory-file:has-text("${LONG_FILE}")`).first().evaluate(node => node.click());
@@ -560,6 +569,21 @@ export async function runWorkbenchBrowser(t, sandbox) {
     assert.equal(file.scrollY, 0, 'the open file starts at the top');
     assert.ok(file.memoryShare >= MEMORY_SHARE, `the file text fills at least ${MEMORY_SHARE * 100}% of the screen under the app header (was ${file.memoryShare.toFixed(3)}, page top ${file.memoryPageTop})`);
     assert.ok(await page.locator('#memory-tree').evaluate(node => node.getBoundingClientRect().height === 0 || getComputedStyle(node).display === 'none'), 'the list is not on the file screen');
+    assert.equal(await page.evaluate(() => location.search), `?file=${encodeURIComponent(LONG_FILE)}`);
+    // A link to a group's file opens that file's screen; back on the list the address drops the file.
+    await page.goto(`${base}/memory?file=${encodeURIComponent(GROUP_FILE)}`);
+    await page.locator('#tab-memory.memory-file-open').waitFor();
+    await page.waitForFunction(path => document.querySelector('#memory-content')?.textContent.includes(path), GROUP_FILE);
+    await shot('memory-link');
+    await page.locator('#memory-back').click();
+    await page.locator(`#memory-tree .memory-file[data-path="${GROUP_FILE}"].active`).waitFor();
+    assert.equal(await page.evaluate(() => location.search), '');
+    // The group picker opens on its first click and stays open once its groups arrive and the page redraws.
+    await page.locator('.wb-memory-picker input').click();
+    await page.locator('.wb-memory-picker-item').nth(1).waitFor();
+    assert.deepEqual(await page.evaluate(() => [document.activeElement?.matches('.wb-memory-picker input'), document.querySelector('.wb-memory-picker-list').hidden]),
+      [true, false], 'the picker keeps its focus and its choices');
+    await page.keyboard.press('Escape');
 
     // Overview and group detail: icon, name and state share the first row; the actions are the second row, starting
     // at the icon's left edge, one row of equal-height buttons with the conversation first.
@@ -640,6 +664,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     for (const [width, height] of [[667, 375], [568, 320]]) {
       const { page, context, errors } = await open(width, height, '/memory');
       await page.locator('#memory-tree .memory-file').first().waitFor();
+      await openReference(page);
       await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
       assert.ok(await page.evaluate(() => scrollY) > height, `${width}x${height}: the file list is taller than the screen`);
       await page.locator(`#memory-tree .memory-file[data-path="${LONG_FILE}"], #memory-tree .memory-file:has-text("${LONG_FILE}")`).first().evaluate(node => node.click());

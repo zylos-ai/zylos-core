@@ -9,7 +9,7 @@ import { createMemoryWriter } from './workbench/memory-write.js';
 // Memory Sync state drafts (zylos-memory/scripts/sync-files.js),
 // memory-write.js saves (24 hex) and self-write.js writes (32 hex).
 const MEMORY_WRITE_TEMP = [/^state\.md\.[^.]+\.tmp$/, /^\..+\.[0-9a-f]{24}\.tmp$/, /^\..+\.[0-9a-f]{32}\.tmp$/];
-const isMemoryWriteTemp = name => MEMORY_WRITE_TEMP.some(pattern => pattern.test(name));
+export const isMemoryWriteTemp = name => MEMORY_WRITE_TEMP.some(pattern => pattern.test(name));
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
@@ -41,7 +41,7 @@ function isDrivePath(value) {
   return /^[A-Za-z]:[\\/]/.test(value) || /^[A-Za-z]:$/.test(value);
 }
 
-function isTextFileName(name) {
+export function isTextFileName(name) {
   return TEXT_EXTENSIONS.has(path.posix.extname(String(name || '').toLowerCase()));
 }
 
@@ -159,61 +159,6 @@ export class MemoryBrowser {
     if (stat.isSymbolicLink()) throw memoryError('invalid_memory_path');
     if (requireFile && !stat.isFile()) throw memoryError('invalid_memory_path');
     return { rel, real, stat };
-  }
-
-  async tree() {
-    const root = await this.realRoot();
-    const rootStat = await fs.lstat(root);
-    return {
-      root: {
-        name: 'memory',
-        path: '',
-        type: 'directory',
-        mtime: isoMtime(rootStat),
-        children: await this.walkDirectory(root, '')
-      }
-    };
-  }
-
-  async walkDirectory(dir, relDir) {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    const nodes = [];
-    for (const entry of entries) {
-      if (entry.name === '.git') continue;
-      if (entry.isSymbolicLink()) continue;
-      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
-      const full = path.join(dir, entry.name);
-      let stat;
-      try {
-        stat = await fs.lstat(full);
-      } catch {
-        continue;
-      }
-      if (stat.isSymbolicLink()) continue;
-      if (stat.isDirectory()) {
-        nodes.push({
-          path: rel,
-          name: entry.name,
-          type: 'directory',
-          mtime: isoMtime(stat),
-          children: await this.walkDirectory(full, rel)
-        });
-      } else if (stat.isFile() && !isMemoryWriteTemp(entry.name)) {
-        nodes.push({
-          path: rel,
-          name: entry.name,
-          type: 'file',
-          size_bytes: stat.size,
-          mtime: isoMtime(stat),
-          renderable: isTextFileName(entry.name) && stat.size <= this.maxFileBytes
-        });
-      }
-    }
-    nodes.sort((a, b) => {
-      if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
-      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-    });
-    return nodes;
   }
 
   async file(relativePath) {

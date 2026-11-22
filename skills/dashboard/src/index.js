@@ -74,12 +74,12 @@ import { agentColor } from './lib/agent-color.js';
 import { C4Reader } from './lib/c4-reader.js';
 import { createDisplayNames } from './lib/workbench/display-names.js';
 import { workbenchGroupKey, workbenchGroupDetailKey, workbenchFailure } from './lib/workbench/group-http.js';
-import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
 import { createRuns } from './lib/workbench/runs.js';
 import { readTimelineEvents } from './lib/workbench/timeline-events.js';
 import { createGroupConfig } from './lib/workbench/group-config.js';
 import { createGroupBacklog } from './lib/workbench/group-backlog.js';
-import { createMemoryBacklog, readBacklogPage, treeBacklog } from './lib/workbench/memory-backlog.js';
+import { createMemoryBacklog, readBacklogPage, groupBadges } from './lib/workbench/memory-backlog.js';
+import { parseEntriesQuery, readEntriesPage } from './lib/memory-entries.js';
 import { createOriginBacklog } from './lib/workbench/origin-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
 import { createSessionHostRoutes } from './lib/session-host-routes.js';
@@ -1007,6 +1007,20 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
+  if (pathname === '/api/memory/entries') {
+    try {
+      const query = parseEntriesQuery(url.searchParams);
+      const names = displayNames.listAll();
+      sendJson(res, 200, await readEntriesPage(query, { browser: memoryBrowser,
+        displayName: key => names.get(key)?.displayName ?? null,
+        sortMessage: key => c4Reader.getGroupSortMessage(key),
+        badges: keys => groupBadges(groupBacklog, keys) }));
+    } catch (error) {
+      sendJson(res, error.statusCode ?? 500, error.statusCode ? listErrorBody(error) : { error: 'internal_error' });
+    }
+    return true;
+  }
+
   if (pathname === '/api/memory/backlog') {
     try {
       sendJson(res, 200, await readBacklogPage(memoryBacklog, url.searchParams));
@@ -1288,18 +1302,6 @@ async function handleMemoryApi(req, res, pathname, url) {
       sendJson(res, 200, await memoryBrowser.writeFile(url.searchParams.get('path') || '', body));
       return true;
     }
-    if (pathname === '/api/memory/tree') {
-      const tree = await memoryBrowser.tree();
-      const names = displayNames.listAll();
-      const groupRoot = tree.root.children.find(node => node.path === 'session-groups' && node.type === 'directory');
-      const sessionGroups = (groupRoot?.children ?? [])
-        .filter(node => node.type === 'directory' && parseSessionGroup(node.name) !== null)
-        .map(node => ({ sessionGroup: node.name, displayName: names.get(node.name)?.displayName ?? null }));
-      // Each group's pending count and syncing state for the badge beside its name.
-      const backlogs = await treeBacklog(groupBacklog, sessionGroups.map(group => group.sessionGroup));
-      sendJson(res, 200, { ...tree, sessionGroups: sessionGroups.map((group, index) => ({ ...group, backlog: backlogs[index] })) });
-      return true;
-    }
     if (pathname === '/api/memory/file') {
       sendJson(res, 200, await memoryBrowser.file(url.searchParams.get('path') || ''));
       return true;
@@ -1579,7 +1581,7 @@ export function createServer() {
       return;
     }
 
-    if (pathname === '/api/memory/tree' || pathname === '/api/memory/file' || pathname === '/api/memory/git') {
+    if (pathname === '/api/memory/file' || pathname === '/api/memory/git') {
       await handleMemoryApi(req, res, pathname, url);
       return;
     }

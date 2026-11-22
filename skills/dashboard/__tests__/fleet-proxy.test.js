@@ -1036,9 +1036,9 @@ test('fleet proxy allows admin memory GETs and validates memory query paths cons
     proxy.handle(req, res, url);
   });
   try {
-    const tree = await fetch(`${hub.origin}/fleet/Remote/api/memory/tree`);
-    assert.equal(tree.status, 200);
-    assert.deepEqual(await tree.json(), { ok: true, method: 'GET', url: '/api/memory/tree' });
+    const entries = await fetch(`${hub.origin}/fleet/Remote/api/memory/entries?dir=reference&limit=50`);
+    assert.equal(entries.status, 200);
+    assert.deepEqual(await entries.json(), { ok: true, method: 'GET', url: '/api/memory/entries?dir=reference&limit=50' });
 
     const nested = await fetch(`${hub.origin}/fleet/Remote/api/memory/file?path=reference%2Fprojects.md`);
     assert.equal(nested.status, 200);
@@ -1080,7 +1080,7 @@ test('fleet proxy allows admin memory GETs and validates memory query paths cons
     assert.deepEqual(await write.json(), { ok: false, error: { code: 'not_allowed_via_fleet', message: "This change can't be made when opening another agent from the fleet" } });
 
     assert.deepEqual(seen, [
-      { method: 'GET', url: '/api/memory/tree' },
+      { method: 'GET', url: '/api/memory/entries?dir=reference&limit=50' },
       { method: 'GET', url: '/api/memory/file?path=reference%2Fprojects.md' },
       { method: 'PUT', url: '/api/memory/file?path=identity.md' },
       { method: 'PUT', url: '/api/memory/file?path=identity.md' }
@@ -1109,8 +1109,8 @@ test('fleet proxy keeps encoded slash fail-closed for memory URL path', async ()
   });
   try {
     for (const url of [
-      `${hub.origin}/fleet/Remote/api%2Fmemory/tree`,
-      `${hub.origin}/fleet/Remote/api/memory%2Ftree`
+      `${hub.origin}/fleet/Remote/api%2Fmemory/entries`,
+      `${hub.origin}/fleet/Remote/api/memory%2Fentries`
     ]) {
       const resp = await fetch(url);
       assert.equal(resp.status, 403);

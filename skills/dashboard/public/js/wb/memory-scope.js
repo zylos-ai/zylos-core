@@ -1,59 +1,37 @@
 import { countLabel } from '../count-label.js';
 import { element, fallbackName, icon, platformOf } from './plain-text.js';
+import { createMemoryEntries, GROUPS_DIR } from './memory-entries.js';
 
-// Scope metadata is validated by Core's parseSessionGroup on the server.
+// Scope metadata is validated by Core's parseSessionGroup on the server; the page knows only what it has loaded
+// (`known`, from memory-entries.js): the session groups it has seen, invalid group directories and the root files.
 /**
  * Multi-session instances have background upkeep writing memory per group. Until Core has a locked write
- * path, the editor always says a save may conflict with it; the tree lists groups only on such instances.
+ * path, the editor always says a save may conflict with it; such instances have session groups.
  */
-export const memoryUpkeepNotice = tree => Array.isArray(tree?.sessionGroups) && tree.sessionGroups.length > 0;
-
-export function memoryScope(tree) {
-  const root = tree?.root ?? { path: '', type: 'directory', children: [] };
-  const metadata = new Map((tree?.sessionGroups ?? []).map(row => [row.sessionGroup, row]));
-  const shared = [], groups = [];
-  for (const child of root.children ?? []) {
-    if (child.path !== 'session-groups' || child.type !== 'directory') { shared.push(child); continue; }
-    const invalid = [];
-    for (const directory of child.children ?? []) {
-      const meta = directory.type === 'directory' && metadata.get(directory.name);
-      if (meta) groups.push({ ...meta, directory });
-      else invalid.push({ ...directory, diagnostic: 'invalid_session_group' });
-    }
-    if (invalid.length) shared.push({ ...child, children: invalid });
-  }
-  return { shared: { ...root, children: shared }, groups };
-}
+export const memoryUpkeepNotice = known => (known?.groups?.size ?? 0) > 0;
 
 export function memoryGroupLabel(group, t) {
   return group.displayName || fallbackName(group, t);
 }
 
-/** Which part of memory a file belongs to: shared, a valid group, or an invalid group directory. */
-export function memoryFileScope(tree, path) {
-  if (typeof path !== 'string' || !path.startsWith('session-groups/')) return { kind: 'shared' };
-  const key = path.split('/')[1];
-  const group = (tree?.sessionGroups ?? []).find(row => row.sessionGroup === key);
-  return group && path.split('/').length >= 3 ? { kind: 'group', group } : { kind: 'invalid' };
-}
-
 /**
- * Files under a directory as one flat list: a directory's own files come before the files in its subdirectories,
- * so the core files at the top (identity.md, references.md, state.md) lead the list. Dot files such as .gitkeep
- * are not memory content.
+ * Which part of memory a file belongs to: shared, a valid group, an invalid group directory, or unknown while the
+ * file's group has not been loaded yet.
  */
-export function memoryFlatFiles(node, files = []) {
-  const children = node?.children ?? [];
-  for (const child of children) if (child.type === 'file' && !String(child.name).startsWith('.')) files.push(child);
-  for (const child of children) if (child.type === 'directory') memoryFlatFiles(child, files);
-  return files;
+export function memoryFileScope(known, path) {
+  if (typeof path !== 'string' || !path.startsWith('session-groups/')) return { kind: 'shared' };
+  const parts = path.split('/'), group = known?.groups?.get(parts[1]);
+  if (group && parts.length >= 3) return { kind: 'group', group };
+  if (parts.length < 3 || known?.invalid?.has(parts[1])) return { kind: 'invalid' };
+  return { kind: 'unknown' };
 }
 
 const CHANNEL_ICON = { telegram: 'send', lark: 'msg', feishu: 'msg', wechat: 'msg', openmax: 'hex', 'web-console': 'monitor' };
 export const memoryGroupIcon = group => group.sessionGroup === 'origin' ? 'origin' : CHANNEL_ICON[platformOf(group)] ?? 'msg';
 
-export function memoryBudgetRows(tree, budgets) {
-  const files = tree?.root?.children ?? [];
+/** The startup budget rows for the root files identity.md, references.md and state.md, from the root listing. */
+export function memoryBudgetRows(rootFiles, budgets) {
+  const files = rootFiles ?? [];
   return ['identity.md', 'references.md', 'state.md'].flatMap(path => {
     const file = files.find(node => node.path === path && node.type === 'file');
     if (!file) return [];
@@ -99,7 +77,8 @@ export function memorySaveCurrent(captured, current) {
   return memorySaveTargetCurrent(captured, current) && captured.file === current.file;
 }
 
-export function applyMemorySave(captured, current, saved) {
+/** Applies a save; `updateFile` gives the saved file's new size and time to the loaded lists. */
+export function applyMemorySave(captured, current, saved, updateFile = () => {}) {
   if (!memorySaveCurrent(captured, current)) return false;
   if (current.draft === captured.draft) current.draft = saved.text;
   current.file = saved;
@@ -109,12 +88,7 @@ export function applyMemorySave(captured, current, saved) {
   current.conflict = null;
   current.conflictRetryText = '';
   current.liveNotice = null;
-  function updateFile(node) {
-    if (!node) return;
-    if (node.type === 'file' && node.path === saved.path) Object.assign(node, { size_bytes: saved.size_bytes, mtime: saved.mtime });
-    else for (const child of node.children ?? []) updateFile(child);
-  }
-  updateFile(current.tree?.root);
+  updateFile(saved.path, { size_bytes: saved.size_bytes, mtime: saved.mtime });
   return true;
 }
 
@@ -152,15 +126,15 @@ export async function saveMemoryOnce({ request, readFile, path, text, sha256, is
   }
 }
 
-export function memoryWriteAllowed(tree, path) {
+/** Core saves shared files and files in a valid group directory; an unknown group stays read-only until loaded. */
+export function memoryWriteAllowed(known, path) {
   if (typeof path !== 'string') return false;
-  if (!path.startsWith('session-groups/')) return true;
-  const parts = path.split('/');
-  return parts.length >= 3 && (tree?.sessionGroups ?? []).some(group => group.sessionGroup === parts[1]);
+  const { kind } = memoryFileScope(known, path);
+  return kind === 'shared' || kind === 'group';
 }
 
-export function applyMemoryWriteAccess(edit, save, tree, path) {
-  if (memoryWriteAllowed(tree, path)) return;
+export function applyMemoryWriteAccess(edit, save, known, path) {
+  if (memoryWriteAllowed(known, path)) return;
   if (edit) { edit.hidden = true; edit.disabled = true; }
   if (save) save.disabled = true;
 }
@@ -207,22 +181,61 @@ const BACKLOG_FILTER_AT = 12;
 // Groups per backlog request, and how long the filter waits after the last keystroke before asking the server.
 const BACKLOG_PAGE = 50;
 const BACKLOG_SEARCH_DELAY = 300;
+// The file search and the group picker ask the server once typing pauses; the list standard's q is at most 64
+// characters, and the picker shows a few groups at a time.
+const LIST_SEARCH_DELAY = 300;
+const SEARCH_MAX = 64;
+const PICKER_PAGE = 8;
 
 // Browsing is ordinary UI. Progress and file budgets belong to technical details;
 // the ordinary view gets a one-line summary instead.
+// The file list reads memory one directory level at a time (memory-entries.js): the root and the session groups
+// first, all folded; opening a directory or group reads its first page, and "Load more" the next.
 export function createMemoryScope({ document = globalThis.document, root, chartsRoot, listRoot = null, summaryRoot = null,
-  t = key => key, request, getTree = () => null, getFile = () => null, onChange = () => {},
-  onGroup = () => {}, onFile = () => {}, detail = () => document.documentElement.dataset.detail,
-  identity = () => 'local', selectedPath = () => getFile()?.path ?? null, isCollapsed = () => false,
-  toggleCollapsed = () => {}, fileTitle = () => '', sizeText = byteSize } = {}) {
+  t = key => key, request, getFile = () => null, onChange = () => {},
+  onFile = () => {}, detail = () => document.documentElement.dataset.detail,
+  identity = () => 'local', selectedPath = () => getFile()?.path ?? null, fileTitle = () => '', sizeText = byteSize } = {}) {
   let selected = 'all', selectedGroup = '', backlog = null, loaded = false, owner = identity(), generation = 0, stopped = false,
-    query = '', backlogQuery = '', backlogTimer = null, loadingMore = false;
+    query = '', backlogQuery = '', backlogTimer = null, loadingMore = false, searchTimer = null,
+    pickerQuery = '', pickerOpen = false, pickerTimer = null;
+  let expanded = new Set();
+  const entries = createMemoryEntries({ request, onChange: () => { if (!stopped) onChange(); } });
   const search = element(document, 'input');
   search.type = 'search';
+  // The server searches; the results change once typing pauses.
   search.addEventListener('input', () => {
-    query = search.value;
-    renderList();
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { query = search.value.trim().slice(0, SEARCH_MAX); renderList(); }, LIST_SEARCH_DELAY);
   });
+  // The group picker: type part of a group's name; the server finds the groups.
+  const picker = element(document, 'input', undefined, 'wb-input');
+  picker.type = 'search';
+  picker.autocomplete = 'off';
+  const pickerList = element(document, 'div', undefined, 'wb-memory-picker-list');
+  pickerList.setAttribute('role', 'listbox');
+  // The list opens on a click, typing or ArrowDown, not on keyboard focus alone, so tabbing past the picker never
+  // enters its choices.
+  const openPicker = () => { if (pickerOpen) return; pickerOpen = true; picker.select?.(); renderPicker(); };
+  picker.addEventListener('click', openPicker);
+  picker.addEventListener('input', () => {
+    pickerOpen = true;
+    clearTimeout(pickerTimer);
+    pickerTimer = setTimeout(() => { pickerQuery = picker.value.trim().slice(0, SEARCH_MAX); renderPicker(); }, LIST_SEARCH_DELAY);
+  });
+  picker.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { pickerOpen = false; renderPicker(); picker.blur?.(); }
+    else if (event.key === 'ArrowDown' && !pickerOpen) { event.preventDefault?.(); openPicker(); }
+  });
+  const pickerWrap = element(document, 'div', undefined, 'wb-memory-picker');
+  pickerWrap.addEventListener('focusout', event => {
+    if (pickerWrap.contains(event.relatedTarget)) return;
+    pickerOpen = false; pickerQuery = ''; renderPicker();
+  });
+  pickerWrap.append(picker, pickerList);
+  const filters = element(document, 'div', undefined, 'wb-memory-filter');
+  // Pressing a choice keeps focus in the field (Safari does not focus a pressed button), so the list is still
+  // there when the click arrives.
+  pickerList.addEventListener('mousedown', event => event.preventDefault?.());
   // Kept across redraws so typing in the group filter keeps focus while only the rows refresh.
   const backlogSearch = element(document, 'input');
   backlogSearch.type = 'search';
@@ -240,50 +253,44 @@ export function createMemoryScope({ document = globalThis.document, root, charts
   const backlogRows = element(document, 'div', undefined, 'wb-memory-rows');
   const searchWrap = element(document, 'label', undefined, 'wb-search wb-memory-search');
   searchWrap.append(icon(document, 'search', 'xs'), search);
-  function currentScope() { return memoryScope(getTree()); }
   function syncIdentity() {
     if (owner !== identity()) {
       owner = identity(); selected = 'all'; selectedGroup = ''; backlog = null; loaded = false; generation++;
+      expanded = new Set(); query = ''; search.value = ''; entries.reset();
     }
+  }
+  const groupPath = key => `${GROUPS_DIR}/${key}`;
+  // A group not on a loaded page is looked up by name: the server's search returns the group directory itself.
+  const lookupSpec = key => ({ view: 'groups', q: key.slice(0, SEARCH_MAX), limit: 100 });
+  function groupRow(key) {
+    const known = entries.known();
+    if (known.groups.has(key)) return known.groups.get(key);
+    const list = entries.start(lookupSpec(key));
+    return list.loading ? undefined : list.items.find(row => row.path === groupPath(key)) ?? null;
   }
   function selectGroup(key) {
     syncIdentity();
     selected = 'groups'; selectedGroup = key ?? '';
-    onGroup(key == null ? null : `session-groups/${key}`);
+    if (key != null) expanded.add(groupPath(key));
     onChange();
   }
   function clearGroup() {
     selectedGroup = '';
-    onGroup(null);
     onChange();
-  }
-  function tree(value) {
-    syncIdentity();
-    const partition = memoryScope(value);
-    const groups = selectedGroup ? partition.groups.filter(group => group.sessionGroup === selectedGroup) : partition.groups;
-    const groupDirs = groups.map(group => ({ ...group.directory, name: memoryGroupLabel(group, t) }));
-    if (selected === 'shared') return partition.shared;
-    if (selected === 'all') return { ...partition.shared, children: [...partition.shared.children, ...groupDirs] };
-    return { ...value?.root, path: '', type: 'directory', children: groupDirs };
-  }
-  function initialPath(value, previousPath, preferredPath) {
-    const scoped = tree(value);
-    const contains = node => node.path === previousPath && node.type === 'file' || (node.children ?? []).some(contains);
-    return contains(scoped) ? previousPath : preferredPath(scoped);
   }
   function button(parent, text, handler, className) {
     const node = element(document, 'button', text, className); node.type = 'button'; node.addEventListener('click', handler); parent.append(node); return node;
   }
-  /** Section keys that fold, in display order; the caller keeps the folded set. */
-  function sectionKeys() {
-    const keys = selected === 'groups' ? [] : ['shared'];
-    if (selected !== 'shared') for (const group of currentScope().groups) keys.push(`session-groups/${group.sessionGroup}`);
-    return keys;
+  function toggle(path) {
+    if (expanded.has(path)) expanded.delete(path); else expanded.add(path);
+    onChange();
   }
   function render() {
     if (!root || stopped) return;
     syncIdentity();
-    root.replaceChildren();
+    // The filter row stays mounted: taking it out would move focus off the picker or the search box whenever a
+    // read they started settles and redraws the page.
+    for (const child of [...root.childNodes]) if (child !== filters) child.remove();
     const nav = element(document, 'div', undefined, 'wb-seg wb-memory-scopes');
     nav.setAttribute('role', 'group'); nav.setAttribute('aria-label', t('wb.memory.scope'));
     for (const [value, label] of [['all', 'wb.memory.all'], ['shared', 'wb.memory.shared'], ['groups', 'wb.memory.groups']]) {
@@ -293,35 +300,46 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       }, selected === value ? 'active' : '');
       item.setAttribute('aria-pressed', String(selected === value));
     }
-    root.append(nav);
-    const filters = element(document, 'div', undefined, 'wb-memory-filter');
-    const select = element(document, 'select', undefined, 'wb-input wb-select');
-    select.setAttribute('aria-label', t('wb.memory.filter'));
-    const all = element(document, 'option', t('wb.memory.allGroups')); all.value = ''; select.append(all);
-    for (const group of currentScope().groups) {
-      const option = element(document, 'option', memoryGroupLabel(group, t)); option.value = group.sessionGroup; select.append(option);
+    if (filters.parentNode === root) root.insertBefore(nav, filters);
+    else { filters.append(pickerWrap, searchWrap); root.append(nav, filters); }
+    picker.placeholder = t('wb.memory.filter');
+    picker.setAttribute('aria-label', t('wb.memory.filter'));
+    picker.disabled = selected === 'shared';
+    if (document.activeElement !== picker) {
+      const row = selectedGroup ? groupRow(selectedGroup) : null;
+      picker.value = selectedGroup ? (row ? memoryGroupLabel(row, t) : fallbackName({ sessionGroup: selectedGroup }, t)) : '';
     }
-    if (selectedGroup && !currentScope().groups.some(group => group.sessionGroup === selectedGroup)) {
-      const missing = element(document, 'option', fallbackName({ sessionGroup: selectedGroup }, t)); missing.value = selectedGroup; select.append(missing);
-    }
-    select.value = selectedGroup; select.addEventListener('change', () => select.value ? selectGroup(select.value) : clearGroup());
-    select.disabled = selected === 'shared';
-    const selectWrap = element(document, 'span', undefined, 'wb-select-wrap');
-    const caret = icon(document, 'chev', 'xs');
-    selectWrap.append(select, caret);
+    renderPicker();
     search.placeholder = t('wb.memory.search');
     search.setAttribute('aria-label', t('wb.memory.search'));
-    filters.append(selectWrap, searchWrap);
-    root.append(filters);
-    if (selectedGroup && !currentScope().groups.some(group => group.sessionGroup === selectedGroup)) root.append(element(document, 'p', t('wb.memory.noGroupFiles'), 'empty-state'));
-    if (currentScope().shared.children.some(node => node.path === 'session-groups')) root.append(element(document, 'p', t('wb.memory.invalidGroup'), 'wb-memory-diagnostic'));
+    if (selectedGroup && groupRow(selectedGroup) === null) root.append(element(document, 'p', t('wb.memory.noGroupFiles'), 'empty-state'));
+    if (selected !== 'shared' && entries.known().invalid.size) root.append(element(document, 'p', t('wb.memory.invalidGroup'), 'wb-memory-diagnostic'));
     const file = getFile();
-    if (file && !memoryWriteAllowed(getTree(), file.path)) {
+    if (file && memoryFileScope(entries.known(), file.path).kind === 'invalid') {
       root.append(element(document, 'p', t('wb.memory.invalidGroupFile'), 'wb-memory-diagnostic'));
     }
     renderList();
     renderSummary();
     renderCharts();
+  }
+  /** The picker's choices: the groups matching what is typed, a few at a time, with "All groups" first. */
+  function renderPicker() {
+    pickerList.replaceChildren();
+    pickerList.hidden = !pickerOpen;
+    if (!pickerOpen) return;
+    const all = button(pickerList, t('wb.memory.allGroups'), () => { pickerOpen = false; picker.blur?.(); clearGroup(); }, 'wb-memory-picker-item');
+    all.setAttribute('role', 'option');
+    const list = entries.start({ view: 'groups', q: pickerQuery, limit: PICKER_PAGE });
+    for (const row of list.items.filter(item => item.type === 'group')) {
+      const item = button(pickerList, undefined, () => { pickerOpen = false; pickerQuery = ''; picker.blur?.(); selectGroup(row.sessionGroup); },
+        'wb-memory-picker-item' + (row.sessionGroup === selectedGroup ? ' active' : ''));
+      item.setAttribute('role', 'option');
+      item.append(icon(document, memoryGroupIcon(row), 'xs'), element(document, 'span', memoryGroupLabel(row, t)));
+      if (detail() === 'technical') item.append(element(document, 'span', row.sessionGroup, 'wb-mono'));
+    }
+    if (list.loading) pickerList.append(element(document, 'p', t('memory.loading'), 'wb-memory-source'));
+    else if (list.error) pickerList.append(element(document, 'p', t('memory.error_generic'), 'wb-memory-diagnostic'));
+    else if (!list.items.some(item => item.type === 'group')) pickerList.append(element(document, 'p', t('wb.noMatch'), 'wb-memory-source'));
   }
   function fileButton(parent, node, prefix, sizeClass = '') {
     const item = button(parent, undefined, () => onFile(node.path),
@@ -336,86 +354,166 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       element(document, 'span', isNumber(node.size_bytes) ? sizeText(node.size_bytes) : '', 'memory-file-meta' + sizeClass));
     return item;
   }
+  /** A group's heading: icon, name, technical ID and its pending count or syncing badge. */
+  function groupHead(parent, row, onClick, open) {
+    const head = button(parent, undefined, onClick, 'wb-memory-group-h');
+    head.dataset.collapseKey = row.path;
+    if (open !== undefined) head.setAttribute('aria-expanded', String(open));
+    const name = element(document, 'span', undefined, 'wb-memory-group-name');
+    name.append(element(document, 'b', memoryGroupLabel(row, t)));
+    if (detail() === 'technical') name.append(element(document, 'span', row.sessionGroup, 'wb-mono'));
+    head.append(icon(document, memoryGroupIcon(row), 'xs'), name);
+    const badge = row.backlog ?? null;
+    if (badge?.syncing === true) {
+      const node = element(document, 'span', undefined, 'wb-memory-badge');
+      node.append(icon(document, 'loader', 'xs'), element(document, 'span', t('wb.memory.syncing')));
+      head.append(node);
+    } else if (isNumber(badge?.count) && badge.count > 0) {
+      head.append(element(document, 'span', t('wb.memory.pending', { count: badge.count }), 'wb-memory-count'));
+    }
+    return head;
+  }
+  function groupBlock(parent, row, forceOpen = false) {
+    const block = element(document, 'div', undefined, 'wb-memory-group');
+    const open = forceOpen || expanded.has(row.path);
+    groupHead(block, row, () => forceOpen ? null : toggle(row.path), open);
+    if (open) renderDirectory(block, row.path);
+    parent.append(block);
+  }
+  function directoryNode(parent, row) {
+    const block = element(document, 'div', undefined, 'wb-memory-dir');
+    const open = expanded.has(row.path);
+    const head = button(block, undefined, () => toggle(row.path), 'wb-memory-dir-h');
+    head.dataset.collapseKey = row.path;
+    head.setAttribute('aria-expanded', String(open));
+    head.append(icon(document, 'chev', 'xs'), element(document, 'span', `${row.name}/`));
+    if (row.diagnostic) head.append(element(document, 'span', t('wb.memory.scopeInvalid'), 'wb-memory-bl-tag warn'));
+    if (open) renderDirectory(block, row.path);
+    parent.append(block);
+  }
+  function listState(parent, list, more) {
+    if (list.loading) parent.append(element(document, 'p', t('memory.loading'), 'wb-memory-source'));
+    else if (list.error) parent.append(element(document, 'p', t('memory.error_generic'), 'wb-memory-diagnostic'));
+    else if (list.nextCursor) button(parent, t('wb.detail.loadMore'), more, 'wb-link-btn wb-memory-more');
+  }
+  /** One directory's loaded rows, folded subdirectories and groups included, then its "Load more". */
+  function renderDirectory(parent, dir, { skip = null, budgets = null } = {}) {
+    const rows = element(document, 'div', undefined, 'wb-memory-entries');
+    const list = entries.start({ dir });
+    for (const row of list.items) {
+      if (row.path === skip) continue;
+      if (row.type === 'file') {
+        const budget = budgets?.get(row.path);
+        fileButton(rows, row, '', budget?.over > 0 || budget?.warned ? ' wb-txt-warn' : '');
+      } else if (row.type === 'group') groupBlock(rows, row);
+      else directoryNode(rows, row);
+    }
+    listState(rows, list, () => entries.more({ dir }));
+    parent.append(rows);
+    return list;
+  }
+  /** The search: one flat list of the shallowest matches in the current view, read page by page. */
+  function searchSpec() {
+    if (selected === 'shared') return { view: 'shared', q: query };
+    if (selected === 'groups') return { view: 'groups', q: query, ...(selectedGroup ? { dir: groupPath(selectedGroup) } : {}) };
+    return { q: query };
+  }
+  function renderSearch() {
+    const spec = searchSpec(), list = entries.start(spec);
+    const rows = element(document, 'div', undefined, 'wb-memory-section');
+    for (const row of list.items) {
+      if (row.type === 'file') {
+        const slash = row.path.lastIndexOf('/');
+        fileButton(rows, row, slash < 0 ? '' : row.path.slice(0, slash + 1));
+      } else if (row.type === 'group') groupHead(rows, row, () => { query = ''; search.value = ''; selectGroup(row.sessionGroup); });
+      else {
+        // A matching directory: clearing the search shows it opened in place.
+        const head = button(rows, undefined, () => { query = ''; search.value = ''; revealDirectory(row.path); }, 'wb-memory-dir-h');
+        head.append(icon(document, 'chev', 'xs'), element(document, 'span', `${row.path}/`));
+        if (row.diagnostic) head.append(element(document, 'span', t('wb.memory.scopeInvalid'), 'wb-memory-bl-tag warn'));
+      }
+    }
+    listState(rows, list, () => entries.more(spec));
+    if (!list.loading && !list.error && !list.items.length) rows.append(element(document, 'p', t('wb.memory.noMatch'), 'empty-state'));
+    listRoot.append(rows);
+  }
   function renderList() {
     if (!listRoot || stopped) return;
     const focused = document.activeElement;
     const focusPath = listRoot.contains(focused) ? focused.dataset.path : undefined;
     const focusKey = listRoot.contains(focused) ? focused.dataset.collapseKey : undefined;
-    const value = getTree();
     listRoot.replaceChildren();
-    if (!value) { listRoot.append(element(document, 'p', t('memory.loading'), 'empty-state')); return; }
-    const scope = memoryScope(value);
-    const needle = query.trim().toLowerCase();
-    const matches = node => !needle || String(node.path).toLowerCase().includes(needle);
-    let shown = 0;
-    if (selected !== 'groups') {
-      const budgets = new Map(memoryBudgetRows(value, backlog?.budgets).map(row => [row.path, row]));
-      const files = memoryFlatFiles(scope.shared).filter(matches);
-      if (files.length) {
+    if (query) renderSearch();
+    else {
+      if (selected !== 'groups') {
         const section = element(document, 'div', undefined, 'wb-memory-section');
-        const head = button(section, undefined, () => toggleCollapsed('shared'), 'wb-memory-section-h');
-        head.dataset.collapseKey = 'shared';
-        head.setAttribute('aria-expanded', String(!isCollapsed('shared')));
-        head.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.memory.sharedTitle')));
-        if (!isCollapsed('shared') || needle) {
-          for (const node of files) {
-            const slash = node.path.lastIndexOf('/');
-            const budget = budgets.get(node.path);
-            fileButton(section, node, slash < 0 ? '' : node.path.slice(0, slash + 1),
-              budget?.over > 0 || budget?.warned ? ' wb-txt-warn' : '');
-          }
-        }
+        section.append(element(document, 'p', t('wb.memory.sharedTitle'), 'wb-memory-list-h'));
+        const budgets = new Map(memoryBudgetRows(entries.known().rootFiles, backlog?.budgets).map(row => [row.path, row]));
+        renderDirectory(section, '', { skip: GROUPS_DIR, budgets });
         listRoot.append(section);
-        shown += files.length;
+      }
+      if (selected !== 'shared') {
+        const section = element(document, 'div', undefined, 'wb-memory-section');
+        section.append(element(document, 'p', t('wb.memory.groupsTitle'), 'wb-memory-list-h'));
+        if (selectedGroup) {
+          const row = groupRow(selectedGroup);
+          if (row?.type === 'group') groupBlock(section, row, true);
+          else if (row) directoryNode(section, row);
+          else if (row === undefined) section.append(element(document, 'p', t('memory.loading'), 'wb-memory-source'));
+        } else renderDirectory(section, GROUPS_DIR);
+        listRoot.append(section);
       }
     }
-    if (selected !== 'shared') {
-      const groups = selectedGroup ? scope.groups.filter(group => group.sessionGroup === selectedGroup) : scope.groups;
-      const blocks = [];
-      for (const group of groups) {
-        const files = memoryFlatFiles(group.directory).filter(matches);
-        const label = memoryGroupLabel(group, t);
-        if (needle && !files.length && !label.toLowerCase().includes(needle)) continue;
-        const key = `session-groups/${group.sessionGroup}`;
-        const block = element(document, 'div', undefined, 'wb-memory-group');
-        const head = button(block, undefined, () => toggleCollapsed(key), 'wb-memory-group-h');
-        head.dataset.collapseKey = key;
-        head.setAttribute('aria-expanded', String(!isCollapsed(key)));
-        const name = element(document, 'span', undefined, 'wb-memory-group-name');
-        name.append(element(document, 'b', label));
-        if (detail() === 'technical') name.append(element(document, 'span', group.sessionGroup, 'wb-mono'));
-        head.append(icon(document, memoryGroupIcon(group), 'xs'), name);
-        // Each group's pending count and syncing state, read with the tree.
-        const row = group.backlog ?? null;
-        if (row?.syncing === true) {
-          const badge = element(document, 'span', undefined, 'wb-memory-badge');
-          badge.append(icon(document, 'loader', 'xs'), element(document, 'span', t('wb.memory.syncing')));
-          head.append(badge);
-        } else if (isNumber(row?.count) && row.count > 0) {
-          head.append(element(document, 'span', t('wb.memory.pending', { count: row.count }), 'wb-memory-count'));
-        }
-        if (!isCollapsed(key) || needle) for (const node of files) fileButton(block, node, '');
-        blocks.push(block);
-        shown += files.length;
-      }
-      if (blocks.length) {
-        listRoot.append(element(document, 'p', t('wb.memory.groupsTitle'), 'wb-memory-list-h'), ...blocks);
-      }
-    }
-    if (!shown && needle) listRoot.append(element(document, 'p', t('wb.memory.noMatch'), 'empty-state'));
-    // Async file/backlog responses rebuild rows while the user may be tabbing.
+    // Async responses rebuild rows while the user may be tabbing.
     const replacement = focusPath !== undefined
       ? [...listRoot.querySelectorAll('.memory-file')].find(node => node.dataset.path === focusPath)
       : focusKey !== undefined
-        ? [...listRoot.querySelectorAll('.wb-memory-section-h'), ...listRoot.querySelectorAll('.wb-memory-group-h')]
+        ? [...listRoot.querySelectorAll('.wb-memory-dir-h'), ...listRoot.querySelectorAll('.wb-memory-group-h')]
           .find(node => node.dataset.collapseKey === focusKey)
         : null;
     replacement?.focus({ preventScroll: true });
   }
+  /** Opens every directory from the root down to `path` (itself included), adding folders past the first page. */
+  async function revealDirectory(path, { file = null } = {}) {
+    const parts = path.split('/');
+    if (parts[0] === GROUPS_DIR ? selected === 'shared' || (selectedGroup && parts[1] !== selectedGroup) : selected === 'groups') {
+      selected = 'all'; selectedGroup = '';
+    }
+    onChange();
+    for (let depth = 1; depth <= parts.length; depth++) {
+      const dir = parts.slice(0, depth).join('/'), parent = parts.slice(0, depth - 1).join('/');
+      if (dir === GROUPS_DIR) { await (entries.get({ dir }) ? null : entries.load({ dir })); continue; }
+      if (!entries.get({ dir: parent }) || entries.get({ dir: parent }).loading) await entries.load({ dir: parent });
+      if (!entries.get({ dir: parent }).items.some(row => row.path === dir)) {
+        let row = { path: dir, name: parts[depth - 1], type: 'directory' };
+        if (parent === GROUPS_DIR) {
+          await entries.load(lookupSpec(parts[1]));
+          row = entries.get(lookupSpec(parts[1])).items.find(item => item.path === dir) ?? row;
+        }
+        entries.insert({ dir: parent }, row);
+      }
+      expanded.add(dir);
+    }
+    if (file) {
+      if (!entries.get({ dir: path }) || entries.get({ dir: path }).loading) await entries.load({ dir: path });
+      entries.insert({ dir: path }, file);
+    }
+    onChange();
+  }
+  /** Shows an opened file in the list: its folders open, the file added when it is past their first page. */
+  function revealFile(file) {
+    const slash = file.path.lastIndexOf('/');
+    const row = { path: file.path, name: file.name, type: 'file', size_bytes: file.size_bytes, mtime: file.mtime, renderable: true };
+    if (slash < 0) {
+      if (selected === 'groups') { selected = 'all'; selectedGroup = ''; }
+      return (entries.get({ dir: '' }) ? Promise.resolve() : entries.load({ dir: '' })).then(() => { entries.insert({ dir: '' }, row); onChange(); });
+    }
+    return revealDirectory(file.path.slice(0, slash), { file: row });
+  }
   function renderSummary() {
     if (!summaryRoot || stopped) return;
     summaryRoot.replaceChildren();
-    summaryRoot.hidden = detail() === 'technical' || !getTree();
+    summaryRoot.hidden = detail() === 'technical' || !entries.get({ dir: '' });
     if (summaryRoot.hidden) return;
     // Counted over every group by the server, however many rows are loaded.
     const summary = backlog?.summary ?? null, cross = backlog?.originSync ?? null;
@@ -450,8 +548,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       name.title = isNumber(row.threshold) ? t('wb.memory.originSyncHint', { count: row.threshold }) : t('wb.memory.originSyncHintNoThreshold');
       head.append(name);
     } else {
-      const meta = { ...(getTree()?.sessionGroups ?? []).find(group => group.sessionGroup === row.sessionGroup), ...row };
-      const label = memoryGroupLabel(meta, t);
+      const label = memoryGroupLabel(row, t);
       const name = button(head, label, () => selectGroup(row.sessionGroup), 'wb-memory-chart-label');
       name.title = label === row.sessionGroup ? label : `${label}\n${row.sessionGroup}`;
     }
@@ -530,7 +627,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     progress.append(element(document, 'p', t('wb.memory.backlogSource'), 'wb-memory-source'));
     chartsRoot.append(progress);
     const budgets = chartCard('wb-memory-budgets', 'book', t('wb.memory.budgets'), t('wb.memory.budgetHint'));
-    for (const row of memoryBudgetRows(getTree(), backlog?.budgets)) {
+    for (const row of memoryBudgetRows(entries.known().rootFiles, backlog?.budgets)) {
       const item = element(document, 'div', undefined, 'wb-memory-chart-row');
       button(item, row.path, () => onFile(row.path), 'wb-memory-chart-label');
       const track = element(document, 'div', undefined, 'wb-memory-track');
@@ -593,8 +690,18 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     }
   }
   // The page redraws this view when the detail level or language changes (app.js renderMemory).
-  return { tree, render, renderList, load, loadMore, selectGroup, initialPath, sectionKeys, destroy() {
-    stopped = true; generation++; clearTimeout(backlogTimer);
-    root?.replaceChildren(); chartsRoot?.replaceChildren(); listRoot?.replaceChildren(); summaryRoot?.replaceChildren();
-  } };
+  return { render, renderList, load, loadMore, selectGroup, revealFile,
+    /** What the loaded lists say about memory (memory-entries.js `known`). */
+    known: () => entries.known(),
+    /** The root listing, once read: the default file is chosen from it. */
+    readRoot: () => entries.get({ dir: '' }) && !entries.get({ dir: '' }).loading ? Promise.resolve(entries.get({ dir: '' })) : entries.load({ dir: '' }).then(() => entries.get({ dir: '' })),
+    /** Reads the root and the session groups again, and the first page of every open directory. */
+    reload() { entries.reset(); onChange(); },
+    updateFile: (path, fields) => entries.updateFile(path, fields),
+    anyExpanded: () => expanded.size > 0,
+    collapseAll() { expanded = new Set(); onChange(); },
+    destroy() {
+      stopped = true; generation++; clearTimeout(backlogTimer); clearTimeout(searchTimer); clearTimeout(pickerTimer); entries.reset();
+      root?.replaceChildren(); chartsRoot?.replaceChildren(); listRoot?.replaceChildren(); summaryRoot?.replaceChildren();
+    } };
 }

@@ -164,7 +164,7 @@ test('Dashboard measures both startup dimensions and preserves reference INDEX b
   assert.equal(budgets.checks['references.md'].status, 'ok');
   assert.equal(budgets.limits['reference/projects/INDEX.md'], 32768);
   assert.equal(budgets.warnings['reference/projects/INDEX.md'], 16384);
-  const rows = memoryBudgetRows({ root: { children: ['identity.md', 'references.md', 'state.md'].map(file => ({ path: file, type: 'file', size_bytes: fs.existsSync(path.join(memory, file)) ? fs.statSync(path.join(memory, file)).size : 123 })) } }, budgets);
+  const rows = memoryBudgetRows(['identity.md', 'references.md', 'state.md'].map(file => ({ path: file, type: 'file', size_bytes: fs.existsSync(path.join(memory, file)) ? fs.statSync(path.join(memory, file)).size : 123 })), budgets);
   assert.ok(rows[0].over > 0); assert.equal(rows[1].warned, false);
   assert.equal(rows[2].limit, null);
 });
