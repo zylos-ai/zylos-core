@@ -55,7 +55,7 @@ export function createConversationState({
     error = null,
     loading = false,
     creatingDraft = false;
-  let search = '', listLoaded = false, loadingMore = false, savingPins = false, readWrite = null;
+  let search = '', listLoaded = false, savingPins = false, readWrite = null;
   const listUpdates = new Set();
   let groupPresenceRead = null, workingTimer = null, storedWorkingTimer = null;
   let deletionAllowed = false;
@@ -476,12 +476,11 @@ export function createConversationState({
   const listPage = (currentTab, q, cursor) => request(`${base}?${query({ tab: currentTab, q: q || null, limit: 50, cursor })}`,
     { headers: localeHeaders() });
   async function list(more = false, quiet = false, sentId = null) {
-    if (!active || blocked || quiet && loadingMore || more && (loading || !nextCursor)) return;
+    if (!active || blocked || quiet && loading || more && (loading || !nextCursor)) return;
     const e = epoch, version = ++listVersion, currentTab = tab, q = search;
     const ownsList = () => valid(e) && version === listVersion && currentTab === tab && q === search;
     if (!quiet) {
       listLoadingVersion = version;
-      loadingMore = more;
       loading = true;
       error = null;
       emit();
@@ -557,10 +556,6 @@ export function createConversationState({
       if (more) listDepth++;
       if (!quiet || !listUpdates.size && listDepth === 1) nextCursor = data.nextCursor ?? null;
       if (!more) lastListAt = now();
-      if (quiet && listLoadingVersion && listLoadingVersion < version) {
-        listLoadingVersion = 0;
-        loading = false;
-      }
       emit();
       return rows;
     } catch (err) {
@@ -577,7 +572,6 @@ export function createConversationState({
     } finally {
       if (valid(e) && listLoadingVersion === version && !quiet) {
         listLoadingVersion = 0;
-        loadingMore = false;
         loading = false;
         emit();
       }

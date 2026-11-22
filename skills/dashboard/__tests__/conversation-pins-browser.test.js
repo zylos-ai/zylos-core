@@ -143,11 +143,16 @@ test('the mounted list moves local sends forward and holds other activity behind
           const context = await browser.newContext({ viewport: { width, height: 900 } });
           try {
             await context.addInitScript(value => localStorage.setItem('zylos-dashboard-locale', value), locale);
-            let listReads = 0;
-            await context.route('**/*', route => {
+            let listReads = 0, holdNextList;
+            await context.route('**/*', async route => {
               const url = new URL(route.request().url());
               if (url.origin !== fixture.base) return route.abort();
-              if (url.pathname === listPath) listReads++;
+              if (url.pathname === listPath) {
+                listReads++;
+                const hold = holdNextList;
+                holdNextList = null;
+                if (hold) await hold();
+              }
               return route.continue();
             });
             await context.addCookies([{ name: '__Secure-zylos_dashboard_session', value: fixture.cookie,
@@ -241,9 +246,25 @@ test('the mounted list moves local sends forward and holds other activity behind
             const second = await fixture.createConversation('Second incoming message in a new conversation');
             const plural = locale === 'en' ? '2 conversations have new messages' : '有 2 个对话有新消息';
             await page.waitForFunction(expected => document.querySelector('#wb-chat [data-action="page.newConversations"]').innerText === expected, plural);
-            await hint.click();
+            // Keep the click's list request in flight until a real chat message has been processed.
+            let releaseList;
+            const listGate = new Promise(resolve => { releaseList = resolve; });
+            const listStarted = new Promise(resolve => {
+              holdNextList = () => { resolve(); return listGate; };
+            });
+            try {
+              await hint.click();
+              await listStarted;
+              const readsAtClick = listReads;
+              const duringClick = fixture.addOutbound(c.draft.localId, 'Reply during the requested list refresh');
+              await page.locator(`#wb-chat [data-message-id="${duringClick.id}"]`).waitFor({ state: 'attached' });
+              assert.equal(listReads, readsAtClick, 'chat push does not supersede the pending user list request');
+            } finally {
+              releaseList();
+            }
             await page.locator(`#wb-chat [data-conversation-id="${idOf(added)}"]`).waitFor();
             await page.locator(`#wb-chat [data-conversation-id="${idOf(second)}"]`).waitFor();
+            await hint.waitFor({ state: 'hidden' });
             assert.equal(await page.evaluate(() => document.scrollingElement.scrollWidth <= innerWidth + 1), true);
           } finally {
             await context.unrouteAll({ behavior: 'ignoreErrors' });
