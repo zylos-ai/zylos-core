@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { chatEnabled, createChatSandbox } from '../skills/dashboard/__tests__/helpers/chat-integration-harness.js';
-import { fleetPageFixture } from '../skills/dashboard/__tests__/helpers/fleet-page-fixture.js';
+import { fleetPageFixture, fleetSettingsPageFixture } from '../skills/dashboard/__tests__/helpers/fleet-page-fixture.js';
 import { startPage } from '../skills/dashboard/__tests__/helpers/workbench-browser.js';
 
 function fleetFixture() {
@@ -275,8 +275,7 @@ test('Fleet reloads the visible page and settings page the configured machines',
         await page.route(url => /^\/api\/fleet\/agents(?:\/.*)?$/.test(url.pathname), async route => {
           const request = route.request(), url = new URL(request.url());
           if (request.method() === 'GET') {
-            const result = fleetPageFixture({ agents: machines }, url.search);
-            return route.fulfill({ json: { items: result.items, nextCursor: result.nextCursor, total: result.total, self: { name: 'Node 01' } } });
+            return route.fulfill({ json: fleetSettingsPageFixture(machines, url.search, 'Node 01') });
           }
           if (request.method() === 'POST') {
             const body = request.postDataJSON();
