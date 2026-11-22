@@ -361,7 +361,15 @@ test('Fleet reloads the visible page and settings page the configured machines',
         assert.equal(await settings.locator('.wb-agent-row').count(), 8);
         assert.match(await settings.locator('[data-agent="worker-01"]').innerText(), /20ms/);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-        if (evidence) await settings.screenshot({ path: path.join(evidence, `fleet-settings-${width}-${locale}-${theme}.png`) });
+        const search = settings.locator('input[type=search]');
+        assert.equal(await search.getAttribute('placeholder'), locale === 'en' ? 'Search machine names' : '搜机器名');
+        if (evidence) {
+          const screenshot = path.join(evidence, `fleet-settings-${width}-${locale}-${theme}.png`);
+          if (mobile) {
+            await search.scrollIntoViewIfNeeded();
+            await page.screenshot({ path: screenshot });
+          } else await settings.screenshot({ path: screenshot });
+        }
         if (functional) {
           await settings.locator('.wb-plist-next').click();
           await settings.locator('[data-agent="worker-09"]').waitFor();
