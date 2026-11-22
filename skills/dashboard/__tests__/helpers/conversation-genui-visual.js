@@ -337,13 +337,11 @@ export async function runConversationGenuiVisual(t, sandbox) {
   const remoteDrafts = () => page.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith('zylos-dashboard-form-draft:'))
     .map(key => JSON.parse(sessionStorage.getItem(key))).filter(record => record.scope.instance.endsWith('/fleet/Remote')));
   assert.ok((await remoteDrafts()).some(record => record.values.company_name === '示例科技'), 'remote draft contains retained inactive input before authentication loss');
-  let unauthorizedReads = 0;
   simulatedRemoteUnauthorized = true;
   const remoteHistoryPattern = '**/fleet/Remote/api/conversations/*/messages?*';
-  await context.route(remoteHistoryPattern, route => {
-    if (unauthorizedReads++) return route.continue();
-    return route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'chat_auth_required' }) });
-  });
+  // Authentication loss persists: every remote history read fails until unroute (mark-read reads one too).
+  await context.route(remoteHistoryPattern, route =>
+    route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'chat_auth_required' }) }));
   const unauthorizedResponse = page.waitForResponse(response => new URL(response.url()).pathname.startsWith('/fleet/Remote/api/conversations') && response.status() === 401);
   await unauthorizedResponse;
   await page.waitForFunction(() => [...document.querySelectorAll('[data-interrupt-id="controls_interrupt"] [data-field-key] input,[data-interrupt-id="controls_interrupt"] [data-field-key] select,[data-interrupt-id="controls_interrupt"] [data-field-key] textarea')].every(control => control.disabled && control.value === ''));
