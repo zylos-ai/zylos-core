@@ -754,6 +754,7 @@
   "wb.memory.groupsTitle": "各组 · memory/session-groups/",
   "wb.memory.pending": "待存入 {count}",
   "wb.memory.noMatch": "没有匹配的文件",
+  "wb.memory.noBacklogGroups": "没有待整理的组",
   "wb.memory.search": "搜文件名",
   "wb.memory.summaryOk": "记忆整理正常",
   "wb.memory.summaryLate": "有组积压超过 6 小时",

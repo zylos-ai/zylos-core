@@ -504,6 +504,8 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     for (const row of rows) backlogRows.append(backlogItem(row));
     if (backlog?.nextCursor) moreButton(backlogRows);
     if (needle && !cross && !rows.length) backlogRows.append(element(document, 'p', t('wb.memory.noMatch'), 'wb-memory-source'));
+    // Without a search, an empty list says so rather than leaving the card blank (the cross-group row is not a group).
+    else if (!needle && !rows.length && !backlog?.nextCursor) backlogRows.append(element(document, 'p', t('wb.memory.noBacklogGroups'), 'wb-memory-source'));
   }
   function renderCharts() {
     if (!chartsRoot || stopped) return;

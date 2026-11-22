@@ -351,7 +351,7 @@ test('the header threshold is the one most groups share, not the first or the sm
   assert.equal(view([15, 30]), 15, 'a tie goes to the smaller threshold');
 });
 
-test('a short backlog list has no filter, and an empty list adds no line of its own', async () => {
+test('a short backlog list has no filter, and an empty list says no group has anything waiting', async () => {
   const f = fixture({ detail: () => 'technical', request: async () => ({ groups: [
     { sessionGroup: 'telegram:dm-1', count: 2, threshold: 15, syncing: false },
     { sessionGroup: 'telegram:dm-2', count: 1, threshold: 15, syncing: false },
@@ -364,7 +364,8 @@ test('a short backlog list has no filter, and an empty list adds no line of its 
   const empty = fixture({ detail: () => 'technical', request: async () => ({ groups: [] }) });
   await empty.controller.load();
   const rows = nodesOfClass(nodesOfClass(empty.chartsRoot, 'wb-memory-progress')[0], 'wb-memory-rows')[0];
-  assert.deepEqual(rows.children, [], 'no rows and no fold line');
+  assert.deepEqual(rows.children.map(node => [node.className, node.textContent]), [['wb-memory-source', t('wb.memory.noBacklogGroups')]],
+    'one line and no count, instead of a blank card');
   empty.controller.destroy();
 });
 

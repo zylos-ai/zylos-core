@@ -754,6 +754,7 @@
   "wb.memory.groupsTitle": "Groups · memory/session-groups/",
   "wb.memory.pending": "{count} to save",
   "wb.memory.noMatch": "No matching files",
+  "wb.memory.noBacklogGroups": "No group has anything waiting",
   "wb.memory.search": "Search file names",
   "wb.memory.summaryOk": "Memory upkeep is normal",
   "wb.memory.summaryLate": "A group has waited more than 6 hours",
