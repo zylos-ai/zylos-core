@@ -26,7 +26,7 @@ for (const id of SUPPORTED_RUNTIMES) {
     const publishesConfig = runtime.install.postUpgradeSync !== UNSUPPORTED;
     assert.equal(hooks.writeConfig !== UNSUPPORTED, publishesConfig);
     assert.equal(hooks.installHooks !== UNSUPPORTED, publishesConfig);
-    for (const member of ['optedIn', 'trust', 'features', 'stage', 'writeConfig', 'installHooks', 'toolInput', 'readSessionSource', 'toolGuard']) {
+    for (const member of ['optedIn', 'trust', 'stage', 'writeConfig', 'installHooks', 'toolInput', 'readSessionSource', 'toolGuard']) {
       if (hooks[member] !== UNSUPPORTED) assert.equal(typeof hooks[member], 'function', `hooks.${member}`);
     }
     assert.equal(runtime.launch.efforts !== UNSUPPORTED, runtimesWith('modelOverride', 'supported').includes(id),

@@ -151,13 +151,19 @@ export async function runDashboardDisplayBrowser(t, sandbox) {
           return { hidden: label.hidden, width: rect.width, height: rect.height, text: label.textContent };
         });
         assert.deepEqual({ ...(await fieldState()), text: undefined }, { hidden: true, width: 0, height: 0, text: undefined }, 'the entire effort field and its label leave layout');
+        // The engine card shows one engine at a time: each engine's field must sit in the same column.
         const alignment = async kind => {
-          const positions = await page.evaluate(kind => ['claude', 'codex'].map(runtime => {
-            const node = document.querySelector(`#settings-${kind}-${runtime}`).closest('label');
-            const rect = node.getBoundingClientRect();
-            return { x: rect.x, width: rect.width };
-          }), kind);
-          assert.ok(Math.abs(positions[0].x - positions[1].x) <= 1, `${kind} columns align: ${JSON.stringify(positions)}`);
+          const positions = [];
+          for (const runtime of ['claude', 'codex']) {
+            await page.locator('#settings-engine').selectOption(runtime);
+            positions.push(await page.locator(`#settings-${kind}-${runtime}`).evaluate(node => {
+              const rect = node.closest('label').getBoundingClientRect();
+              return { x: rect.x, width: rect.width };
+            }));
+          }
+          await page.locator('#settings-engine').selectOption('claude');
+          assert.ok(positions.every(position => position.width > 0) && Math.abs(positions[0].x - positions[1].x) <= 1,
+            `${kind} columns align: ${JSON.stringify(positions)}`);
         };
         await alignment('threshold');
         await shot('settings-haiku');

@@ -1013,7 +1013,6 @@ export const hooks = Object.freeze({
     return true;
   },
   trust: async ({ zylosDir }) => ensureCodexHooksTrusted({ zylosDir }),
-  features: UNSUPPORTED,
   stage: UNSUPPORTED,
   writeConfig: syncCodexConfig,
   installHooks: installCoreCodexHook,

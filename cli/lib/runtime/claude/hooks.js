@@ -493,10 +493,6 @@ export async function repairProjectSettings(zylosDir, settingsPath) {
   console.log(`Claude settings were not valid JSON; moved to ${backupPath} and rebuilt from the template`);
 }
 
-function features() {
-  return { stopFailure: detectStopFailureSupport(), subagentHooks: detectSubagentHooksSupport() };
-}
-
 async function ready({ zylosDir }) {
   try {
     const settings = JSON.parse(fs.readFileSync(path.join(zylosDir, '.claude', 'settings.json'), 'utf8'));
@@ -528,7 +524,6 @@ export const hooks = Object.freeze({
   optedIn: UNSUPPORTED,
   ready,
   trust: UNSUPPORTED,
-  features,
   stage,
   writeConfig: UNSUPPORTED,
   installHooks: UNSUPPORTED,

@@ -97,7 +97,6 @@ export const RUNTIME_CONTRACT = Object.freeze({
       optedIn: 'optional',
       ready: 'required',
       trust: 'optional',
-      features: 'optional',
       stage: 'optional',
       writeConfig: 'optional',
       installHooks: 'optional',

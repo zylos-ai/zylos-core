@@ -1,4 +1,3 @@
-import { URL } from 'node:url';
 import { loadCoreModule } from './core-modules.js';
 
 const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
@@ -12,50 +11,6 @@ function toBool(value, fallback) {
   if (value === true || value === 'true') return true;
   if (value === false || value === 'false') return false;
   return fallback;
-}
-
-function summarizeWebFetch(toolInput = {}) {
-  const rawUrl = typeof toolInput.url === 'string' ? toolInput.url.trim() : '';
-  if (!rawUrl) {
-    return { type: 'input-keys', value: Object.keys(toolInput).sort() };
-  }
-  try {
-    const parsed = new URL(rawUrl);
-    return { type: 'url-host', value: parsed.host || parsed.hostname || rawUrl };
-  } catch {
-    return { type: 'url-preview', value: rawUrl.slice(0, 120) };
-  }
-}
-
-function summarizeWebSearch(toolInput = {}) {
-  const query = typeof toolInput.query === 'string'
-    ? toolInput.query.trim()
-    : (typeof toolInput.prompt === 'string' ? toolInput.prompt.trim() : '');
-  if (!query) {
-    return { type: 'input-keys', value: Object.keys(toolInput).sort() };
-  }
-  return { type: 'query-preview', value: query.slice(0, 120) };
-}
-
-function summarizeBash(toolInput = {}) {
-  const command = typeof toolInput.command === 'string' ? toolInput.command.trim() : '';
-  if (!command) {
-    return { type: 'input-keys', value: Object.keys(toolInput).sort() };
-  }
-  return { type: 'command-head', value: command.split(/\s+/)[0] || command.slice(0, 80) };
-}
-
-export function summarizeToolInput(toolName, toolInput = {}) {
-  switch (toolName) {
-    case 'WebFetch':
-      return summarizeWebFetch(toolInput);
-    case 'WebSearch':
-      return summarizeWebSearch(toolInput);
-    case 'Bash':
-      return summarizeBash(toolInput);
-    default:
-      return { type: 'input-keys', value: Object.keys(toolInput || {}).sort() };
-  }
 }
 
 export function getToolRules({ runtimeId, watchdog, config = {} } = {}) {
