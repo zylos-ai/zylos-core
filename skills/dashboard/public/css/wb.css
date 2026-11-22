@@ -939,17 +939,23 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .memory-head .memory-refresh { width: 30px; height: 30px; border: 0; background: transparent; }
 .memory-head .memory-refresh svg { width: 16px; height: 16px; }
 .wb-memory-filter { order: 2; display: flex; flex-basis: 100%; gap: 6px; margin: 0; }
-.wb-memory-filter .wb-select-wrap { flex: 0 0 132px; }
-.wb-memory-filter .wb-select { height: var(--wb-h); }
+/* The group picker: type part of a group's name; its choices drop below the field. */
+.wb-memory-picker { position: relative; flex: 0 0 148px; min-width: 0; }
+.wb-memory-picker .wb-input { width: 100%; height: var(--wb-h); }
+.wb-memory-picker-list { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: max(100%, 240px); max-height: 320px; overflow: auto; padding: 4px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); box-shadow: 0 8px 24px rgba(0, 0, 0, .12); }
+.wb-memory-picker-list[hidden] { display: none; }
+.wb-memory-picker-list > p { margin: 0; padding: 6px 8px; }
+.wb-memory-picker-item { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--wb-r); background: transparent; color: var(--text); font-size: 12.5px; text-align: left; cursor: pointer; }
+.wb-memory-picker-item:hover, .wb-memory-picker-item:focus-visible { background: var(--wb-hover); }
+.wb-memory-picker-item.active { background: var(--wb-accent-soft); }
+.wb-memory-picker-item > span:not(.wb-mono) { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-memory-picker-item .wb-mono { flex: 1 1 0; min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .wb-memory-search { flex: 1; min-width: 0; height: var(--wb-h); }
 .wb-memory-search input { width: 100%; font-size: 12.5px; }
 .memory-head > p { order: 3; flex-basis: 100%; margin: 0; }
 /* Leave focus space at the pane edges; item padding below preserves the text alignment. */
 .memory-tree { flex: 1; min-height: 0; padding: 4px 4px 18px; overflow: auto; scroll-padding: 5px; }
-.wb-memory-section-h, .wb-memory-list-h { display: flex; align-items: center; gap: 5px; width: 100%; margin: 0; padding: 10px 10px 5px; border: 0; background: transparent; color: var(--text-muted); font-size: 11.5px; font-weight: 600; text-align: left; }
-.wb-memory-section-h { cursor: pointer; }
-.wb-memory-section-h .wb-ico, .wb-memory-group-h > .wb-ico:first-child { transition: transform .15s; }
-.wb-memory-section-h[aria-expanded="true"] .wb-ico { transform: rotate(90deg); }
+.wb-memory-list-h { display: flex; align-items: center; gap: 5px; width: 100%; margin: 0; padding: 10px 10px 5px; border: 0; background: transparent; color: var(--text-muted); font-size: 11.5px; font-weight: 600; text-align: left; }
 .memory-file { grid-template-columns: 14px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 0; font-size: 13px; }
 .memory-file > .wb-ico { color: var(--text-muted); }
 .memory-file:hover { background: var(--wb-hover); }
@@ -960,6 +966,15 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .memory-file-meta { font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .memory-file-meta.wb-txt-warn { color: var(--wb-wait); font-weight: 600; }
 .wb-memory-group .memory-file { padding-left: 32px; }
+/* A folder opens in place; what it holds is indented one step per level. */
+.wb-memory-dir-h { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 10px; border: 0; background: transparent; color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }
+.wb-memory-dir-h:hover { background: var(--wb-hover); }
+.wb-memory-dir-h > .wb-ico { color: var(--text-muted); transition: transform .15s; }
+.wb-memory-dir-h[aria-expanded="true"] > .wb-ico { transform: rotate(90deg); }
+.wb-memory-dir > .wb-memory-entries, .wb-memory-group > .wb-memory-entries { margin-left: 16px; border-left: 1px solid var(--wb-line); }
+.wb-memory-group > .wb-memory-entries .memory-file { padding-left: 10px; }
+.wb-memory-entries > .wb-memory-source, .wb-memory-entries > .wb-memory-diagnostic { margin: 0; padding: 5px 10px; }
+.wb-memory-entries > .wb-memory-more { margin: 2px 10px 6px; }
 .wb-memory-group-h { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 0; background: transparent; color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }
 .wb-memory-group-h:hover { background: var(--wb-hover); }
 .wb-memory-group-h > .wb-ico { color: var(--text-dim); }
@@ -1706,7 +1721,7 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   .wb-sched-timeline .wb-sched-dot:hover::before { transform: scale(1.25); }
   .wb-sched-timeline .wb-sched-dot:hover { --wb-dot: var(--text); }
   .wb-sched-timeline .wb-sched-dot.active { --wb-dot: var(--accent); --wb-dot-ring: 0 0 0 3px var(--wb-accent-soft); }
-  .memory-file, .wb-memory-group-h, .wb-memory-section-h { min-height: 40px; }
+  .memory-file, .wb-memory-group-h, .wb-memory-dir-h, .wb-memory-picker-item { min-height: 40px; }
   /* Task detail: deleting sits apart from pausing and editing; a tappable value lines up with its label. */
   .wb-sched-detail .wb-d-acts .wb-icon-danger { margin-left: auto; }
   .wb-kv:has(> .wb-kv-v > button.wb-sched-target) { align-items: center; }

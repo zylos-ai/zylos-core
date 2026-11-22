@@ -227,7 +227,7 @@ test('a stored enabled:false auth setting still requires sign-in for pages and A
   assert.equal(loginPage.status, 200);
   assert.match(await loginPage.text(), /type="password"/);
   for (const [method, route] of [['GET', '/api/settings/timezone'], ['PUT', '/api/settings/timezone'],
-    ['POST', '/api/settings/timezone/actions/restart-services'], ['GET', '/api/memory/tree'], ['GET', '/api/memory/file?path=state.md'],
+    ['POST', '/api/settings/timezone/actions/restart-services'], ['GET', '/api/memory/entries'], ['GET', '/api/memory/file?path=state.md'],
     ['GET', '/api/conversations'], ['GET', '/api/stream'], ['GET', '/api/keys']]) {
     const response = await fetch(origin + route, { method, headers: { Origin: origin } });
     assert.equal(response.status, 401, `${method} ${route}`);
@@ -819,22 +819,22 @@ test('/api/memory tree accepts read keys while file contents require admin', { t
     const { token: readToken } = await readTokenResp.json();
     const { token: adminToken } = await adminTokenResp.json();
 
-    const readResp = await fetch(`${origin}/api/memory/tree`, {
+    const readResp = await fetch(`${origin}/api/memory/entries`, {
       headers: { Authorization: `Bearer ${readToken}` }
     });
     assert.equal(readResp.status, 200);
-    assert.equal((await readResp.json()).root.type, 'directory');
+    assert.equal(Array.isArray((await readResp.json()).items), true);
     const readFile = await fetch(`${origin}/api/memory/file?path=identity.md`, { headers: { Authorization: `Bearer ${readToken}` } });
     assert.equal(readFile.status, 403);
     assert.equal((await readFile.json()).error.code, 'insufficient_scope');
 
-    const adminResp = await fetch(`${origin}/api/memory/tree`, {
+    const adminResp = await fetch(`${origin}/api/memory/entries`, {
       headers: { Authorization: `Bearer ${adminToken}` }
     });
     assert.equal(adminResp.status, 200);
     const adminBody = await adminResp.json();
     assert.equal(JSON.stringify(adminBody).includes('sha256'), false);
-    assert.equal(adminBody.root.children.some(node => node.path === 'identity.md'), true);
+    assert.equal(adminBody.items.some(node => node.path === 'identity.md'), true);
 
     const login = await fetch(`${origin}/login`, {
       method: 'POST',

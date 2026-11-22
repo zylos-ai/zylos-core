@@ -8,6 +8,11 @@ import { sendHtml, sendJson, sendCommandJson, serveStatic } from '../../src/lib/
 import { GROUP, GROUP_FILE, LONG_FILE, workbenchAnswer } from '../fixtures/workbench-browser-api.js';
 import { keyPage } from '../fixtures/key-pages.js';
 
+// Opens the memory list's reference folder (fourteen notes), so the list is taller than a phone screen.
+async function openReference(page) {
+  await page.locator('#memory-tree .wb-memory-dir-h[data-collapse-key="reference"]').click();
+  await page.locator('#memory-tree .memory-file[data-path="reference/note-14.md"]').waitFor();
+}
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const PAGES = ['/', '/index.html', '/memory', '/schedule', '/usage', '/settings'];
 // Share of the memory page (the screen under the app header and page tabs) that an open file's text fills on a
@@ -548,9 +553,11 @@ export async function runWorkbenchBrowser(t, sandbox) {
       await shot(name);
       return layout;
     };
-    // Memory: the list fills the screen; a file opened from further down starts at the top of its own screen.
+    // Memory: the list starts folded; with the reference folder open it fills the screen, and a file opened from
+    // further down starts at the top of its own screen.
     await page.locator('#memory-tree .memory-file').first().waitFor();
     await check('memory-list');
+    await openReference(page);
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     assert.ok(await page.evaluate(() => scrollY) > 100, 'the file list is taller than the screen');
     await page.locator(`#memory-tree .memory-file[data-path="${LONG_FILE}"], #memory-tree .memory-file:has-text("${LONG_FILE}")`).first().evaluate(node => node.click());
@@ -640,6 +647,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     for (const [width, height] of [[667, 375], [568, 320]]) {
       const { page, context, errors } = await open(width, height, '/memory');
       await page.locator('#memory-tree .memory-file').first().waitFor();
+      await openReference(page);
       await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
       assert.ok(await page.evaluate(() => scrollY) > height, `${width}x${height}: the file list is taller than the screen`);
       await page.locator(`#memory-tree .memory-file[data-path="${LONG_FILE}"], #memory-tree .memory-file:has-text("${LONG_FILE}")`).first().evaluate(node => node.click());

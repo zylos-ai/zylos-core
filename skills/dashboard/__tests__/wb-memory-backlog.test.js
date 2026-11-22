@@ -9,7 +9,6 @@ import { createMemoryBacklog, memoryBacklogPage, parseBacklogQuery, readBacklogP
 import { createGroupBacklog } from '../src/lib/workbench/group-backlog.js';
 import { createOriginBacklog } from '../src/lib/workbench/origin-backlog.js';
 import { AuthGate } from '../src/lib/auth.js';
-import { MemoryBrowser } from '../src/lib/memory-browser.js';
 import { setupMemoryHttp } from './fixtures/memory-http.js';
 import { BUDGETS, WARN_THRESHOLDS } from '../../zylos-memory/scripts/memory-budget.js';
 
@@ -316,34 +315,34 @@ test('the backlog list, group details and the memory tree read one backlog, and 
   assert.equal(detail.status, 200);
   assert.deepEqual(await detail.json(), { count: 2, firstAt: '2026-10-01T12:00:00.000Z', syncing: true }, 'group details show the list\'s numbers');
   assert.equal(engine.store.writeGroupDisplayName('telegram:dm-1001', 'Product notes', 'human'), true);
-  const original = await new MemoryBrowser({ zylosDir: root }).tree();
-  const treeResponse = await request('/api/memory/tree', 'admin');
-  assert.equal(treeResponse.status, 200);
-  const scoped = await treeResponse.json();
-  assert.deepEqual(scoped.root, original.root, 'all original tree fields stay identical');
-  assert.deepEqual(Object.keys(scoped).sort(), ['root', 'sessionGroups']);
-  assert.deepEqual(scoped.sessionGroups, [
+  const groupsResponse = await request('/api/memory/entries?dir=session-groups', 'admin');
+  assert.equal(groupsResponse.status, 200);
+  const scoped = await groupsResponse.json();
+  assert.deepEqual(Object.keys(scoped).sort(), ['items', 'nextCursor']);
+  const groupRows = scoped.items.filter(row => row.type === 'group').map(({ sessionGroup, displayName, backlog }) => ({ sessionGroup, displayName, backlog }))
+    .sort((a, b) => a.sessionGroup < b.sessionGroup ? -1 : 1);
+  assert.deepEqual(groupRows, [
     { sessionGroup: 'origin', displayName: null, backlog: { count: 2, syncing: true } },
     { sessionGroup: 'telegram:dm-1001', displayName: 'Product notes', backlog: { count: 1, syncing: false } },
-  ], 'the tree carries current badges in its one answer, matching the list for Origin');
+  ], 'each group row of the page carries its current badge, matching the list for Origin');
   assert.deepEqual(calls.filter(call => call.args[1] === 'unsummarized'), [], 'no count starts a process');
   assert.deepEqual(lockCalls(), [['status', '--group', 'origin', '--json'], ['status', '--group', 'origin', '--json']],
-    'the cross-group row reads the Origin Sync lock; of the groups only Origin has a Sync marker, and its status is asked once for the list, details and tree (30-second cache)');
+    'the cross-group row reads the Origin Sync lock; of the groups only Origin has a Sync marker, and its status is asked once for the list, details and the memory groups page (30-second cache)');
   for (const [query, code, param] of [['?limit=0', 'invalid_parameter', 'limit'], ['?cursor=forged', 'invalid_cursor', undefined]]) {
     const refused = await request('/api/memory/backlog' + query, 'admin');
     assert.equal(refused.status, 400, query);
     const body = await refused.json();
     assert.equal(body.ok, false); assert.equal(body.error.code, code); assert.equal(body.error.param, param);
   }
-  assert.ok(scoped.root.children.find(node => node.path === 'session-groups').children.some(node => node.name === 'bad name'));
-  // The database goes away: the tree still answers, with no count beside any group.
+  assert.deepEqual(scoped.items.filter(row => row.name === 'bad name').map(row => [row.type, row.diagnostic]), [['directory', 'invalid_session_group']]);
+  // The database goes away: the page still answers, with no count beside any group.
   fsSync.renameSync(path.join(root, 'comm-bridge/c4.db'), path.join(root, 'comm-bridge/c4.db.away'));
   advance(30000);
-  const unreadable = await request('/api/memory/tree', 'admin');
+  const unreadable = await request('/api/memory/entries?dir=session-groups', 'admin');
   assert.equal(unreadable.status, 200);
   const blind = await unreadable.json();
-  assert.deepEqual(blind.root, original.root);
-  assert.deepEqual(blind.sessionGroups.map(group => group.backlog?.count ?? null), [null, null]);
+  assert.deepEqual(blind.items.map(row => row.path).sort(), scoped.items.map(row => row.path).sort());
+  assert.deepEqual(blind.items.filter(row => row.type === 'group').map(group => group.backlog?.count ?? null), [null, null]);
 });
 
 // Real memory and group readers; in-memory catalog/backlog adapters only.

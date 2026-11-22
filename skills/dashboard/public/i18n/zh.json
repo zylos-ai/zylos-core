@@ -37,7 +37,6 @@
   "memory.back": "返回文件列表",
   "memory.refresh": "刷新记忆目录",
   "memory.collapse_all": "全部折叠",
-  "memory.expand_all": "全部展开",
   "memory.select_file": "选择文件",
   "memory.rendered": "预览",
   "memory.raw": "原文",

@@ -94,12 +94,11 @@ const state = {
     selectionGeneration: 0
   },
   memory: {
-    tree: null,
+    ready: false,
     selectedPath: null,
     file: null,
     git: null,
     mode: 'rendered',
-    collapsed: new Set(),
     loading: false,
     error: null,
     editing: false,
@@ -412,17 +411,10 @@ async function requestAgentJson(path, options = {}) {
 const memoryScopeView = createMemoryScope({
   document, root: $('#memory-scope'), chartsRoot: $('#memory-charts'), listRoot: $('#memory-tree'),
   summaryRoot: $('#memory-summary'), t,
-  request: fetchAgentJson, getTree: () => state.memory.tree, getFile: () => state.memory.file,
+  request: fetchAgentJson, getFile: () => state.memory.file,
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
   onChange: () => renderMemory(), onFile: path => { state.memory.filePaneOpen = true; window.scrollTo(0, 0); return openMemoryFile(path).catch(() => {}); },
-  onGroup: path => state.memory.collapsed.delete(path),
   selectedPath: () => state.memory.selectedPath,
-  isCollapsed: key => state.memory.collapsed.has(key),
-  toggleCollapsed: key => {
-    if (state.memory.collapsed.has(key)) state.memory.collapsed.delete(key);
-    else state.memory.collapsed.add(key);
-    renderMemory();
-  },
   fileTitle: node => [node.path, fmtBytes(node.size_bytes), fmtAge(node.mtime)].filter(Boolean).join(' · '),
   sizeText: fmtBytes,
 });
@@ -430,21 +422,20 @@ window.addEventListener('pagehide', () => memoryScopeView.destroy());
 // The detail level can be set after the memory page first drew (on load, or from the header switch);
 // redraw so the summary line, technical charts and commit details follow it.
 if (window.MutationObserver) {
-  new MutationObserver(() => { if (state.memory?.tree) renderMemoryPreservingEditor(renderMemory, document); })
+  new MutationObserver(() => { if (state.memory?.ready) renderMemoryPreservingEditor(renderMemory, document); })
     .observe(document.documentElement, { attributes: true, attributeFilter: ['data-detail'] });
 }
-document.addEventListener('dashboard-locale-change', () => { if (state.memory?.tree) renderMemoryPreservingEditor(renderMemory, document); });
+document.addEventListener('dashboard-locale-change', () => { if (state.memory?.ready) renderMemoryPreservingEditor(renderMemory, document); });
 
 function resetMemoryState() {
   if (state.memory?.draftTimer) clearTimeout(state.memory.draftTimer);
   stopMemoryLiveCheck();
   state.memory = {
-    tree: null,
+    ready: false,
     selectedPath: null,
     file: null,
     git: null,
     mode: 'rendered',
-    collapsed: new Set(),
     loading: false,
     error: null,
     editing: false,
@@ -567,15 +558,9 @@ async function checkMemoryLiveSha() {
   }
 }
 
-function flattenMemoryFiles(node, files = []) {
-  if (!node) return files;
-  if (node.type === 'file') files.push(node);
-  for (const child of node.children || []) flattenMemoryFiles(child, files);
-  return files;
-}
-
-function preferredMemoryPath(root) {
-  const files = flattenMemoryFiles(root).filter(f => f.renderable);
+/** The default file: identity.md, else the first readable Markdown file at the memory root, else any readable one. */
+function preferredMemoryPath(rows) {
+  const files = (rows ?? []).filter(row => row.type === 'file' && row.renderable);
   return files.find(f => f.path === 'identity.md')?.path ||
     files.find(f => f.path?.endsWith('.md'))?.path ||
     files[0]?.path ||
@@ -706,7 +691,7 @@ function renderMemoryContent() {
     const retry = state.memory.error === 'memory_conflict_latest_failed'
       ? `<div class="memory-notice warning">${esc(t('memory.conflict_retry_body'))} <button type="button" data-memory-retry-conflict>${esc(t('memory.retry'))}</button></div>`
       : '';
-    const upkeep = memoryUpkeepNotice(state.memory.tree)
+    const upkeep = memoryUpkeepNotice(memoryScopeView.known())
       ? `<div class="memory-notice warning">${esc(t('wb.memory.upkeepConflict'))}</div>`
       : '';
     content.innerHTML = `${upkeep}${notice}${live}${retry}${conflict}<textarea class="memory-editor" id="memory-editor" spellcheck="false">${esc(state.memory.draft)}</textarea>`;
@@ -758,7 +743,7 @@ function renderMemoryActions() {
     resetBtn.hidden = !editing;
     resetBtn.disabled = state.memory.saving;
   }
-  applyMemoryWriteAccess(editBtn, saveBtn, state.memory.tree, file?.path);
+  applyMemoryWriteAccess(editBtn, saveBtn, memoryScopeView.known(), file?.path);
   $('#memory-rendered-btn')?.toggleAttribute('disabled', editing);
   $('#memory-raw-btn')?.toggleAttribute('disabled', editing);
 }
@@ -808,11 +793,10 @@ function renderMemory() {
 
   const fold = $('#memory-fold');
   if (fold) {
-    const dirs = memoryScopeView.sectionKeys();
-    const allCollapsed = dirs.length > 0 && dirs.every(d => state.memory.collapsed.has(d));
-    fold.disabled = !state.memory.tree || dirs.length === 0;
-    fold.innerHTML = `<i class="wb-ico wb-ico-${allCollapsed ? 'unfold' : 'fold'}" aria-hidden="true"></i>`;
-    fold.title = allCollapsed ? t('memory.expand_all') : t('memory.collapse_all');
+    // Folds every open directory and group; with nothing open there is nothing to fold.
+    fold.disabled = !memoryScopeView.anyExpanded();
+    fold.innerHTML = '<i class="wb-ico wb-ico-fold" aria-hidden="true"></i>';
+    fold.title = t('memory.collapse_all');
     fold.setAttribute('aria-label', fold.title);
   }
 
@@ -836,8 +820,9 @@ function renderMemory() {
       ] : []),
     ].filter(Boolean).map(part => `<span>${part}</span>`).join('');
     if (scopeTag) {
-      const scope = memoryFileScope(state.memory.tree, file.path);
-      if (scope.kind === 'group') {
+      const scope = memoryFileScope(memoryScopeView.known(), file.path);
+      if (scope.kind === 'unknown') scopeTag.innerHTML = '';
+      else if (scope.kind === 'group') {
         scopeTag.innerHTML = `<button type="button" class="wb-tag wb-memory-tag" title="${esc(t('wb.schedule.openGroup'))}">${esc(t('wb.memory.scopeGroup', { name: memoryGroupLabel(scope.group, t) }))}</button>`;
         scopeTag.querySelector('button')?.addEventListener('click', () => openWorkbenchGroup(scope.group.sessionGroup));
       } else {
@@ -850,23 +835,41 @@ function renderMemory() {
   memoryScopeView.render();
 }
 
+/** The file a link names: `/memory?file=<path>` opens it (and its folders) on loading the page. */
+function memoryLinkPath() {
+  if (tabForPath(window.location.pathname) !== 'memory') return null;
+  return new URLSearchParams(window.location.search).get('file') || null;
+}
+
 async function loadMemoryTree({ force = false } = {}) {
   if (remoteIsReadOnly()) {
     renderMemory();
     return;
   }
   memoryScopeView.load().catch(() => {});
-  if (state.memory.tree && !force) {
+  if (state.memory.ready && !force) {
     renderMemory();
     return;
   }
+  if (force) memoryScopeView.reload();
   state.memory.loading = true;
   state.memory.error = null;
   renderMemory();
   try {
-    state.memory.tree = await fetchAgentJson('/api/memory/tree');
-    const selected = memoryScopeView.initialPath(state.memory.tree, state.memory.selectedPath, preferredMemoryPath);
-    if (selected) await openMemoryFile(selected);
+    const linked = state.memory.ready ? null : memoryLinkPath();
+    const rootList = await memoryScopeView.readRoot();
+    if (rootList.error) throw Object.assign(new Error(rootList.error), { code: rootList.error });
+    state.memory.ready = true;
+    const selected = linked || state.memory.selectedPath || preferredMemoryPath(rootList.items);
+    // A link to a file that cannot be opened shows the usual failure, then the default file.
+    if (selected && !(await openMemoryFile(selected)) && linked) {
+      const fallback = preferredMemoryPath(rootList.items);
+      if (fallback && fallback !== linked) {
+        const failure = state.memory.error;
+        await openMemoryFile(fallback);
+        state.memory.error = failure;
+      }
+    }
   } catch (err) {
     state.memory.error = err.code || 'memory_browser_failed';
   } finally {
@@ -901,6 +904,11 @@ async function openMemoryFile(filePath) {
     state.memory.file = file;
     state.memory.git = git;
     state.memory.error = null;
+    memoryScopeView.revealFile(file).catch(() => {});
+    // The address names the open file, so a refresh or a copied link opens it again; no history entry is added.
+    if (activeTabName() === 'memory' && tabForPath(window.location.pathname) === 'memory') {
+      window.history.replaceState(window.history.state, '', api(`${remotePrefix()}/memory?file=${encodeURIComponent(file.path)}`));
+    }
     const draft = readMemoryDraft(file.path);
     if (draft != null && draft !== file.text) {
       state.memory.editing = true;
@@ -911,8 +919,10 @@ async function openMemoryFile(filePath) {
     } else if (draft != null) {
       clearMemoryDraft(file.path);
     }
+    return true;
   } catch (err) {
     state.memory.error = err.code || 'memory_browser_failed';
+    return false;
   } finally {
     state.memory.loading = false;
     renderMemory();
@@ -957,7 +967,7 @@ async function saveMemoryDraftToServer({ text = state.memory.draft, sha256 = sta
     const saved = await saveMemoryOnce({ request: requestAgentJson, readFile: fetchAgentJson,
       path: file.path, text, sha256, isCurrent: () => memorySaveCurrent(captured, state.memory) });
     if (!saved) return;
-    if (!applyMemorySave(captured, state.memory, saved)) return;
+    if (!applyMemorySave(captured, state.memory, saved, memoryScopeView.updateFile)) return;
     saveMemoryDraft();
     const git = await fetchAgentJson(`/api/memory/git?path=${encodeURIComponent(saved.path)}`).catch(() => ({ commit: null }));
     if (!memorySaveAppliedCurrent(captured, state.memory, saved)) return;
@@ -1869,13 +1879,7 @@ function initMemoryControls() {
   $('#memory-back')?.addEventListener('click', () => { state.memory.filePaneOpen = false; renderMemory(); window.scrollTo(0, 0); });
   $('#memory-save-btn')?.addEventListener('click', () => saveMemoryDraftToServer().catch(() => {}));
   $('#memory-reset-btn')?.addEventListener('click', resetMemoryEdit);
-  $('#memory-fold')?.addEventListener('click', () => {
-    const dirs = memoryScopeView.sectionKeys();
-    if (!dirs.length) return;
-    const allCollapsed = dirs.every(d => state.memory.collapsed.has(d));
-    state.memory.collapsed = allCollapsed ? new Set() : new Set(dirs);
-    renderMemory();
-  });
+  $('#memory-fold')?.addEventListener('click', () => memoryScopeView.collapseAll());
   document.querySelectorAll('.memory-mode').forEach((btn) => {
     btn.addEventListener('click', () => {
       state.memory.mode = btn.dataset.mode === 'raw' ? 'raw' : 'rendered';

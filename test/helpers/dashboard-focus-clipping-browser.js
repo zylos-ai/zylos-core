@@ -139,7 +139,7 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, memoryRef
   if (memoryRefresh) {
     await openDashboardTab(page, 'memory');
     const first = page.locator(memoryFocus === 'file' ? '.memory-file'
-      : memoryFocus === 'header' ? '.wb-memory-section-h' : '.wb-memory-search input').first();
+      : memoryFocus === 'header' ? '.wb-memory-dir-h' : '.wb-memory-search input').first();
     await first.focus();
     await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab');
     const original = await first.elementHandle();
@@ -155,7 +155,7 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, memoryRef
       tag: document.activeElement.tagName,
       inList: !!document.activeElement.closest('.memory-tree'),
       key: document.activeElement.dataset.collapseKey,
-      header: document.activeElement.matches('.wb-memory-section-h'),
+      header: document.activeElement.matches('.wb-memory-dir-h'),
       search: document.activeElement.matches('.wb-memory-search input'),
       connected: document.activeElement.isConnected, file: document.activeElement.matches('.memory-file'),
       visible: document.activeElement.matches(':focus-visible') }));
@@ -275,6 +275,9 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, memoryRef
   }
   await openDashboardTab(page, 'memory');
   const files = page.locator('.memory-file'); await files.first().waitFor();
+  // The list starts folded; the reference folder's fourteen notes make it taller than its pane.
+  await page.locator('.memory-tree .wb-memory-dir-h[data-collapse-key="reference"]').click();
+  await page.locator('.memory-tree .memory-file[data-path="reference/note-14.md"]').waitFor();
   // Desktop tree owns scrolling; the phone's stacked tree uses page scrolling.
   if (width === 1280) await tabThrough('.memory-tree', '.memory-file', 'memory-tree');
   await check(files.first(), 'memory-tree-first', ['memory-tree', 'memory-tree-card']);

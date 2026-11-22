@@ -55,9 +55,9 @@ for (const count of [1, 2]) {
     const document = createDocument(), root = document.createElement('div'), chartsRoot = document.createElement('div'), summaryRoot = document.createElement('div');
     const active = groups(count).map(row => ({ sessionGroup: row.sessionGroup, count, threshold: 15, pendingSummaries: count, syncing: true }));
     let level = 'plain';
-    const controller = createMemoryScope({ document, root, chartsRoot, summaryRoot, t, getTree: () => ({ root: { children: [] }, sessionGroups: [] }), detail: () => level, request: async path => memoryBacklogPage({ groups: active, originSync: { count, threshold: 15, pendingSummaries: count, syncing: false }, budgets: null },
+    const controller = createMemoryScope({ document, root, chartsRoot, summaryRoot, t, detail: () => level, request: async path => path.startsWith('/api/memory/entries') ? { items: [], nextCursor: null } : memoryBacklogPage({ groups: active, originSync: { count, threshold: 15, pendingSummaries: count, syncing: false }, budgets: null },
       parseBacklogQuery(new URL(path, 'http://dashboard').searchParams)) });
-    await controller.load();
+    await controller.readRoot(); await controller.load();
     assert.ok(summaryRoot.textContent.includes(`${count} group${noun} being saved`));
     assert.ok(summaryRoot.textContent.includes(`${count} group${noun} ${count === 1 ? 'has' : 'have'} new conversation waiting`));
     level = 'technical'; controller.render();

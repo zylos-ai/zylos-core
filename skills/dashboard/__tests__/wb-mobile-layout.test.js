@@ -37,7 +37,7 @@ test('stylesheet: on phones ordinary control frames are at least 36px, square ic
   assert.match(phone, /\.app-header \.header-icon-btn \{ width: 44px; min-width: 44px; min-height: 44px; \}/, 'navigation keeps its 44px tier');
   assert.match(phone, /\.wb-switch-l \{ min-height: 40px; \}/);
   assert.match(phone, /\.wb-sched-timeline \.wb-sched-dot \{[^}]*width: 40px; height: 40px;/, 'timeline dots are 40px targets');
-  assert.match(phone, /\.memory-file, \.wb-memory-group-h, \.wb-memory-section-h \{ min-height: 40px; \}/);
+  assert.match(phone, /\.memory-file, \.wb-memory-group-h, \.wb-memory-dir-h, \.wb-memory-picker-item \{ min-height: 40px; \}/);
 });
 
 test('stylesheet: on phones the memory file list and the open file each take the screen, with a way back', () => {
