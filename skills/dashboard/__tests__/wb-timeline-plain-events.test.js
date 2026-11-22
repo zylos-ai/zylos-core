@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../src/lib/store.js';
 import { createRuns } from '../src/lib/workbench/runs.js';
+import { readTimelineEvents } from '../src/lib/workbench/timeline-events.js';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 import { createTimelineLoader, renderTimeline } from '../public/js/wb/detail-timeline.js';
 import { createGroupDetail } from '../public/js/wb/detail.js';
@@ -49,16 +50,11 @@ function fixture(t, { unattributed = false } = {}) {
   async function read(pathname) {
     const url = new URL(pathname, 'http://fixture'), params = url.searchParams;
     reads.push(url);
-    const types = params.get('types')?.split(',').filter(Boolean) || undefined;
     if (url.pathname === '/api/groups/' + encodeURIComponent(GROUP) + '/events') {
-      const afterSeq = Number(params.get('after_seq'));
-      return { events: store.queryEvents({ types, sessionGroup: GROUP,
-        runId: params.get('run_id') || undefined, afterSeq, order: params.get('order') === 'desc' ? 'desc' : 'asc',
-        limit: Math.min(1000, Number(params.get('limit') ?? 100)) }) };
+      return readTimelineEvents(store, GROUP, false, params, items => items);
     }
-    if (url.pathname.endsWith('/runs')) return runs(GROUP, { limit: Number(params.get('limit') ?? 3), types,
-      ...(params.has('before') ? { before: params.get('before') } : {}) });
-    if (url.pathname.endsWith('/messages')) return { messages: [] };
+    if (url.pathname.endsWith('/runs')) return runs(GROUP, params);
+    if (url.pathname.endsWith('/messages')) return { items: [], nextCursor: null, afterCursor: 'empty' };
     if (url.pathname.endsWith('/backlog')) return { count: 0, firstAt: null, syncing: false };
     throw new Error('unexpected read ' + url.pathname);
   }
@@ -76,7 +72,7 @@ test('600 release diagnostics: plain view shows only the plain events newest fir
   await loader.open(GROUP, RUN);
   const eventReads = f.reads.filter(url => url.pathname === '/api/groups/' + encodeURIComponent(GROUP) + '/events');
   assert.equal(eventReads.length, 1, 'the plain events fit one page: the server filtered the diagnostics out');
-  assert.equal(eventReads[0].searchParams.get('types').split(',').includes('release'), false);
+  assert.equal(eventReads[0].searchParams.get('level'), 'plain');
   assert.equal(loader.state.events.get(RUN).length, 5);
   assert.equal(loader.state.totalEvents, 5, 'counts cover the events the plain view shows');
   assert.equal(loader.state.runs[0].n, 5);
@@ -92,8 +88,15 @@ test('600 release diagnostics: plain view shows only the plain events newest fir
   f.reads.length = 0;
   await loader.setLevel();
   const technicalReads = f.reads.filter(url => url.pathname === '/api/groups/' + encodeURIComponent(GROUP) + '/events');
-  assert.equal(technicalReads.every(url => !url.searchParams.has('types')), true, 'technical view reads every type');
+  assert.equal(technicalReads.length, 1, 'opening the run reads only the newest page');
+  assert.equal(loader.state.events.get(RUN).length, 50);
+  assert.equal(loader.state.events.get(RUN).at(-1).event_seq, 605);
+  for (let page = 1; page < 13; page++) await loader.loadEarlierEvents(RUN);
   assert.equal(loader.state.events.get(RUN).length, 605);
+  assert.deepEqual(loader.state.events.get(RUN).map(event => event.event_seq), Array.from({ length: 605 }, (_, index) => index + 1));
+  const finished = f.reads.length;
+  await loader.loadEarlierEvents(RUN);
+  assert.equal(f.reads.length, finished, 'there is no read beyond the oldest page');
   assert.equal(loader.state.totalEvents, 605);
   assert.equal(loader.state.runs[0].n, 605);
   renderTimeline(root, loader, { document, t: tr, level });
@@ -129,11 +132,11 @@ test('recent activity is not taken over by diagnostics and follows the technical
   f.reads.length = 0;
   detail.setViewDetail();
   // The switch alone rereads: wait (bounded) for the read it starts and the redraw after it.
-  const recentReadOf = () => f.reads.find(url => url.pathname === '/api/groups/' + encodeURIComponent(GROUP) + '/events' && url.searchParams.get('limit') === String(recentWindow));
+  const recentReadOf = () => f.reads.find(url => url.pathname === '/api/groups/' + encodeURIComponent(GROUP) + '/events' && url.searchParams.get('limit') === String(recentWindow) && !url.searchParams.has('runId'));
   for (let i = 0; i < 50 && !(recentReadOf() && codes(recent()).includes('release')); i++) await new Promise(resolve => setImmediate(resolve));
   const recentRead = recentReadOf();
   assert.ok(recentRead, 'switching to technical detail rereads recent activity');
-  assert.equal(recentRead.searchParams.has('types'), false);
+  assert.equal(recentRead.searchParams.get('level'), 'technical');
   // The window holds the stop and the 99 newest releases; the releases run on past it, so the count is a lower bound.
   assert.deepEqual(labels(recent()), ['wb.event.stop', 'wb.event.category.diagnostic'], 'the releases in the window are one row');
   assert.deepEqual(codes(recent()), ['stop', 'release']);
@@ -197,8 +200,9 @@ test('plain view: new diagnostics are not appended on refresh', async t => {
   f.reads.length = 0;
   await loader.refresh();
   const append = f.reads.find(url => url.pathname === '/api/groups/' + encodeURIComponent(GROUP) + '/events');
-  assert.ok(append?.searchParams.has('after_seq'), 'the refresh reads only what follows the loaded events');
-  assert.equal(append.searchParams.get('types')?.split(',').includes('release'), false, 'the read asks for plain events only');
+  assert.ok(append?.searchParams.has('cursor'), 'the refresh reads only what follows the loaded events');
+  assert.equal(append.searchParams.get('direction'), 'after');
+  assert.equal(append.searchParams.get('level'), 'plain');
   const types = loader.state.events.get(RUN).map(event => event.event_type);
   assert.equal(types.includes('release'), false);
   assert.equal(types.at(-1), 'user_prompt_submit');
@@ -224,7 +228,7 @@ test('a run count read for a level switched away from is dropped when it arrives
   let level = 'plain', hold = null;
   const request = async (pathname, options) => {
     const url = new URL(pathname, 'http://fixture');
-    if (url.pathname.endsWith('/runs') && !url.searchParams.has('types') && !hold) {
+    if (url.pathname.endsWith('/runs') && url.searchParams.get('level') === 'technical' && !hold) {
       let release; const gate = new Promise(resolve => { release = resolve; });
       hold = { release };
       await gate;
@@ -256,7 +260,7 @@ test('requested release renders a translated end reason in plain view and its co
   f.put('reclaim_done', 80, 'lifecycle', RUN, { reason: 'release' });
   const runs = createRuns({ store: f.store });
   const result = await runs(GROUP);
-  assert.equal(result.runs[0].endReason, 'release');
+  assert.equal(result.items[0].endReason, 'release');
   const read = pathname => new URL(pathname, 'http://fixture').pathname.endsWith('/runs')
     ? runs(GROUP) : f.read(pathname);
   for (const [language, expected] of [['zh', '回收 · 主动释放'], ['en', 'Recycled · released on request']]) {

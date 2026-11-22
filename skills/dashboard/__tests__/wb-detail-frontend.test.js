@@ -34,7 +34,8 @@ const createGroupConfig = options => productGroupConfig({ ...options, request: a
   return !requestOptions?.method && !path.includes('/runtime-options') && !value?.config ? { config: value } : value;
 } });
 const isGroupDetail = path => /^\/api\/groups\/[^/?]+(?:\?include=[^&]*)?$/.test(path);
-const emptyRuns = { runs: [], totalEvents: 17, totalRuns: 5, unattributed: 0 };
+const emptyRuns = { items: [], nextCursor: null, totalEvents: 17, totalRuns: 5, unattributed: 0 };
+const timelinePage = (items = [], nextCursor = null, afterCursor = 'newest') => ({ items, nextCursor, afterCursor });
 function detailFixture(fetch, options = {}) {
   const document = createDocument(), root = document.createElement('aside'), timers = [];
   const controller = createGroupDetail({ root, document, fetch, t,
@@ -42,10 +43,10 @@ function detailFixture(fetch, options = {}) {
   return { controller, root, timers, document };
 }
 function defaultRead(path) {
-  if (path.includes('types=subagent_start')) return { events: [] };
-  if (path.includes('/events')) return { events: [{ event_type: 'stop', timestamp: 'recent' }] };
+  if (path.includes('filter=subagents')) return timelinePage();
+  if (path.includes('/events')) return timelinePage([{ id: 'recent-stop', event_type: 'stop', timestamp: 'recent' }]);
   if (path.includes('/backlog')) return { count: 3, firstAt: 100, syncing: false };
-  if (path.includes('/messages')) return { messages: [] };
+  if (path.includes('/messages')) return timelinePage();
 
   return emptyRuns;
 }
@@ -63,10 +64,10 @@ test('historical detail resolves board rows, named search and key-only jumps wit
   assert.match(f.root.textContent, /—/);
   assert.match(f.root.textContent, /wb.unknown/);
   assert.equal(allNodes(f.root).some(node => node.tagName === 'SCRIPT'), false);
-  assert.equal(calls.some(path => path.includes('/search') || (path.includes('/events') && path.includes('run_id='))), false);
+  assert.equal(calls.some(path => path.includes('/search') || (path.includes('/events') && path.includes('runId='))), false);
   const recent = calls.find(path => path.includes('/events'));
   assert.equal(new URL(recent, 'http://fixture').searchParams.get('limit'), String(recentWindow), 'recent activity reads a window, not only the rows it shows');
-  assert.equal(new URL(recent, 'http://fixture').searchParams.has('run_id'), false);
+  assert.equal(new URL(recent, 'http://fixture').searchParams.has('runId'), false);
   assert.equal(f.controller.state.totalEvents, 17);
   assert.equal(f.controller.state.totalRuns, 5);
   f.controller.updateSnapshot({ rows: [row('telegram:older')], listKnown: true });
@@ -1405,17 +1406,19 @@ test('an active timeline discards the previous run and reads the replacement run
 
 
 test('failed initial subagent pagination resumes at one page per later snapshot', async () => {
-  const stream = Array.from({ length: 2500 }, (_, index) => ({ run_id: 'run-a', event_seq: index + 1,
-    event_type: 'subagent_start', metadata: { agent_id: 'worker' } }));
+  const stream = Array.from({ length: 250 }, (_, index) => ({ id: `event-${index + 1}`, run_id: 'run-a', event_seq: index + 1,
+    event_type: 'subagent_start', metadata: { agent_id: `worker-${index + 1}` } }));
   const current = row('a'), calls = [];
   let fail = true;
   const f = detailFixture(async path => {
     const url = new URL(path, 'http://fixture');
-    if (url.searchParams.get('types') === 'subagent_start,subagent_stop') {
+    if (url.searchParams.get('filter') === 'subagents') {
       calls.push(url);
-      const after = Number(url.searchParams.get('after_seq') ?? 0);
-      if (fail && after === 1000) throw new Error('offline');
-      return response({ events: stream.slice(after, after + 1000) });
+      const cursor = url.searchParams.get('cursor');
+      if (fail && cursor === 'earlier-150') throw new Error('offline');
+      if (cursor === 'earlier-150') return response(timelinePage(stream.slice(50, 150), 'earlier-50'));
+      if (cursor === 'earlier-50') return response(timelinePage(stream.slice(0, 50)));
+      return response(timelinePage(stream.slice(150), 'earlier-150', 'newer-250'));
     }
     return response(defaultRead(path));
   });
@@ -1426,10 +1429,11 @@ test('failed initial subagent pagination resumes at one page per later snapshot'
   fail = false; calls.length = 0;
   await f.controller.updateSnapshot(snapshot);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].searchParams.get('after_seq'), '1000');
+  assert.equal(calls[0].searchParams.get('cursor'), 'earlier-150');
   calls.length = 0; await f.controller.updateSnapshot(snapshot);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].searchParams.get('after_seq'), '2000');
+  assert.equal(calls[0].searchParams.get('cursor'), 'earlier-50');
+  assert.equal(activeSubagents(f.controller.state.currentEvents, 'run-a').length, 250);
   f.controller.destroy();
 });
 

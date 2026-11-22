@@ -4,7 +4,7 @@ import { projectApiTimestamps } from '../../src/lib/wire-time.js';
 // Every answer is computed from `now`, so the page's relative times stay stable within one run.
 
 import { projectGroup, projectListRow } from '../../src/lib/workbench/groups-api.js';
-import { runRestartEffect } from '../../public/js/wb/timeline-rows.js';
+import { eventTypesFor, runRestartEffect } from '../../public/js/wb/timeline-rows.js';
 import { keyPage } from './key-pages.js';
 import { memoryBacklogPage, parseBacklogQuery } from '../../src/lib/workbench/memory-backlog.js';
 
@@ -163,29 +163,31 @@ function restartedRuns(now) {
   ];
 }
 function timeline(url, now) {
-  const params = url.searchParams, types = params.get('types')?.split(',').filter(Boolean);
-  const after = Number(params.get('after_seq') ?? 0), limit = Math.min(1000, Number(params.get('limit') ?? 100));
-  // The stopped group's recent activity is read across its runs, by group; one run's events by run.
-  const stopped = !params.get('run_id') && params.get('session_group') === STOPPED_GROUP ? restartedRuns(now).flatMap(run => run.events)
-    .sort((a, b) => a.event_seq - b.event_seq) : null;
-  const restarted = stopped ? { events: stopped } : restartedRuns(now).find(run => run.runId === params.get('run_id'));
-  if (!restarted && (params.get('run_id') ? params.get('run_id') !== 'run-tg' : params.get('session_group') !== GROUP)) return { events: [] };
-  const events = (restarted?.events ?? runEvents(now)).filter(event => (!types || types.includes(event.event_type)) && event.event_seq > after);
-  if (params.get('order') === 'desc') events.reverse();
-  return { events: events.slice(0, limit) };
+  const params = url.searchParams, group = decodeURIComponent(url.pathname.split('/')[3]);
+  const types = eventTypesFor(params.get('filter') ?? 'all', params.get('level') ?? 'plain');
+  const runId = params.get('runId'), limit = Number(params.get('limit') ?? 50);
+  const all = group === STOPPED_GROUP ? restartedRuns(now).flatMap(run => run.events) : group === GROUP ? runEvents(now) : [];
+  const effect = runRestartEffect(all);
+  const after = params.get('direction') === 'after';
+  const cursor = Number(params.get('cursor') ?? (after ? 0 : Infinity));
+  const rows = all.filter(event => (!runId || event.run_id === runId) && (!types || types.includes(event.event_type)) &&
+    effect(event) !== 'exit' && (after ? event.event_seq > cursor : event.event_seq < cursor));
+  const items = (after ? rows.slice(0, limit) : rows.slice(-limit)).map(event => effect(event) === 'interrupted' ? { ...event, interrupted: true } : event);
+  return { items, nextCursor: !after && rows.length > limit ? String(items[0].event_seq) : null,
+    afterCursor: String(items.at(-1)?.event_seq ?? params.get('cursor') ?? 0) };
 }
 function runs(url, now) {
-  const group = decodeURIComponent(url.pathname.split('/')[3] ?? ''), types = url.searchParams.get('types')?.split(',').filter(Boolean);
+  const group = decodeURIComponent(url.pathname.split('/')[3] ?? ''), types = eventTypesFor('all', url.searchParams.get('level') ?? 'plain');
   // As the server counts: the crash report an automatic restart causes is not shown, so it is not counted.
   const count = events => { const effect = runRestartEffect(events); return events.filter(event => (!types || types.includes(event.event_type)) && effect(event) !== 'exit').length; };
   if (group === STOPPED_GROUP) {
     const list = restartedRuns(now).map(({ events, ...run }) => ({ ...run, n: count(events) }));
-    return { runs: list, totalEvents: list.reduce((sum, run) => sum + run.n, 0), totalRuns: list.length, unattributed: 0 };
+    return { items: list, nextCursor: null, totalEvents: list.reduce((sum, run) => sum + run.n, 0), totalRuns: list.length, unattributed: 0 };
   }
-  if (group !== GROUP) return { runs: [], totalEvents: 0, totalRuns: 0, unattributed: 0 };
+  if (group !== GROUP) return { items: [], nextCursor: null, totalEvents: 0, totalRuns: 0, unattributed: 0 };
   const all = runEvents(now);
   const n = count(all);
-  return { runs: [{ runId: 'run-tg', startAt: all[0].timestamp, endAt: all.at(-1).timestamp, n, endReason: 'running' }], totalEvents: n, totalRuns: 1, unattributed: 0 };
+  return { items: [{ runId: 'run-tg', startAt: all[0].timestamp, endAt: all.at(-1).timestamp, n, endReason: 'running' }], nextCursor: null, totalEvents: n, totalRuns: 1, unattributed: 0 };
 }
 
 const meta = { runtime: 'claude', current_model: 'opus', current_effort: 'high', new_session_threshold: 70,
@@ -222,7 +224,7 @@ function workbenchAnswerData(url, now) {
     count: 12, firstAt: null, aged: false, syncing: false, threshold: 15 }], budgets: { limits: {}, warnings: {} } }, url);
   if (p.endsWith('/backlog')) return { count: 12, firstAt: null, syncing: false };
   if (p.endsWith('/runs')) return runs(url, now);
-  if (p.endsWith('/messages')) return { messages: [] };
+  if (p.endsWith('/messages')) return { items: [], nextCursor: null, afterCursor: '0' };
   if (p.endsWith('/config')) {
     const pair = { runtime: 'claude', mode: 'default' };
     return { runtime: { ok: true, data: { desired: { mode: 'inherit' }, resolved: pair, running: { status: 'applied', launchConfig: pair } } },

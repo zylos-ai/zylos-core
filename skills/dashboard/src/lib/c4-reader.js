@@ -3,6 +3,8 @@ import { progressFunctions } from '../../../comm-bridge/scripts/c4-store-progres
 import path from 'node:path';
 import fs from 'node:fs';
 import { originVisible, visible } from './chat/visibility.js';
+import { listFailure } from './list-query.js';
+import { timelinePage, timelineQuery } from './workbench/timeline-page.js';
 
 // Keep this predicate aligned for list ordering and incremental invalidation.
 export const receivedMessage = "c.direction='in' AND c.channel<>'' AND c.channel NOT IN ('void','control')";
@@ -175,6 +177,20 @@ export class C4Reader {
       return db.prepare(`SELECT id, direction, channel, timestamp FROM conversations
         WHERE session_group IS ? AND channel <> 'internal' AND timestamp BETWEEN ? AND ?
         ORDER BY id`).all(key, start, end);
+    } catch { throw failure(); }
+  }
+
+  getGroupMessagePage(key, search) {
+    const query = timelineQuery(`group-messages:${key ?? ''}`, search);
+    const failure = () => listFailure(503, 'unavailable', 'Group messages unavailable');
+    const db = this._open();
+    if (!db) throw failure();
+    try {
+      const rows = db.prepare(`SELECT id, direction, channel, timestamp FROM conversations
+        WHERE session_group IS @key AND channel <> 'internal'
+          ${query.after === null ? '' : `AND id ${query.operator} @cursor`}
+        ORDER BY id ${query.order} LIMIT @limit`).all({ key, cursor: query.after, limit: query.limit + 1 });
+      return timelinePage(rows, query, row => row.id, 0);
     } catch { throw failure(); }
   }
 

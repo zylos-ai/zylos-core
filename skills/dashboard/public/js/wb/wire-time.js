@@ -66,7 +66,7 @@ const FLEET_RECORD = [
   ...beneath('group_summary.rows.*', GROUP),
 ];
 const FLEET = [...beneath('self', FLEET_RECORD), ...beneath('agents.*', FLEET_RECORD)];
-const EVENTS = ms('events.*.timestamp', 'gaps.*.timestamp', 'events.*.metadata.pasted_at');
+const EVENTS = ms('items.*.timestamp', 'items.*.metadata.pasted_at');
 const MEMORY = ms('firstAt', 'items.*.firstAt', 'originSync.firstAt', 'commit.author_date', 'mtime');
 
 function mapPath(value, segments, unit, convert = isoTimestamp) {
@@ -92,9 +92,11 @@ export function projectApiTimestamps(pathname, value) {
   if (pathname === '/api/health') return project(value, ms('startedAt', 'source.*.*.updated_at'));
   if (pathname === '/api/groups/activity') return project(value, ms('start', 'groups.*.inbound.*'));
   if (pathname === '/api/groups') return project(value, [...ms('readAt'), ...beneath('items.*', GROUP)]);
+  if (/^\/api\/groups\/[^/]+\/events$/.test(pathname)) return project(value, EVENTS);
+  if (/^\/api\/groups\/[^/]+\/messages$/.test(pathname)) return project(value, ms('items.*.timestamp'));
+  if (/^\/api\/groups\/[^/]+\/runs$/.test(pathname)) return project(value, ms('items.*.startAt', 'items.*.endAt'));
   if (pathname.startsWith('/api/groups/')) {
-    return project(value, [...GROUP, ...beneath('rows.*', GROUP), ...beneath('group', GROUP), ...EVENTS,
-      ...ms('messages.*.timestamp', 'runs.*.startAt', 'runs.*.endAt', 'firstAt', 'data.updatedAt')]);
+    return project(value, [...GROUP, ...beneath('rows.*', GROUP), ...beneath('group', GROUP), ...ms('firstAt', 'data.updatedAt')]);
   }
   if (pathname === '/api/schedules' || pathname.startsWith('/api/schedules/')) return project(value, SCHEDULE);
   if (pathname.startsWith('/api/memory/')) return project(value, MEMORY);

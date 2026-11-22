@@ -364,35 +364,35 @@ Example: `GET /api/groups/origin/usage`.
 
 ### GET /api/groups/:id/runs
 
-**Access:** Read. **Parameters:** encoded ID, optional `before:string` (ISO run-start cursor), `limit:integer` (1–1000, default 3), `types:string` (comma-separated event types).
+**Access:** Read. **Parameters:** encoded ID; optional `limit:integer` (1–100, default 50), `cursor:string`, and `level=plain|technical` (default `plain`).
 
-Returns `runs:Array<{runId:string,startAt:string,endAt:string,n:number,endReason:string}>`, `totalRuns:number`, `totalEvents:number`, and `unattributed:number`. `types` filters counts, not whether runs exist. `endReason` distinguishes the current run (`running`), reclaim/restart/rotation/crash reasons and `unknown`.
+Returns `{items, nextCursor, totalRuns, totalEvents, unattributed}`. Rows are `{runId, startAt, endAt, n, endReason}`, ordered by start time descending, then run ID ascending. `nextCursor` is signed, opaque and null at the end. `level` changes the event counts, not run membership or bounds. Counts exclude the crashes caused by an automatic restart. `endReason` distinguishes the current run (`running`), reclaim/restart/rotation/crash reasons and `unknown`. Single-session Origin reads null-group runs; multi-session Origin reads its own group.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_ARGUMENT`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; common read errors.
+**Errors:** 400 `invalid_parameter` with `error.param`, `invalid_cursor`, or `SESSION_GROUP_INVALID`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; 503 `unavailable` when runs cannot be read; common read errors.
 
 Example: `GET /api/groups/origin/runs?limit=3`.
 
 ### GET /api/groups/:id/messages
 
-**Access:** Read. **Parameters:** encoded ID, optional `since` / `until` message-time bounds (ISO timestamps; defaults epoch through now).
+**Access:** Read. **Parameters:** encoded ID; optional `limit:integer` (1–100, default 50), `cursor:string`, and `direction=before|after` (default `before`; `after` requires a cursor).
 
-Returns `{messages:Array<{id:number,direction:string,channel:string,timestamp:string}>}`. It excludes internal-channel messages and returns metadata rather than message bodies. Legacy single-mode Origin reads use the legacy null attribution.
+Returns `{items, nextCursor, afterCursor}`. An unanchored request selects the newest page; items are always ordered by ascending C4 message ID. Each item contains only `{id, direction, channel, timestamp}` and internal-channel messages are excluded. Single-session Origin reads null-group messages; other groups, including multi-session Origin, read their own group. `nextCursor` reads older rows and is null after the last older page or on an `after` request. `afterCursor` reads newer rows and is returned even for an empty page.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_ARGUMENT`; 502 `READ_FAILED`, `GROUP_CATALOG_UNREADABLE` (when historical membership cannot be verified); common read errors.
+**Errors:** 400 `invalid_parameter` with `error.param`, `invalid_cursor`, or `SESSION_GROUP_INVALID`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; 503 `unavailable` when C4 cannot be read; common read errors.
 
-Example: `GET /api/groups/origin/messages?since=2026-11-01T00%3A00%3A00Z`.
+Example: `GET /api/groups/origin/messages?limit=20`.
 
 ### GET /api/groups/:id/events
 
-Single-session Origin reads current hook records stored as `session_group:"origin"` together with historical null-group records, within the same run, ordering and pagination filters. Other groups and multi-session Origin retain their own group scope. The same single-session alias applies to current working and duration observations and history diagnostics: single Origin includes events:origin plus legacy unassigned diagnostics; another group and multi Origin remain scoped.
+Single-session Origin reads current hook records stored as `session_group:"origin"` together with historical null-group records. Other groups and multi-session Origin retain their own group scope.
 
-**Access:** Read. **Parameters:** encoded ID; optional `since`, `until`, `types` (comma-separated), `session_id`, `run_id`, `runtime`, `after_seq`, `limit` (default 100, maximum 1000), `offset` (default 0), `order=asc|desc` (default asc); diagnostic-gap filters `stream`, `gap_limit` (default 100), `gap_offset` (default 0).
+**Access:** Read. **Parameters:** encoded ID; optional `runId`, `filter=all|tools|lifecycle|subagents` (default `all`), `level=plain|technical` (default `plain`), `limit:integer` (1–100, default 50), `cursor:string`, and `direction=before|after` (default `before`; `after` requires a cursor). `subagents` selects start and stop events. `all` includes unlabelled types only at `technical` level.
 
-Returns `events:object[]` (sanitized runtime-event records), `count:number`, and `gaps:object[]` (sanitized import diagnostics). Event records include `id`, `event_seq`, `timestamp`, `runtime`, `session_id`, `session_group`, `run_id`, `event_type`, `category`, `summary`, `duration_ms`, `metadata`, `source` and `confidence`, with nullable source fields. Filtering does not modify stored attribution.
+Returns `{items, nextCursor, afterCursor}` with the same direction semantics as group messages. Items are always ordered by `event_seq` ascending, then `id` ascending. The store allocates `event_seq` across all groups, but the schema does not enforce its uniqueness; `id` is the unique tie-breaker. Event rows are sanitized and include `id`, `event_seq`, `timestamp`, `runtime`, `session_id`, `session_group`, `run_id`, `event_type`, `category`, `summary`, `duration_ms`, `metadata`, `source` and `confidence`, with nullable source fields. A `post_tool_failure` associated with an automatic restart in the same run in the preceding 10 seconds includes `interrupted:true`; other rows omit the field. Associated crash reports are excluded before pagination, whether or not the restart is on the same page. Cursors are signed and scoped to the group and filters; a Dashboard restart invalidates them.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; source/database failures and common read errors.
+**Errors:** 400 `invalid_parameter` with `error.param`, `invalid_cursor`, or `SESSION_GROUP_INVALID`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; 503 `unavailable` when events cannot be read; common read errors.
 
-Example: `GET /api/groups/origin/events?order=desc&limit=20`.
+Example: `GET /api/groups/origin/events?filter=tools&limit=20`.
 
 ### GET /api/groups/:id/backlog
 

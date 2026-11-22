@@ -11,6 +11,8 @@ import { createGroupBacklog } from '../src/lib/workbench/group-backlog.js';
 import { importSupervisorRecords, supervisorRecord, supervisorSequences } from './helpers/supervisor-records.js';
 import { eventTypesFor, restartEffect, restartRows } from '../public/js/wb/timeline-rows.js';
 
+const query = values => new URLSearchParams(values);
+
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-runs-'));
   const store = new Store(path.join(root, 'dashboard.db'));
@@ -45,14 +47,14 @@ test('run pages keep whole-group totals and unattributed events while using star
   f.event('elsewhere', 10, 'session_start', {}, 'claude', 'telegram:b');
   const runs = createRuns({ store: f.store,
     getSnapshot: async () => ({ rows: [{ sessionGroup: 'telegram:a', live: { runId: 'run-5' } }] }) });
-  const first = await runs('telegram:a');
-  assert.deepEqual(first.runs.map(row => [row.runId, row.endReason, row.n]),
+  const first = await runs('telegram:a', query({ limit: 3 }));
+  assert.deepEqual(first.items.map(row => [row.runId, row.endReason, row.n]),
     [['run-5', 'running', 2], ['run-4', 'unknown', 2], ['run-3', 'crash', 2]]);
   assert.deepEqual([first.totalRuns, first.totalEvents, first.unattributed], [5, 10, 10]);
-  const second = await runs('telegram:a', { before: first.runs[2].startAt });
-  assert.deepEqual(second.runs.map(row => [row.runId, row.endReason]), [['run-2', 'rotate'], ['run-1', 'ttl']]);
+  const second = await runs('telegram:a', query({ cursor: first.nextCursor }));
+  assert.deepEqual(second.items.map(row => [row.runId, row.endReason]), [['run-2', 'rotate'], ['run-1', 'ttl']]);
   assert.deepEqual([second.totalRuns, second.totalEvents, second.unattributed], [5, 10, 10]);
-  assert.deepEqual((await runs('telegram:older')).runs, []);
+  assert.deepEqual((await runs('telegram:older')).items, []);
 });
 
 // Integration boundary: supervisor records imported by the real importer into a private Store, then aggregated.
@@ -68,7 +70,7 @@ test('a run the supervisor restarted ends as an automatic restart even though it
   ]);
   const runs = createRuns({ store: f.store,
     getSnapshot: async () => ({ rows: [{ sessionGroup: 'telegram:a', live: { runId: 'current' } }] }) });
-  assert.deepEqual((await runs('telegram:a', { limit: 10 })).runs.map(row => [row.runId, row.endReason]),
+  assert.deepEqual((await runs('telegram:a', query({ limit: 10 }))).items.map(row => [row.runId, row.endReason]),
     [['current', 'running'], ['crashed', 'crash'], ['tool', 'auto_restart_tool_timeout'], ['silent', 'auto_restart_no_response']]);
 });
 
@@ -95,22 +97,18 @@ test('run and group counts leave out the crash report an automatic restart cause
     ${types ? `AND event_type IN (${types.map(() => '?').join(',')})` : ''} GROUP BY run_id`).all(group, ...(types ?? [])).map(row => [row.run_id, row.n]));
   for (const types of [eventTypesFor('all', 'plain'), undefined]) {
     const label = types ? 'plain' : 'technical', raw = stored(types);
-    const page = await runs(group, { limit: 10, types });
-    const n = Object.fromEntries(page.runs.map(run => [run.runId, run.n]));
+    const page = await runs(group, query({ limit: 10, level: label }));
+    const n = Object.fromEntries(page.items.map(run => [run.runId, run.n]));
     // One crash report hidden in each of silent, tool and edge; none in crashed or late.
     assert.deepEqual(n, { ...raw, silent: raw.silent - 1, tool: raw.tool - 1, edge: raw.edge - 1 }, `${label}: run counts`);
     assert.equal(page.totalEvents, Object.values(raw).reduce((sum, count) => sum + count, 0) - 3, `${label}: group count`);
     assert.equal(page.unattributed, 1, `${label}: events in no run are counted as before`);
     // Each run's count is the number of rows its timeline shows.
-    for (const run of page.runs) {
+    for (const run of page.items) {
       const events = f.store.queryEvents({ sessionGroup: group, runId: run.runId, types, limit: 1000 });
       assert.equal(run.n, restartRows(events, restartEffect(events)).length, `${label}: ${run.runId} count equals its rows`);
     }
   }
-  // Counting types without crash reports subtracts nothing.
-  const types = ['session_start', 'no_response_restart', 'post_tool_failure'], raw = stored(types), page = await runs(group, { limit: 10, types });
-  assert.deepEqual(Object.fromEntries(page.runs.map(run => [run.runId, run.n])), { ...Object.fromEntries(Object.keys(stored()).map(run => [run, 0])), ...raw });
-  assert.equal(page.totalEvents, Object.values(raw).reduce((sum, count) => sum + count, 0));
 });
 
 test('session rotation never hides a preceding run-ending event and the latest actual ending wins', async t => {
@@ -119,11 +117,11 @@ test('session rotation never hides a preceding run-ending event and the latest a
   f.event('ended', 2, 'reclaim_done', { reason: 'evict' });
   f.event('ended', 3, 'rotate_done', { oldSessionId: 'old' });
   const runs = createRuns({ store: f.store });
-  assert.equal((await runs('telegram:a')).runs[0].endReason, 'evict');
+  assert.equal((await runs('telegram:a')).items[0].endReason, 'evict');
   f.event('ended', 4, 'crash_detected');
-  assert.equal((await runs('telegram:a')).runs[0].endReason, 'crash');
-  await assert.rejects(runs('telegram:a', { before: 'not-a-time' }), { code: 'INVALID_ARGUMENT' });
-  await assert.rejects(runs('telegram:a', { limit: 0 }), { code: 'INVALID_ARGUMENT' });
+  assert.equal((await runs('telegram:a')).items[0].endReason, 'crash');
+  await assert.rejects(runs('telegram:a', query({ before: 'not-a-time' })), { code: 'invalid_parameter', param: 'before' });
+  await assert.rejects(runs('telegram:a', query({ limit: 0 })), { code: 'invalid_parameter', param: 'limit' });
 });
 
 // Integration boundary: single-mode NULL attribution in the same real event
@@ -136,7 +134,7 @@ test('a run ended by a manual restart reports the manual restart end reason', as
   f.event('current', 3, 'session_start');
   const runs = createRuns({ store: f.store,
     getSnapshot: async () => ({ rows: [{ sessionGroup: 'telegram:a', live: { runId: 'current' } }] }) });
-  assert.deepEqual((await runs('telegram:a')).runs.map(row => [row.runId, row.endReason]),
+  assert.deepEqual((await runs('telegram:a')).items.map(row => [row.runId, row.endReason]),
     [['current', 'running'], ['restarted', 'manual_restart']]);
 });
 
@@ -150,15 +148,15 @@ test('single view reads only ungrouped runs while multi Origin keeps its own his
   f.event('another-group', 5, 'session_start');
   let snapshot = { view: 'single', rows: [{ sessionGroup: null, live: { runId: 'single-current' } }] };
   const runs = createRuns({ store: f.store, getSnapshot: async () => snapshot });
-  const first = await runs('origin', { limit: 1 });
-  assert.deepEqual(first.runs.map(row => [row.runId, row.endReason]), [['single-current', 'running']]);
+  const first = await runs('origin', query({ limit: 1 }));
+  assert.deepEqual(first.items.map(row => [row.runId, row.endReason]), [['single-current', 'running']]);
   assert.deepEqual([first.totalRuns, first.totalEvents, first.unattributed], [2, 3, 1]);
-  const second = await runs('origin', { before: first.runs[0].startAt, limit: 1 });
-  assert.deepEqual(second.runs.map(row => [row.runId, row.endReason]), [['single-old', 'ttl']]);
+  const second = await runs('origin', query({ cursor: first.nextCursor, limit: 1 }));
+  assert.deepEqual(second.items.map(row => [row.runId, row.endReason]), [['single-old', 'ttl']]);
   assert.deepEqual([second.totalRuns, second.totalEvents, second.unattributed], [2, 3, 1]);
   snapshot = { view: 'multi', rows: [{ sessionGroup: 'origin', live: { runId: 'origin-current' } }] };
   const origin = await runs('origin');
-  assert.deepEqual(origin.runs.map(row => [row.runId, row.endReason]), [['origin-current', 'running']]);
+  assert.deepEqual(origin.items.map(row => [row.runId, row.endReason]), [['origin-current', 'running']]);
   assert.deepEqual([origin.totalRuns, origin.totalEvents, origin.unattributed], [1, 1, 0]);
 });
 

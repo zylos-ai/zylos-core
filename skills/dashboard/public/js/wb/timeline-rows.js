@@ -24,6 +24,7 @@ export function eventTypesFor(filter, level = 'plain') {
   if (filter === 'messages') return [];
   if (filter === 'tools') return [...toolEventTypes, ...automaticRestarts];
   if (filter === 'lifecycle') return lifecycleEventTypes;
+  if (filter === 'subagents') return ['subagent_start', 'subagent_stop'];
   return level === 'technical' ? null : plainEventTypes;
 }
 
@@ -37,7 +38,8 @@ export function showsEvent(event, { chips, chipCount, level = 'plain' }) {
 // recorded a moment later in the same run as a crash: that record is the restart itself, already shown, not a crash.
 // A tool call the restart cut off is recorded as failed in the same moment: it was interrupted, it did not go wrong.
 export const RESTART_EXIT_MS = 10_000;
-const automaticRestarts = new Set(['no_response_restart', 'tool_timeout_restart']);
+export const automaticRestartTypes = ['no_response_restart', 'tool_timeout_restart'];
+const automaticRestarts = new Set(automaticRestartTypes);
 const restartEffects = new Map([['crash_detected', 'exit'], ['post_tool_failure', 'interrupted']]);
 
 /**
@@ -77,6 +79,10 @@ export function restartRows(events, effect) {
   return rows;
 }
 
+export function eventRows(events) {
+  return events.map(event => ({ at: timeValue(event.timestamp), event, ...(event.interrupted === true ? { interrupted: true } : {}) }));
+}
+
 const sequence = row => row.event?.event_seq ?? -Infinity;
 /** Newest first; events recorded at the same moment keep their recorded order, latest first. */
 export function newestFirst(rows) {
@@ -113,7 +119,7 @@ export const recentLimit = 5;
  * by recorded order, not by position. Automatic restarts read as on the timeline (see restartRows).
  */
 export function recentRows(events, { window = recentWindow, limit = recentLimit } = {}) {
-  const rows = newestFirst(restartRows(events, runRestartEffect(events)));
+  const rows = newestFirst(eventRows(events));
   const groups = mergeRepeats(rows);
   if (events.length >= window && groups.length) {
     let edge = rows.length - 1;
