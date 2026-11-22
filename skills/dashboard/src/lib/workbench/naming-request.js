@@ -3,17 +3,18 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 
 export const ORIGINAL_GROUP_NAME_PATH = '~/zylos/.claude/skills/dashboard/scripts/group-name.js';
-export const NAME_PROMPT = `请给 Dashboard 里还没有名字的会话组起个名字：
+export const NAME_PROMPT = `Name the unnamed conversation groups in Dashboard.
 
-1. 运行 node ~/zylos/.claude/skills/dashboard/scripts/group-name.js list --unnamed --active 3d，列出最近 3 天有活动、还没有名字的组。
-2. 先根据组键判断会话类型，按下面的优先级取名：
-   - 论坛话题用话题标题，可以在前面加一个短群名。从对应渠道组件的话题记录里查标题。Telegram 话题的组键形如 telegram:group<群ID>:topic-<话题ID>，按 Telegram 技能的说明运行 topics.js list --chat <群ID>，用话题 ID 找到对应条目的 name。找不到非空的标题时，直接按最近对话内容取名。
-   - 普通群聊用群名，私聊用对方的名字。可以从消息开头（如「[TG GROUP:产品周会]」「howard said」）辨认，或用对应渠道的工具查询。
-   - 查不到该会话类型对应的名称时，只读该组最近的对话内容，根据主要话题起一个有意义的短名。只有连对话内容都没有时才跳过。
-   - 禁止用纯编号、ID 或「群名 · 话题编号」这类名字。
-3. 用 group-name.js set <组键> "名字" 设置。名字要短，让人一眼认出哪个话题、哪个群或和谁的私聊。
-4. 已经有名字的组不要动。
-5. 做完列出你给每个组起的名字，以及因没有对话内容而跳过的组。`;
+1. Run node ~/zylos/.claude/skills/dashboard/scripts/group-name.js list --unnamed --active 3d to list unnamed groups active in the last three days.
+2. Identify the conversation type from the group key and use the applicable naming rule:
+   - For a forum topic, use its title. You may prefix it with a short group name. Look up the title in the channel component's topic records. Telegram topic keys look like telegram:group<chat-id>:topic-<topic-id>. Follow the Telegram skill to run topics.js list --chat <chat-id>, then find the name field of the entry matching the topic ID. If there is no non-empty title, use the recent conversation as described below.
+   - For an ordinary group chat, use the group name. For a direct chat, use the other person's name. Check the message header (for example, "[TG GROUP:Product Weekly]" or "howard said") or use the channel's tools.
+   - When the applicable title or name is unavailable, read recent conversation from that group and choose a meaningful short name that reflects its main subject. Skip the group only if it has no conversation content.
+   - Never use a bare number, an ID, or a name such as "Group Name · Topic Number".
+   - Use the language of the topic title or the conversation in that group. Copy the topic title as written, without translating it.
+3. Use group-name.js set <group-key> "name" to set a short name that makes the topic, group, or direct chat easy to recognize.
+4. Keep existing group names.
+5. When finished, list the names you assigned and the groups you skipped because they had no conversation content.`;
 
 /** Preserve the supplied prompt verbatim apart from its known CLI path. */
 export function namePromptText(scriptPath, template, originalPath) {

@@ -643,7 +643,7 @@ test('automatic naming failures read as one plain sentence in either language, w
   const words = Object.fromEntries(['zh', 'en'].map(language =>
     [language, JSON.parse(readFileSync(new URL(`../public/i18n/wb.${language}.json`, import.meta.url), 'utf8'))]));
   // What Core can answer when the command itself breaks: the whole command line, the prompt and a Node stack.
-  const command = 'Command failed: /usr/bin/node /z/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content 请给 Dashboard 里还没有名字的会话组起个名字 --no-ack-suffix --json\n'
+  const command = 'Command failed: /usr/bin/node /z/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content Name the unnamed conversation groups in Dashboard. --no-ack-suffix --json\n'
     + "Error: Cannot find module '/z/.claude/skills/comm-bridge/scripts/c4-control.js'\n    at Function._resolveFilename (node:internal/modules/cjs/loader:1225:15)";
   const answers = [
     [{ ok: false, sessionGroup: 'origin', error: { code: 'CONTROL_TARGET_REQUIRED', message: 'A control target is required when configuration cannot be read' } }, undefined, 'failed'],
