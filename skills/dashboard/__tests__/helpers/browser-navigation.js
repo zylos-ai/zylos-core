@@ -13,11 +13,11 @@ export async function openDashboardTab(page, name) {
   if (!await phone(page)) {
     return page.locator(name === 'settings' ? '#wb-settings-btn' : `.tab[data-tab="${name}"]`).click();
   }
-  if (['overview', 'chat', 'schedule', 'memory'].includes(name)) {
+  if (['overview', 'chat', 'trends', 'fleet'].includes(name)) {
     return page.locator(`[data-mobile-tab="${name}"]`).click();
   }
   await openMobileMore(page);
-  return page.locator(`[data-mobile-action="${name === 'trends' ? 'usage' : name}"]`).click();
+  return page.locator(`[data-mobile-action="${name}"]`).click();
 }
 
 export async function openConversationMenu(page) {
@@ -41,4 +41,7 @@ export async function conversationAction(page, name, { keyboard = false } = {}) 
 }
 
 export const openGroupDetail = (page, options) => conversationAction(page, 'group', options);
-export const openObserver = page => openDashboardTab(page, 'observer');
+export async function observeGroupFromOverview(page, group) {
+  await page.locator(`#wb-board [data-group="${group}"]`).click();
+  await page.locator(`#wb-side button[data-observer-group="${group}"]`).click();
+}

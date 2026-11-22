@@ -75,20 +75,12 @@ export function tabForPath(path) {
   return 'overview';
 }
 
-export function observerNavEntry(status, level, t) {
-  if (level !== 'technical' || status == null) return null;
+// Both the running and sleeping group details use the same eligibility rule.
+export function groupObservable(status, level, row) {
   const installed = status?.installed ?? status?.state === 'installed';
   const enabled = status?.enabled ?? status?.desired?.enabled;
-  const key = installed ? (enabled ? 'tab.observer' : 'wb.observerDisabled') : 'wb.observerInstall';
-  const fallback = {
-    'tab.observer': '终端观察',
-    'wb.observerDisabled': '终端观察（已停用）',
-    'wb.observerInstall': '终端观察 · 去设置安装',
-  };
-  return { label: t ? t(key) : fallback[key], target: installed && enabled ? 'observer' : 'settings' };
+  return level === 'technical' && Boolean(row && installed && enabled);
 }
-// Every group can open the observer page; sleeping groups offer its history branch.
-export const groupObservable = (entry, row) => entry?.target === 'observer' && Boolean(row);
 export const wbWritable = remoteIsReadOnly => !remoteIsReadOnly();
 /** The raw instance line under the session mode (shown only with technical details): view, mode and Origin state. */
 export function instanceStatusText(data = {}, t = key => key) {

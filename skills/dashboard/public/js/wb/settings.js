@@ -5,7 +5,7 @@ import { createSettingsNavigation } from './settings-navigation.js';
 // Grouped by who a setting affects: who may enter this machine, this browser only, the whole machine, other
 // machines, the defaults for groups without their own choice, and model prices.
 export const settingsSections = ['account', 'general', 'machine', 'fleet', 'defaults', 'pricing'];
-const sectionIcons = { account: 'user', general: 'sliders', machine: 'cpu', fleet: 'fleet', defaults: 'bot', pricing: 'dollar' };
+const sectionIcons = { account: 'user', general: 'sliders', machine: 'cpu', fleet: 'server', defaults: 'bot', pricing: 'dollar' };
 // This browser's rows, top to bottom; each holds one control and an optional grey note.
 export const prefRows = ['detail', 'lang', 'theme', 'sound'];
 // The page's own controls these rows and the account card take over.
