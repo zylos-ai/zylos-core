@@ -67,6 +67,11 @@ function fixture(t, options) {
   return { ...f, db, task, run, reader };
 }
 
+// Reads go through the real route adapter, so the query is parsed exactly as for HTTP.
+const list = (reader, query = {}) => scheduleReadResponse(reader, '/api/schedules', new URLSearchParams(query));
+const runs = (reader, id, query = {}) => scheduleReadResponse(reader, `/api/schedules/${encodeURIComponent(id)}/history`, new URLSearchParams(query));
+const SECTION = { pending: 0, running: 0, failed: 1, paused: 2, completed: 3 };
+
 function populate(f) {
   const ids = {};
   for (let i = 0; i < 17; i++) {
@@ -106,12 +111,14 @@ function populate(f) {
 test('schedule read reports counts, sections, recent results and last error from the database', async t => {
   const f = fixture(t);
   const { ids, rows } = populate(f);
-  const page = await f.reader().read();
+  const page = await list(f.reader(), { limit: '100' });
   assert.equal(page.available, true);
   assert.equal(page.tz, 'Asia/Singapore');
-  assert.equal(page.tasks.length, 56);
+  assert.equal(page.items.length, 97);
+  assert.equal(page.nextCursor, null);
   assert.deepEqual(page.counts, { all: 97, enabled: 26, paused: 8, failed: 22, completed: 41 });
-  const counts = type => page.tasks.filter(task => task.type === type).length;
+  const active = page.items.filter(task => task.status !== 'completed');
+  const counts = type => active.filter(task => task.type === type).length;
   assert.deepEqual([counts('recurring'), counts('interval'), counts('one-time')], [16, 2, 38]);
   const recent = rows.filter(row => row.executed_at >= NOW - 7 * DAY);
   const success = recent.filter(row => row.status === 'success').length;
@@ -121,11 +128,11 @@ test('schedule read reports counts, sections, recent results and last error from
     runs7d: recent.length, bad7d: bad, successRate7d: success / (success + bad),
   });
   assert.equal(bad, 3);
-  const byId = new Map(page.tasks.map(task => [task.id, task]));
+  const byId = new Map(page.items.map(task => [task.id, task]));
   const completed = (await f.reader().detail(ids.completed)).task;
   assert.equal(completed.status, 'completed');
-  assert.equal(page.tasks.some(task => task.status === 'completed'), false);
-  const failedRecurring = page.tasks.filter(task => task.type === 'recurring' && task.status === 'failed');
+  assert.equal(page.items.at(-1).status, 'completed');
+  const failedRecurring = page.items.filter(task => task.type === 'recurring' && task.status === 'failed');
   assert.equal(failedRecurring.length, 2);
   assert.equal(failedRecurring.every(task => task.reenable === false), true);
   const history = byId.get(ids.recurring).recent;
@@ -142,7 +149,7 @@ test('schedule read reports counts, sections, recent results and last error from
   assert.equal(byId.get(ids.recovered).showLastError, false);
   assert.equal(byId.get(ids.recovered).lastError, null);
   assert.equal(completed.showLastError, false);
-  assert.equal(page.tasks.filter(task => task.showLastError).length, 1);
+  assert.equal(page.items.filter(task => task.showLastError).length, 1);
   assert.equal(page.daily7d.tz, 'Asia/Singapore');
   assert.equal(page.daily7d.utcFallback, false);
   assert.equal(page.daily7d.days.length, 7);
@@ -157,19 +164,19 @@ test('schedule read failure paths: missing file, non-SQLite file, bad cron and m
   useZylosDir(t, missing.zylosDir);
   const empty = createScheduleRead({ zylosDir: missing.zylosDir, now: () => NOW_MS,
     scheduleTz: createScheduleTz({ zylosDir: missing.zylosDir, tzModule: `${TZ_URL}?case=${++importCase}` }) });
-  assert.deepEqual(await scheduleReadResponse(empty, '/api/schedules', new URLSearchParams()), { available: false, tasks: [] });
+  assert.deepEqual(await scheduleReadResponse(empty, '/api/schedules', new URLSearchParams()), { available: false, items: [], nextCursor: null });
   fs.writeFileSync(missing.dbPath, 'not a database file');
   await assert.rejects(scheduleReadResponse(empty, '/api/schedules', new URLSearchParams()),
-    error => error.statusCode === 503 && error.code === 'scheduler_unreadable');
+    error => error.statusCode === 503 && error.code === 'unavailable');
   await assert.rejects(scheduleReadResponse(empty, '/api/schedules/task-1/history', new URLSearchParams()),
-    error => error.statusCode === 503 && error.code === 'scheduler_unreadable');
+    error => error.statusCode === 503 && error.code === 'unavailable');
 
   const f = fixture(t);
   const broken = f.task({ type: 'recurring', cron_expression: 'not a cron' });
   const good = f.task({ type: 'recurring', cron_expression: '0 8 * * *' });
   const interval = f.task({ type: 'interval', interval_seconds: HOUR, next_run_at: NOW + 60 });
-  const page = await f.reader().read();
-  const byId = new Map(page.tasks.map(task => [task.id, task]));
+  const page = await list(f.reader());
+  const byId = new Map(page.items.map(task => [task.id, task]));
   assert.deepEqual(byId.get(broken.id).nextRuns, { unavailable: true, reason: 'cron_preview_unavailable' });
   assert.equal(byId.get(good.id).nextRuns.runs.length, 5);
   assert.equal(byId.get(interval.id).nextRuns.in24h.length, 24);
@@ -177,11 +184,11 @@ test('schedule read failure paths: missing file, non-SQLite file, bad cron and m
   assert.equal(page.kpi.next24h, 1 + 24);
 
   const absent = path.join(f.root, 'absent', 'cron-utils.js');
-  const noCron = await f.reader({ cronModule: new URL(`file://${absent}`).href }).read();
-  for (const task of noCron.tasks.filter(item => item.type === 'recurring')) {
+  const noCron = await list(f.reader({ cronModule: new URL(`file://${absent}`).href }));
+  for (const task of noCron.items.filter(item => item.type === 'recurring')) {
     assert.deepEqual(task.nextRuns, { unavailable: true, reason: 'cron_preview_unavailable' });
   }
-  assert.equal(noCron.tasks.find(item => item.id === interval.id).nextRuns.runs.length, 5);
+  assert.equal(noCron.items.find(item => item.id === interval.id).nextRuns.runs.length, 5);
   const preview = await f.reader({ cronModule: new URL(`file://${absent}`).href }).preview({ kind: 'cron', value: '0 8 * * *' });
   assert.deepEqual(preview, { valid: null, error: 'cron_preview_unavailable' });
 });
@@ -196,9 +203,9 @@ test('schedule time zone comes from the same installation .env or is reported un
   fs.mkdirSync(other);
   const mismatch = f.reader({ scheduleTz: createScheduleTz({ zylosDir: f.zylosDir, env: { ZYLOS_DIR: other },
     tzModule: `${TZ_URL}?case=${++importCase}` }) });
-  const page = await mismatch.read();
+  const page = await list(mismatch);
   assert.equal(page.tz, null);
-  assert.equal(page.tzReason, 'tz_unavailable');
+  assert.equal(Object.hasOwn(page, 'tzReason'), false);
   assert.equal(page.daily7d.tz, 'UTC');
   assert.equal(page.daily7d.utcFallback, true);
   assert.deepEqual(page.daily7d.days.find(day => day.date === '2027-01-14'), { date: '2027-01-14', success: 1, timeout: 0, failed: 0 });
@@ -213,9 +220,9 @@ test('schedule time zone comes from the same installation .env or is reported un
     tzModule: `${TZ_URL}?case=${++importCase}` })(), { tz: 'Asia/Singapore' });
 
   fs.writeFileSync(path.join(f.zylosDir, '.env'), 'TZ=Not/AZone\n');
-  const invalid = await f.reader().read();
+  const invalid = await list(f.reader());
   assert.equal(invalid.tz, null);
-  assert.equal(invalid.tzReason, 'tz_unavailable');
+  assert.equal(invalid.daily7d.utcFallback, true);
 });
 
 test('local form times convert with the offset in effect at that moment', () => {
@@ -245,33 +252,41 @@ test('schedule preview validates cron, interval and re-enable times', async t =>
   await assert.rejects(reader.preview({ kind: 'in', value: '1h' }), error => error.statusCode === 400);
 });
 
-test('execution history pages by time and id without repeats or gaps', async t => {
+test('execution history pages with a signed cursor by time and id without repeats or gaps', async t => {
   const f = fixture(t);
   const task = f.task({});
+  const other = f.task({});
   const ids = [];
-  for (let i = 0; i < 65; i++) ids.push(f.run(task.id, { executed_at: NOW - DAY + Math.floor(i / 2) * 60, status: 'success' }));
+  for (let i = 0; i < 120; i++) ids.push(f.run(task.id, { executed_at: NOW - DAY + Math.floor(i / 2) * 60, status: 'success' }));
+  f.run(other.id, { executed_at: NOW - HOUR, status: 'success' });
   const reader = f.reader();
-  const page = query => scheduleReadResponse(reader, `/api/schedules/${task.id}/history`, new URLSearchParams(query));
-  const first = await page({ limit: '30' });
-  const second = await page({ limit: '30', before: String(first.next.before), beforeId: String(first.next.beforeId) });
+  const first = await runs(reader, task.id);
+  assert.deepEqual(Object.keys(first).sort(), ['items', 'nextCursor']);
+  const second = await runs(reader, task.id, { cursor: first.nextCursor });
   // A run recorded between page reads must not shift the next page.
   const late = f.run(task.id, { executed_at: NOW, status: 'started' });
-  const third = await page({ limit: '30', before: String(second.next.before), beforeId: String(second.next.beforeId) });
-  assert.deepEqual([first.rows.length, second.rows.length, third.rows.length], [30, 30, 5]);
-  assert.equal(third.next, null);
-  const seen = [...first.rows, ...second.rows, ...third.rows].map(row => row.id);
-  assert.equal(new Set(seen).size, 65);
+  const third = await runs(reader, task.id, { cursor: second.nextCursor });
+  assert.deepEqual([first.items.length, second.items.length, third.items.length], [50, 50, 20]);
+  assert.equal(third.nextCursor, null);
+  const seen = [...first.items, ...second.items, ...third.items].map(row => row.id);
+  assert.equal(new Set(seen).size, 120);
   assert.deepEqual([...seen].sort((a, b) => a - b), ids.map(Number));
   assert.equal(seen.includes(Number(late)), false);
-  const tied = first.rows.filter(row => row.executedAt === first.rows[0].executedAt);
-  assert.ok(tied.length >= 1 && tied.every((row, index) => index === 0 || row.id < tied[index - 1].id));
-  assert.equal((await page({})).rows.length, 30);
-  for (const query of [{ limit: '0' }, { limit: '201' }, { limit: '2.5' }]) {
-    await assert.rejects(page(query), error => error.statusCode === 400 && error.code === 'invalid_limit');
+  // executed_at DESC, id DESC: equal start times are ordered by id, also across the page boundary.
+  const all = [...first.items, ...second.items, ...third.items];
+  assert.ok(all.every((row, index) => index === 0 || row.executedAt < all[index - 1].executedAt ||
+    (row.executedAt === all[index - 1].executedAt && row.id < all[index - 1].id)));
+  assert.equal((await runs(reader, task.id, { limit: '100' })).items.length, 100);
+  for (const [query, param] of [[{ limit: '0' }, 'limit'], [{ limit: '101' }, 'limit'], [{ limit: '2.5' }, 'limit'],
+    [{ before: String(NOW), beforeId: '3' }, 'before'], [new URLSearchParams('limit=5&limit=6'), 'limit']]) {
+    await assert.rejects(runs(reader, task.id, query), error => error.statusCode === 400 && error.code === 'invalid_parameter' && error.param === param);
   }
-  for (const query of [{ before: String(NOW) }, { beforeId: '3' }, { before: 'x', beforeId: '1' }]) {
-    await assert.rejects(page(query), error => error.statusCode === 400 && error.code === 'invalid_cursor');
+  // A cursor belongs to one task's history.
+  for (const cursor of ['bad', first.nextCursor.replace(/.$/, c => c === 'A' ? 'B' : 'A')]) {
+    await assert.rejects(runs(reader, task.id, { cursor }), error => error.statusCode === 400 && error.code === 'invalid_cursor');
   }
+  await assert.rejects(runs(reader, other.id, { cursor: first.nextCursor }), error => error.code === 'invalid_cursor');
+  await assert.rejects(runs(reader, 'absent-task'), error => error.statusCode === 404 && error.code === 'not_found');
 });
 
 test('target groups follow the dispatch rule using the group snapshot without namespace lookups', async t => {
@@ -306,8 +321,8 @@ test('target groups follow the dispatch rule using the group snapshot without na
     },
   });
   const names = new Map([['telegram:dm-1001', { displayName: 'Customer DM' }]]);
-  const page = await f.reader({ getSnapshot: () => snapshot.getSnapshot(), displayNames: { listAll: () => names } }).read();
-  const byId = new Map(page.tasks.map(task => [task.id, task]));
+  const page = await list(f.reader({ getSnapshot: () => snapshot.getSnapshot(), displayNames: { listAll: () => names } }));
+  const byId = new Map(page.items.map(task => [task.id, task]));
   assert.deepEqual(byId.get(grouped.id).target, { kind: 'group', sessionGroup: 'telegram:dm-1001', componentName: 'telegram', displayName: 'Customer DM' });
   assert.deepEqual(byId.get(grouped.id).reply, { channel: 'telegram', endpoint: '1001' });
   assert.deepEqual(byId.get(whole.id).target, { kind: 'group', sessionGroup: 'telegram', componentName: 'telegram', displayName: null });
@@ -317,11 +332,68 @@ test('target groups follow the dispatch rule using the group snapshot without na
   assert.ok(calls.length > 0);
   assert.equal(calls.filter(args => args.includes('namespace')).length, 0);
 
-  const withoutTelegram = await f.reader({ getSnapshot: async () => ({ rows: [] }) }).read();
-  assert.deepEqual(withoutTelegram.tasks.find(task => task.id === grouped.id).target, { kind: 'raw', text: 'telegram:dm-1001' });
-  assert.deepEqual(withoutTelegram.tasks.find(task => task.id === whole.id).target, { kind: 'raw', text: 'telegram' });
-  const failing = await f.reader({ getSnapshot: async () => { throw Error('snapshot failed'); } }).read();
-  assert.deepEqual(failing.tasks.find(task => task.id === grouped.id).target, { kind: 'raw', text: 'telegram:dm-1001' });
+  const withoutTelegram = await list(f.reader({ getSnapshot: async () => ({ rows: [] }) }));
+  assert.deepEqual(withoutTelegram.items.find(task => task.id === grouped.id).target, { kind: 'raw', text: 'telegram:dm-1001' });
+  assert.deepEqual(withoutTelegram.items.find(task => task.id === whole.id).target, { kind: 'raw', text: 'telegram' });
+  const failing = await list(f.reader({ getSnapshot: async () => { throw Error('snapshot failed'); } }));
+  assert.deepEqual(failing.items.find(task => task.id === grouped.id).target, { kind: 'raw', text: 'telegram:dm-1001' });
+});
+
+test('the target filter selects exactly the tasks whose delivery target is that group, before paging', async t => {
+  const f = fixture(t);
+  // Namespaces differ from component names, and only the first row of a component decides its namespace.
+  const rows = [
+    { sessionGroup: 'tg:dm-5', c4: { componentName: 'telegram' } }, { sessionGroup: 'other:dm-6', c4: { componentName: 'telegram' } },
+    { sessionGroup: 'lk', c4: { componentName: 'lark' } }, { sessionGroup: 'tg:ops', c4: { componentName: 'tgbot' } },
+  ];
+  let failSnapshot = false;
+  const getSnapshot = async () => { if (failSnapshot) throw Error('snapshot failed'); return { rows }; };
+  const variants = [
+    { session_component: 'telegram', session_group_name: 'dm-1' }, { session_component: 'telegram', session_group_name: 'dm-2' },
+    { session_component: 'telegram' }, { reply_channel: 'telegram', reply_endpoint: '1' }, { reply_channel: 'lark' },
+    { session_component: 'lark', session_group_name: 'ops' }, {}, { session_component: 'mystery', session_group_name: 'a' },
+    { session_component: 'telegram', session_group_name: 'dm-1', reply_channel: 'lark' }, { session_component: 'tgbot', reply_channel: 'telegram' },
+  ];
+  for (let i = 0; i < 180; i++) {
+    f.task({ ...variants[i % variants.length], status: ['pending', 'failed', 'paused', 'completed'][i % 4], updated_at: NOW - i });
+  }
+  // Group X: twenty tasks that sort after the third page of the whole list.
+  const x = Array.from({ length: 20 }, (_, i) => f.task({ session_component: 'telegram', session_group_name: 'dm-x', status: 'completed',
+    updated_at: NOW - 10000 - i }).id);
+  const reader = f.reader({ getSnapshot });
+  const walk = async query => {
+    const items = [];
+    let cursor = null;
+    do {
+      const page = await list(reader, { ...query, ...(cursor ? { cursor } : {}) });
+      items.push(...page.items);
+      cursor = page.nextCursor;
+    } while (cursor);
+    return items;
+  };
+  const all = await walk({});
+  assert.equal(all.length, 200);
+  assert.ok(x.every(id => all.findIndex(task => task.id === id) >= 150));
+  // The rows' own resolved targets, from deliveryTarget, are the reference for every filter.
+  const resolved = task => task.target.kind === 'origin' ? 'origin' : task.target.kind === 'group' ? task.target.sessionGroup : null;
+  const targets = ['origin', 'tg', 'tg:dm-1', 'tg:dm-2', 'tg:dm-x', 'lk', 'lk:ops', 'tg:ops', 'other', 'other:dm-6', 'mystery:a', 'absent'];
+  assert.ok(new Set(all.map(resolved)).size >= 7);
+  for (const target of targets) {
+    const expected = all.filter(task => resolved(task) === target).map(task => task.id);
+    assert.deepEqual((await walk({ target, limit: '7' })).map(task => task.id), expected, target);
+    assert.equal((await list(reader, { target, include: 'total' })).total, expected.length, target);
+  }
+  // S6: selecting group X shows only its tasks from the first page on.
+  const first = await list(reader, { target: 'tg:dm-x', limit: '8' });
+  assert.deepEqual(first.items.map(task => task.id), x.slice(0, 8));
+  assert.deepEqual((await walk({ target: 'tg:dm-x', limit: '8' })).map(task => task.id), x);
+  assert.deepEqual((await list(reader, { target: 'tg:dm-x', status: 'completed', q: 'Task' })).items.length, 20);
+  assert.equal((await list(reader, { target: 'tg:dm-x', status: 'enabled' })).items.length, 0);
+  await assert.rejects(list(reader, { target: 'tg:dm-1', limit: '8', cursor: first.nextCursor }), error => error.code === 'invalid_cursor');
+  await assert.rejects(list(reader, { target: '' }), error => error.code === 'invalid_parameter' && error.param === 'target');
+  failSnapshot = true;
+  await assert.rejects(list(reader, { target: 'tg' }), error => error.statusCode === 503 && error.code === 'unavailable');
+  assert.equal((await list(reader, { target: 'origin', include: 'total' })).total, all.filter(task => resolved(task) === 'origin').length);
 });
 
 // Real scheduler SQLite -> snapshot -> group search/detail boundary. Run for
@@ -414,73 +486,99 @@ test('upcoming cron runs parse once and stop after five runs and the full day', 
   assert.equal(daily.length, 5);
 });
 
-test('completed tasks page stably while counts, timeline and week totals remain global', async t => {
+test('every status pages in section order with signed cursors while counts, timeline and week totals stay global', async t => {
   const f = fixture(t);
-  f.task({ type: 'recurring', cron_expression: '* * * * *' });
-  f.task({ type: 'recurring', cron_expression: '0 8 * * *' });
-  for (let i = 0; i < 17; i++) f.task({ status: i < 8 ? 'paused' : 'pending' });
+  f.task({ type: 'recurring', cron_expression: '* * * * *', next_run_at: NOW + 60 });
+  f.task({ type: 'recurring', cron_expression: '0 8 * * *', next_run_at: NOW + 60 });
+  // 60 active tasks with tied next-run and update times, so ids break the ties inside each section.
+  for (let i = 0; i < 58; i++) {
+    const status = ['pending', 'running', 'failed', 'paused'][i % 4];
+    f.task({ status, next_run_at: NOW + 600 * (Math.floor(i / 8) + 1), updated_at: NOW - Math.floor(i / 6) });
+  }
   const completed = [];
-  for (let i = 0; i < 101; i++) {
-    const task = f.task({ status: 'completed', updated_at: NOW - Math.floor(i / 2), prompt: '😀'.repeat(250) + ' HiddenNeedle%_ ÄWord' });
+  for (let i = 0; i < 120; i++) {
+    const task = f.task({ status: 'completed', updated_at: NOW - Math.floor(i / 2), name: `Done ${i} HiddenNeedle%_ ÄWord`,
+      prompt: '😀'.repeat(250) + ' BodyOnlyWord' });
     completed.push(task);
     f.run(task.id, { executed_at: NOW - HOUR, completed_at: NOW - HOUR + 1, status: i % 2 ? 'success' : 'failed' });
   }
+  const rows = f.db.prepare('SELECT id, status, next_run_at, updated_at FROM tasks').all();
+  const key = row => SECTION[row.status] === 0 ? row.next_run_at : -row.updated_at;
+  const expected = rows.sort((a, b) => SECTION[a.status] - SECTION[b.status] || key(a) - key(b) || (a.id < b.id ? -1 : 1));
   const reader = f.reader();
-  const page = query => scheduleReadResponse(reader, '/api/schedules', new URLSearchParams(query));
-  const initial = await page({});
-  assert.equal(initial.tasks.length, 19);
-  assert.equal(Object.hasOwn(initial, 'timelineTasks'), false);
-  for (const task of initial.tasks) {
-    assert.equal(Object.hasOwn(task, 'prompt'), false);
-    assert.equal(typeof task.promptSummary, 'string');
-    assert.equal(typeof task.promptTruncated, 'boolean');
+  const walk = async (query = {}) => {
+    const pages = [];
+    let cursor = null;
+    do {
+      const page = await list(reader, { ...query, ...(cursor ? { cursor } : {}) });
+      pages.push(page);
+      cursor = page.nextCursor;
+      assert.ok(pages.length <= 10);
+    } while (cursor);
+    return pages;
+  };
+  const pages = await walk({ include: 'total' });
+  assert.deepEqual(pages.map(page => page.items.length), [50, 50, 50, 30]);
+  assert.equal(pages[0].total, 180);
+  const seen = pages.flatMap(page => page.items.map(task => task.id));
+  assert.deepEqual(seen, expected.map(row => row.id));
+  const first = pages[0];
+  for (const page of pages) {
+    assert.deepEqual(page.counts, { all: 180, enabled: 32, paused: 14, failed: 14, completed: 120 });
+    assert.deepEqual(page.kpi, first.kpi);
+    assert.deepEqual(page.daily7d, first.daily7d);
+    assert.deepEqual(page.timelineTasks, first.timelineTasks);
   }
-  assert.deepEqual(initial.counts, { all: 120, enabled: 11, paused: 8, failed: 0, completed: 101 });
-  assert.equal(initial.kpi.next24h, 1441);
-  assert.equal(initial.kpi.runs7d, 101);
-  const first = await page({ status: 'completed' });
-  assert.equal(first.tasks.length, 30);
-  assert.equal(Array.from(first.tasks[0].promptSummary).length, 200);
-  assert.equal(first.tasks[0].promptTruncated, true);
-  assert.equal(Object.hasOwn(first.tasks[0], 'prompt'), false);
-  assert.equal(first.timelineTasks.every(task => !Object.hasOwn(task, 'prompt')), true);
-  assert.deepEqual(first.counts, initial.counts);
-  assert.deepEqual(first.kpi, initial.kpi);
-  assert.deepEqual(first.daily7d, initial.daily7d);
-  assert.equal(first.timelineTasks.length, 19);
-  assert.equal(first.timelineTasks[0].nextRuns.in24h.length, 1440);
-  const seen = [...first.tasks.map(task => task.id)];
-  let cursor = first.nextCursor;
-  // A new completion inserted before the cursor does not shift following pages.
-  const late = f.task({ status: 'completed', updated_at: NOW + 1 });
-  const sizes = [];
-  while (cursor) {
-    const next = await page({ status: 'completed', cursor });
-    sizes.push(next.tasks.length);
-    seen.push(...next.tasks.map(task => task.id));
-    assert.ok(seen.length <= 101);
-    cursor = next.nextCursor;
+  assert.equal(first.kpi.runs7d, 120);
+  assert.equal(first.kpi.enabled, 32);
+  // The lane covers every enabled task with a run in the next 24 hours, with only the fields it draws.
+  assert.equal(first.timelineTasks.length, 32);
+  assert.deepEqual(Object.keys(first.timelineTasks[0]).sort(), ['id', 'name', 'nextRuns', 'priority']);
+  assert.equal(first.timelineTasks.find(task => task.nextRuns.in24h.length === 1440)?.nextRuns.in24h[0], NOW + 60);
+  const last = pages.at(-1).items.at(-1);
+  assert.equal(Array.from(last.promptSummary).length, 200);
+  assert.equal(last.promptTruncated, true);
+  assert.equal(Object.hasOwn(last, 'prompt'), false);
+  // Recent results are read only for the rows of each page.
+  assert.ok(pages[0].items.every(task => task.status === 'completed' || task.recent.length === 0));
+  assert.equal(pages.at(-1).items.every(task => task.recent.length === 1), true);
+
+  // A row added before the cursor does not shift the following pages.
+  const enabledFirst = await list(reader, { status: 'enabled', limit: '20' });
+  const early = f.task({ next_run_at: NOW + 1 });
+  const enabledRest = await walk({ status: 'enabled', limit: '20', cursor: enabledFirst.nextCursor });
+  const enabledSeen = [...enabledFirst.items, ...enabledRest.flatMap(page => page.items)].map(task => task.id);
+  assert.deepEqual(enabledSeen, expected.filter(row => SECTION[row.status] === 0).map(row => row.id));
+  assert.equal(enabledSeen.includes(early.id), false);
+  assert.equal((await list(reader, { status: 'enabled' })).items[0].id, early.id);
+  for (const status of ['paused', 'failed']) {
+    assert.deepEqual((await list(reader, { status })).items.map(task => task.id), expected.filter(row => row.status === status).map(row => row.id));
   }
-  assert.deepEqual(sizes, [30, 30, 11]);
-  assert.equal(seen.length, 101);
-  assert.equal(new Set(seen).size, 101);
-  assert.equal(seen.includes(late.id), false);
-  for (const task of completed) assert.ok(seen.includes(task.id));
-  const searched = await page({ status: 'completed', q: 'HIDDENNEEDLE%_' });
-  assert.equal(searched.tasks.length, 30);
-  assert.equal(searched.counts.completed, 102);
-  assert.equal((await page({ status: 'completed', q: 'äword' })).tasks.length, 30);
+  const done = await walk({ status: 'completed' });
+  assert.deepEqual(done.map(page => page.items.length), [50, 50, 20]);
+  assert.deepEqual(done.flatMap(page => page.items.map(task => task.id)), expected.filter(row => row.status === 'completed').map(row => row.id));
+
+  // q matches the name only, case-insensitively and with literal %, _ and Unicode.
+  assert.equal((await list(reader, { q: 'BodyOnlyWord' })).items.length, 0);
+  assert.equal((await list(reader, { q: 'hiddenneedle%_', include: 'total' })).total, 120);
+  assert.equal((await list(reader, { q: '  äword  ', limit: '7' })).items.length, 7);
+  assert.equal((await list(reader, { q: 'Done 11 ' })).items[0].id, completed[11].id);
+  assert.equal((await list(reader, { q: '' })).items.length, 50);
+  // A cursor is bound to its filters and q.
+  const searched = await list(reader, { q: 'needle', limit: '3' });
+  await assert.rejects(list(reader, { q: 'needl', limit: '3', cursor: searched.nextCursor }), error => error.code === 'invalid_cursor');
+  await assert.rejects(list(reader, { status: 'completed', cursor: pages[0].nextCursor }), error => error.code === 'invalid_cursor');
+  for (const [query, param] of [[{ status: 'unknown' }, 'status'], [{ limit: '101' }, 'limit'], [{ limit: '0' }, 'limit'],
+    [{ q: 'x'.repeat(65) }, 'q'], [{ include: 'count' }, 'include'], [{ sort: 'name' }, 'sort'],
+    [new URLSearchParams('status=paused&status=failed'), 'status']]) {
+    await assert.rejects(list(reader, query), error => error.statusCode === 400 && error.code === 'invalid_parameter' && error.param === param);
+  }
+  for (const cursor of ['bad', Buffer.from(JSON.stringify(['wrong', 2])).toString('base64url')]) {
+    await assert.rejects(list(reader, { cursor }), error => error.statusCode === 400 && error.code === 'invalid_cursor');
+  }
   const detail = await scheduleReadResponse(reader, `/api/schedules/${completed[0].id}`, new URLSearchParams());
   assert.equal(detail.task.prompt, completed[0].prompt);
   assert.equal(detail.task.promptTruncated, false);
-  const enabled = await page({ status: 'enabled' });
-  assert.equal(enabled.tasks.length, 19);
-  assert.equal((await page({ status: 'paused' })).tasks.length, 19);
-  assert.equal((await page({ q: 'missing-text' })).tasks.length, 0);
-  for (const query of [{ status: 'unknown' }, { limit: '101' }, { limit: '0' }, { status: 'completed', cursor: 'bad' },
-    { status: 'completed', cursor: Buffer.from(JSON.stringify(['wrong', 2])).toString('base64url') }, { cursor: first.nextCursor }]) {
-    await assert.rejects(page(query), error => error.statusCode === 400);
-  }
   await assert.rejects(reader.detail('absent'), error => error.statusCode === 404 && error.code === 'task_not_found');
 });
 
@@ -488,10 +586,10 @@ test('capped high frequency previews are explicitly partial without hiding healt
   const f = fixture(t);
   const capped = f.task({ type: 'recurring', cron_expression: '* * * * * *' });
   const good = f.task({ type: 'recurring', cron_expression: '0 8 * * *' });
-  const page = await f.reader().read();
-  assert.equal(page.tasks.find(task => task.id === capped.id).nextRuns.truncated, true);
-  assert.equal(page.tasks.find(task => task.id === capped.id).nextRuns.in24h.length, 2000);
-  assert.equal(page.tasks.find(task => task.id === good.id).nextRuns.runs.length, 5);
+  const page = await list(f.reader());
+  assert.equal(page.items.find(task => task.id === capped.id).nextRuns.truncated, true);
+  assert.equal(page.items.find(task => task.id === capped.id).nextRuns.in24h.length, 2000);
+  assert.equal(page.items.find(task => task.id === good.id).nextRuns.runs.length, 5);
   assert.equal(page.kpi.partialPreview, true);
   assert.equal(page.kpi.next24h, 2001);
 });
@@ -519,49 +617,17 @@ test('summary reads work with the original scheduler schema without session colu
   db.prepare(`INSERT INTO tasks (id, name, prompt, type, next_run_at, created_at, updated_at)
     VALUES ('old-task', 'Original schema', ?, 'one-time', ?, ?, ?)`).run('😀'.repeat(230), NOW + 60, NOW, NOW);
   const reader = createScheduleRead({ zylosDir: f.zylosDir, now: () => NOW_MS, scheduleTz: async () => ({ tz: 'UTC' }) });
-  const page = await reader.read();
+  const page = await list(reader);
   assert.equal(page.available, true);
   assert.equal(page.kpi.enabled, 1);
-  assert.equal(page.tasks[0].promptSummary, '😀'.repeat(200));
-  assert.equal(page.tasks[0].promptTruncated, true);
-  assert.equal(Object.hasOwn(page.tasks[0], 'prompt'), false);
-  assert.equal(Object.hasOwn(page, 'timelineTasks'), false);
-  assert.deepEqual(page.tasks[0].target, { kind: 'origin' });
+  assert.equal(page.items[0].promptSummary, '😀'.repeat(200));
+  assert.equal(page.items[0].promptTruncated, true);
+  assert.equal(Object.hasOwn(page.items[0], 'prompt'), false);
+  assert.deepEqual(page.timelineTasks.map(task => task.id), ['old-task']);
+  assert.deepEqual(page.items[0].target, { kind: 'origin' });
   assert.equal((await reader.detail('old-task')).task.prompt, '😀'.repeat(230));
-});
-
-test('all search includes paged completions and preserves tied timestamps across page boundaries', async t => {
-  const f = fixture(t);
-  const active = f.task({ prompt: 'Active shared-needle' });
-  const expected = [];
-  for (let i = 0; i < 11; i++) expected.push(f.task({ status: 'completed', updated_at: NOW - Math.floor(i / 3),
-    prompt: 'x'.repeat(240) + ' Shared-Needle' }));
-  const reader = f.reader();
-  const compare = expected.slice().sort((a, b) => b.updated_at - a.updated_at || b.id.localeCompare(a.id)).map(task => task.id);
-  for (const limit of [1, 7]) {
-    const seen = [];
-    let cursor = null;
-    do {
-      const page = await reader.read(undefined, { status: 'all', q: 'SHARED-NEEDLE', limit, cursor });
-      assert.equal(page.tasks[0].id, active.id);
-      assert.equal(page.tasks[0].status, 'pending');
-      assert.equal(page.counts.all, 12);
-      assert.equal(page.counts.completed, 11);
-      assert.ok(page.tasks.slice(1).every(task => task.status === 'completed'));
-      assert.ok(page.tasks.every(task => !Object.hasOwn(task, 'prompt')));
-      seen.push(...page.tasks.slice(1).map(task => task.id));
-      assert.ok(seen.length <= 11);
-      cursor = page.nextCursor;
-    } while (cursor);
-    assert.deepEqual(seen, compare);
-  }
-  const completedOnly = await reader.read(undefined, { status: 'completed', q: 'SHARED-NEEDLE', limit: 1 });
-  assert.equal(completedOnly.tasks.length, 1);
-  assert.equal(completedOnly.tasks[0].id, compare[0]);
-  const noncompleted = await reader.read(undefined, { status: 'enabled', q: 'SHARED-NEEDLE' });
-  assert.equal(noncompleted.tasks.length, 1);
-  assert.equal(noncompleted.tasks[0].id, active.id);
-  assert.equal(Object.hasOwn(noncompleted, 'timelineTasks'), false);
+  assert.deepEqual((await list(reader, { target: 'origin' })).items.map(task => task.id), ['old-task']);
+  assert.equal((await list(reader, { target: 'telegram' })).items.length, 0);
 });
 
 test('minute rules match real zoned cron runs and only eligible rules use arithmetic', () => {
@@ -602,24 +668,25 @@ test('legacy timeouts stay in history but do not become delivery failures or low
   const legacy = f.task({ type: 'interval', interval_seconds: 1800, last_error: 'Task timed out' });
   f.run(legacy.id, { executed_at: NOW - 100, status: 'timeout', error: 'TASK_TIMEOUT', completed_at: NOW - 50 });
   const reader = f.reader();
-  const onlyTimeouts = await reader.read();
+  const onlyTimeouts = await list(reader);
   assert.equal(onlyTimeouts.kpi.bad7d, 0);
   assert.equal(onlyTimeouts.kpi.successRate7d, null);
   assert.equal(onlyTimeouts.daily7d.days.at(-1).timeout, 1);
-  assert.equal(onlyTimeouts.tasks[0].showLastError, false);
-  assert.equal(onlyTimeouts.tasks[0].lastError, null);
-  assert.equal(reader.history(legacy.id).rows[0].status, 'timeout');
-  assert.equal(reader.history(legacy.id).rows[0].error, 'TASK_TIMEOUT');
+  assert.equal(onlyTimeouts.items[0].showLastError, false);
+  assert.equal(onlyTimeouts.items[0].lastError, null);
+  const legacyRuns = await runs(reader, legacy.id);
+  assert.equal(legacyRuns.items[0].status, 'timeout');
+  assert.equal(legacyRuns.items[0].error, 'TASK_TIMEOUT');
   const delivered = f.task({ status: 'completed' });
   f.run(delivered.id, { executed_at: NOW - 90, status: 'success', completed_at: NOW - 89 });
   const rejected = f.task({ last_error: 'RECEIVE_FAILED' });
   f.run(rejected.id, { executed_at: NOW - 80, status: 'failed', completed_at: NOW - 79, error: 'RECEIVE_FAILED' });
   const uncertain = f.task({ status: 'running', last_error: 'RECEIVE_RESULT_UNKNOWN' });
   f.run(uncertain.id, { executed_at: NOW - 70, status: 'started', error: 'RECEIVE_RESULT_UNKNOWN' });
-  const mixed = await reader.read();
+  const mixed = await list(reader);
   assert.equal(mixed.kpi.bad7d, 1);
   assert.equal(mixed.kpi.successRate7d, 0.5);
   assert.equal(mixed.kpi.running, 1);
-  assert.equal(mixed.tasks.find(task => task.id === rejected.id).showLastError, true);
-  assert.equal(mixed.tasks.find(task => task.id === uncertain.id).showLastError, false);
+  assert.equal(mixed.items.find(task => task.id === rejected.id).showLastError, true);
+  assert.equal(mixed.items.find(task => task.id === uncertain.id).showLastError, false);
 });

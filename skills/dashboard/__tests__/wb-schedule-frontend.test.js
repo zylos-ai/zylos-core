@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { axisLabels, dayTime, deliveryLine, groupTasks, laneDots, laneTicks, missText, mountSchedule, targetLabel, untilText, writeMessage,
-  writeOutcome, statusCounts } from '../public/js/wb/schedule.js';
+  writeOutcome } from '../public/js/wb/schedule.js';
 import { createForm, createPreviewer, formPayload, initialForm, saveAllowed } from '../public/js/wb/schedule-form.js';
 import { allNodes, createDocument, deferred, tick } from './fixtures/workbench-dom.js';
 import { packTranslator } from './fixtures/schedule-env.js';
@@ -16,9 +16,11 @@ function task(fields = {}) {
     requireIdle: false, missThreshold: 300, showLastError: false, lastError: null, recent: [],
     nextRuns: { runs: [1800003600], in24h: [1800003600] }, target: { kind: 'origin' }, reply: null, reenable: false, ...fields };
 }
+const statusCounts = tasks => ({ all: tasks.length, enabled: tasks.filter(item => ['pending', 'running'].includes(item.status)).length,
+  ...Object.fromEntries(['paused', 'failed', 'completed'].map(status => [status, tasks.filter(item => item.status === status).length])) });
 const page = (tasks = [task()]) => ({ available: true, tz: 'Asia/Singapore', readAt: 0,
   kpi: { enabled: 1, paused: 0, running: 0, next24h: 1, partialPreview: false, runs7d: 0, bad7d: 0, successRate7d: null },
-  daily7d: { tz: 'Asia/Singapore', utcFallback: false, days: [] }, tasks, counts: statusCounts(tasks),
+  daily7d: { tz: 'Asia/Singapore', utcFallback: false, days: [] }, items: tasks, counts: statusCounts(tasks),
   timelineTasks: tasks.filter(item => ['pending', 'running'].includes(item.status)), nextCursor: null });
 
 test('target and delivery lines use the dispatch target and always keep two parts', () => {
@@ -38,17 +40,17 @@ test('target and delivery lines use the dispatch target and always keep two part
   assert.equal(deliveryLine({ target: group, reply }, { t: en, locale: 'en' }), 'Runs in Telegram · dm-1001 · results go to Telegram');
 });
 
-test('list sections order enabled tasks by next run and keep expired and completed apart', () => {
+test('list sections keep the server order and put enabled, failed, paused and completed rows apart', () => {
+  // The server returns rows in section order; within a section the page keeps the rows as they came.
   const tasks = [
-    task({ id: 'late', nextRuns: { runs: [300], in24h: [] } }), task({ id: 'soon', nextRuns: { runs: [100], in24h: [] } }),
-    task({ id: 'expired', status: 'failed', type: 'one-time' }), task({ id: 'done', status: 'completed', type: 'one-time' }),
-    task({ id: 'off', status: 'paused' }), task({ id: 'busy', status: 'running', nextRuns: { runs: [200], in24h: [] } }),
+    task({ id: 'late', nextRuns: { runs: [100], in24h: [] } }), task({ id: 'busy', status: 'running', nextRuns: { runs: [200], in24h: [] } }),
+    task({ id: 'expired', status: 'failed', type: 'one-time' }), task({ id: 'off', status: 'paused' }),
+    task({ id: 'done', status: 'completed', type: 'one-time' }),
   ];
-  assert.deepEqual(groupTasks(tasks, { t }).map(section => [section.name, section.tasks.map(item => item.id)]), [
-    ['enabled', ['soon', 'busy', 'late']], ['failed', ['expired']], ['paused', ['off']], ['completed', ['done']],
+  assert.deepEqual(groupTasks(tasks).map(section => [section.name, section.tasks.map(item => item.id)]), [
+    ['enabled', ['late', 'busy']], ['failed', ['expired']], ['paused', ['off']], ['completed', ['done']],
   ]);
-  assert.deepEqual(groupTasks(tasks, { t, status: 'failed' }).map(section => section.name), ['failed']);
-  assert.deepEqual(groupTasks(tasks, { t, query: 'BUSY' })[0].tasks.map(item => item.id), ['busy']);
+  assert.deepEqual(groupTasks(tasks.slice(2, 3)).map(section => section.name), ['failed']);
   assert.equal(writeMessage({ result: 'unknown', reason: 'scheduler_cli_failed' }, t), '结果未知，已重新读取当前状态');
   assert.deepEqual(writeOutcome(200, { ok: true, data: { task: { id: 'new' } } }), { result: 'done', data: { task: { id: 'new' } } });
   assert.equal(writeMessage({ result: 'rejected', code: 'INVALID_ARGS', message: 'Priority must be 1-3' }, t), 'Priority must be 1-3');
@@ -197,8 +199,8 @@ function harness(context, respond, { writable = true, hidden = false } = {}) {
       let value = await respond(path, options);
       // Existing page fixtures share their full task rows with the detail route.
       const detail = path.match(/\/api\/schedules\/([^/?]+)$/);
-      if (detail && value?.tasks) value = { task: value.tasks.find(item => item.id === decodeURIComponent(detail[1])) };
-      if (!detail && value?.tasks) value = { ...value, tasks: value.tasks.map(task => {
+      if (detail && value?.items) value = { task: value.items.find(item => item.id === decodeURIComponent(detail[1])) };
+      if (!detail && value?.items) value = { ...value, items: value.items.map(task => {
         if (!Object.hasOwn(task, 'promptTruncated')) return task;
         const summary = { ...task, promptSummary: task.promptSummary ?? task.prompt };
         delete summary.prompt;
@@ -224,7 +226,7 @@ test('schedule page polls only while visible and keeps old rows after a read fai
   let fail = false;
   const h = harness(context, path => {
     if (fail) throw Error('offline');
-    return path.endsWith('/history?limit=30') ? { rows: [], next: null } : page();
+    return path.endsWith('/history') ? { items: [], nextCursor: null } : page();
   }, { hidden: true });
   await tick();
   assert.equal(h.reads(), 0);
@@ -281,7 +283,7 @@ test('an unknown write result re-reads the list once and a re-enable moves the t
   let outcome = { result: 'unknown', reason: 'scheduler_cli_failed' };
   const h = harness(context, (path, options) => {
     if (path.startsWith('/api/schedules/preview')) return { valid: true, runs: [1800009000] };
-    if (path.includes('/history')) return { rows: [], next: null };
+    if (path.includes('/history')) return { items: [], nextCursor: null };
     if (options.method === 'PUT') return outcome;
     return current;
   });
@@ -319,7 +321,7 @@ test('an unknown write result re-reads the list once and a re-enable moves the t
 
 test('read-only agents get no write entry points and target groups open the overview', async context => {
   const group = { kind: 'group', sessionGroup: 'telegram:dm-1001', componentName: 'telegram', displayName: null };
-  const h = harness(context, path => path.includes('/history') ? { rows: [], next: null }
+  const h = harness(context, path => path.includes('/history') ? { items: [], nextCursor: null }
     : page([task({ target: group, reply: { channel: 'telegram', endpoint: '1001' } })]), { writable: false });
   await tick();
   assert.equal(buttons(h.root, '新建任务').length, 0);
@@ -337,7 +339,7 @@ test('target buttons pass the exact group key to the supplied opener from list a
     { kind: 'group', sessionGroup: 'openmax:research', componentName: 'openmax', displayName: 'Research' },
     { kind: 'group', sessionGroup: 'telegram:older-group', componentName: 'telegram', displayName: null },
   ];
-  const h = harness(context, path => path.includes('/history') ? { rows: [], next: null }
+  const h = harness(context, path => path.includes('/history') ? { items: [], nextCursor: null }
     : page(groups.map((target, index) => task({ id: `task-${index}`, target }))));
   await tick();
   const targets = () => allNodes(h.root).filter(node => node.tagName === 'BUTTON' && node.classList.contains('wb-sched-target'));
@@ -354,7 +356,7 @@ test('target buttons pass the exact group key to the supplied opener from list a
 test('schedule page shows an unknown time zone, unavailable previews and the idle setting', async context => {
   const broken = task({ id: 'task-cron', name: 'Broken rule', cron: 'bad', requireIdle: true,
     nextRuns: { unavailable: true, reason: 'cron_preview_unavailable' } });
-  const h = harness(context, path => path.includes('/history') ? { rows: [], next: null }
+  const h = harness(context, path => path.includes('/history') ? { items: [], nextCursor: null }
     : { ...page([broken]), tz: null, tzReason: 'tz_unavailable', daily7d: { tz: 'UTC', utcFallback: true, days: [] } });
   await tick();
   assert.match(textOf(h.root), /时区未知 · 时间按 UTC 显示/);
@@ -371,7 +373,7 @@ test('a refused write explains the refusal and rows hold two sibling buttons', a
   const group = { kind: 'group', sessionGroup: 'telegram:dm-1001', componentName: 'telegram', displayName: null };
   const h = harness(context, (path, options) => {
     if (options.method === 'PUT') return { ok: false, status: 413, json: async () => ({ error: { code: 'payload_too_large', message: '' } }) };
-    return path.includes('/history') ? { rows: [], next: null } : page([task({ target: group })]);
+    return path.includes('/history') ? { items: [], nextCursor: null } : page([task({ target: group })]);
   });
   await tick();
   const row = allNodes(h.root).find(node => node.classList.contains('wb-sched-row'));
@@ -459,7 +461,7 @@ test('lane labels stay inside the lane and keep "tomorrow 00:00" at 00:10 and 23
 
 test('a refresh keeps the drawer scroll position and an open form keeps its node, focus and text', async context => {
   const rows = Array.from({ length: 40 }, (_, index) => ({ id: index, executedAt: 1799990000 - index * 3600, status: 'success', duration: 1000 }));
-  const h = harness(context, path => path.includes('/history') ? { rows, next: null } : page());
+  const h = harness(context, path => path.includes('/history') ? { items: rows, nextCursor: null } : page());
   await tick();
   allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
   await tick();
@@ -469,7 +471,7 @@ test('a refresh keeps the drawer scroll position and an open form keeps its node
   await h.poll();
   assert.equal(h.root.children.find(node => node.tagName === 'ASIDE'), aside, 'the drawer stays mounted');
   assert.equal(body().scrollTop, 375);
-  buttons(h.root, '加载全部')[0].dispatch('click');
+  buttons(h.root, '加载更多')[0].dispatch('click');
   assert.equal(body().scrollTop, 375);
   buttons(h.root, '编辑')[0].dispatch('click');
   const panel = aside.children[0];
@@ -485,7 +487,7 @@ test('a refresh keeps the drawer scroll position and an open form keeps its node
 });
 
 test('Esc leaves an input method alone and keeps a form with typed changes open', async context => {
-  const h = harness(context, path => path.includes('/history') ? { rows: [], next: null } : page());
+  const h = harness(context, path => path.includes('/history') ? { items: [], nextCursor: null } : page());
   await tick();
   const escape = (fields = {}) => h.listeners.get('keydown')({ key: 'Escape', preventDefault() {}, ...fields });
   const formOpen = () => allNodes(h.root).some(node => node.tagName === 'FORM');
@@ -509,7 +511,7 @@ test('Esc leaves an input method alone and keeps a form with typed changes open'
 test('the edit button of an expired one-time task opens the re-enable form', async context => {
   const expired = task({ id: 'task-x', type: 'one-time', status: 'failed', cron: null, reenable: true,
     showLastError: true, lastError: 'Missed execution window', nextRuns: [] });
-  const h = harness(context, path => path.includes('/history') ? { rows: [], next: null }
+  const h = harness(context, path => path.includes('/history') ? { items: [], nextCursor: null }
     : path.startsWith('/api/schedules/preview') ? { valid: true, runs: [] } : page([expired]));
   await tick();
   allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
@@ -524,7 +526,7 @@ test('the edit button of an expired one-time task opens the re-enable form', asy
 });
 
 test('task detail header gives the title its own row and keeps state and actions together for the second row', async context => {
-  const h = harness(context, path => path.includes('/history') ? { rows: [], next: null } : page());
+  const h = harness(context, path => path.includes('/history') ? { items: [], nextCursor: null } : page());
   await tick();
   allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
   await tick();
@@ -584,7 +586,102 @@ test('completed pages keep server counts and timeline and follow fresh cursors o
   assert.equal(h.calls.at(-1).path.includes('cursor='), false);
 });
 
-test('a full-text server search keeps matches whose prompt summary does not contain the query', async context => {
+// A paging server double: 50 rows per page, cursors carry the server epoch, and a restart refuses older cursors
+// with invalid_cursor as the real list routes do.
+function pagingServer(rows) {
+  const state = { epoch: 1 };
+  state.page = (list, query) => {
+    const cursor = query.get('cursor');
+    let start = 0;
+    if (cursor) {
+      const [epoch, offset] = cursor.split(':').map(Number);
+      if (epoch !== state.epoch) {
+        return { ok: false, status: 400, json: async () => ({ ok: false, error: { code: 'invalid_cursor', message: 'reload' } }) };
+      }
+      start = offset;
+    }
+    const end = start + 50;
+    return { items: list.slice(start, end), nextCursor: end < list.length ? `${state.epoch}:${end}` : null };
+  };
+  state.respond = query => {
+    const status = query.get('status') ?? 'all';
+    const list = rows.filter(row => status === 'all' || (status === 'enabled' ? ['pending', 'running'].includes(row.status) : row.status === status));
+    const result = state.page(list, query);
+    return result.json ? result : { ...page(result.items), counts: { all: 180, enabled: 60, paused: 0, failed: 0, completed: 120 },
+      timelineTasks: [], nextCursor: result.nextCursor };
+  };
+  return state;
+}
+
+test('every status loads in batches of the server order and a refused cursor reloads the first page without an error', async context => {
+  const rows = [
+    ...Array.from({ length: 60 }, (_, index) => task({ id: `active-${index}`, name: `Active ${index}` })),
+    ...Array.from({ length: 120 }, (_, index) => task({ id: `done-${index}`, name: `Done ${index}`, status: 'completed', type: 'one-time',
+      nextRuns: { runs: [], in24h: [] } })),
+  ];
+  const server = pagingServer(rows);
+  const h = harness(context, path => {
+    if (path.includes('/history')) return { items: [], nextCursor: null };
+    return server.respond(new URL(path, 'http://fixture.invalid').searchParams);
+  });
+  await tick();
+  assert.equal(listRows(h).length, 50);
+  assert.equal(allNodes(h.root).some(node => node.tagName === 'SELECT'), false, 'no target filter over loaded rows');
+  for (const expected of [100, 150, 180]) {
+    buttons(h.root, '加载更多')[0].dispatch('click');
+    await tick();
+    assert.equal(listRows(h).length, expected);
+  }
+  const names = listRows(h).map(node => node.textContent.match(/(Active|Done) \d+/)[0]);
+  assert.deepEqual(names, rows.map(row => row.name), 'all rows once, in server order');
+  const sections = allNodes(h.root).filter(node => node.classList.contains('wb-sched-section'));
+  assert.deepEqual(sections.map(node => node.children.filter(child => child.classList.contains('wb-sched-row')).length), [60, 120],
+    'a later page continues its section instead of opening a second one');
+  assert.equal(buttons(h.root, '加载更多').length, 0);
+
+  chooseFilter(h, 'enabled');
+  await tick();
+  assert.equal(listRows(h).length, 50);
+  assert.ok(h.calls.at(-1).path.includes('status=enabled'));
+  // The Dashboard restarts: the next page's cursor is refused and the page silently reloads from the first page.
+  server.epoch = 2;
+  const reads = h.reads();
+  buttons(h.root, '加载更多')[0].dispatch('click');
+  await tick();
+  assert.equal(h.reads(), reads + 3, 'refused cursor, then the first page and the next page again');
+  assert.equal(h.calls.at(-2).path.includes('cursor='), false);
+  assert.equal(listRows(h).length, 60);
+  assert.equal(textOf(h.root).includes('数据读取失败'), false);
+});
+
+test('execution history loads more with its cursor and reloads its first page after a refused cursor', async context => {
+  const runs = Array.from({ length: 120 }, (_, index) => ({ id: 120 - index, executedAt: 1799990000 - index * 60, status: 'success', duration: 1000 }));
+  const server = pagingServer([]);
+  const h = harness(context, path => {
+    if (path.includes('/history')) return server.page(runs, new URL(path, 'http://fixture.invalid').searchParams);
+    return page();
+  });
+  await tick();
+  listRows(h)[0].dispatch('click');
+  await tick();
+  const history = () => allNodes(h.root).filter(node => node.classList.contains('wb-sched-run'));
+  assert.equal(history().length, 8);
+  assert.ok(h.calls.some(call => call.path === '/api/schedules/task-1/history'));
+  buttons(h.root, '加载更多')[0].dispatch('click');
+  await tick();
+  assert.equal(history().length, 100);
+  assert.ok(h.calls.at(-1).path.endsWith('/history?cursor=1%3A50'));
+  server.epoch = 2;
+  buttons(h.root, '加载更多')[0].dispatch('click');
+  await tick();
+  assert.equal(history().length, 50, 'the refused cursor reloads the first page');
+  assert.equal(textOf(h.root).includes('数据读取失败'), false);
+  buttons(h.root, '加载更多')[0].dispatch('click');
+  await tick();
+  assert.equal(history().length, 100);
+});
+
+test('server search results are shown as returned, without filtering the loaded rows again', async context => {
   const match = task({ prompt: 'Only the summary is sent.', promptTruncated: true });
   const h = harness(context, path => {
     const query = new URL(path, 'http://fixture.invalid').searchParams;
@@ -624,7 +721,7 @@ test('detail and editing wait for the complete prompt instead of using a list su
   const full = 'Complete prompt\n' + '内容'.repeat(240) + '\nfinal secret tail';
   const h = harness(context, path => {
     if (path === '/api/schedules/task-1') return { ok: true, json: () => detail.promise };
-    if (path.includes('/history')) return { rows: [], next: null };
+    if (path.includes('/history')) return { items: [], nextCursor: null };
     return page([summary]);
   });
   await tick(); listRows(h)[0].dispatch('click'); await tick();
@@ -642,7 +739,7 @@ test('detail failures and stale detail replies expose no editable truncated prom
   const h = harness(context, path => {
     if (path === '/api/schedules/task-1') return { ok: true, json: () => late.promise };
     if (path === '/api/schedules/other') throw Error('offline');
-    if (path.includes('/history')) return { rows: [], next: null };
+    if (path.includes('/history')) return { items: [], nextCursor: null };
     return page([task({ promptTruncated: true }), task({ id: 'other', name: 'Other task', promptTruncated: true })]);
   });
   await tick(); listRows(h)[0].dispatch('click'); await tick();
@@ -660,7 +757,7 @@ test('a global timeline dot opens its full task while the completed list is sele
   const done = task({ id: 'done', name: 'Completed item', status: 'completed', nextRuns: { runs: [], in24h: [] } });
   const h = harness(context, path => {
     if (path === '/api/schedules/task-1') return { task: active };
-    if (path.includes('/history')) return { rows: [], next: null };
+    if (path.includes('/history')) return { items: [], nextCursor: null };
     return path.includes('status=completed') ? { ...page([done]), timelineTasks: [active] } : page([active]);
   });
   await tick(); chooseFilter(h, 'completed'); await tick();
@@ -672,41 +769,13 @@ test('a global timeline dot opens its full task while the completed list is sele
   assert.equal(buttons(h.root, '编辑').length, 1);
 });
 
-test('legacy full task lists search locally and edit without a detail endpoint', async context => {
-  const full = 'Legacy full prompt '.repeat(25) + 'uniquetail';
-  const legacy = task({ id: 'legacy', status: 'completed', prompt: full, nextRuns: { runs: [], in24h: [] } });
-  delete legacy.promptTruncated;
-  const unmatched = task({ id: 'unmatched-legacy', name: 'Unrelated legacy task', prompt: 'Different content' });
-  delete unmatched.promptTruncated;
-  const h = harness(context, path => {
-    if (path.includes('/history')) return { rows: [], next: null };
-    assert.equal(path, '/api/schedules', 'legacy reads never request search or task detail');
-    const value = page([legacy, unmatched]);
-    delete value.counts;
-    delete value.timelineTasks;
-    return value;
-  });
-  await tick();
-  assert.equal(listRows(h).length, 2, 'both legacy tasks are initially loaded');
-  const before = h.reads();
-  const search = allNodes(h.root).find(node => node.type === 'search');
-  search.value = 'uniquetail'; search.dispatch('change');
-  assert.equal(h.reads(), before, 'legacy fulltext search uses the already loaded prompt');
-  assert.equal(listRows(h).length, 1, 'legacy all search retains completed matches');
-  assert.equal(listRows(h).some(node => node.textContent.includes(unmatched.name)), false, 'unmatched legacy content is filtered out');
-  listRows(h)[0].dispatch('click'); await tick();
-  assert.equal(h.calls.some(call => call.path === '/api/schedules/legacy'), false);
-  buttons(h.root, '编辑')[0].dispatch('click');
-  assert.equal(allNodes(h.root).find(node => node.tagName === 'TEXTAREA').value, full);
-});
-
 test('dense task runs use one accessible band while sparse task dots and real counts remain', async context => {
   const start = 1800000000;
   const dense = task({ name: 'Every minute', nextRuns: { runs: [start + 60],
     in24h: Array.from({ length: 1440 }, (_, index) => start + (index + 1) * 60) } });
   const sparse = task({ id: 'daily', name: 'Daily summary', nextRuns: { runs: [start + 3600], in24h: [start + 3600] } });
   const h = harness(context, path => {
-    if (path.includes('/history')) return { rows: [], next: null };
+    if (path.includes('/history')) return { items: [], nextCursor: null };
     const value = page([dense, sparse]);
     value.kpi.next24h = 1441;
     return value;
@@ -758,7 +827,7 @@ test('delivery rates exclude old timeouts while history preserves them without a
   const item = task({ recent: rows.slice().reverse(), showLastError: false, lastError: null });
   const value = { ...page([item]), kpi: { ...page().kpi, runs7d: 3, bad7d: 1, successRate7d: 0.5 },
     daily7d: { days: [{ date: '2027-01-15', success: 1, timeout: 1, failed: 1 }] } };
-  const h = harness(context, path => path.includes('/history') ? { rows, next: null } : value);
+  const h = harness(context, path => path.includes('/history') ? { items: rows, nextCursor: null } : value);
   await tick();
   assert.match(textOf(h.root), /送达率/);
   assert.match(textOf(h.root), /其中送达失败/);
@@ -777,7 +846,7 @@ test('delivery rates exclude old timeouts while history preserves them without a
 test('legacy timeout can retain its re-enable action without claiming a delivery failure', async context => {
   const item = task({ id: 'legacy-timeout', type: 'one-time', status: 'failed', reenable: true,
     showLastError: false, lastError: null, recent: [] });
-  const h = harness(context, path => path.includes('/history') ? { rows: [], next: null } : page([item]));
+  const h = harness(context, path => path.includes('/history') ? { items: [], nextCursor: null } : page([item]));
   await tick();
   allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
   await tick();

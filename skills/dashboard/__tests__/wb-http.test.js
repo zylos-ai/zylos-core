@@ -170,6 +170,21 @@ test('workbench HTTP routes retain read authentication, method guards and source
   const recoveredInbound = await request('/api/groups/activity?range=6h&ids=telegram%3Aa');
   assert.equal(recoveredInbound.status, 200);
   assert.equal(Object.hasOwn(await recoveredInbound.json(), 'inboundError'), false);
+  // Schedule list routes: the shared list serializer keeps error.param; this fixture has no scheduler database.
+  const noScheduler = await request('/api/schedules?status=enabled');
+  assert.equal(noScheduler.status, 200);
+  assert.deepEqual(await noScheduler.json(), { available: false, items: [], nextCursor: null });
+  for (const [route, status, error] of [
+    ['/api/schedules?limit=0', 400, { code: 'invalid_parameter', message: 'limit must be an integer from 1 to 100', param: 'limit' }],
+    ['/api/schedules?status=paused&status=failed', 400, { code: 'invalid_parameter', message: 'Parameter status must be given once', param: 'status' }],
+    ['/api/schedules?before=1', 400, { code: 'invalid_parameter', message: 'Unknown parameter before', param: 'before' }],
+    ['/api/schedules?cursor=forged', 400, { code: 'invalid_cursor', message: 'The cursor is no longer valid; reload the first page' }],
+    ['/api/schedules/absent/history', 404, { code: 'not_found', message: 'The task does not exist' }],
+  ]) {
+    const response = await request(route);
+    assert.equal(response.status, status, route);
+    assert.deepEqual(await response.json(), { ok: false, error }, route);
+  }
   // Store unexpected failures map to internal_error, without exception text.
   const realQuery = engine.store.queryEvents;
   engine.store.queryEvents = () => { throw new Error('private storage details'); };

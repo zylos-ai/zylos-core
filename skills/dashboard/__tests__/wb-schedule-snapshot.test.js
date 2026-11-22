@@ -31,9 +31,10 @@ async function fixture(t) {
       return new Database(file, { ...options, verbose: sql => beforeQuery?.(sql) });
     },
   });
-  const { createScheduleRead } = await import(`../src/lib/workbench/schedule-read.js?snapshot=${++importCase}`);
+  const { createScheduleRead, scheduleListQuery } = await import(`../src/lib/workbench/schedule-read.js?snapshot=${++importCase}`);
   const reader = createScheduleRead({ zylosDir: f.zylosDir, now: () => NOW * 1000, scheduleTz: async () => ({ tz: 'UTC' }) });
-  return { ...f, writer, task, reader, onQuery: fn => { beforeQuery = fn; } };
+  const query = params => scheduleListQuery(new URLSearchParams(params));
+  return { ...f, writer, task, reader, query, onQuery: fn => { beforeQuery = fn; } };
 }
 
 test('a completion between list SELECTs cannot split counts, rows and timeline across snapshots', async t => {
@@ -47,22 +48,21 @@ test('a completion between list SELECTs cannot split counts, rows and timeline a
     f.writer.prepare("UPDATE tasks SET status = 'completed', updated_at = ? WHERE id = 'finishing'").run(NOW + 1);
     writes++;
   });
-  const page = await f.reader.read(undefined, { status: 'completed' });
+  const page = await f.reader.read(undefined, f.query({ status: 'completed' }));
   assert.equal(writes, 1);
   assert.equal(page.counts.enabled, 1);
   assert.equal(page.counts.completed, 1);
-  assert.equal(page.tasks.length, 1);
-  assert.equal(page.tasks[0].id, 'previous');
-  assert.equal(page.tasks[0].status, 'completed');
+  assert.equal(page.items.length, 1);
+  assert.equal(page.items[0].id, 'previous');
+  assert.equal(page.items[0].status, 'completed');
   assert.equal(page.timelineTasks.length, 1);
   assert.equal(page.timelineTasks[0].id, 'finishing');
-  assert.equal(page.timelineTasks[0].status, 'pending');
   assert.equal(page.kpi.enabled, 1);
-  const next = await f.reader.read(undefined, { status: 'completed' });
+  const next = await f.reader.read(undefined, f.query({ status: 'completed' }));
   assert.equal(next.counts.enabled, 0);
   assert.equal(next.counts.completed, 2);
-  assert.equal(next.tasks.length, 2);
-  assert.ok(next.tasks.every(task => task.status === 'completed'));
+  assert.equal(next.items.length, 2);
+  assert.ok(next.items.every(task => task.status === 'completed'));
   assert.equal(next.timelineTasks.length, 0);
 });
 
@@ -99,11 +99,11 @@ test('a failed snapshot read releases its transaction and connection', async t =
     f.onQuery(null);
     throw Error('read interrupted');
   });
-  await assert.rejects(f.reader.read(), error => error.statusCode === 503 && error.code === 'scheduler_unreadable');
+  await assert.rejects(f.reader.read(), error => error.statusCode === 503 && error.code === 'unavailable');
   const checkpoint = f.writer.pragma('wal_checkpoint(TRUNCATE)');
   assert.equal(checkpoint[0].busy, 0);
   f.writer.prepare("UPDATE tasks SET status = 'completed' WHERE id = 'pending'").run();
-  const page = await f.reader.read(undefined, { status: 'completed' });
+  const page = await f.reader.read(undefined, f.query({ status: 'completed' }));
   assert.equal(page.counts.completed, 1);
-  assert.equal(page.tasks[0].status, 'completed');
+  assert.equal(page.items[0].status, 'completed');
 });

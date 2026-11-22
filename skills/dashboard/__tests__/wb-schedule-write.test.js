@@ -40,7 +40,7 @@ function dashboard(context, options = {}) {
   const snapshotRows = options.snapshotRows ?? [];
   const reader = createScheduleRead({ zylosDir: f.zylosDir, scheduleTz, getSnapshot: async () => ({ rows: snapshotRows }) });
   const write = (method, route, body) => writer.write(method, route, async () => body);
-  const task = async id => (await reader.read()).tasks.find(item => item.id === id);
+  const task = async id => (await reader.read()).items.find(item => item.id === id);
   return { ...f, writer, reader, write, task };
 }
 
@@ -332,7 +332,7 @@ test('schedule HTTP routes read, write and map errors through the real server', 
   });
   const missing = await request('/api/schedules');
   assert.equal(missing.status, 200);
-  assert.deepEqual(await missing.json(), { available: false, tasks: [] });
+  assert.deepEqual(await missing.json(), { available: false, items: [], nextCursor: null });
   const form = JSON.stringify({ name: 'HTTP', prompt: 'Over HTTP', schedule: { kind: 'every', value: '1h' } });
   const denied = await request('/api/schedules', { method: 'POST', body: form });
   assert.equal(denied.status, 403);
@@ -346,11 +346,12 @@ test('schedule HTTP routes read, write and map errors through the real server', 
   const id = (await created.json()).data.task.id;
   const page = await (await request('/api/schedules')).json();
   assert.equal(page.tz, 'Asia/Singapore');
-  assert.deepEqual(page.tasks.map(task => [task.id, task.target.kind]), [[id, 'origin']]);
-  assert.deepEqual(await (await request(`/api/schedules/${id}/history`)).json(), { rows: [], next: null });
+  assert.deepEqual(page.items.map(task => [task.id, task.target.kind]), [[id, 'origin']]);
+  assert.deepEqual(await (await request(`/api/schedules/${id}/history`)).json(), { items: [], nextCursor: null });
   const limit = await request(`/api/schedules/${id}/history?limit=0`);
   assert.equal(limit.status, 400);
-  assert.deepEqual(await limit.json(), { ok: false, error: { code: 'invalid_limit', message: 'invalid_limit' } });
+  const limitError = (await limit.json()).error;
+  assert.deepEqual([limitError.code, limitError.param], ['invalid_parameter', 'limit']);
   const previewError = await request('/api/schedules/preview?kind=cron&value=bad');
   assert.equal(previewError.status, 400);
   assert.deepEqual(await previewError.json(), { ok: false, error: { code: 'invalid_cron', message: 'invalid_cron' } });
@@ -364,7 +365,7 @@ test('schedule HTTP routes read, write and map errors through the real server', 
   fs.writeFileSync(f.dbPath, 'not a database file');
   const unreadable = await request('/api/schedules');
   assert.equal(unreadable.status, 503);
-  assert.deepEqual(await unreadable.json(), { ok: false, error: { code: 'scheduler_unreadable', message: 'scheduler_unreadable' } });
+  assert.equal((await unreadable.json()).error.code, 'unavailable');
   assert.equal(children.length, 4);
 });
 
@@ -381,7 +382,7 @@ test('an older editor changing priority cannot write a summary back over the ful
     schedule: { kind: 'every', value: '2h' }, priority: '3' });
   assert.equal(created.body.ok, true);
   const id = created.body.data.task.id;
-  const listed = (await d.reader.read()).tasks.find(task => task.id === id);
+  const listed = (await d.reader.read()).items.find(task => task.id === id);
   assert.equal(Object.hasOwn(listed, 'prompt'), false);
   assert.equal(Array.from(listed.promptSummary).length, 200);
   assert.equal(listed.promptTruncated, true);

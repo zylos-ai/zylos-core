@@ -4,7 +4,7 @@ import { countLabel } from '../count-label.js';
 import { element, fallbackName, icon } from './plain-text.js';
 import { createFetchGuard } from './fetch-guard.js';
 import { cronText } from './cron-text.js';
-import { createForm, createPreviewer, formPayload, initialForm, intervalText, missText, previewPath, wrapSelect } from './schedule-form.js';
+import { createForm, createPreviewer, formPayload, initialForm, intervalText, missText, previewPath } from './schedule-form.js';
 
 export { missText };
 
@@ -127,13 +127,6 @@ export function durationText(ms) {
   return `${Math.floor(seconds / 3600)}h${String(Math.floor(seconds % 3600 / 60)).padStart(2, '0')}m`;
 }
 
-/** Status filter counts over all tasks, so the segmented control shows what each choice holds. */
-export function statusCounts(tasks) {
-  const counts = { all: tasks.length };
-  for (const [name, test] of SECTIONS) counts[name] = tasks.filter(test).length;
-  return counts;
-}
-
 /**
  * Dots on the next-24-hours lane. Dots closer than `gap` percent share a column and
  * step down a row so none hide another; three rows at most.
@@ -188,20 +181,15 @@ export function axisLabels(ticks) {
   return { labels, hideNow: labels.some(label => label.midnight && label.left < 6) };
 }
 
-const legacyTask = task => !Object.prototype.hasOwnProperty.call(task, 'promptTruncated');
 const nextRun = task => Array.isArray(task.nextRuns?.runs) ? task.nextRuns.runs[0] ?? null : null;
 
-/** Filtered list sections: enabled by next run, then failed, paused and completed. */
-export function groupTasks(tasks, { status = 'all', target = 'all', query = '', t = key => key } = {}) {
-  const needle = query.trim().toLowerCase();
-  const match = task => (status === 'all' || SECTIONS.find(([name]) => name === status)?.[1](task)) &&
-    (target === 'all' || targetLabel(task.target, { t }) === target) &&
-    (!needle || [task.name, task.prompt, task.id].some(value => String(value ?? '').toLowerCase().includes(needle)));
-  return SECTIONS.map(([name, test]) => {
-    const list = tasks.filter(task => test(task) && match(task));
-    if (name === 'enabled') list.sort((a, b) => (nextRun(a) ?? Infinity) - (nextRun(b) ?? Infinity));
-    return { name, tasks: list };
-  }).filter(section => section.tasks.length);
+/**
+ * List sections of the loaded rows: enabled, failed, paused and completed. The server already returns rows in
+ * this order (enabled by next run, the others by last update), so rows keep their order and a later page only
+ * continues the last section or opens the next one.
+ */
+export function groupTasks(tasks) {
+  return SECTIONS.map(([name, test]) => ({ name, tasks: tasks.filter(test) })).filter(section => section.tasks.length);
 }
 
 const EXPLAINED = new Set(['RESCHEDULE_NOT_FUTURE', 'TASK_WRONG_STATUS', 'tz_unavailable', 'invalid_time', 'invalid_form',
@@ -280,8 +268,8 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   if (!root) return () => {};
   const guard = createFetchGuard();
   let data = null, error = false, selected = null, history = null, historyGen = 0, form = null, confirmFor = null,
-    filter = { status: 'all', target: 'all', query: '' }, owner = identity(), stopped = false, notice = null,
-    fullPrompt = null, detailTask = null, detailError = false, detailGen = 0, listBusy = false, pageCount = 1, legacyServer = false;
+    filter = { status: 'all', query: '' }, owner = identity(), stopped = false, notice = null,
+    fullPrompt = null, detailTask = null, detailError = false, detailGen = 0, listBusy = false, pageCount = 1;
   // The page, the drawer and the dialog layer stay mounted across redraws, so a refresh keeps the drawer's
   // scroll position and an open form keeps its focus and typed text.
   const main = element(document, 'div', undefined, 'wb-sched-main');
@@ -311,8 +299,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     detailError = false;
     listBusy = false;
     pageCount = 1;
-    legacyServer = false;
-    filter = { status: 'all', target: 'all', query: '' };
+    filter = { status: 'all', query: '' };
     form = null;
     confirmFor = null;
     notice = null;
@@ -334,43 +321,52 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     return document.visibilityState !== 'hidden' && document.querySelector('#tab-schedule')?.classList.contains('active') &&
       !document.querySelector('#agent-detail')?.hidden;
   };
-  const pagedList = () => !legacyServer && (filter.status === 'completed' ||
-    (filter.status === 'all' && Boolean(filter.query.trim())));
   function listPath(cursor = null) {
-    if (legacyServer) return '/api/schedules';
     const query = new URLSearchParams();
     if (filter.status !== 'all') query.set('status', filter.status);
     if (filter.query.trim()) query.set('q', filter.query.trim());
     if (cursor !== null) query.set('cursor', cursor);
     return '/api/schedules' + (query.size ? `?${query}` : '');
   }
+  // Reads pages until `target` pages are loaded. A refresh re-reads from the first page with fresh cursors, so
+  // an expanded list keeps its depth. A cursor refused after a Dashboard restart reloads from the first page.
+  async function readPages(gen, more) {
+    const target = more ? pageCount + 1 : pageCount;
+    let items = more ? [...data.items] : [], cursor = more ? data.nextCursor : null, loaded = more ? pageCount : 0;
+    let restarted = false, value;
+    while (true) {
+      try {
+        value = await read(listPath(cursor));
+      } catch (error) {
+        if (error.code !== 'invalid_cursor' || cursor === null || restarted) throw error;
+        restarted = true;
+        items = [];
+        cursor = null;
+        loaded = 0;
+        continue;
+      }
+      if (!guard.current(gen)) return null;
+      items.push(...value.items);
+      loaded++;
+      cursor = value.nextCursor;
+      if (!cursor || loaded >= target) break;
+    }
+    return { value: { ...value, items: [...new Map(items.map(task => [task.id, task])).values()] }, loaded };
+  }
   async function refresh({ force = false, more = false } = {}) {
     if (!force && !visible()) return;
     reset();
     if (listBusy && !force) return;
-    if (more && (!pagedList() || !data?.nextCursor)) return;
+    if (more && !data?.nextCursor) return;
     if (force && !more) pageCount = 1;
     const gen = guard.next();
-    const paged = pagedList();
-    const pages = paged && !more ? pageCount : 1;
-    let cursor = more ? data.nextCursor : null;
     listBusy = true;
     redraw();
     try {
-      let value, tasks = more ? [...data.tasks] : [], loaded = 0;
-      // Follow fresh cursors on a poll so an already expanded completed list keeps
-      // its depth without retaining stale cursor boundaries after task changes.
-      do {
-        value = await read(listPath(cursor));
-        if (!guard.current(gen)) return;
-        tasks.push(...value.tasks);
-        loaded++;
-        cursor = value.nextCursor;
-      } while (!more && paged && cursor && loaded < pages);
-      const unique = new Map(tasks.map(task => [task.id, task]));
-      data = { ...value, tasks: [...unique.values()] };
-      legacyServer = data.tasks.some(legacyTask);
-      pageCount = more ? pageCount + 1 : loaded;
+      const pages = await readPages(gen, more);
+      if (!pages) return;
+      data = pages.value;
+      pageCount = pages.loaded;
       error = false;
     } catch {
       if (!guard.current(gen)) return;
@@ -383,22 +379,14 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   }
   function changeList(change) {
     filter = { ...filter, ...change };
-    if (legacyServer) { redraw(); return; }
     guard.invalidate();
     listBusy = false;
     pageCount = 1;
-    if (data) data = { ...data, tasks: [], nextCursor: null };
+    if (data) data = { ...data, items: [], nextCursor: null };
     refresh({ force: true });
   }
   async function loadDetail(id) {
     const gen = ++detailGen;
-    const listed = [...(data?.tasks ?? []), ...(data?.timelineTasks ?? [])].find(task => task.id === id);
-    if (listed && legacyTask(listed)) {
-      detailTask = listed;
-      detailError = false;
-      redraw();
-      return;
-    }
     try {
       const value = await read(`/api/schedules/${encodeURIComponent(id)}`);
       if (gen !== detailGen || selected !== id) return;
@@ -414,19 +402,25 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   }
   async function loadHistory(task, more = false) {
     const gen = ++historyGen;
-    const query = new URLSearchParams({ limit: more ? '200' : '30' });
-    if (more && history?.next) {
-      query.set('before', String(history.next.before));
-      query.set('beforeId', String(history.next.beforeId));
-    }
+    const path = cursor => `/api/schedules/${encodeURIComponent(task.id)}/history` +
+      (cursor ? `?${new URLSearchParams({ cursor })}` : '');
+    let next = more ? history?.nextCursor ?? null : null;
     try {
-      const value = await read(`/api/schedules/${encodeURIComponent(task.id)}/history?${query}`);
+      let value;
+      try {
+        value = await read(path(next));
+      } catch (error) {
+        // After a Dashboard restart the cursor is refused: reload the first page.
+        if (error.code !== 'invalid_cursor' || next === null) throw error;
+        next = null;
+        value = await read(path(null));
+      }
       if (gen !== historyGen || selected !== task.id) return;
-      history = { rows: more ? [...(history?.rows ?? []), ...value.rows] : value.rows, next: value.next,
+      history = { rows: next ? [...(history?.rows ?? []), ...value.items] : value.items, nextCursor: value.nextCursor,
         expanded: history?.expanded };
     } catch {
       if (gen !== historyGen) return;
-      history = { ...(history ?? { rows: [], next: null }), failed: true };
+      history = { ...(history ?? { rows: [], nextCursor: null }), failed: true };
     }
     redraw();
   }
@@ -596,7 +590,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       label.style.setProperty('left', `${tick.left}%`);
       axis.append(label);
     }
-    const timeline = data.timelineTasks ?? data.tasks;
+    const timeline = data.timelineTasks ?? [];
     const dense = timeline.filter(task => (task.nextRuns?.in24h?.length ?? 0) > 96);
     if (dense.length) lane.style.setProperty('height', `${46 + dense.length * 44}px`);
     for (const [index, task] of dense.entries()) {
@@ -626,7 +620,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   }
   function renderFilters() {
     const bar = element(document, 'div', undefined, 'wb-sched-filters');
-    const counts = data.counts ?? statusCounts(data.tasks);
+    const counts = data.counts ?? {};
     const seg = element(document, 'div', undefined, 'wb-seg');
     seg.setAttribute('role', 'group');
     seg.setAttribute('aria-label', t('wb.schedule.filter.label'));
@@ -638,22 +632,6 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       item.setAttribute('aria-pressed', String(filter.status === value));
       seg.append(item);
     }
-    const target = document.createElement('select');
-    target.className = 'wb-input wb-select';
-    target.setAttribute('aria-label', t('wb.schedule.filter.allTargets'));
-    const all = element(document, 'option', t('wb.schedule.filter.allTargets'));
-    all.value = 'all';
-    target.append(all);
-    for (const label of [...new Set([...(data.timelineTasks ?? []), ...data.tasks].map(task => targetLabel(task.target, { t })))].sort()) {
-      const option = element(document, 'option', label);
-      option.value = label;
-      target.append(option);
-    }
-    target.value = filter.target;
-    target.addEventListener('change', () => {
-      filter = { ...filter, target: target.value };
-      redraw();
-    });
     const searchWrap = element(document, 'label', undefined, 'wb-search');
     const search = document.createElement('input');
     search.type = 'search';
@@ -667,7 +645,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     search.addEventListener('change', apply);
     search.addEventListener('search', apply);
     searchWrap.append(icon(document, 'search', 'xs'), search);
-    bar.append(seg, wrapSelect(document, target), searchWrap);
+    bar.append(seg, searchWrap);
     if (writable()) {
       const create = button(document, t('wb.schedule.new'), () => openForm(null), 'wb-btn wb-btn-primary wb-sched-new');
       create.replaceChildren(icon(document, 'plus', 'xs'), element(document, 'span', t('wb.schedule.new')));
@@ -718,7 +696,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const head = element(document, 'div', undefined, 'wb-sched-th');
     for (const key of ['task', 'rule', 'next', 'recent', 'target', 'status']) head.append(element(document, 'span', t('wb.schedule.col.' + key)));
     wrap.append(head);
-    const sections = groupTasks(data.tasks, { ...filter, query: legacyServer ? filter.query : '', t });
+    const sections = groupTasks(data.items);
     if (!sections.length) wrap.append(element(document, 'p', t('wb.schedule.noMatch'), 'wb-sched-empty'));
     for (const section of sections) {
       const block = element(document, 'section', undefined, 'wb-sched-section');
@@ -727,7 +705,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       for (const task of section.tasks) block.append(renderRow(task));
       wrap.append(block);
     }
-    if (pagedList() && data.nextCursor) {
+    if (data.nextCursor) {
       const more = button(document, t('wb.detail.loadMore'), () => refresh({ more: true }), 'wb-link-btn wb-sched-more');
       more.disabled = listBusy;
       wrap.append(more);
@@ -767,10 +745,10 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     }
     box.append(list);
     if (history.failed) box.append(element(document, 'p', t('wb.readFailed'), 'wb-sched-note'));
-    if (history.next || (!history.expanded && rows.length > 8)) {
-      const more = button(document, t('wb.schedule.loadAll'), () => {
+    if (history.nextCursor || (!history.expanded && rows.length > 8)) {
+      const more = button(document, t('wb.detail.loadMore'), () => {
         history.expanded = true;
-        if (history.next) loadHistory(task, true);
+        if (history.nextCursor) loadHistory(task, true);
         else redraw();
       }, 'wb-link-btn wb-chev');
       box.append(more);

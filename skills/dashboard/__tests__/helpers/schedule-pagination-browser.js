@@ -7,7 +7,8 @@ import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { createScheduleRead, scheduleReadResponse } from '../../src/lib/workbench/schedule-read.js';
 import { sendHtml, sendJson, serveStatic } from '../../src/lib/http.js';
 import { workbenchAnswer } from '../fixtures/workbench-browser-api.js';
-import { populateSchedulePagination, SHARED_NEEDLE } from '../fixtures/schedule-pagination.js';
+import { listErrorBody } from '../../src/lib/list-query.js';
+import { populateSchedulePagination, SHARED_NEEDLE, listOrder } from '../fixtures/schedule-pagination.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 
@@ -21,6 +22,10 @@ export async function runSchedulePaginationBrowser(t, sandbox) {
   const fixture = populateSchedulePagination(db);
   const reader = createScheduleRead({ zylosDir: sandbox.paths.zylos, scheduleTz: async () => ({ tz: 'UTC' }) });
   const reads = [];
+  // A Dashboard restart changes the cursor key. Here each cursor sent out carries the fixture's epoch; after
+  // restart() a cursor of an earlier epoch is altered on arrival, so the real route refuses it with invalid_cursor.
+  let epoch = 1;
+  const restart = () => { epoch++; };
   let writeCount = 0, firstWrite = null;
   const server = http.createServer(async (req, res) => {
     try {
@@ -29,7 +34,12 @@ export async function runSchedulePaginationBrowser(t, sandbox) {
       if (url.pathname.startsWith('/api/schedules')) {
         if (req.method === 'GET') {
           if (reads.length < 100) reads.push(url.pathname + url.search);
+          if (url.searchParams.has('cursor')) {
+            const [issued, cursor] = url.searchParams.get('cursor').split('~');
+            url.searchParams.set('cursor', Number(issued) === epoch ? cursor : `${cursor}x`);
+          }
           const value = await scheduleReadResponse(reader, url.pathname, url.searchParams);
+          if (value?.nextCursor) value.nextCursor = `${epoch}~${value.nextCursor}`;
           return sendJson(res, value === undefined ? 404 : 200, value ?? { error: 'not_found' });
         }
         writeCount++;
@@ -47,7 +57,7 @@ export async function runSchedulePaginationBrowser(t, sandbox) {
           .replaceAll('__BASE_PATH__', '').replaceAll('__ASSET_ROOT__', '/_assets').replaceAll('__REMOTE_ACCESS__', 'admin'));
       }
       if (!serveStatic(req, res, publicDir)) sendJson(res, 404, { error: 'not_found' });
-    } catch (error) { sendJson(res, error.statusCode ?? 500, { error: error.code ?? error.message }); }
+    } catch (error) { sendJson(res, error.statusCode ?? 500, error.statusCode ? listErrorBody(error) : { error: 'internal_error' }); }
   });
   const base = await sandbox.startHttp(server, proof);
   const modulePath = process.env.ZYLOS_CHAT_BROWSER_MODULE;
@@ -81,9 +91,13 @@ export async function runSchedulePaginationBrowser(t, sandbox) {
         page.on('pageerror', error => { if (errors.length < 5) errors.push(error.message); });
         await page.goto(base + '/schedule');
         const rows = page.locator('.wb-sched-row');
+        const rowCount = count => page.waitForFunction(n => document.querySelectorAll('.wb-sched-row').length === n, count);
+        const more = page.getByRole('button', { name: '加载更多', exact: true });
+        const loadMore = async count => { await more.scrollIntoViewIfNeeded(); await more.click(); await rowCount(count); };
         await rows.first().waitFor();
-        assert.equal(await rows.count(), 19);
+        assert.equal(await rows.count(), 50);
         assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
+        assert.equal(await page.locator('.wb-sched-filters select').count(), 0, 'no target filter over loaded rows');
         const filters = page.locator('.wb-sched-filters .wb-seg');
         const counts = await filters.locator('.wb-n').allTextContents();
         assert.equal(counts[0], '120');
@@ -111,46 +125,53 @@ export async function runSchedulePaginationBrowser(t, sandbox) {
         await page.locator('.wb-sched-close').click();
         await page.evaluate(() => scrollTo(0, 0));
         if (evidence) await page.screenshot({ path: path.join(evidence, `${width}-${theme}-schedule.png`) });
-        const search = page.getByRole('searchbox', { name: '搜索任务' });
+        // All: 50 per page in the documented section order, no repeats or gaps; a later page continues its section.
+        await loadMore(100);
+        await loadMore(120);
+        assert.equal(await more.count(), 0);
+        assert.deepEqual(await rows.locator('.wb-sched-title').allTextContents(), listOrder(fixture.rows).map(row => row.name));
+        assert.equal(await page.locator('.wb-sched-section').count(), 3);
+        assert.equal((await filters.locator('.wb-n').allTextContents()).join(','), counts.join(','));
+        assert.equal(await page.locator('.wb-sched-kpi').textContent(), kpi);
+        assert.equal(await page.locator('.wb-sched-dot').count(), dots);
+        await page.evaluate(() => scrollTo(0, 0));
+        // q matches names only: a word only in the prompt finds nothing, part of a name finds every match.
+        const search = page.getByRole('searchbox', { name: '搜索任务名' });
         await search.fill(SHARED_NEEDLE);
         await search.dispatchEvent('change');
-        await page.waitForFunction(() => document.querySelectorAll('.wb-sched-row').length === 49);
-        const activeNames = (await rows.locator('.wb-sched-title').allTextContents()).slice(0, 19);
-        assert.ok(activeNames.every(name => !name.startsWith('已完成任务')));
-        assert.equal(await rows.filter({ hasText: '已完成任务' }).count(), 30);
-        const more = page.getByRole('button', { name: '加载更多', exact: true });
-        await more.scrollIntoViewIfNeeded();
-        await more.click();
-        await page.waitForFunction(() => document.querySelectorAll('.wb-sched-row').length === 79);
-        const mixedNames = await rows.locator('.wb-sched-title').allTextContents();
-        assert.equal(mixedNames.slice(0, 19).join('\n'), activeNames.join('\n'));
-        assert.equal(await rows.filter({ hasText: '已完成任务' }).count(), 60);
-        assert.equal(new Set(mixedNames).size, 79, 'combined search preserves active rows and pages completed rows without duplicates');
+        await rowCount(0);
+        await page.locator('.wb-sched-empty').waitFor();
+        await search.fill('已完成任务');
+        await search.dispatchEvent('change');
+        await rowCount(50);
+        await loadMore(100);
+        await loadMore(101);
+        assert.equal(new Set(await rows.locator('.wb-sched-title').allTextContents()).size, 101);
         assert.equal((await filters.locator('.wb-n').allTextContents()).join(','), counts.join(','));
         assert.equal(await page.locator('.wb-sched-kpi').textContent(), kpi);
         assert.equal(await band.count(), 1);
         assert.equal(await page.locator('.wb-sched-dot').count(), dots);
         await search.fill('');
         await search.dispatchEvent('change');
-        await page.waitForFunction(() => document.querySelectorAll('.wb-sched-row').length === 19);
+        await rowCount(50);
         await filters.getByRole('button', { name: /^已送达/ }).click();
-        await page.waitForFunction(() => document.querySelectorAll('.wb-sched-row').length === 30);
-        await more.scrollIntoViewIfNeeded();
-        await more.click();
-        await page.waitForFunction(() => document.querySelectorAll('.wb-sched-row').length === 60);
-        assert.equal((await filters.locator('.wb-n').allTextContents()).join(','), counts.join(','));
-        assert.equal(await page.locator('.wb-sched-kpi').textContent(), kpi);
-        assert.equal(await page.locator('.wb-sched-dot').count(), dots);
-        assert.equal(await band.count(), 1);
+        await rowCount(50);
+        await loadMore(100);
         const names = await rows.locator('.wb-sched-title').allTextContents();
-        assert.equal(new Set(names).size, 60);
+        assert.equal(new Set(names).size, 100);
+        assert.ok(names.every(name => name.startsWith('已完成任务')));
         await more.scrollIntoViewIfNeeded();
         const moreBox = await more.boundingBox();
         assert.equal(Math.round(moreBox.x), 16, 'load more aligns with the list content');
         if (evidence) await page.screenshot({ path: path.join(evidence, `${width}-${theme}-completed-more.png`) });
-        await search.fill('schedule-fulltext-tail');
+        // After a restart the next cursor is refused; the page reloads from the first page without an error.
+        restart();
+        await loadMore(101);
+        assert.equal(await page.locator('.wb-sched-note', { hasText: '数据读取失败' }).count(), 0);
+        assert.equal(new Set(await rows.locator('.wb-sched-title').allTextContents()).size, 101);
+        await search.fill('已完成任务 101');
         await search.dispatchEvent('change');
-        await page.waitForFunction(() => document.querySelectorAll('.wb-sched-row').length === 1);
+        await rowCount(1);
         assert.match(await rows.first().textContent(), /已完成任务 101/);
         assert.doesNotMatch(await rows.first().textContent(), /schedule-fulltext-tail/);
         await rows.first().locator('.wb-sched-select').click();
@@ -184,6 +205,6 @@ export async function runSchedulePaginationBrowser(t, sandbox) {
   }
   assert.equal(writeCount, 0, firstWrite ?? 'no writes');
   assert.ok(reads.some(url => url.includes('cursor=')));
-  assert.ok(reads.some(url => url.includes('q=schedule-fulltext-tail')));
+  assert.ok(reads.some(url => url.includes(`q=${encodeURIComponent(SHARED_NEEDLE)}`)));
   assert.ok(reads.some(url => url.endsWith('/completed-100')));
 }

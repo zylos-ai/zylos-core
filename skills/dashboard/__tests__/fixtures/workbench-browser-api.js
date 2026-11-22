@@ -111,7 +111,9 @@ function schedule(now) {
   ];
   const days = Array.from({ length: 7 }, (_, i) => ({ date: iso(now - (6 - i) * 86400e3).slice(0, 10), success: 8, timeout: i === 3 ? 1 : 0, failed: 0 }));
   return { available: true, tz: 'UTC', readAt: now, kpi: { enabled: 3, paused: 1, running: 0, next24h: 28, partialPreview: false, runs7d: 57, bad7d: 1, successRate7d: 56 / 57 },
-    daily7d: { tz: 'UTC', utcFallback: false, days }, tasks };
+    daily7d: { tz: 'UTC', utcFallback: false, days }, items: tasks, nextCursor: null,
+    counts: { all: 4, enabled: 3, paused: 1, failed: 0, completed: 0 },
+    timelineTasks: tasks.filter(item => item.nextRuns.in24h.length).map(({ id, name, priority, nextRuns }) => ({ id, name, priority, nextRuns: { in24h: nextRuns.in24h } })) };
 }
 
 function memoryTree(now) {
@@ -210,7 +212,7 @@ function workbenchAnswerData(url, now) {
   }
   if (p === '/api/groups/activity') return { start: now - 59 * 60e3, cellSeconds: 60, groups: {} };
   if (p === '/api/schedules') return schedule(now);
-  if (p.startsWith('/api/schedules/') && p.endsWith('/history')) return { rows: [], next: null };
+  if (p.startsWith('/api/schedules/') && p.endsWith('/history')) return { items: [], nextCursor: null };
   if (p === '/api/memory/tree') return memoryTree(now);
   if (p === '/api/memory/file') {
     const path = url.searchParams.get('path');

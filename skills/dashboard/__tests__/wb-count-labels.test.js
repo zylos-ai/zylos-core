@@ -77,9 +77,9 @@ for (const count of [1, 2]) test(`Schedule detail renders English last ${count} 
   const window = { addEventListener() {}, removeEventListener() {} };
   context.mock.method(globalThis, 'setInterval', () => 1); context.mock.method(globalThis, 'clearInterval', () => {});
   const task = { promptTruncated: false, id: 'task-1', name: 'Report', prompt: 'Report', type: 'recurring', status: 'pending', cron: '0 8 * * *', nextRunAt: 1800003600, updatedAt: 1799990000, target: { kind: 'origin' }, nextRuns: { runs: [1800003600], in24h: [] } };
-  const page = { available: true, tz: 'Asia/Singapore', tasks: [{ ...task, promptSummary: 'Report' }], counts: { pending: 1 }, kpi: {}, daily7d: { days: [] }, timelineTasks: [], nextCursor: null };
+  const page = { available: true, tz: 'Asia/Singapore', items: [{ ...task, promptSummary: 'Report' }], counts: { pending: 1 }, kpi: {}, daily7d: { days: [] }, timelineTasks: [], nextCursor: null };
   const stop = mountSchedule({ document, window, t, locale: () => 'en', writable: () => false, now: () => 1800000000000,
-    fetch: async path => ({ ok: true, json: async () => path.includes('/history') ? { rows: Array.from({ length: count }, (_, id) => ({ id, status: 'success', duration: 1000, executedAt: 1799990000 })), next: null } : path.endsWith('/task-1') ? { task } : page }) });
+    fetch: async path => ({ ok: true, json: async () => path.includes('/history') ? { items: Array.from({ length: count }, (_, id) => ({ id, status: 'success', duration: 1000, executedAt: 1799990000 })), nextCursor: null } : path.endsWith('/task-1') ? { task } : page }) });
   context.after(stop);
   await tick();
   allNodes(nodes.get('#wb-schedule')).find(node => node.classList.contains('wb-sched-select')).dispatch('click');

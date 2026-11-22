@@ -1110,7 +1110,7 @@ async function handleApi(req, res, pathname, url) {
       if (value === undefined) return false;
       sendJson(res, 200, value);
     } catch (error) {
-      sendJson(res, error.statusCode ?? 500, { error: error.statusCode ? error.code : 'internal_error' });
+      sendJson(res, error.statusCode ?? 500, error.statusCode ? listErrorBody(error) : { error: 'internal_error' });
     }
     return true;
   }

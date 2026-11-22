@@ -4,6 +4,15 @@ import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 export const LONG_PROMPT = '核对当天消息并整理工作记录。'.repeat(30) + '\n全文搜索标记 schedule-fulltext-tail';
 export const SHARED_NEEDLE = 'schedule-shared';
 
+// The stored next run matches the rule as the scheduler keeps it (UTC): every minute, or daily at an hour.
+function nextRun(cron, now, fallback) {
+  if (cron === '* * * * *') return (Math.floor(now / 60) + 1) * 60;
+  const hour = cron?.match(/^0 (\d+) \* \* \*$/)?.[1];
+  if (hour === undefined) return now + fallback;
+  const day = Math.floor(now / 86400) * 86400 + Number(hour) * 3600;
+  return day > now ? day : day + 86400;
+}
+
 /** Populate only the connection supplied by an already isolated test caller. */
 export function populateSchedulePagination(db, now = Math.floor(Date.now() / 1000)) {
   guardDatabase(db, schema);
@@ -14,8 +23,8 @@ export function populateSchedulePagination(db, now = Math.floor(Date.now() / 100
   const rows = [];
   const add = (id, name, type, status, cron = null, interval = null, prompt = '汇总工作进展，整理下一步。') => {
     prompt += `\n全量搜索标记 ${SHARED_NEEDLE}`;
-    const row = { id, name, prompt, type, status, cron, interval };
-    insert.run(id, name, prompt, type, cron, interval, now + (id === 'once' ? 3600 : 60), 3, status, 0, 300, now - 20 * 86400, now - rows.length);
+    const row = { id, name, prompt, type, status, cron, interval, nextRunAt: nextRun(cron, now, id === 'once' ? 3600 : 60), updatedAt: now - rows.length };
+    insert.run(id, name, prompt, type, cron, interval, row.nextRunAt, 3, status, 0, 300, now - 20 * 86400, row.updatedAt);
     rows.push(row);
     return row;
   };
@@ -32,4 +41,12 @@ export function populateSchedulePagination(db, now = Math.floor(Date.now() / 100
     history.run(rows[i % rows.length].id, at, at + 2, i % 13 === 0 ? 'failed' : 'success', 2000);
   }
   return { rows, now, activeId: 'daily-0', longCompletedId: 'completed-100', prompt: rows.find(row => row.id === 'completed-100').prompt };
+}
+
+const SECTION = { pending: 0, running: 0, failed: 1, paused: 2, completed: 3 };
+
+/** The documented list order: section, then next run (enabled) or newest update (others), then id. */
+export function listOrder(rows) {
+  const key = row => SECTION[row.status] === 0 ? row.nextRunAt : -row.updatedAt;
+  return rows.slice().sort((a, b) => SECTION[a.status] - SECTION[b.status] || key(a) - key(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
