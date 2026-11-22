@@ -1,15 +1,18 @@
 import { markdownPreview } from './markdown-preview.js';
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { parseC4Content } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 import { splitContentAndAttachments, sanitizeDisplayName } from '../../../../comm-bridge/scripts/attachment-annotations.js';
 import { answerDisplay } from '../../../public/js/wb/chat-answer.js';
 import { parseChatQuote, stripChatQuote } from '../../../../comm-bridge/scripts/chat-quote.js';
 import { ORIGIN, ORIGIN_CONVERSATION_ID, ORIGIN_DISPLAY_NAME } from './origin.js';
+import { groupId } from './conversations.js';
+import { listFailure, parseListQuery } from '../list-query.js';
+import { prepareLatestReceived, receivedMessage } from '../c4-reader.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const shown = (groups, channels) => `c.direction IN ('in','out') AND c.session_group NOT IN (${groups})
   AND c.channel <> '' AND c.channel NOT IN (${channels})`;
-// Lists and summaries never include internal messages; message pages do.
+// List membership requires a visible ordinary message, but timeline previews can include relays.
 // The `origin` group is shown only through the Origin conversation's range.
 const visible = shown("'origin','*'", "'void','internal','system','scheduler','control'");
 const messageVisible = shown("'origin','*'", "'void','system','scheduler','control'");
@@ -22,8 +25,34 @@ const visibleIn = (range, messages = false) => range?.origin
 // own address `dashboard origin`, and in single mode every conversation and
 // external chat, whose rows are recorded under `origin` at delivery.
 const originWhere = 'c.session_group=@group';
-const identity = `CASE WHEN c.session_group = '' THEN 'l:' || hex(c.channel) || ':' || hex(c.endpoint_id)
-  ELSE 'g:' || hex(c.session_group) END`;
+const tabs = ['mine', 'external'];
+// A long legacy conversation ID still produces a bounded cursor scope.
+export const chatCollection = (id, kind) => kind ? `conversations:${kind}:${createHash('sha256').update(id).digest('base64url')}` : 'conversations';
+
+export function chatQuery(tabParams, collection, options) {
+  const params = new URLSearchParams(tabParams);
+  if (!params.has('tab')) params.set('tab', 'mine');
+  return parseListQuery(collection, params, { ...options, filters: { tab: tabs } });
+}
+
+function tabGroupScope(tab, group = 'c.session_group') {
+  const dashboard = `EXISTS (SELECT 1 FROM channel_namespaces n WHERE n.component_name='dashboard'
+    AND substr(${group}, 1, length(n.namespace)+1)=n.namespace || ':')`;
+  return tab === 'mine' ? dashboard : `NOT ${dashboard}`;
+}
+
+// Timeline rows still use their established channel and endpoint checks.
+const listScope = tab => tab === 'mine'
+  ? `c.channel='dashboard' AND EXISTS (
+    SELECT 1 FROM channel_namespaces n WHERE n.component_name='dashboard'
+    AND c.session_group=n.namespace || ':' || c.endpoint_id)`
+  : "c.channel<>'dashboard'";
+
+const grouped = "c.session_group NOT IN ('', 'origin', '*')";
+const compareRows = (a, b) => b.stamp - a.stamp || Buffer.compare(Buffer.from(a.id), Buffer.from(b.id));
+const matchesSearch = (row, search) => [row.display_name, row.session_group]
+  .some(value => typeof value === 'string' && value.toLowerCase().includes(search));
+const groupIndex = 'conversations c INDEXED BY idx_conv_group_id';
 
 const previewLabels = locale => locale === 'en'
   ? { image: '[Image]', file: '[File]', chart: '[Chart]', component: '[Component]', media: '[Media] Original-channel attachment', invalid: 'Unable to display message' }
@@ -116,7 +145,6 @@ export class ChatHistory {
     this.c4Reader = c4Reader;
     this.conversations = conversations;
     this.attachments = attachments;
-    this.secret = randomBytes(32);
   }
 
   _db() {
@@ -131,144 +159,124 @@ export class ChatHistory {
     catch { throw fail('chat_history_unavailable', 502); }
   }
 
-  _limit(value) {
-    if (value === undefined || value === null) return 50;
-    if (!/^[1-9][0-9]*$/.test(String(value)) || Number(value) > 100) throw fail('invalid_chat_limit');
-    return Number(value);
-  }
-
-  _token(value) {
-    const body = Buffer.from(JSON.stringify(value)).toString('base64url');
-    return body + '.' + createHmac('sha256', this.secret).update(body).digest('base64url');
-  }
-
-  _cursor(token, scope) {
-    if (token == null) return null;
-    try {
-      if (typeof token !== 'string') throw Error();
-      const [body, signature, extra] = token.split('.');
-      const actual = Buffer.from(signature || '', 'base64url');
-      const expected = createHmac('sha256', this.secret).update(body).digest();
-      if (extra !== undefined || actual.length !== expected.length || !timingSafeEqual(actual, expected)) throw Error();
-      const result = JSON.parse(Buffer.from(body, 'base64url').toString());
-      if (result.scope !== scope) throw Error();
-      return result;
-    } catch { throw fail('invalid_chat_cursor'); }
-  }
-
   _tab(tab) {
     if (!['mine', 'external'].includes(tab)) throw fail('invalid_chat_tab');
     return tab;
   }
 
-  _source(tab) {
-    const own = `c.channel = 'dashboard' AND EXISTS (
-      SELECT 1 FROM channel_namespaces n WHERE n.component_name = 'dashboard'
-      AND c.session_group = n.namespace || ':' || c.endpoint_id)`;
-    return `WITH allowed AS (
-      SELECT c.*, ${identity} AS identity FROM conversations c
-      WHERE ${visible} AND ${tab === 'mine' ? own : "c.channel <> 'dashboard'"}
-    )`;
+  pinIds(tab = 'mine') {
+    this._tab(tab);
+    return this.conversations?.db.prepare('SELECT conversation_id FROM chat_pins WHERE tab=? ORDER BY position').pluck().all(tab) ?? [];
   }
 
-  pinIds() {
-    return this.conversations?.db.prepare('SELECT conversation_id FROM chat_pins ORDER BY position').pluck().all() ?? [];
-  }
-
-  replacePins(ids) {
+  replacePins(ids, tab = 'mine') {
+    this._tab(tab);
     if (!Array.isArray(ids)) throw fail('invalid_chat_parameters');
     if (ids.some(id => typeof id !== 'string' || !id.startsWith('g:') || id === ORIGIN_CONVERSATION_ID)
         || new Set(ids).size !== ids.length) throw fail('invalid_chat_pin');
     const db = this.conversations.db;
     return db.transaction(() => {
       for (const id of ids) {
-        const { where, parameters } = this._range('mine', id);
+        const { where, parameters } = this._range(tab, id);
         // The committed fence remains visible until Core finishes deletion.
         // Check it together with existence while holding the Dashboard writer lock.
-        const eligible = this._query(`SELECT 1 FROM conversations c WHERE ${visible} AND ${where}
+        const eligible = this._query(`SELECT 1 FROM ${groupIndex} WHERE ${grouped} AND ${tabGroupScope(tab)} AND ${visible} AND ${where}
           AND NOT EXISTS (SELECT 1 FROM drain_fences f WHERE f.session_group=c.session_group AND f.reason='delete')
           LIMIT 1`, parameters)[0];
         if (!eligible) throw fail('invalid_chat_pin');
       }
-      db.prepare('DELETE FROM chat_pins').run();
-      const insert = db.prepare('INSERT INTO chat_pins(conversation_id, position) VALUES (?, ?)');
-      ids.forEach((id, position) => insert.run(id, position));
+      db.prepare('DELETE FROM chat_pins WHERE tab=?').run(tab);
+      const insert = db.prepare('INSERT INTO chat_pins(tab, conversation_id, position) VALUES (?, ?, ?)');
+      ids.forEach((id, position) => insert.run(tab, id, position));
       return ids;
     }).immediate();
   }
 
-  list({ tab = 'mine', limit, cursor, locale = 'zh' } = {}) {
-    this._tab(tab);
-    limit = this._limit(limit);
-    const scope = `list:${tab}`;
-    const position = this._cursor(cursor, scope);
-    const firstMine = tab === 'mine' && !position;
-    // Origin keeps its usual page slot. User pins precede the ordinary page
-    // and never participate in its cursor, just like Origin.
-    if (firstMine) limit--;
-    const pins = tab === 'mine' ? this.pinIds() : [];
-    const cursorFilter = '(@stamp IS NULL OR stamp < @stamp OR (stamp = @stamp AND id COLLATE BINARY > @id))';
-    const hasPins = pins.length > 0;
-    let rows = this._query(`${this._source(tab)}, summaries AS (
-      SELECT identity AS id, session_group, channel, endpoint_id,
-        COALESCE(MAX(julianday(timestamp)), 0) AS stamp, COUNT(*) AS count
-      FROM allowed GROUP BY identity
-    )${hasPins ? ', pins AS MATERIALIZED (SELECT value AS pinned_id, key AS pin_order FROM json_each(@pins))' : ''}
-      SELECT summaries.*${hasPins ? ', pin_order' : ''} FROM summaries ${hasPins ? 'LEFT JOIN pins ON pinned_id=id' : ''}
-      WHERE ${hasPins ? `(pin_order IS NULL AND ${cursorFilter}) OR (@firstMine AND pin_order IS NOT NULL)` : cursorFilter}
-      ORDER BY ${hasPins ? 'pin_order IS NULL, pin_order, ' : ''}stamp DESC, id COLLATE BINARY LIMIT @limit`, {
-      stamp: position?.stamp ?? null, id: position?.id ?? '', limit: limit + 1 + (firstMine ? pins.length : 0),
-      ...(hasPins ? { pins: JSON.stringify(pins), firstMine: Number(firstMine) } : {}),
-    });
-    const pinned = rows.filter(row => row.pin_order != null);
-    rows = rows.filter(row => row.pin_order == null);
-    if (tab === 'mine' && this.conversations) {
-      rows = [...rows, ...this._drafts(limit + 1, position)]
-        .sort((a, b) => b.stamp - a.stamp || Buffer.compare(Buffer.from(a.id), Buffer.from(b.id)));
+  list({ tab = 'mine', limit, cursor, q, locale = 'zh', page } = {}) {
+    if (!page) {
+      const parameters = new URLSearchParams({ tab });
+      for (const [key, value] of Object.entries({ limit, cursor, q })) {
+        if (value != null) parameters.set(key, value);
+      }
+      page = chatQuery(parameters, 'conversations', { q: true });
     }
-    const more = rows.length > limit;
-    const page = rows.slice(0, limit);
-    const items = [...pinned, ...page].map(({ pin_order, ...row }, itemIndex) => {
-      if (row.draft) return row;
-      const { where, parameters } = this._scope(tab, row.session_group === ''
-        ? "c.session_group='' AND c.channel=@channel AND c.endpoint_id=@endpoint"
-        : 'c.session_group=@group', row.session_group === ''
-        ? { channel: row.channel, endpoint: row.endpoint_id } : { group: row.session_group });
-      const index = row.session_group === '' ? 'idx_conv_channel_endpoint' : 'idx_conv_group_id';
-      const latest = this._query(`SELECT c.id, c.content, c.direction, c.channel FROM conversations c INDEXED BY ${index}
-        WHERE ${visible} AND ${where}
-        ORDER BY COALESCE(julianday(c.timestamp), 0) DESC, c.id DESC LIMIT 1`, parameters)[0];
-      const registered = tab === 'mine' ? this.conversations?.findByGroup(row.session_group) : null;
-      // A stored group display name wins in both tabs; without one, an external
-      // conversation keeps its session group name and legacy rows stay unnamed history.
-      const name = row.session_group === '' ? null : this.conversations?.store.getGroupDisplayName(row.session_group)?.display_name;
-      return { ...row, previewDirection: latest?.direction ?? null, preview: conversationPreview(previewContent(latest), { external: tab === 'external', locale }),
-        display_name: registered ? name ?? registered.displayName : name ?? (row.session_group === '' ? '旧历史' : tab === 'mine'
-          ? row.session_group.slice(row.session_group.indexOf(':') + 1) : row.session_group),
-        ...(registered ? { localId: registered.localId } : {}),
-        ...(pin_order != null ? { pinOrder: itemIndex } : {}), draft: false };
-    });
-    const last = page.at(-1);
-    if (firstMine) items.unshift(this._originItem(locale));
-    // A first page with no ordinary slots continues at the beginning of the activity order.
-    const next = last ? { stamp: last.stamp, id: last.id } : { stamp: null, id: '' };
-    return { items, nextCursor: more ? this._token({ scope, ...next }) : null };
+    tab = page.filters.tab;
+    const search = page.q?.toLowerCase();
+    const unnamed = locale === 'en' ? 'Untitled conversation' : '未命名对话';
+    const after = page.after && { stamp: page.after[0], id: page.after[1] };
+    const pins = this.pinIds(tab);
+    const pinOrders = new Map(pins.map((id, index) => [id, index]));
+    try {
+      const db = this._db();
+      return db.transaction(() => {
+        const latestReceived = prepareLatestReceived(db);
+        const stamp = db.prepare('SELECT COALESCE(julianday(?), 0)').pluck();
+        const nextGroup = db.prepare(`SELECT c.session_group FROM ${groupIndex}
+          WHERE c.session_group>? ORDER BY c.session_group LIMIT 1`).pluck();
+        const memberOfTab = `c.session_group=? AND ${visible} AND ${listScope(tab)}`;
+        const member = db.prepare(`SELECT c.channel, c.endpoint_id FROM ${groupIndex}
+          WHERE ${memberOfTab} ORDER BY c.id DESC LIMIT 1`);
+        const first = db.prepare(`SELECT c.timestamp FROM ${groupIndex} WHERE ${memberOfTab} ORDER BY c.id LIMIT 1`);
+        const belongsToTab = db.prepare(`SELECT ${tabGroupScope(tab, '@group')}`).pluck();
+        const latest = db.prepare(`SELECT c.id,c.content,c.direction,c.channel,c.endpoint_id FROM ${groupIndex}
+          WHERE c.session_group=? AND ${messageVisible}
+          AND ((${listScope(tab)}) OR c.channel='internal') ORDER BY c.id DESC LIMIT 1`);
+        const originLatest = tab === 'mine' && db.prepare(`SELECT c.id,c.content,c.direction,c.channel,c.endpoint_id FROM ${groupIndex}
+          WHERE c.session_group=? AND ${originMessageVisible} ORDER BY c.id DESC LIMIT 1`);
+        const originFirst = tab === 'mine' && db.prepare(`SELECT c.timestamp FROM ${groupIndex}
+          WHERE c.session_group=? AND ${originVisible} ORDER BY c.id LIMIT 1`);
+        const rows = [], pinned = [];
+        const append = row => {
+          if (search && !matchesSearch({ ...row, display_name: row.display_name ?? unnamed }, search)) return;
+          const isPinned = pinOrders.has(row.id);
+          if (isPinned) row.pinOrder = pinOrders.get(row.id);
+          if (!search && (isPinned || row.origin)) {
+            if (!after) pinned.push(row);
+          } else if (!after || compareRows(row, after) > 0) {
+            rows.push(row);
+          }
+        };
+        if (tab === 'mine') append({
+          id: ORIGIN_CONVERSATION_ID, session_group: ORIGIN, channel: 'dashboard', endpoint_id: ORIGIN,
+          stamp: stamp.get((latestReceived.get(ORIGIN) ?? originFirst.get(ORIGIN))?.timestamp ?? null),
+          display_name: ORIGIN_DISPLAY_NAME, localId: ORIGIN, origin: true, draft: false,
+        });
+        // Jump from one index prefix to the next, including groups without a head.
+        for (let group = nextGroup.get(''); group !== undefined; group = nextGroup.get(group)) {
+          if (group === ORIGIN || group === '*' || !belongsToTab.get({ group })) continue;
+          const route = member.get(group);
+          if (!route) continue;
+          const registered = tab === 'mine' ? this.conversations?.findByGroup(group) : null;
+          const name = this.conversations?.store.getGroupDisplayName(group)?.display_name;
+          append({ id: groupId(group), session_group: group, channel: route.channel, endpoint_id: route.endpoint_id,
+            stamp: stamp.get((latestReceived.get(group) ?? first.get(group))?.timestamp ?? null),
+            display_name: registered ? name ?? registered.displayName : name ?? (tab === 'mine' ? group.slice(group.indexOf(':') + 1) : group),
+            ...(registered ? { localId: registered.localId } : {}), draft: false });
+        }
+        // The existing draft source pages its own timestamp index.
+        const slots = page.limit;
+        if (tab === 'mine' && this.conversations) rows.push(...this._drafts(slots + 1, after, search, unnamed));
+        pinned.sort((a, b) => (a.pinOrder ?? -1) - (b.pinOrder ?? -1));
+        rows.sort(compareRows);
+        const items = [...pinned, ...rows.slice(0, slots)].map(row => {
+          if (row.draft) return row;
+          const message = (row.origin ? originLatest : latest).get(row.session_group);
+          const content = message?.channel === 'internal' ? internalContent(message) : previewContent(message);
+          return { ...row, previewDirection: message?.direction ?? null,
+            preview: conversationPreview(content, { external: tab === 'external' || row.origin
+              && !['dashboard', 'internal'].includes(message?.channel), locale }),
+            ...(tab === 'mine' ? { unread: this.hasUnread(row.id, this._messageRange(tab, row.id, this._range(tab, row.id))) } : {}) };
+        });
+        const last = rows[slots - 1];
+        return { items, nextCursor: rows.length > slots ? page.nextCursor([last.stamp, last.id]) : null };
+      })();
+    } catch (error) {
+      if (error.code === 'chat_history_unavailable') throw error;
+      throw fail('chat_history_unavailable', 502);
+    }
   }
 
-  _originItem(locale) {
-    const parameters = { group: ORIGIN };
-    const summary = this._query(`SELECT COALESCE(MAX(julianday(c.timestamp)), 0) AS stamp, COUNT(*) AS count
-      FROM conversations c INDEXED BY idx_conv_group_id WHERE ${originVisible} AND ${originWhere} LIMIT 1`, parameters)[0];
-    const latest = this._query(`SELECT c.id, c.content, c.direction, c.channel FROM conversations c INDEXED BY idx_conv_group_id
-      WHERE ${originVisible} AND ${originWhere}
-      ORDER BY COALESCE(julianday(c.timestamp), 0) DESC, c.id DESC LIMIT 1`, parameters)[0];
-    return { id: ORIGIN_CONVERSATION_ID, session_group: ORIGIN, channel: 'dashboard', endpoint_id: ORIGIN,
-      stamp: summary?.stamp ?? 0, count: summary?.count ?? 0, previewDirection: latest?.direction ?? null,
-      preview: latest ? conversationPreview(previewContent(latest), { external: latest.channel !== 'dashboard', locale }) : '',
-      display_name: ORIGIN_DISPLAY_NAME, localId: ORIGIN, origin: true, draft: false };
-  }
-
-  _drafts(limit, position) {
+  _drafts(limit, position, search, unnamed) {
     const drafts = [];
     let next = position;
     // Each source read is limited, including when stale unknown registrations
@@ -282,9 +290,11 @@ export class ChatHistory {
           JOIN channel_namespaces n ON n.namespace=@namespace AND n.component_name='dashboard'
           WHERE h.session_group=@group LIMIT 1`, { namespace: row.namespace, group })[0];
         if (established) continue;
-        drafts.push({ id: row.id, localId: row.local_id, session_group: group ?? '',
-          channel: 'dashboard', endpoint_id: row.local_id, stamp: row.stamp, count: 0,
-          preview: '', display_name: row.display_name, draft: true, state: row.state });
+        const draft = { id: row.id, localId: row.local_id, session_group: group ?? '',
+          channel: 'dashboard', endpoint_id: row.local_id, stamp: row.stamp,
+          preview: '', display_name: row.display_name, draft: true, state: row.state, unread: false };
+        if (search && !matchesSearch({ ...draft, display_name: draft.display_name ?? unnamed }, search)) continue;
+        drafts.push(draft);
         if (drafts.length === limit) break;
       }
       if (batch.length < limit) break;
@@ -319,9 +329,7 @@ export class ChatHistory {
   }
 
   _scope(tab, where, parameters) {
-    where += tab === 'mine' ? ` AND c.channel='dashboard' AND EXISTS (
-      SELECT 1 FROM channel_namespaces n WHERE n.component_name='dashboard'
-      AND c.session_group=n.namespace || ':' || c.endpoint_id)` : " AND c.channel<>'dashboard'";
+    where += ` AND ${listScope(tab)}`;
     return { where, parameters };
   }
 
@@ -354,22 +362,104 @@ export class ChatHistory {
     };
   }
 
-  messages(id, { tab = 'mine', limit, cursor, direction = 'before', recheckIds, locale = 'zh' } = {}) {
-    limit = this._limit(limit);
-    if (!['before', 'after'].includes(direction)) throw fail('invalid_chat_direction');
-    if (direction === 'after' && cursor == null) throw fail('invalid_chat_cursor');
+  readPosition(id) {
+    return this.conversations?.db.prepare("SELECT COALESCE(MAX(last_read),0) FROM chat_read_positions WHERE conversation_id IN ('',?)")
+      .pluck().get(id) ?? 0;
+  }
+
+  readPositions() {
+    return this.conversations?.db.prepare("SELECT conversation_id,last_read FROM chat_read_positions WHERE conversation_id <> '' ORDER BY conversation_id").all() ?? [];
+  }
+
+  _unread(range, readUpTo, limit) {
+    return this._query(`SELECT c.id FROM conversations c INDEXED BY idx_conv_group_id
+      WHERE ${range.where} AND ${visibleIn(range, true)} AND c.id>@readUpTo
+        AND NOT (c.direction='in' AND c.channel='dashboard')
+      ORDER BY c.id DESC LIMIT @limit`, {
+      ...range.parameters, readUpTo, limit,
+    }).length;
+  }
+
+  hasUnread(id, range = this._messageRange('mine', id)) {
+    return this._unread(range, this.readPosition(id), 1) > 0;
+  }
+
+  /** The Dashboard database is the only writer of read positions. */
+  _advanceRead(id, upTo) {
+    const db = this.conversations.db;
+    db.prepare(`INSERT INTO chat_read_positions (conversation_id,last_read)
+      SELECT ?,? WHERE ?>COALESCE((SELECT last_read FROM chat_read_positions WHERE conversation_id=''),0)
+      ON CONFLICT(conversation_id) DO UPDATE SET last_read=excluded.last_read
+      WHERE chat_read_positions.last_read < excluded.last_read`).run(id, upTo, upTo);
+    return this.readPosition(id);
+  }
+
+  markRead(id, upTo) {
+    if (!Number.isSafeInteger(upTo) || upTo <= 0) {
+      throw listFailure(400, 'invalid_parameter', 'Invalid upTo', 'upTo');
+    }
+    const db = this.conversations.db;
+    return db.transaction(() => {
+      let range;
+      try { range = this._messageRange('mine', id); }
+      catch (error) {
+        if (['chat_conversation_not_found', 'invalid_chat_conversation'].includes(error.code)) {
+          throw listFailure(404, 'not_found', 'The requested conversation does not exist');
+        }
+        throw error;
+      }
+      // Serialize with Dashboard deletion cleanup. A committed Core deletion
+      // fence prevents a stale read request from recreating the removed row.
+      const row = this._query(`SELECT c.id FROM conversations c
+        WHERE ${range.where} AND ${visibleIn(range, true)} AND c.id=@upTo
+          AND NOT EXISTS (
+            SELECT 1 FROM drain_fences f WHERE f.session_group=c.session_group AND f.reason='delete'
+          )`, { ...range.parameters, upTo })[0];
+      if (!row) throw listFailure(400, 'invalid_parameter', 'The message is outside this conversation', 'upTo');
+      return this._advanceRead(id, upTo);
+    }).immediate();
+  }
+
+  messages(id, { tab = 'mine', limit, cursor, direction = 'before', anchor, recheckIds, locale = 'zh', page: query } = {}) {
+    if (!query) {
+      const parameters = new URLSearchParams({ tab, direction });
+      if (limit != null) parameters.set('limit', limit);
+      if (cursor != null) parameters.set('cursor', cursor);
+      if (anchor != null) parameters.set('anchor', anchor);
+      query = chatQuery(parameters, chatCollection(id, 'messages'), { extras: { direction: ['before', 'after'], anchor: ['read'] } });
+    }
+    limit = query.limit;
+    const position = query.after;
+    if (anchor && (tab !== 'mine' || position !== null || direction === 'after')) {
+      throw listFailure(400, 'invalid_parameter', 'The read anchor is only available on the first Mine page', 'anchor');
+    }
+    if (direction === 'after' && position === null) throw fail('invalid_chat_cursor');
     const range = this._messageRange(tab, id);
     const recheck = recheckIds === undefined ? [] : this._messageIds(recheckIds);
-    const position = this._cursor(cursor, `messages:${tab}:${id}:${direction}`);
-    const rows = this._query(`SELECT c.id, c.timestamp, c.direction, c.channel,
+    const readRows = (operator, order, boundary, count) => this._query(`SELECT c.id, c.timestamp, c.direction, c.channel,
       c.endpoint_id, c.session_group, c.content, c.status, c.delivery_action FROM conversations c
-      WHERE ${visibleIn(range, true)} AND ${range.where} AND (@position IS NULL OR c.id ${direction === 'before' ? '<' : '>'} @position)
-      ORDER BY c.id ${direction === 'before' ? 'DESC' : 'ASC'} LIMIT @limit`, {
-      ...range.parameters, position: position?.id ?? null, limit: limit + 1,
+      WHERE ${visibleIn(range, true)} AND ${range.where}${boundary === null ? '' : ` AND c.id ${operator} @position`}
+      ORDER BY c.id ${order} LIMIT @limit`, {
+      ...range.parameters, ...(boundary === null ? {} : { position: boundary }), limit: count,
     });
-    const more = rows.length > limit;
-    const page = rows.slice(0, limit);
-    const next = page.at(-1)?.id;
+    let page, more, next, readUpTo, unreadCount;
+    if (anchor) {
+      readUpTo = this.readPosition(id);
+      unreadCount = this._unread(range, readUpTo, 100);
+      const newer = readRows('>', 'ASC', readUpTo, Math.ceil(limit / 2));
+      const olderCount = limit - newer.length;
+      const older = readRows('<=', 'DESC', readUpTo, olderCount + 1);
+      more = older.length > olderCount;
+      page = [...older.slice(0, olderCount).reverse(), ...newer];
+      next = page[0]?.id;
+    } else {
+      const before = direction === 'before';
+      const rows = readRows(before ? '<' : '>', before ? 'DESC' : 'ASC', position, limit + 1);
+      more = rows.length > limit;
+      page = rows.slice(0, limit);
+      next = page.at(-1)?.id;
+      if (before) page.reverse();
+    }
     const rechecked = recheck.length ? this._rowsByIds(range, recheck,
       'c.id,c.direction,c.channel,c.endpoint_id,c.session_group,c.content', visibleIn(range, true)) : [];
     const batch = [...new Map([...page, ...rechecked].map(row => [row.id, row])).values()];
@@ -399,7 +489,7 @@ export class ChatHistory {
       if (!named.has(localId)) named.set(localId, this._conversationName(localId));
       return named.get(localId);
     };
-    const items = (direction === 'before' ? page.reverse() : page).map(row => {
+    const items = page.map(row => {
       const marker = rowQuote(row);
       if (marker) {
         const target = quoted.get(marker.id);
@@ -415,9 +505,9 @@ export class ChatHistory {
         preview: conversationPreview(previewContent(row), { external: externalRow(row), locale }), attachments: rowAttachments(row),
         ...(range.origin && row.channel === 'dashboard' ? { conversationName: names(row.endpoint_id) } : {}) };
     });
-    const newest = items.at(-1)?.id ?? position?.id ?? 0;
-    return { items, nextCursor: more ? this._token({ scope: `messages:${tab}:${id}:${direction}`, id: next }) : null,
-      afterCursor: this._token({ scope: `messages:${tab}:${id}:after`, id: newest }),
+    const newest = items.at(-1)?.id ?? position ?? readUpTo ?? 0;
+    return { items, nextCursor: more ? query.nextCursor(next) : null, afterCursor: query.nextCursor(newest),
+      ...(anchor ? { readUpTo, unreadCount } : {}),
       ...(recheckIds !== undefined ? { attachmentUpdates: rechecked.map(row => ({ id: row.id, attachments: rowAttachments(row) })) } : {}) };
   }
 
@@ -459,10 +549,11 @@ export class ChatHistory {
       // rescanning old conversations, including excluded-channel traffic.
       const highwater = this._query('SELECT COALESCE(MAX(id),0) AS id FROM conversations', {})[0].id;
       if (afterId !== null && afterId > highwater) throw fail('chat_history_unavailable', 502);
-      const listScope = this._scope(tab, '1=1', {});
-      // "Mine" also changes with the pinned Origin conversation.
-      const listed = tab === 'mine' ? `((${visible} AND ${listScope.where}) OR (${originVisible} AND ${originWhere}))`
-        : `${visible} AND ${listScope.where}`;
+      const groupedChange = `(${grouped} AND ${tabGroupScope(tab)} AND
+        ((${visible} AND ${listScope(tab)}) OR (${receivedMessage})))`;
+      // A system message in Origin changes its time without changing its preview.
+      const listed = tab === 'mine'
+        ? `(${groupedChange} OR ((${originVisible} OR ${receivedMessage}) AND ${originWhere}))` : groupedChange;
       const inserted = this._query(`SELECT c.id FROM conversations c NOT INDEXED
         WHERE c.id>@afterId AND c.id<=@highwater AND ${listed}
         ORDER BY c.id LIMIT 1`, { afterId: afterId ?? highwater, highwater, group: ORIGIN });

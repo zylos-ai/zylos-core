@@ -126,12 +126,12 @@ async function startApi(sandbox) {
   const answer = url => {
     const p = url.pathname;
     if (['/api/groups/running', '/api/groups/offline', '/api/groups/counts'].includes(p) || /^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'counts', 'offline'].includes(p.split('/').at(-1)) || p === '/api/instance') return workbenchSnapshotAnswer(url, snapshot(url), scene().now);
-    if (p === '/api/chat/conversations') {
+    if (p === '/api/conversations') {
       if (url.searchParams.get('tab') === 'external') return { items: [], nextCursor: null, tz: 'UTC' };
       return { items: [{ ...conversation, session_group: GROUP, display_name: '起名示例' }], nextCursor: null, tz: 'UTC' };
     }
-    if (p === `/api/chat/conversations/${encodeURIComponent(ID)}` || p === `/api/chat/conversations/${ID}`) return { conversation, stored: true, conversationId: ID, deliveryState: null, error: null };
-    if (p.startsWith('/api/chat/conversations/')) {
+    if (p === `/api/conversations/${encodeURIComponent(ID)}` || p === `/api/conversations/${ID}`) return { conversation, stored: true, conversationId: ID, deliveryState: null, error: null };
+    if (p.startsWith('/api/conversations/')) {
       const items = scene().messages;
       if (p.endsWith('/messages')) return { items, nextCursor: null, afterCursor: 'after-' + items.at(-1).id, tz: 'UTC' };
       if (p.endsWith('/activity')) {

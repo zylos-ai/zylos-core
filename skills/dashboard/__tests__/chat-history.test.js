@@ -68,7 +68,7 @@ function collect(history, tab, limit = 2, expectedCount) {
   let cursor;
   for (let batch = 0; batch < 100; batch++) {
     const page = history.list({ tab, limit, cursor });
-    assert.ok(page.items.length <= limit);
+    assert.ok(page.items.filter(row => !row.origin && !Number.isInteger(row.pinOrder)).length <= limit);
     if (tab === 'mine' && batch === 0) assert.equal(page.items[0]?.id, ORIGIN_ID);
     items.push(...(tab === 'mine' && batch === 0 ? page.items.slice(1) : page.items));
     if (expectedCount !== undefined && items.length === expectedCount) {
@@ -214,62 +214,40 @@ test('history treats markers as literal except on earlier Dashboard inbound refe
   assert.equal(referenceReads, 1);
 });
 
-test('external list summaries exclude internal traffic while selected histories include it', t => {
+test('external list membership excludes relay-only groups while receive time and preview include relays', t => {
   const f = fixture(t);
   for (let i = 0; i < 7; i++) f.add({ id: 10 + i * 10, session_group: `tg:${i}` });
   f.add({ id: 85, session_group: 'tg:0', content: 'visible latest', timestamp: '2026-01-02 00:00:00' });
   for (const [i, channel] of ['void', 'internal', 'system', 'scheduler', 'control', 'dashboard'].entries()) {
-    f.add({ id: 100 + i, channel, session_group: 'tg:0', content: 'HIDDEN', timestamp: '2026-02-01 00:00:00' });
+    f.add({ id: 100 + i, channel, session_group: 'tg:0', content: channel, timestamp: '2026-02-01 00:00:00' });
     f.add({ id: 120 + i, channel, session_group: `hidden:${i}` });
   }
   f.add({ id: 150, session_group: 'origin' });
   f.add({ id: 151, session_group: '*' });
   f.add({ id: 152, direction: 'other', session_group: 'tg:0', content: 'HIDDEN' });
-  const queries = [];
-  const query = f.history._query.bind(f.history);
-  f.history._query = (sql, params) => {
-    const rows = query(sql, params);
-    queries.push({ sql, rows: rows.length });
-    return rows;
-  };
   const items = collect(f.history, 'external', 2, 7);
   assert.equal(f.history._db().pragma('query_only', { simple: true }), 1);
   assert.throws(() => f.history._db().exec("UPDATE conversations SET content='changed' WHERE id=10"), /readonly/);
-  assert.equal(items.length, 7);
-  assert.equal(new Set(items.map(item => item.id)).size, 7);
-  assert.equal(items[0].session_group, 'tg:0');
-  assert.equal(items[0].count, 2);
-  assert.equal(items[0].preview, 'visible latest');
+  assert.deepEqual(items.map(item => item.session_group), ['tg:0', 'tg:1', 'tg:2', 'tg:3', 'tg:4', 'tg:5', 'tg:6']);
+  assert.equal(items[0].preview, 'internal');
   assert.equal(items[0].previewDirection, 'in');
-  assert.equal(items[0].stamp, f.db.prepare("SELECT julianday('2026-01-02 00:00:00') AS stamp").get().stamp);
-  assert.deepEqual(items.slice(1).map(item => item.session_group), ['tg:1', 'tg:2', 'tg:3', 'tg:4', 'tg:5', 'tg:6']);
-  assert.ok(queries.length > 1);
-  for (const query of queries) { assert.match(query.sql, /\bLIMIT\b/i); assert.ok(query.rows <= 3); }
+  assert.equal(items[0].stamp, f.db.prepare("SELECT julianday('2026-02-01 00:00:00') AS stamp").get().stamp);
   const body = f.history.messages(items[0].id, { tab: 'external' });
   assert.deepEqual(body.items.map(row => row.id), [10, 85, 101]);
-  assert.equal(body.items.at(-1).internal.content, 'HIDDEN');
+  assert.equal(body.items.at(-1).internal.content, 'internal');
   assert.equal(body.items.at(-1).internal.peerExists, false);
 });
 
-test('legacy history is separated by channel and endpoint without creating group membership', t => {
+test('the external list leaves legacy history out while its separate channel and endpoint timelines remain readable', t => {
   const f = fixture(t);
   f.add({ id: 1, session_group: '', channel: 'telegram' });
   f.add({ id: 2, session_group: '', channel: 'lark' });
   f.add({ id: 3, session_group: '', channel: 'telegram', endpoint_id: 'other' });
   f.add({ id: 4, session_group: 'tg:established', channel: 'telegram', content: 'GROUPED_ONLY', timestamp: '2026-02-01' });
-  const items = collect(f.history, 'external', 1, 4);
-  assert.equal(items.length, 4);
-  assert.equal(new Set(items.map(item => item.id)).size, 4);
-  for (const item of items.filter(item => item.session_group === '')) {
-    assert.ok(!item.session_group);
-    assert.match(item.display_name, /旧历史/);
-    const page = f.history.messages(item.id, { tab: 'external' });
-    assert.equal(page.items.length, 1);
-    assert.equal(page.items[0].channel, item.channel);
-    assert.equal(page.items[0].endpoint_id, item.endpoint_id);
-    assert.equal(item.count, 1);
-    assert.ok(!item.preview.includes('GROUPED_ONLY'));
-    assert.ok(page.items.every(row => row.session_group === '' && row.content !== 'GROUPED_ONLY'));
+  const items = collect(f.history, 'external', 1, 1);
+  assert.equal(items[0].session_group, 'tg:established');
+  for (const [channel, endpoint, id] of [['telegram', 'shared', 1], ['lark', 'shared', 2], ['telegram', 'other', 3]]) {
+    assert.deepEqual(f.history.messages(legacyId(channel, endpoint), { tab: 'external' }).items.map(row => row.id), [id]);
   }
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE session_group='' ").get().n, 3);
 });
@@ -298,21 +276,16 @@ test('list previews project structured content before applying the character bud
   }
 });
 
-test('long legacy endpoints remain readable through list and message cursors', t => {
+test('long legacy endpoints remain readable through message cursors', t => {
   const f = fixture(t);
   const endpoint = 'x'.repeat(2300) + '尾';
   f.add({ id: 1, session_group: '', endpoint_id: endpoint, content: 'long endpoint history', timestamp: '2026-02-01' });
   f.add({ id: 2, session_group: '', endpoint_id: endpoint, content: 'latest long endpoint', timestamp: '2026-02-02' });
   f.add({ id: 3, session_group: 'tg:other' });
   f.add({ id: 4, session_group: 'tg:established', endpoint_id: endpoint, content: 'GROUPED_ONLY' });
-  const first = f.history.list({ tab: 'external', limit: 1 });
-  const item = first.items[0];
+  const item = { id: legacyId('telegram', endpoint) };
   assert.ok(item.id.length > 4096);
-  assert.equal(item.id, legacyId('telegram', endpoint));
-  assert.equal(item.count, 2);
-  assert.equal(item.preview, 'latest long endpoint');
-  const rest = collect({ list: options => f.history.list({ ...options, cursor: options.cursor ?? first.nextCursor }) }, 'external', 1, 2);
-  assert.equal(rest.some(row => row.id === item.id), false);
+  assert.deepEqual(collect(f.history, 'external', 1, 2).map(row => row.session_group), ['tg:established', 'tg:other']);
   const latest = f.history.messages(item.id, { tab: 'external', limit: 1 });
   assert.deepEqual(latest.items.map(row => row.id), [2]);
   const older = f.history.messages(item.id, { tab: 'external', cursor: latest.nextCursor });
@@ -331,15 +304,16 @@ test('mine requires the Dashboard namespace binding and exact local endpoint rou
   f.add({ id: 1, channel: 'dashboard', endpoint_id: 'a', session_group: 'dash-owned:a' });
   f.add({ id: 2, channel: 'dashboard', endpoint_id: 'b', session_group: 'dash-owned:b' });
   f.add({ id: 3, channel: 'dashboard', endpoint_id: 'wrong', session_group: 'dash-owned:a', content: 'HIDDEN' });
-  f.add({ id: 4, channel: 'telegram', endpoint_id: 'a', session_group: 'dash-owned:a', content: 'HIDDEN' });
+  f.add({ id: 4, channel: 'telegram', endpoint_id: 'a', session_group: 'dash-owned:a', direction: 'out', content: 'HIDDEN' });
   f.add({ id: 5, channel: 'dashboard', endpoint_id: 'foreign', session_group: 'wrong:foreign' });
   f.add({ id: 6, channel: 'dashboard', endpoint_id: 'foreign', session_group: 'other-owned:foreign' });
   const items = collect(f.history, 'mine', 1, 2);
   assert.equal(items.length, 2);
-  assert.equal(items[0].endpoint_id, 'a'); assert.equal(items[0].draft, false); assert.equal(items[0].count, 1);
-  assert.equal(items[1].endpoint_id, 'b'); assert.equal(items[1].draft, false); assert.equal(items[1].count, 1);
+  assert.equal(items[0].endpoint_id, 'a'); assert.equal(items[0].draft, false);
+  assert.equal(items[1].endpoint_id, 'b'); assert.equal(items[1].draft, false);
   assert.deepEqual(f.history.messages(items[0].id, { tab: 'mine' }).items.map(row => row.id), [1]);
   assert.equal(items[0].display_name, 'a');
+  assert.equal(f.history.list({ tab: 'external' }).items.length, 0, 'External excludes Dashboard-owned groups even with a non-Dashboard row');
   assert.throws(() => f.history.messages(groupId('other-owned:foreign'), { tab: 'mine' }), bad);
   f.db.prepare("DELETE FROM channel_namespaces WHERE component_name='dashboard'").run();
   assert.deepEqual(f.history.list({ tab: 'mine' }).items.map(item => item.id), [ORIGIN_ID]);
@@ -353,6 +327,62 @@ test('refresh rebuilds ordering after a conversation becomes active', t => {
   assert.equal(f.history.list({ tab: 'external', limit: 1 }).items[0].session_group, 'tg:b');
   f.add({ id: 9, session_group: 'tg:a', timestamp: '2026-01-03 00:00:00' });
   assert.equal(f.history.list({ tab: 'external', limit: 1 }).items[0].session_group, 'tg:a');
+});
+
+// Real indexed C4 list and preview reads in the private fixture. Run when
+// conversation activity, membership or previews change. No live runtime/HTTP.
+test('received activity moves a row and outbound messages only change its preview', t => {
+  const f = fixture(t);
+  const own = (id, group, date, more = {}) => f.add({ id, channel: 'dashboard', endpoint_id: group,
+    session_group: `dash-owned:${group}`, timestamp: `2026-01-${date}`, ...more });
+  own(1, 'a', '01');
+  own(2, 'b', '02');
+  own(3, 'a', '03', { direction: 'out', content: 'Agent reply' });
+  own(4, 'out-only', '01', { direction: 'out', content: 'First message' });
+  own(5, 'out-only', '04', { direction: 'out', content: 'Latest preview' });
+  f.add({ id: 6, channel: 'dashboard', endpoint_id: 'origin', session_group: 'origin',
+    direction: 'out', timestamp: '2026-01-05', content: 'Origin preview' });
+  const names = () => f.history.list().items.map(row => row.endpoint_id);
+  const byName = name => f.history.list().items.find(row => row.endpoint_id === name);
+  const julian = date => f.db.prepare('SELECT julianday(?)').pluck().get(`2026-01-${date}`);
+  assert.deepEqual(names(), ['origin', 'b', 'a', 'out-only']);
+  assert.deepEqual([byName('a').stamp, byName('a').preview, byName('a').previewDirection], [julian('01'), 'Agent reply', 'out']);
+  assert.deepEqual([byName('out-only').stamp, byName('out-only').preview], [julian('01'), 'Latest preview']);
+  assert.equal(byName('origin').stamp, julian('05'));
+
+  own(7, 'a', '07', { channel: 'internal', endpoint_id: 'telegram:peer', content: '[internal] telegram:peer said: Relayed' });
+  f.add({ id: 8, channel: 'system', session_group: 'origin', timestamp: '2026-01-08', content: 'Task is not a timeline preview' });
+  assert.deepEqual(names(), ['origin', 'a', 'b', 'out-only']);
+  assert.deepEqual([byName('a').stamp, byName('a').preview, byName('a').previewDirection], [julian('07'), 'Relayed', 'in']);
+  assert.deepEqual([byName('origin').stamp, byName('origin').preview], [julian('08'), 'Origin preview']);
+});
+
+// Real Dashboard name/pin data and private C4. Run for list search, pin or
+// keyset scope changes. The same isolated fixture owns both databases.
+test('name and group searches use chronological pages and retain pin markers', t => {
+  const f = fixture(t, true);
+  f.history.conversations = new ChatConversations({ store: f.store });
+  f.add({ id: 1, session_group: 'tg:needle-group', timestamp: '2026-01-01', content: 'match only message content' });
+  f.add({ id: 2, session_group: 'tg:middle', timestamp: '2026-01-02', content: 'unrelated message' });
+  f.add({ id: 3, session_group: 'tg:newer', timestamp: '2026-01-03' });
+  f.store.writeGroupDisplayName('tg:middle', 'Needle display', 'human');
+  f.store.writeGroupDisplayName('tg:newer', 'Needle name', 'human');
+  f.history.replacePins([groupId('tg:middle')], 'external');
+  const initial = f.history.list({ tab: 'external', limit: 1 });
+  assert.deepEqual(initial.items.map(row => row.session_group), ['tg:middle', 'tg:newer']);
+  assert.equal(initial.items[0].pinOrder, 0);
+  assert.deepEqual(f.history.pinIds('mine'), []);
+
+  const options = { tab: 'external', limit: 1, q: '  NEEDLE  ' };
+  const top = f.history.list(options);
+  const middle = f.history.list({ ...options, cursor: top.nextCursor });
+  const tail = f.history.list({ ...options, cursor: middle.nextCursor });
+  assert.deepEqual([top.items[0].session_group, middle.items[0].session_group, tail.items[0].session_group],
+    ['tg:newer', 'tg:middle', 'tg:needle-group']);
+  assert.equal(middle.items[0].pinOrder, 0);
+  assert.equal(tail.nextCursor, null);
+  assert.deepEqual(f.history.list({ tab: 'external', q: 'match only message' }).items, []);
+  assert.throws(() => f.history.list({ ...options, q: 'changed', cursor: top.nextCursor }), { code: 'invalid_cursor' });
 });
 
 test('message pages use C4 ids across gaps and later polling never crosses groups', t => {
@@ -406,48 +436,36 @@ test('default and maximum batches stay bounded at the real SQL query wrapper', t
   }
 });
 
-test('list summaries page before preview queries and previews use indexed group or endpoint lookups', t => {
+test('conversation lists seek by group and load previews only for the page', t => {
   const f = fixture(t);
   for (let i = 0; i < 4; i++) for (let j = 0; j < 5; j++) {
     f.add({ id: 1 + i * 10 + j, session_group: `tg:${i}` });
     f.add({ id: 101 + i * 10 + j, session_group: '', endpoint_id: `legacy-${i}` });
   }
+  const db = f.history._db();
+  const prepare = db.prepare.bind(db);
   const calls = [];
-  const query = f.history._query.bind(f.history);
-  f.history._query = (sql, params) => {
-    const rows = query(sql, params);
-    const plan = f.history._db().prepare(`EXPLAIN QUERY PLAN ${sql}`).all(params).map(row => row.detail);
-    calls.push({ sql, rows: rows.length, plan });
-    return rows;
+  db.prepare = sql => {
+    const stmt = prepare(sql);
+    if (!sql.includes('FROM conversations c')) return stmt;
+    const get = stmt.get.bind(stmt);
+    stmt.get = (...params) => {
+      const plan = prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params).map(row => row.detail);
+      calls.push({ sql, plan });
+      return get(...params);
+    };
+    return stmt;
   };
-  let cursor;
-  const previewIndexes = new Set();
-  let total = 0;
-  for (let batch = 0; batch < 3; batch++) {
-    calls.length = 0;
-    const page = f.history.list({ tab: 'external', limit: 3, cursor });
-    total += page.items.length;
-    assert.ok(calls.length >= 1);
-    const [summary, ...previews] = calls;
-    assert.match(summary.sql, /\bLIMIT\b/i);
-    assert.ok(summary.rows <= 4);
-    assert.equal(summary.plan.some(detail => /CORRELATED SCALAR SUBQUERY/.test(detail)), false, summary.plan.join('\n'));
-    assert.equal(/SELECT\s+(?:\w+\.)?content\b/i.test(summary.sql), false);
-    assert.equal(previews.length, page.items.length);
-    assert.ok(previews.length <= 3);
-    for (const preview of previews) {
-      assert.match(preview.sql, /\bLIMIT\s+1\b/i);
-      assert.ok(preview.rows <= 1);
-      const index = preview.plan.join('\n').match(/SEARCH\b[^\n]*\bUSING INDEX (idx_conv_group_id|idx_conv_channel_endpoint)\b/);
-      assert.ok(index, preview.plan.join('\n'));
-      previewIndexes.add(index[1]);
-    }
-    cursor = page.nextCursor;
-    if (total === 8) assert.equal(cursor, null);
-    else assert.ok(cursor);
+  const page = f.history.list({ tab: 'external', limit: 3 });
+  assert.equal(page.items.length, 3);
+  assert.ok(page.nextCursor);
+  assert.equal(calls.filter(({ sql }) => /SELECT.+\.content/.test(sql)).length, 3);
+  assert.ok(calls.length < 20);
+  for (const { sql, plan } of calls) {
+    assert.match(sql, /LIMIT 1/);
+    assert.match(plan.join('\n'), /SEARCH c USING (?:COVERING )?INDEX idx_conv_group_id/);
+    assert.doesNotMatch(sql, /GROUP BY|COUNT\(\*\)/i);
   }
-  assert.equal(total, 8);
-  assert.deepEqual([...previewIndexes].sort(), ['idx_conv_channel_endpoint', 'idx_conv_group_id']);
 });
 
 test('null and invalid timestamps page in a stable zero-time bucket', t => {
@@ -482,7 +500,7 @@ test('malformed parameters and cursors reject instead of falling back to whole h
     assert.throws(() => f.history.messages(a.id, { tab: 'external', cursor }), bad);
   assert.throws(() => f.history.messages(b.id, { tab: 'external', cursor: body.nextCursor }), bad);
   assert.throws(() => f.history.messages(a.id, { tab: 'mine', cursor: body.nextCursor }), bad);
-  assert.throws(() => f.history.messages(a.id, { tab: 'external', direction: 'after', cursor: body.nextCursor }), bad);
+  assert.deepEqual(f.history.messages(a.id, { tab: 'external', direction: 'after', cursor: body.nextCursor }).items.map(row => row.id), []);
   assert.throws(() => f.history.messages(a.id, { tab: 'external', direction: 'after' }), bad);
   for (const id of ['garbage', groupId('origin'), legacyId('telegram', 'missing')])
     assert.throws(() => f.history.messages(id, { tab: 'external' }), bad);
@@ -554,8 +572,8 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
   const config = { auth: { enabled: true, password: 'scrypt:test' }, chat: { allowRemote: false } };
   const auth = new AuthGate(config, f.store);
   let reads = 0;
-  const query = f.history._query.bind(f.history);
-  f.history._query = (...args) => { reads++; return query(...args); };
+  const open = f.history._db.bind(f.history);
+  f.history._db = (...args) => { reads++; return open(...args); };
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     res.apiPath = url.pathname;
@@ -576,8 +594,8 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
     return result;
   };
   const id = f.history.list({ tab: 'external' }).items[0].id;
-  const routes = ['/api/chat/conversations?tab=external', `/api/chat/conversations/${id}/messages?tab=external`,
-    `/api/chat/conversations/${id}/status?tab=external&ids=1`];
+  const routes = ['/api/conversations?tab=external', `/api/conversations/${id}/messages?tab=external`,
+    `/api/conversations/${id}/status?tab=external&ids=1`];
   for (const allow of [false, true]) {
     config.chat.allowRemote = allow;
     for (const route of routes) for (const identity of ['none', 'read', 'admin', 'cookie']) {
@@ -592,16 +610,26 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
   f.db.prepare('UPDATE conversations SET content=? WHERE id=3').run('**Result**\n\n```js\nsecret()\n```');
   for (const locale of ['zh', 'en']) {
     const expected = 'Result\n' + (locale === 'en' ? '[Code]' : '[代码]');
-    assert.equal((await request('/api/chat/conversations?tab=external', 'cookie', locale)).body.items[0].preview, expected);
-    const messages = await request(`/api/chat/conversations/${id}/messages?tab=external`, 'cookie', locale);
+    assert.equal((await request('/api/conversations?tab=external', 'cookie', locale)).body.items[0].preview, expected);
+    const messages = await request(`/api/conversations/${id}/messages?tab=external`, 'cookie', locale);
     assert.equal(messages.body.items.find(row => row.id === 3).preview, expected);
   }
-  assert.equal((await request('/api/chat/conversations?tab=external', 'cookie', 'fr')).body.items[0].preview, 'Result\n[代码]');
-  for (const suffix of ['locale=fr', 'locale=en&locale=zh', 'tab=external&tab=mine', 'tab=external&extra=1', 'limit=', 'limit=0', 'limit=101', 'cursor=garbage'])
-    assert.equal((await request(`/api/chat/conversations?${suffix}`)).status, 400);
+  assert.equal((await request('/api/conversations?tab=external', 'cookie', 'fr')).body.items[0].preview, 'Result\n[代码]');
+  for (const [param, query] of [
+    ['offset', 'offset=1'], ['anchor', 'anchor=x'], ['tab', 'tab=unknown'], ['limit', 'limit=101'],
+    ['tab', 'tab=external&tab=mine'], ['locale', 'locale=fr'], ['q', `q=${'x'.repeat(65)}`],
+  ]) {
+    const response = await request(`/api/conversations?${query}`);
+    assert.equal(response.status, 400);
+    assert.deepEqual([response.body.error.code, response.body.error.param], ['invalid_parameter', param]);
+  }
+  const staleCursor = await request('/api/conversations?cursor=garbage');
+  assert.equal(staleCursor.status, 400);
+  assert.equal(staleCursor.body.error.code, 'invalid_cursor');
+  assert.equal((await request('/api/chat/conversations')).status, 404);
   for (const suffix of ['tab=external&ids=1&ids=3', 'tab=external&ids=1,1', 'tab=external&ids=1x', 'tab=external&ids=', 'tab=external&ids=999'])
-    assert.ok((await request(`/api/chat/conversations/${id}/status?${suffix}`)).status >= 400);
-  assert.equal((await request('/api/chat/conversations/%E0%A4%A/messages?tab=external')).status, 400);
+    assert.ok((await request(`/api/conversations/${id}/status?${suffix}`)).status >= 400);
+  assert.equal((await request('/api/conversations/%E0%A4%A/messages?tab=external')).status, 400);
   if (process.env.DASHBOARD_CHAT_HISTORY_EVIDENCE) {
     fs.mkdirSync(path.dirname(process.env.DASHBOARD_CHAT_HISTORY_EVIDENCE), { recursive: true });
     fs.writeFileSync(process.env.DASHBOARD_CHAT_HISTORY_EVIDENCE, JSON.stringify(observations, null, 2));
@@ -634,7 +662,7 @@ test('conversation lists and message pages carry the instance time zone from .en
     return { status, body };
   };
   const reader = () => createScheduleTz({ zylosDir: install.zylosDir, tzModule: `${TZ_URL}?case=${++tzImport}` });
-  const messages = `/api/chat/conversations/${encodeURIComponent(id)}/messages?tab=external`;
+  const messages = `/api/conversations/${encodeURIComponent(id)}/messages?tab=external`;
   let page = await call(messages, reader());
   assert.equal(page.status, 200); assert.equal(page.body.tz, 'Asia/Shanghai'); assert.deepEqual(page.body.items.map(row => row.id), [1]);
   fs.writeFileSync(path.join(install.zylosDir, '.env'), 'TZ=America/Los_Angeles\n');
@@ -644,10 +672,10 @@ test('conversation lists and message pages carry the instance time zone from .en
   assert.equal((await call(messages, async () => { throw new Error('unreadable'); })).body.tz, null);
   assert.equal((await call(messages, null)).body.tz, null);
   fs.writeFileSync(path.join(install.zylosDir, '.env'), 'TZ=Asia/Shanghai\n');
-  const list = await call('/api/chat/conversations?tab=external', reader());
+  const list = await call('/api/conversations?tab=external', reader());
   assert.equal(list.status, 200); assert.equal(list.body.tz, 'Asia/Shanghai', 'the conversation list carries the zone for its times too');
-  assert.equal((await call('/api/chat/conversations?tab=external', null)).body.tz, null);
-  const status = await call(`/api/chat/conversations/${encodeURIComponent(id)}/status?tab=external&ids=1`, reader());
+  assert.equal((await call('/api/conversations?tab=external', null)).body.tz, null);
+  const status = await call(`/api/conversations/${encodeURIComponent(id)}/status?tab=external&ids=1`, reader());
   assert.equal(status.status, 200); assert.equal('tz' in status.body, false, 'delivery status reads carry no zone');
 });
 
@@ -687,9 +715,9 @@ test('internal rows preserve raw facts and project peers on both histories witho
   assert.equal(external[3].internal.peerDisplayName, 'missing:peer');
   assert.equal(external[3].internal.peerChannel, null);
   assert.equal(external[4].internal.peerExists, false, 'internal-only group does not create a navigable peer');
-  for (const [tab, id, expected] of [['mine', 1, 'own external'], ['external', 2, 'telegram external']]) {
+  for (const [tab, id, expected] of [['mine', 1, body], ['external', 2, 'unlisted peer']]) {
     const list = f.history.list({ tab }).items.filter(item => !item.origin);
-    assert.equal(list.length, 1); assert.equal(list[0].count, 1);
+    assert.equal(list.length, 1);
     assert.equal(list[0].preview, expected);
     assert.equal(list[0].channel, tab === 'mine' ? 'dashboard' : 'telegram');
     const recent = f.reader.getGroupMessages(list[0].session_group, { since: '2026-01-01', until: '2026-01-02' });

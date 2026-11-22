@@ -61,10 +61,10 @@ test('missing and outbound states do not assert delivery', () => {
 });
 test('list cursors reset on refresh and deduplicate pages', async () => {
   let count=0;
-  const {state,calls}=fixture(path => path.startsWith('/api/chat/conversations?') ? (++count===1 ? {items:[{id:'g:A'}],nextCursor:'next'} : {items:[{id:'g:A'},{id:'g:B'}],nextCursor:null}) : undefined);
+  const {state,calls}=fixture(path => path.startsWith('/api/conversations?') ? (++count===1 ? {items:[{id:'g:A'}],nextCursor:'next'} : {items:[{id:'g:A'},{id:'g:B'}],nextCursor:null}) : undefined);
   await state.open(); await state.loadMore(); assert.equal(state.snapshot().items.length,2);
   assert.match(calls.at(-1).path,/cursor=next/); await state.refresh();
-  assert.equal(calls.filter(x=>x.path.startsWith('/api/chat/conversations?')).at(-1).path.includes('cursor='),false);
+  assert.equal(calls.filter(x=>x.path.startsWith('/api/conversations?')).at(-1).path.includes('cursor='),false);
   state.destroy();
 });
 test('slow group response cannot replace selected group', async () => {
@@ -191,7 +191,7 @@ for (const boundary of ['reopened page', 'changed identity']) {
   });
 }
 test('pending draft creation does not hijack a later navigation', async () => {
-  const wait=pending(); const {state}=fixture((path,options)=>path==='/api/chat/drafts'?wait.promise:undefined);
+  const wait=pending(); const {state}=fixture((path,options)=>path==='/api/conversations/drafts'?wait.promise:undefined);
   await state.open(); const created=state.createDraft('name'); await state.setTab('external'); await state.select('g:B');
   wait.resolve({conversation:{id:'d:new'}}); await created;
   assert.equal(state.snapshot().tab,'external'); assert.equal(state.snapshot().selectedId,'g:B'); state.destroy();
@@ -249,10 +249,10 @@ test('empty list ends pagination and network failure remains visible', async () 
   assert.equal(state.snapshot().error,'offline'); assert.equal(state.snapshot().loading,false); state.destroy();
 });
 test('unnamed draft creation and rename use only explicit user names', async () => {
-  const {state,calls}=fixture((path,options)=>path==='/api/chat/drafts'?{conversation:{id:'d:new',displayName:null,state:'draft'}}:options?.method==='PATCH'?{conversation:{id:'d:new',displayName:options.body.displayName,state:'draft'}}:undefined);
+  const {state,calls}=fixture((path,options)=>path==='/api/conversations/drafts'?{conversation:{id:'d:new',displayName:null,state:'draft'}}:options?.method==='PATCH'?{conversation:{id:'d:new',displayName:options.body.displayName,state:'draft'}}:undefined);
   await state.open(); await state.createDraft();
   assert.equal(state.snapshot().selectedId,'d:new');
-  const create=calls.find(row=>row.path==='/api/chat/drafts'); assert.equal(Object.keys(create.options.body).length,0);
+  const create=calls.find(row=>row.path==='/api/conversations/drafts'); assert.equal(Object.keys(create.options.body).length,0);
   await state.rename('Human name'); assert.equal(state.snapshot().conversation.displayName,'Human name');
   assert.equal(calls.filter(row=>row.options?.method==='POST').length,1); state.destroy();
 });
@@ -345,8 +345,8 @@ test('late conversation failure cannot become the selected conversation error', 
 test('a list invalidation refreshes the selected name without resetting the composer', async () => {
   let name = null;
   const { state } = fixture((url, options) => {
-    if (url.startsWith('/api/chat/conversations?')) return { items: [{ id: 'g:A', display_name: name }], nextCursor: null };
-    if (url === '/api/chat/conversations/g%3AA') return { conversation: { id: 'g:A', state: 'active', displayName: name } };
+    if (url.startsWith('/api/conversations?')) return { items: [{ id: 'g:A', display_name: name }], nextCursor: null };
+    if (url === '/api/conversations/g%3AA') return { conversation: { id: 'g:A', state: 'active', displayName: name } };
   });
   await state.open(); await state.select('g:A');
   assert.equal(state.snapshot().conversation.displayName, null);
@@ -365,8 +365,8 @@ test('a list invalidation refreshes the selected name without resetting the comp
 test('an opened conversation outside the first list page receives a name change', async () => {
   let name = null, firstPage = true;
   const { state } = fixture(url => {
-    if (url.startsWith('/api/chat/conversations?')) return { items: firstPage ? [{ id: 'g:A', display_name: name }] : [], nextCursor: null };
-    if (url === '/api/chat/conversations/g%3AA') return { conversation: { id: 'g:A', state: 'active', displayName: name } };
+    if (url.startsWith('/api/conversations?')) return { items: firstPage ? [{ id: 'g:A', display_name: name }] : [], nextCursor: null };
+    if (url === '/api/conversations/g%3AA') return { conversation: { id: 'g:A', state: 'active', displayName: name } };
   });
   await state.open(); await state.select('g:A'); state.setInput('preserve my draft');
   const receipt = state.snapshot().receipt;
@@ -381,10 +381,10 @@ test('an opened conversation outside the first list page receives a name change'
 test('a committed draft drops its old list row before canonical detail reconciliation', async () => {
   const detail = pending(); let promoted = false;
   const { state } = fixture((url, options) => {
-    if (url === '/api/chat/drafts') return { conversation: { id: 'd:new', state: 'draft' } };
-    if (url.startsWith('/api/chat/conversations?')) return { items: [{ id: promoted ? 'g:A' : 'd:new' }], nextCursor: null };
+    if (url === '/api/conversations/drafts') return { conversation: { id: 'd:new', state: 'draft' } };
+    if (url.startsWith('/api/conversations?')) return { items: [{ id: promoted ? 'g:A' : 'd:new' }], nextCursor: null };
     if (url.endsWith('/send')) { promoted = true; return { stored: true, conversationId: 'g:A' }; }
-    if (url === '/api/chat/conversations/g%3AA') return detail.promise;
+    if (url === '/api/conversations/g%3AA') return detail.promise;
   });
   await state.open(); await state.createDraft(); state.setInput('hello');
   const sending = state.send();

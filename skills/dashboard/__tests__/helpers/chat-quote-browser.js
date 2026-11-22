@@ -11,7 +11,7 @@ import { sendJson } from '../../src/lib/http.js';
 
 /** Records each send body the page posts (bounded) and passes the request on to the real route unchanged. */
 async function recordSends(context, sent) {
-  await context.route(url => url.pathname.endsWith('/send') && url.pathname.startsWith('/api/chat/conversations/'), async route => {
+  await context.route(url => url.pathname.endsWith('/send') && url.pathname.startsWith('/api/conversations/'), async route => {
     assert.ok(sent.length < 50, 'bounded send capture');
     sent.push(structuredClone(route.request().postDataJSON()));
     await route.continue();

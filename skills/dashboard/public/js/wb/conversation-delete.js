@@ -2,7 +2,7 @@ import { permissionErrorKey } from './write-errors.js';
 import { countLabel } from '../count-label.js';
 /** UI state only. The server resolves target ownership and Core owns the deletion. */
 export function deletionPath(item) {
-  if (item?.id?.startsWith('d:')) return `/api/chat/drafts/${encodeURIComponent(item.id.slice(2))}`;
+  if (item?.id?.startsWith('d:')) return `/api/conversations/drafts/${encodeURIComponent(item.id.slice(2))}`;
   const group = item?.sessionGroup ?? item?.session_group;
   return typeof group === 'string' && group && group !== 'origin'
     ? `/api/groups/${encodeURIComponent(group)}` : null;

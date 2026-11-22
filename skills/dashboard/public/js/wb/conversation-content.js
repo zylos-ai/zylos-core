@@ -14,10 +14,10 @@ export function conversationErrorKey(code) {
   if (code === 'chat_conversation_started') {
     return 'chat.error.conversationStarted';
   }
-  if (['chat_conversation_not_found', 'chat_message_not_found'].includes(code)) {
+  if (['not_found', 'chat_conversation_not_found', 'chat_message_not_found'].includes(code)) {
     return 'chat.error.notFound';
   }
-  if (['chat_core_unavailable', 'chat_history_unavailable', 'chat_conversation_unavailable'].includes(code)) {
+  if (['unavailable', 'chat_core_unavailable', 'chat_history_unavailable', 'chat_conversation_unavailable'].includes(code)) {
     return 'chat.error.unavailable';
   }
   if (code === 'chat_send_unknown') {

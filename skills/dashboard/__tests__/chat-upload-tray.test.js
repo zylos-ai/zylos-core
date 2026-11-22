@@ -18,7 +18,7 @@ class Upload extends Events {
   reply(status = 200, data = {}) { this.status = status; this.responseText = JSON.stringify(data); this.emit('load'); }
 }
 const file = (name = 'image.png', type = 'image/png', size = 4) => new File([new Uint8Array(size)], name, { type });
-const scope = (conversationId = 'a', instance = 'local') => ({ instance, conversationId, uploadsUrl: `/instance/${instance}/api/chat/conversations/${conversationId}/uploads` });
+const scope = (conversationId = 'a', instance = 'local') => ({ instance, conversationId, uploadsUrl: `/instance/${instance}/api/conversations/${conversationId}/uploads` });
 function fixture(options = {}) {
   let clock = 1000, nextTimer = 0;
   const uploads = [], revoked = [], created = [], changes = [], calls = [], unauthorized = [], timers = new Map();

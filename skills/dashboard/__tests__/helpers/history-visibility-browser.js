@@ -21,6 +21,8 @@ export async function runHistoryVisibilityBrowser(t, sandbox, { width, trigger }
   const original = fixture.addOutbound(localId, 'Original earlier message: rehearse the rollback before release.');
   for (let index = 1; index <= 180; index++) fixture.addOutbound(localId, `History entry ${index}: a visible message for stable reading position.`);
   const quoted = fixture.c4.insertConversation('in', 'dashboard', localId, `[quote c4_id=${original.id}]\nReturn to the earlier original.`, { groupName: localId });
+  const read = await fixture.request(`${mine.route}/read`, { method: 'PUT', body: { upTo: quoted.id } });
+  assert.equal(read.status, 200, read.text);
   fixture.db.prepare('UPDATE conversations SET timestamp=?').run('2000-01-01 08:00:00');
   const { chromium } = await import(pathToFileURL(process.env.ZYLOS_CHAT_BROWSER_MODULE));
   const browser = await chromium.launch({ executablePath: process.env.ZYLOS_CHAT_BROWSER_BIN, headless: true, env: sandbox.env,

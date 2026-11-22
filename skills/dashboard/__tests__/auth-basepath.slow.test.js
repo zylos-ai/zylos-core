@@ -164,7 +164,7 @@ for (const auth of [undefined, { enabled: false }, { password: null }, { passwor
     const running = await makeServerWithDir(root);
     server = running.server;
     const { origin } = running;
-    for (const route of ['/api/usage/series', '/api/chat/conversations', '/api/instance', '/api/stream', '/observer/frame']) {
+    for (const route of ['/api/usage/series', '/api/conversations', '/api/instance', '/api/stream', '/observer/frame']) {
       const response = await fetch(origin + route, { headers: { 'X-Forwarded-Prefix': '/dashboard' } });
       assert.equal(response.status, 401, route);
       await response.text();
@@ -214,7 +214,7 @@ test('a stored enabled:false auth setting still requires sign-in for pages and A
   assert.match(await loginPage.text(), /type="password"/);
   for (const [method, route] of [['GET', '/api/settings/timezone'], ['PUT', '/api/settings/timezone'],
     ['POST', '/api/settings/timezone/actions/restart-services'], ['GET', '/api/memory/tree'], ['GET', '/api/memory/file?path=state.md'],
-    ['GET', '/api/chat/conversations'], ['GET', '/api/stream'], ['GET', '/api/keys']]) {
+    ['GET', '/api/conversations'], ['GET', '/api/stream'], ['GET', '/api/keys']]) {
     const response = await fetch(origin + route, { method, headers: { Origin: origin } });
     assert.equal(response.status, 401, `${method} ${route}`);
     await response.text();

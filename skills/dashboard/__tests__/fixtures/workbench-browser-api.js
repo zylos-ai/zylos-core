@@ -216,7 +216,7 @@ function workbenchAnswerData(url, now) {
   if (p === '/api/fleet') return { agents: [{ name: 'browser-case', self: true, access: 'admin' }], updated_at: iso(now) };
   if (p === '/api/fleet/agents') return { self: { name: 'browser-case' }, agents: [] };
   if (p === '/api/keys') return { keys: [] };
-  if (p === '/api/chat/conversations') return { items: [], nextCursor: null };
+  if (p === '/api/conversations') return { items: [], nextCursor: null };
   if (p === '/api/settings/timezone') return { tz: 'UTC' };
   if (p === '/api/settings/chat') return { chat_allow_remote: false };
   if (p === '/api/observer/status') return { state: 'not_installed' };

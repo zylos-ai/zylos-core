@@ -217,7 +217,7 @@ test('metadata snapshots share history visibility and discover only scoped pendi
   const own = f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('dash:one') }, { afterId: 0 });
   assert.equal(own.listChanged, true); assert.equal(own.latestId, 11); assert.equal(own.highwater, 24);
   const external = f.history.chatChangeSnapshot({ tab: 'external' }, { afterId: 23 }); assert.equal(external.listChanged, true);
-  const hiddenOnly = f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: 1 }); assert.equal(hiddenOnly.listChanged, false);
+  const hiddenOnly = f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: 1 }); assert.equal(hiddenOnly.listChanged, true);
   assert.throws(() => f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('telegram:one') }), /chat_conversation_not_found/);
   assert.deepEqual(own.delivery.map(row => row.id), [1], 'only selected conversation pending rows are monitored');
   assert.equal(external.delivery.length, 0, 'external chat does not monitor delivery rows');
@@ -316,7 +316,7 @@ test('incremental metadata queries use primary-key windows at representative C4 
         const endpoint = 'new';
         insert.run(null, channel, endpoint, channel === 'dashboard' ? 'dash:new' : channel === 'telegram' ? 'telegram:new' : 'private:internal');
         const start = performance.now(); const snapshot = f.history.chatChangeSnapshot(options, { afterId: previous.highwater }); samples.push(performance.now() - start);
-        assert.equal(snapshot.listChanged, channel !== 'internal');
+        assert.equal(snapshot.listChanged, channel !== 'internal' || options.tab === 'external');
         assert.equal(snapshot.latestId, options.tab === 'mine' ? 99801 : null);
         assert.equal(snapshot.delivery.length, options.tab === 'mine' ? 100 : 0);
         previous = snapshot;
@@ -440,7 +440,7 @@ test('server pending discovery retains the newest hundred scoped inbound rows wi
 // private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/DB proof before access.
 // Run for internal message invalidation or scope changes; UI-only work skips.
 // The fixture owns/cleans DBs and sampler; no HTTP, PM2, model or tmux launch.
-test('internal relay inserts invalidate each selected history without changing either list', gate, t => {
+test('internal relay inserts invalidate both timelines and the receiving tab list', gate, t => {
   const f = fixture(t);
   f.write({ id: 1, status: 'delivered' });
   f.write({ id: 2, channel: 'telegram', group: 'telegram:peer', endpoint: 'peer', status: 'delivered' });
@@ -462,13 +462,14 @@ test('internal relay inserts invalidate each selected history without changing e
     for (const forbidden of ['PRIVATE_RELAY', 'content', 'preview', 'attachment']) assert.equal(payload.includes(forbidden), false);
     assert.equal(stream.events.some(row => row.event === 'chat_delivery_changed'), false);
   }
-  for (const stream of [other, ownList, externalList]) assert.equal(stream.events.length, 1);
+  for (const stream of [other, ownList]) assert.equal(stream.events.length, 1);
+  assert.equal(externalList.events.length, 2);
   const ownTruth = f.history.messages(idFor('dash:one'), { tab: 'mine' });
   const peerTruth = f.history.messages(idFor('telegram:peer'), { tab: 'external' });
   assert.equal(ownTruth.items.at(-1).internal.content, 'PRIVATE_RELAY');
   assert.equal(peerTruth.items.at(-1).internal.content, 'PRIVATE_RELAY');
   assert.equal(f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('dash:one') }, { afterId: 3 }).listChanged, false);
-  assert.equal(f.history.chatChangeSnapshot({ tab: 'external', conversationId: idFor('telegram:peer') }, { afterId: 3 }).listChanged, false);
+  assert.equal(f.history.chatChangeSnapshot({ tab: 'external', conversationId: idFor('telegram:peer') }, { afterId: 3 }).listChanged, true);
   assert.throws(() => f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('unknown:peer') }), /chat_conversation_not_found/);
 });
 
@@ -495,10 +496,11 @@ test('a group display name change sends a dirty hint to external list and conver
   assert.deepEqual(counts(), before.map(count => count + 1), 'an unchanged name sends no further hint');
 });
 
-test('pin order changes use the existing list hint for mine subscribers only', gate, t => {
+test('pin order changes send the existing list hint only to the edited tab', gate, t => {
   const f = fixture(t);
   f.write({ id: 1 });
   f.write({ id: 2, endpoint: 'two', group: 'dash:two' });
+  f.write({ id: 3, channel: 'telegram', endpoint: 'peer', group: 'telegram:peer' });
   const store = new Store(f.sandbox.paths.dashboardDb);
   t.after(() => store.close());
   f.history.conversations = new ChatConversations({ store });
@@ -512,4 +514,33 @@ test('pin order changes use the existing list hint for mine subscribers only', g
     for (const stream of [mine, list]) assert.deepEqual(stream.events.map(row => row.event), expected);
     assert.deepEqual(external.events.map(row => row.event), ['chat_ready']);
   }
+  f.history.replacePins([idFor('telegram:peer')], 'external');
+  f.timers.tick();
+  assert.deepEqual(external.events.map(row => row.event), ['chat_ready', 'chat_messages_changed']);
+  for (const stream of [mine, list]) assert.deepEqual(stream.events.map(row => row.event), expected);
+});
+
+
+// Real C4 insertion, scoped observers and fake timers. Run for receive/list hint
+// changes, skip drawing-only changes. The isolated fixture owns SQLite and timers.
+test('a received Dashboard relay or Origin task invalidates Mine independently of External', gate, t => {
+  const f = fixture(t);
+  f.write({ id: 1 });
+  f.write({ id: 2, channel: 'telegram', group: 'telegram:peer' });
+  const mine = f.subscribe({ tab: 'mine' }), external = f.subscribe({ tab: 'external' });
+  for (const row of [
+    { id: 3, channel: 'internal', endpoint: 'telegram:peer' },
+    { id: 4, channel: 'system', group: 'origin' },
+  ]) {
+    const previous = mine.events.length;
+    f.write(row);
+    f.timers.tick();
+    assert.equal(mine.events.length, previous + 1);
+    assert.equal(mine.events.at(-1).event, 'chat_messages_changed');
+    assert.equal(external.events.length, 1);
+  }
+  f.write({ id: 5, channel: 'void', group: 'origin' });
+  f.timers.tick();
+  assert.equal(mine.events.length, 3);
+  assert.equal(external.events.length, 1);
 });

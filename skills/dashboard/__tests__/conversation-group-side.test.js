@@ -84,11 +84,11 @@ async function fixture(testContext, { storage = memoryStorage(), open = true, gr
     if (path.includes('/backlog')) return json({ pending: 0 });
     if (path.includes('/runs')) return json({ totalEvents: 0, totalRuns: 0, unattributed: 0, runs: [] });
 
-    if (path.startsWith('/api/chat/conversations?')) return json({ items: [
+    if (path.startsWith('/api/conversations?')) return json({ items: [
       { id: conversationId, sessionGroup, display_name: 'Release room', channel: 'dashboard' },
       { id: otherId, sessionGroup: otherGroup, display_name: 'Other room', channel: 'dashboard' },
     ], nextCursor: null });
-    const match = /\/api\/chat\/conversations\/([^/?]+)$/.exec(path);
+    const match = /\/api\/conversations\/([^/?]+)$/.exec(path);
     if (match) {
       const id = decodeURIComponent(match[1]);
       return json({ conversation: { id, sessionGroup: id === otherId ? otherGroup : sessionGroup, state: 'active', displayName: 'Room' } });
@@ -270,7 +270,7 @@ test('the link to this group\'s conversation only closes the side panel', async 
   allNodes(f.side()).find(node => node.dataset.action === 'viewConversation').dispatch('click');
   await tick();
   assert.equal(f.side().hidden, true);
-  assert.equal(f.reads.slice(before).some(path => path.startsWith('/api/chat/')), false, 'the conversation was not reloaded');
+  assert.equal(f.reads.slice(before).some(path => path.startsWith('/api/conversations')), false, 'the conversation was not reloaded');
   assert.ok(f.document.activeElement === f.groupButton());
 });
 

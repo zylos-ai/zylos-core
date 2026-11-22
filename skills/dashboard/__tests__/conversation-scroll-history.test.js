@@ -42,7 +42,7 @@ function fixture(t, { initial = rows(100, 10), cursor = 'older-1', older } = {})
     const url = new URL(path, 'http://fixture');
     let body, status = 200;
     if (path === '/api/instance') body = { session_mode: { sessionMode: 'multi' } };
-    else if (url.pathname === '/api/chat/conversations') body = { items: [{ id: 'g:AA', sessionGroup: 'dashboard:fixture', channel: url.searchParams.get('tab') === 'external' ? 'telegram' : 'dashboard' }], nextCursor: null };
+    else if (url.pathname === '/api/conversations') body = { items: [{ id: 'g:AA', sessionGroup: 'dashboard:fixture', channel: url.searchParams.get('tab') === 'external' ? 'telegram' : 'dashboard' }], nextCursor: null };
     else if (url.pathname.endsWith('/messages')) {
       if (url.searchParams.has('cursor') && url.searchParams.get('direction') === 'before') {
         olderReads++; inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);

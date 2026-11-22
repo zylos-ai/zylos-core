@@ -61,8 +61,8 @@ export async function runObserverBrowser(t, sandbox, signal) {
     if (p.startsWith('/api/observer/history/')) return { sessions: [], entries: [], hasMore: false };
     // Two external conversations; the first is not the observed group's, so a return that only reopens the
     // conversation page (which selects the first one on wide screens) does not pass for a return to GROUP's.
-    if (p === '/api/chat/conversations') return { items: url.searchParams.get('tab') === 'external' ? chats.map(chat => chat.row) : [], nextCursor: null, tz: 'UTC' };
-    const chat = chats.find(item => p.startsWith(`/api/chat/conversations/${encodeURIComponent(item.row.id)}`));
+    if (p === '/api/conversations') return { items: url.searchParams.get('tab') === 'external' ? chats.map(chat => chat.row) : [], nextCursor: null, tz: 'UTC' };
+    const chat = chats.find(item => p.startsWith(`/api/conversations/${encodeURIComponent(item.row.id)}`));
     if (chat && p.endsWith('/messages')) return { items: [{ id: 1, direction: 'in', channel: chat.row.channel, status: 'delivered', content: 'Fixture message', timestamp: new Date(now).toISOString() }], nextCursor: null, afterCursor: null, tz: 'UTC' };
     if (chat && /\/(?:questions|activity|status)$/.test(p)) return { items: [], rounds: [], nextCursor: null, afterCursor: null, tz: 'UTC' };
     if (chat) return { conversation: chat.detail, stored: true, conversationId: chat.row.id };

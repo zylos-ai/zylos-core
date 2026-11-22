@@ -19,7 +19,7 @@ export async function runConversationVisual(t, sandbox) {
   const messageRequests = [];
   // The instance zone (Los Angeles) differs from the browser's (Shanghai below), so times show which one the page uses.
   const fixture = await createChatApiFixture(t, sandbox, { name: 'Cache design review', instanceTz: async () => ({ tz: 'America/Los_Angeles' }), extraHandler(req, res, url, f) {
-    if (url.pathname.startsWith('/api/chat/')) return false;
+    if (url.pathname.startsWith('/api/conversations')) return false;
     if (!url.pathname.startsWith('/api/')) return false;
     if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return true; }
     const values = {
@@ -59,7 +59,7 @@ export async function runConversationVisual(t, sandbox) {
   for (let index = 0; index < 55; index++) fixture.c4.insertConversation('in', 'telegram', 'newer-' + index, 'Newer external history.', { groupName: 'newer-' + index });
   const externalGroup = unicodeExternal.session_group;
   const externalId = 'g:' + Buffer.from(externalGroup).toString('hex').toUpperCase();
-  const externalFirstPage = await fixture.request('/api/chat/conversations?tab=external&limit=50');
+  const externalFirstPage = await fixture.request('/api/conversations?tab=external&limit=50');
   assert.equal(externalFirstPage.status, 200);
   assert.equal(externalFirstPage.body.items.some(row => row.id === externalId), false);
 
@@ -76,12 +76,12 @@ export async function runConversationVisual(t, sandbox) {
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
     if (path.endsWith('/messages')) { reads++; messageRequests.push(request.url()); }
-    if (path === '/api/chat/drafts' && request.method() === 'POST') draftWrites++;
+    if (path === '/api/conversations/drafts' && request.method() === 'POST') draftWrites++;
   });
   const errors = [], shots = [], composerMeasurements = [];
   let expectedDenied = false;
   page.on('pageerror', error => { if (!errors.length) errors.push(error.message); });
-  page.on('response', response => { const url = new URL(response.url()); if (response.url().startsWith(fixture.base + '/') && response.status() >= 400 && url.pathname !== '/favicon.ico' && !(expectedDenied && response.status() === 403 && url.pathname.includes('/api/chat/')) && !errors.length) errors.push(`${response.status()} ${url.pathname}`); });
+  page.on('response', response => { const url = new URL(response.url()); if (response.url().startsWith(fixture.base + '/') && response.status() >= 400 && url.pathname !== '/favicon.ico' && !(expectedDenied && response.status() === 403 && url.pathname.includes('/api/conversations')) && !errors.length) errors.push(`${response.status()} ${url.pathname}`); });
   page.on('console', message => { if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:') && !errors.length) errors.push(message.text()); });
   const select = async () => {
     await page.locator(`[data-conversation-id="${first.receipt.conversationId}"]`).click();
@@ -539,7 +539,7 @@ export async function runConversationVisual(t, sandbox) {
   assert.equal(await page.locator('#wb-chat .conversation-notices > .chat-error').isVisible(), false, 'operation receipt replaces duplicate top error');
   fixture.setInvoke(null);
   // A transport failure proves unknown-result UI without rewriting product code.
-  const sendPattern = '**/api/chat/conversations/*/send';
+  const sendPattern = '**/api/conversations/*/send';
   await context.route(sendPattern, route => route.abort());
   await page.locator('#wb-chat [data-action="send"]').click();
   await page.locator('#wb-chat .conversation-receipt[data-delivery-state="pending_reconciliation"]').waitFor();

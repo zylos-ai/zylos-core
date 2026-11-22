@@ -69,9 +69,9 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, memoryRef
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
         res.write(': ready\n\n'); streams.add(res); res.on('close', () => streams.delete(res)); return;
       }
-      if (p === '/api/chat/conversations') return sendJson(res, 200, { items: conversations, nextCursor: null, tz: 'UTC', deletionAllowed: true });
-      if (p.startsWith('/api/chat/conversations/')) {
-        const id = decodeURIComponent(p.split('/')[4]);
+      if (p === '/api/conversations') return sendJson(res, 200, { items: conversations, nextCursor: null, tz: 'UTC', deletionAllowed: true });
+      if (p.startsWith('/api/conversations/')) {
+        const id = decodeURIComponent(p.split('/')[3]);
         const conversation = conversations.find(item => item.id === id) ?? conversations[0];
         return sendJson(res, 200, p.endsWith('/activity') ? { now: new Date().toISOString(), items: [] }
           : /\/(messages|questions|status)$/.test(p) ? { items: [], nextCursor: null, tz: 'UTC' }

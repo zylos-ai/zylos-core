@@ -117,7 +117,7 @@ await page.openGroup(${JSON.stringify(group)},{channel:'dashboard'});window.read
         if (url.pathname.endsWith('/questions')) return json(res, { items: [question], nextCursor: null });
         if (url.pathname.endsWith('/uploads/config')) return json(res, { enabled: false });
         if (url.pathname.startsWith('/api/groups/')) return json(res, { sessionGroup: group, readAt: Date.now(), state: { kind: 'unknown' } });
-        if (url.pathname === '/api/chat/conversations/' + encodeURIComponent(conversationId)) return json(res, { conversation: { id: conversationId, sessionGroup: group, channel: 'dashboard', displayName: 'Live conversation / 实时对话', state: 'active' }, conversationId, stored: true });
+        if (url.pathname === '/api/conversations/' + encodeURIComponent(conversationId)) return json(res, { conversation: { id: conversationId, sessionGroup: group, channel: 'dashboard', displayName: 'Live conversation / 实时对话', state: 'active' }, conversationId, stored: true });
         return json(res, { error: 'fixture_unknown_endpoint' }, 404);
       }
       if (url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }

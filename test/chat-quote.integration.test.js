@@ -126,7 +126,7 @@ test('HTTP quote persists, delivers and replays the same source without reviving
       assert.equal(item.content, saved.content);
       assert.deepEqual(item.quote, { id: original.id, direction: 'out', timestamp: new Date(original.timestamp.includes('T') ? original.timestamp : original.timestamp.replace(' ', 'T') + 'Z').toISOString(),
         internal: false, preview: 'Earlier <answer> & details.\n[文件] old.txt', available: true });
-      const listing = await api.request('/api/chat/conversations?tab=mine');
+      const listing = await api.request('/api/conversations?tab=mine');
       assert.equal(listing.body.items.find(row => row.id === result.body.conversationId).preview, input);
       api.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run(other.receipt.namespace + ':' + other.draft.localId, original.id);
       const unavailable = await api.request(current.route + '/messages?tab=mine');

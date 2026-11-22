@@ -929,7 +929,7 @@ test('recreated groups are registered only by authorized send or attachment writ
     req._authContext = req.headers.cookie ? { kind: 'cookie', scope: 'admin', principalId: 'owner' } : null;
     return req._authContext;
   } };
-  const id = groupId(group), route = `/api/chat/conversations/${encodeURIComponent(id)}`;
+  const id = groupId(group), route = `/api/conversations/${encodeURIComponent(id)}`;
   const invoke = async (handler, pathname, method, headers = {}, body = {}) => {
     const req = Readable.from(method === 'GET' ? [] : [Buffer.from(JSON.stringify(body))]);
     Object.assign(req, { method, headers });
@@ -985,15 +985,18 @@ test('attachment tree preflight failure preserves every file and its database re
   assert.equal(f.store.db.prepare("SELECT COUNT(*) n FROM chat_attachments WHERE id='preflight'").get().n, 1);
 });
 
-test('group deletion removes its pin and leaves the other pinned conversation in order', async t => {
+test('group deletion removes read state and both tab pins while preserving another conversation', async t => {
   const f = fixture(t);
   const group = 'dashboard:pinned', kept = 'dashboard:kept';
-  f.message(group);
+  const messageId = f.message(group);
   f.message(kept);
   const reader = new Database(f.c4Db.name, { readonly: true });
   t.after(() => reader.close());
   const history = new ChatHistory({ c4Reader: { _open: () => reader }, conversations: f.conversations });
   history.replacePins([groupId(group), groupId(kept)]);
+  history.markRead(groupId(group), messageId);
+  // A persisted pin in the other tab can survive a change in group ownership.
+  f.store.db.prepare("INSERT INTO chat_pins(tab,conversation_id,position) VALUES ('external',?,0)").run(groupId(group));
   const { service } = stoppedService(t, f, stage => {
     if (stage === 'stopped') assert.throws(() => history.replacePins([groupId(group)]), { code: 'invalid_chat_pin' });
   });
@@ -1003,6 +1006,7 @@ test('group deletion removes its pin and leaves the other pinned conversation in
   const result = await service.delete(target, await confirmation(service, target, 'delete-pinned'));
   assert.equal(result.pending, false);
   assert.deepEqual(f.store.db.prepare('SELECT conversation_id FROM chat_pins').pluck().all(), [groupId(kept)]);
+  assert.equal(f.store.db.prepare('SELECT 1 FROM chat_read_positions WHERE conversation_id=?').get(groupId(group)), undefined);
   assert.deepEqual(history.list().items.map(row => [row.id, row.pinOrder]), [
     ['g:6F726967696E', undefined], [groupId(kept), 0],
   ]);

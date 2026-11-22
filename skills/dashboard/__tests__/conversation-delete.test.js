@@ -42,7 +42,7 @@ test('draft confirmation is light and its request never fabricates a group', asy
   const f = fixture({ request: async (path, options) => { calls.push({ path, options }); return options?.method ? { ok: true } : { ...boundary, ok: true, operationId: 'draft-op', draft: true }; },
     confirm: async text => { confirmations.push(JSON.parse(text)); return true; } });
   await f.controller.remove({ id: 'd:333' });
-  assert.equal(calls[0].path, '/api/chat/drafts/333/deletion');
+  assert.equal(calls[0].path, '/api/conversations/drafts/333/deletion');
   assert.deepEqual(confirmations, [{ key: 'chat.delete.draftConfirm' }]);
 });
 

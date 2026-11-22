@@ -58,13 +58,19 @@ export function copyDashboardDb(zylosDir, txDir) {
   } catch (error) { return { ok: false, error: { code: 'db_copy_failed', message: error.message } }; }
 }
 
-const DASHBOARD_SCHEMA_SCRIPT = `const [schemaUrl, driverUrl, file, action] = process.argv.slice(1);
+const DASHBOARD_SCHEMA_SCRIPT = `const [schemaUrl, driverUrl, file, action, coreFile] = process.argv.slice(1);
 const { inspectDatabase, migrateDatabase } = await import(schemaUrl);
+const { existsSync } = await import('node:fs');
 const { default: Database } = await import(driverUrl);
 try {
   const db = new Database(file, { fileMustExist: true, timeout: 5000 });
   try {
-    if (action === 'migrate') migrateDatabase(db);
+    if (action === 'migrate') migrateDatabase(db, {conversationHighwater: () => {
+      if (!existsSync(coreFile)) return 0;
+      const core = new Database(coreFile, {readonly: true,fileMustExist: true,timeout: 5000});
+      try { return core.prepare('SELECT COALESCE(MAX(id),0) FROM conversations').pluck().get(); }
+      finally { core.close(); }
+    }});
     process.stdout.write(JSON.stringify(inspectDatabase(db)));
   } finally { db.close(); }
 } catch (error) { process.stderr.write(String(error?.message ?? error)); process.exitCode = 1; }`;
@@ -76,7 +82,7 @@ function dashboardSchema(loc, root, action) {
   let output;
   try {
     output = run(process.execPath, ['--input-type=module', '-e', DASHBOARD_SCHEMA_SCRIPT,
-      pathToFileURL(schemaFile).href, pathToFileURL(driver).href, loc.db, action], root, 120000);
+      pathToFileURL(schemaFile).href, pathToFileURL(driver).href, loc.db, action, path.join(root, 'comm-bridge/c4.db')], root, 120000);
   } catch (error) {
     const detail = String(error.stderr || '').trim() || (error.code === 'ETIMEDOUT' ? 'timed out' : error.message);
     throw Error(`Dashboard schema ${action} failed: ${detail}`);

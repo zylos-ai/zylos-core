@@ -25,7 +25,7 @@ export async function runVisualCase(t, sandbox) {
   if (output) fs.mkdirSync(output, { recursive: true });
   const { chromium } = await import(pathToFileURL(modulePath));
   const fixture = await createChatApiFixture(t, sandbox, { name: 'Visual conversation', extraHandler(req, res, url, f) {
-    if (!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/chat/')) return false;
+    if (!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/conversations')) return false;
     const values = {
       '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Isolated browser' } },
       '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
@@ -96,7 +96,7 @@ export async function runVisualCase(t, sandbox) {
   page.on('response', response => {
     const pathname = new URL(response.url()).pathname;
     if (response.status() >= 400 && pathname !== '/favicon.ico'
-      && !(expectedChatDenial && response.status() === 403 && pathname.includes('/api/chat/'))) firstError(`${response.status()} ${pathname}`);
+      && !(expectedChatDenial && response.status() === 403 && pathname.includes('/api/conversations'))) firstError(`${response.status()} ${pathname}`);
   });
   page.setDefaultTimeout(10_000);
   async function save(name, fullPage = true) {

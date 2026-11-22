@@ -145,7 +145,7 @@ test('a button, or the message box around it, shows one focus ring',
         sandbox.addCleanup(() => context.close());
         await context.route('**/*', request => request.request().url().startsWith(base + '/') ? request.continue() : request.abort());
         await context.route(base + '/_assets/vendor/chart.umd.js', request => request.fulfill({ path: chartAsset, contentType: 'text/javascript' }));
-        await context.route(base + '/api/chat/conversations/*/messages*', async request => {
+        await context.route(base + '/api/conversations/*/messages*', async request => {
           const answer = await (await request.fetch()).json();
           const reply = answer.items?.find(item => item.direction === 'out');
           if (reply) reply.attachments = [{ id: 'plan', name: '方案资料.pdf', kind: 'file', available: true, size: 84 }];

@@ -1481,7 +1481,7 @@ test('fleet chat language headers preserve legacy remote query contracts', { tim
     proxy.handle(req, res, new URL(req.url, 'http://hub.test'));
   });
   t.after(async () => { hub.server.closeAllConnections(); await hub.close(); });
-  for (const route of ['/api/chat/conversations?tab=mine&limit=50', '/api/chat/conversations/group/messages?tab=mine&limit=50&direction=after']) {
+  for (const route of ['/api/conversations?tab=mine&limit=50', '/api/conversations/group/messages?tab=mine&limit=50&direction=after']) {
     const oldQuery = await fetch(hub.origin + '/fleet/Legacy' + route + '&locale=en');
     assert.equal(oldQuery.status, 400); await oldQuery.arrayBuffer();
     for (const locale of ['zh', 'en']) {
@@ -1772,7 +1772,7 @@ test('fleet migrates object writes and exposes remote chat policy to read caller
     assert.equal(response.status, 200, route);
     assert.deepEqual(seen.at(-1), ['GET', route]);
   }
-  for (const route of ['/api/chat/conversations', '/api/observer/history/sessions?session_group=telegram%3Ateam']) {
+  for (const route of ['/api/conversations', '/api/observer/history/sessions?session_group=telegram%3Ateam']) {
     const count = seen.length;
     const denied = await request(route, 'GET', { 'x-test-scope': 'read' });
     assert.equal(denied.status, 403, route);

@@ -9,11 +9,12 @@ import { isChatDataRoute, requireChatAccess, requireChatWrite, requireChatWriteP
 import { handleChatSettings } from '../../src/lib/chat/settings.js';
 
 export const chatRoutes = [
-  ...['/api/chat/conversations', ...['messages', 'status', 'questions'].map(kind => `/api/chat/conversations/local-chat/${kind}`)]
+  ...['/api/conversations', ...['messages', 'status', 'questions'].map(kind => `/api/conversations/local-chat/${kind}`)]
     .map(path => ({ method: 'GET', path })),
-  { method: 'POST', path: '/api/chat/drafts' },
-  { method: 'PUT', path: '/api/chat/pins' },
-  ...['send', 'answers'].map(kind => ({ method: 'POST', path: `/api/chat/conversations/local-chat/${kind}` })),
+  { method: 'POST', path: '/api/conversations/drafts' },
+  { method: 'PUT', path: '/api/conversations/pins' },
+  { method: 'PUT', path: '/api/conversations/g%3A64617368626F6172643A6C6F63616C2D63686174/read' },
+  ...['send', 'answers'].map(kind => ({ method: 'POST', path: `/api/conversations/local-chat/${kind}` })),
 ];
 export const tokens = { read: `zylos_st_${'a'.repeat(64)}`, admin: `zylos_st_${'b'.repeat(64)}` };
 const cookie = 'isolated-browser-session';
@@ -65,7 +66,7 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
         }
         if (isChatDataRoute(req.method, url.pathname)) {
           const denied = req.method === 'GET' ? requireChatAccess(req, auth, settings) :
-            url.pathname === '/api/chat/pins' ? requireChatWritePreflight(req, auth, settings) :
+            req.method === 'PUT' ? requireChatWritePreflight(req, auth, settings) :
               requireChatWrite(req, auth, settings, { mode, draft: url.pathname.endsWith('/drafts'),
               conversation: record, namespace: owner.namespace, localId: owner.localId });
           if (denied) { const { status, ...body } = denied; sendJson(res, status, body); return; }
