@@ -1,6 +1,8 @@
-// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/dashboard/src/lib/auth.js skills/dashboard/src/lib/store.js skills/dashboard/src/lib/version-checker.js skills/dashboard/src/lib/workbench/group-snapshot.js skills/dashboard/src/lib/core-state.js skills/dashboard/src/index.js skills/dashboard/src/lib/ skills/dashboard/public/themes/ skills/dashboard/public/index.html skills/dashboard/public/manifest.json skills/dashboard/public/icons/ skills/dashboard/__tests__/helpers/explicit-migration.js skills/dashboard/__tests__/fixtures/schema13.js skills/dashboard/__tests__/fixtures/memory-installation.js skills/dashboard/__tests__/fixtures/fleet-object-api.js skills/dashboard/__tests__/helpers/dashboard-sign-in.js
+// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/dashboard/src/lib/auth.js skills/dashboard/src/lib/store.js skills/dashboard/src/lib/version-checker.js skills/dashboard/src/lib/workbench/group-snapshot.js skills/dashboard/src/lib/core-state.js skills/dashboard/src/index.js skills/dashboard/src/lib/ skills/dashboard/public/themes/ skills/dashboard/public/index.html skills/dashboard/public/manifest.json skills/dashboard/public/icons/ skills/dashboard/__tests__/helpers/explicit-migration.js skills/dashboard/__tests__/fixtures/schema13.js skills/dashboard/__tests__/fixtures/memory-installation.js skills/dashboard/__tests__/fixtures/fleet-object-api.js skills/dashboard/__tests__/helpers/dashboard-sign-in.js skills/dashboard/__tests__/helpers/fleet-restart-server.js
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { fork } from 'node:child_process';
+import { once } from 'node:events';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -1670,6 +1672,7 @@ test('the Fleet routes page 20 machines, preserve the summary and reject invalid
     const wall = '/api/fleet', settings = wall + '/agents';
     const observed = [];
     let cursor = null;
+    let wallCursor;
     for (const size of [8, 8, 4]) {
       const params = new URLSearchParams({ limit: '8', include: 'total' });
       if (cursor) params.set('cursor', cursor);
@@ -1681,6 +1684,7 @@ test('the Fleet routes page 20 machines, preserve the summary and reject invalid
       assert.equal(page.summary.daily_cost, 0);
       assert.doesNotMatch(JSON.stringify(page), /zylos_ak_secret|read_api_key|read_session_token/);
       cursor = page.nextCursor;
+      wallCursor ??= cursor;
       observed.push(...page.items.map(agent => agent.name));
     }
     assert.equal(cursor, null);
@@ -1706,8 +1710,32 @@ test('the Fleet routes page 20 machines, preserve the summary and reject invalid
       assert.equal((await get(route + '?cursor=bad', 400)).error.code, 'invalid_cursor');
     }
     assert.equal((await get(wall + '?cursor=' + encodeURIComponent(first.nextCursor), 400)).error.code, 'invalid_cursor');
-  } finally {
     await closeServer(server);
+    const restarted = fork(new URL('./helpers/fleet-restart-server.js', import.meta.url), [], {
+      env: { ...process.env, ZYLOS_DIR: zylosDir, DASHBOARD_PORT: '0' }, silent: true,
+    });
+    try {
+      const [{ origin: restartedOrigin }] = await once(restarted, 'message', { signal: AbortSignal.timeout(8000) });
+      const restartedHeaders = { Cookie: await signIn(restartedOrigin, 'secret') };
+      for (const [route, oldCursor] of [[wall, wallCursor], [settings, first.nextCursor]]) {
+        const stale = await fetch(restartedOrigin + route + '?cursor=' + encodeURIComponent(oldCursor), {
+          headers: restartedHeaders, signal: AbortSignal.timeout(3000),
+        });
+        assert.equal(stale.status, 400);
+        assert.equal((await stale.json()).error.code, 'invalid_cursor');
+        const fresh = await fetch(restartedOrigin + route + '?limit=8', { headers: restartedHeaders, signal: AbortSignal.timeout(3000) });
+        assert.equal(fresh.status, 200);
+        assert.equal((await fresh.json()).items.length, 8);
+      }
+    } finally {
+      if (restarted.exitCode === null && restarted.signalCode === null) {
+        const exit = once(restarted, 'exit', { signal: AbortSignal.timeout(5000) });
+        if (restarted.connected) restarted.disconnect();
+        try { await exit; } catch (error) { restarted.kill('SIGKILL'); throw error; }
+      }
+    }
+  } finally {
+    if (server.listening) await closeServer(server);
     fs.rmSync(zylosDir, { recursive: true, force: true });
   }
 });
