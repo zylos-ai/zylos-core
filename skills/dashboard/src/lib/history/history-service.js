@@ -4,6 +4,7 @@ import { ClaudeHistory } from './claude-history.js';
 import { CodexHistory } from './codex-history.js';
 import { createHistoryScope } from './history-scope.js';
 import { createRedactor } from '../redaction/engine.js';
+import { BOOLEAN, listErrorBody, listFailure, parseListQuery } from '../list-query.js';
 
 // Transcript readers exist only for these runtimes. Other runtimes have no
 // imported history yet and must never inherit another runtime's file reader.
@@ -19,6 +20,39 @@ const SEARCH_BYTES = 20 * 1024 * 1024;
 const SAFE_FAILURE = '此内容暂时无法安全显示';
 const INLINE_MEDIA = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const ROUTES = new Set(['sessions', 'entries', 'content', 'search']);
+const LIST_ROUTES = new Set(['sessions', 'entries']);
+const nonempty = value => value && value.length <= 200 ? value : undefined;
+const sessionId = value => nonempty(value) && /^[a-zA-Z0-9][a-zA-Z0-9_-]*(?:\/agent-[a-zA-Z0-9_-]+)?$/.test(value) ? value : undefined;
+const entryId = value => /^o:(0|[1-9]\d*)(?::(0|[1-9]\d*))?$/.test(value) &&
+  value.slice(2).split(':').every(part => Number.isSafeInteger(Number(part))) ? value : undefined;
+
+function historyListQuery(route, params) {
+  const filters = { session_group: nonempty };
+  const extras = {};
+  const normalized = new URLSearchParams(params);
+  if (!normalized.has('session_group')) normalized.set('session_group', 'origin');
+  if (route === 'entries') {
+    filters.session = sessionId;
+    filters.internal = BOOLEAN;
+    extras.direction = ['before', 'after'];
+    extras.anchor = entryId;
+    if (!normalized.has('internal')) normalized.set('internal', 'false');
+  }
+  const query = parseListQuery(`observer/history/${route}`, normalized, { filters, extras });
+  if (route === 'entries' && !query.filters.session) throw listFailure(400, 'invalid_parameter', 'session is required', 'session');
+  if (query.after !== null && query.extras.anchor) throw listFailure(400, 'invalid_parameter', 'anchor is only allowed on the first page', 'anchor');
+  return query;
+}
+
+function compareSessionKeys(left, right) {
+  return (right[0] < left[0] ? -1 : right[0] > left[0] ? 1 : 0) ||
+    (left[1] < right[1] ? -1 : left[1] > right[1] ? 1 : 0);
+}
+
+const sessionKey = item => [isoTimestamp(item.updatedAt) ?? '', item.id];
+const entryKey = id => id ? id.slice(2).split(':').map(Number) : [-1];
+const compareEntryKeys = ([leftLine, leftBlock = -1], [rightLine, rightBlock = -1]) =>
+  leftLine - rightLine || leftBlock - rightBlock;
 
 class HistoryError extends Error {
   constructor(status, code) { super(code); this.status = status; this.code = code; }
@@ -123,19 +157,29 @@ export class HistoryService {
     return out;
   }
 
-  async sessions() {
-    const listing = await this.parser.listSessions();
-    const sessions = [];
-    for (const item of listing.sessions) {
+  async sessions(params = new URLSearchParams(), query = historyListQuery('sessions', params),
+    listings = null, runtime = this.runtime) {
+    listings ??= [await this.parser.listSessions()];
+    const current = listings.find(listing => listing.current)?.current ?? null;
+    const unique = new Map();
+    for (const listing of listings) {
+      for (const item of listing.sessions) if (!unique.has(item.id)) unique.set(item.id, { item, key: sessionKey(item) });
+    }
+    const matches = [...unique.values()].sort((left, right) => compareSessionKeys(left.key, right.key));
+    const page = matches.filter(({ key }) => query.after === null || compareSessionKeys(key, query.after) > 0).slice(0, query.limit + 1);
+    const more = page.length > query.limit;
+    if (more) page.pop();
+    const items = [];
+    for (const { item, key: [updatedAt] } of page) {
       const out = {};
-      for (const key of ['id', 'parentId', 'kind', 'title', 'startedAt', 'updatedAt', 'bytes']) {
+      for (const key of ['id', 'kind', 'title']) {
         if (item[key] === undefined) continue;
         out[key] = typeof item[key] === 'string' ? (await this.safe(item[key], `session:${item.id}:${key}`)).text : item[key];
         if (key === 'title' && typeof out[key] === 'string') out[key] = out[key].slice(0, 120);
       }
-      sessions.push(out);
+      items.push({ ...out, updatedAt: updatedAt || null });
     }
-    return { runtime: this.runtime, current: listing.current || null, sessions };
+    return { runtime, current, items, nextCursor: more ? query.nextCursor(page.at(-1).key) : null };
   }
 
   async session(params) {
@@ -146,32 +190,43 @@ export class HistoryService {
     return { id, ...await this.parser.loadSession(id) };
   }
 
-  async entries(params) {
-    const limit = integer(params, 'limit', 50, 200);
-    if (!limit) throw new HistoryError(400, 'invalid_limit');
-    const modes = ['before', 'after', 'around'].filter((key) => params.has(key));
-    if (modes.length > 1 || (params.has('internal') && !['0', '1'].includes(params.get('internal')))) throw new HistoryError(400, 'invalid_parameters');
+  async entries(params, query = historyListQuery('entries', params)) {
     const session = await this.session(params);
     const all = session.entries;
-    const visible = (entry) => params.get('internal') === '1' || entry.kind !== 'internal';
-    const mode = modes[0];
-    let anchor = mode ? position(all, session.index, params.get(mode)) : all.length;
-    if (anchor < 0) anchor = all.length;
-    let selected;
-    if (mode === 'after') selected = all.slice(anchor + 1).filter(visible).slice(0, limit);
-    else if (mode === 'around') {
-      const older = all.slice(0, anchor).filter(visible).slice(-Math.floor(limit / 2));
-      selected = [...older, ...all.slice(anchor).filter(visible).slice(0, limit - older.length)];
-    } else selected = all.slice(0, anchor).filter(visible).slice(-limit);
-    const entries = await Promise.all(selected.map((entry) => this.publicEntry(entry, session.id, session.generation)));
-    const first = selected.length ? all.indexOf(selected[0]) : anchor;
-    const last = selected.length ? all.indexOf(selected.at(-1)) : anchor;
-    const hasNewer = all.slice(last + 1).some(visible);
-    const after = hasNewer ? selected.at(-1)?.id || params.get('after') : all.at(-1)?.id || null;
+    const visible = query.filters.internal ? all : all.filter(entry => entry.kind !== 'internal');
+    const { anchor, direction = 'before' } = query.extras;
+    const boundary = entryKey(query.after);
+    const indexOf = predicate => {
+      const index = visible.findIndex(entry => predicate(entryKey(entry.id)));
+      return index < 0 ? visible.length : index;
+    };
+    let start, end;
+    if (anchor) {
+      try { position(all, session.index, anchor); }
+      catch { throw listFailure(400, 'invalid_parameter', 'Unknown history anchor', 'anchor'); }
+      const at = indexOf(key => compareEntryKeys(key, entryKey(anchor)) >= 0);
+      start = Math.max(0, Math.min(at - Math.floor(query.limit / 2), visible.length - query.limit));
+      end = Math.min(start + query.limit, visible.length);
+    } else if (direction === 'after' && query.after !== null) {
+      start = indexOf(key => compareEntryKeys(key, boundary) > 0);
+      end = Math.min(start + query.limit, visible.length);
+    } else {
+      end = query.after === null ? visible.length : indexOf(key => compareEntryKeys(key, boundary) >= 0);
+      start = Math.max(0, end - query.limit);
+    }
+    const selected = visible.slice(start, end);
+    const project = entry => this.publicEntry(entry, session.id, session.generation);
+    const afterId = end < visible.length ? selected.at(-1)?.id ?? query.after : all.at(-1)?.id ?? '';
     // Tool results may arrive after the call's original page was fetched. Send
     // replacements by stable id as well as the newly appended records.
-    const updates = mode === 'after' ? await Promise.all(all.slice(0, anchor + 1).filter((entry) => ['tool', 'outbound'].includes(entry.kind) && entry.updatedOffset > Number(params.get('after').split(':')[1])).map((entry) => this.publicEntry(entry, session.id, session.generation))) : [];
-    return { entries, updates, before: selected[0]?.id || null, after, hasOlder: all.slice(0, first).some(visible), hasNewer };
+    const updates = direction === 'after' && query.after !== null ? all.filter(entry =>
+      entry.updatedOffset > boundary[0] && compareEntryKeys(entryKey(entry.id), boundary) <= 0) : [];
+    return {
+      items: await Promise.all(selected.map(project)),
+      updates: await Promise.all(updates.map(project)),
+      nextCursor: start > 0 ? query.nextCursor(selected[0]?.id ?? query.after) : null,
+      afterCursor: query.nextCursor(afterId),
+    };
   }
 
   async content(params) {
@@ -276,6 +331,7 @@ export class HistoryService {
     try {
       if (!ROUTES.has(route)) throw new HistoryError(404, 'not_found');
       if (req.method !== 'GET') throw new HistoryError(404, 'not_found');
+      const query = LIST_ROUTES.has(route) ? historyListQuery(route, url.searchParams) : undefined;
       let service = this;
       if (this.resolveScope) {
         const scope = await this.resolveScope(url.searchParams, route);
@@ -283,11 +339,8 @@ export class HistoryService {
         const scopes = scope.scopes ?? [scope];
         if (route === 'sessions') {
           const listings = await Promise.all(scopes.map(async candidate =>
-            (await this.scopedService(group, candidate, route)).sessions()));
-          const current = listings.find(listing => listing.current)?.current ?? null;
-          const sessions = listings.flatMap(listing => listing.sessions);
-          if (listings.length > 1) sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-          sendJson(res, 200, { runtime: scope.runtime, current, sessions });
+            (await this.scopedService(group, candidate, route)).parser.listSessions()));
+          sendJson(res, 200, await this.sessions(url.searchParams, query, listings, scope.runtime));
           return true;
         }
         for (const candidate of scopes) {
@@ -295,7 +348,7 @@ export class HistoryService {
           if (service.parser.paths.has(url.searchParams.get('session'))) break;
         }
       }
-      const result = route === 'sessions' ? await service.sessions() : await service[route](url.searchParams);
+      const result = await service[route](url.searchParams, query);
       if (result.binary) {
         const { data, mimeType } = result.binary;
         const mime = INLINE_MEDIA.has(mimeType) ? mimeType : 'application/octet-stream';
@@ -303,6 +356,14 @@ export class HistoryService {
         res.end(data);
       } else sendJson(res, 200, result);
     } catch (error) {
+      if (LIST_ROUTES.has(route)) {
+        const failure = ['invalid_parameter', 'invalid_cursor'].includes(error.code) ? error
+          : error.code === 'invalid_session_group' ? listFailure(400, 'invalid_parameter', 'Invalid session group', 'session_group')
+            : error.status === 404 && error instanceof HistoryError ? listFailure(404, 'not_found', 'History resource not found')
+              : listFailure(503, 'unavailable', 'History could not be read');
+        sendJson(res, failure.statusCode, listErrorBody(failure));
+        return true;
+      }
       // Never reflect exception text or record-controlled paths into errors.
       const known = error instanceof HistoryError || ['invalid_session_group', 'group_catalog_unreadable'].includes(error.code);
       sendJson(res, known ? error.status : 503, { error: known ? error.code : 'history_unavailable' });

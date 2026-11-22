@@ -76,6 +76,7 @@ export default {
     '<rootDir>/test/owned-removal-callers.integration.test.js',
     '<rootDir>/test/test-environment-cleanup.test.js',
     '<rootDir>/test/history-reminders.integration.test.js',
+    '<rootDir>/test/observer-history-pagination.test.js',
     '<rootDir>/test/chat-quote.integration.test.js',
     '<rootDir>/test/origin-conversation.integration.test.js',
     '<rootDir>/test/web-console-process.integration.test.js',

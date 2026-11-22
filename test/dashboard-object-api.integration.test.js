@@ -326,16 +326,18 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       runtime: 'claude', event_type: 'session_start', category: 'lifecycle' });
     const rejected = await request('/api/observer/history/sessions?session_group=nosuch%3Agroup',
       { identity: 'cookie', expected: 400 });
-    assert.equal(rejected.error.code, 'invalid_session_group');
+    assert.equal(rejected.error.code, 'invalid_parameter');
+    assert.equal(rejected.error.param, 'session_group');
     const offline = await request('/api/groups/telegram%3Aoffline-0?include=', { identity: 'cookie' });
     assert.equal(offline.state.kind, 'offline');
     const history = await request('/api/observer/history/sessions?session_group=telegram%3Aoffline-0', { identity: 'cookie' });
     assert.equal(history.current, null);
-    assert.ok(history.sessions.some(session => session.id === sessionId), 'Catalogued offline history stays visible');
+    assert.ok(history.items.some(session => session.id === sessionId), 'Catalogued offline history stays visible');
     writeMode('single');
     const single = await request('/api/observer/history/sessions?session_group=telegram%3Aoffline-0',
       { identity: 'cookie', expected: 400 });
-    assert.equal(single.error.code, 'invalid_session_group');
+    assert.equal(single.error.code, 'invalid_parameter');
+    assert.equal(single.error.param, 'session_group');
   });
   const retired = ['/api/health?probe=ready', '/api/state', '/api/restart-status', '/api/session-mode', '/api/instance-status', '/api/timeline', '/api/system', '/api/summary', '/api/communication',
     '/api/metrics/history/cpu_pct', '/api/metrics/aggregate', '/api/metrics/cpu_pct', '/api/metrics/series', '/api/actions/meta', '/api/actions/interrupt', '/api/actions/chop-chop',

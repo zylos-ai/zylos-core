@@ -319,3 +319,11 @@ red button, and cancelling sends nothing. A change's result shows in the card
 that made it. Long names wrap and actions move below the text on narrow screens.
 Verify both languages and themes at 1280 px and 390 px, including action labels,
 focus, and the allowlist field with its list open.
+
+### Terminal history
+
+The session selector keeps the server's most-recently-updated order. The
+adjacent Load more sessions button appends the next page without changing the
+selected session. Its frame aligns with the select on desktop; at narrow
+widths it wraps below the select. The timeline starts at its newest page and
+prepends earlier entries without moving the reader's scroll position.
