@@ -67,7 +67,7 @@ const FLEET_RECORD = [
 ];
 const FLEET = [...beneath('self', FLEET_RECORD), ...beneath('agents.*', FLEET_RECORD)];
 const EVENTS = ms('events.*.timestamp', 'gaps.*.timestamp', 'events.*.metadata.pasted_at');
-const MEMORY = ms('firstAt', 'groups.*.firstAt', 'originSync.firstAt', 'commit.author_date', 'mtime');
+const MEMORY = ms('firstAt', 'items.*.firstAt', 'originSync.firstAt', 'commit.author_date', 'mtime');
 
 function mapPath(value, segments, unit, convert = isoTimestamp) {
   if (!segments.length) return convert(value, unit);
@@ -105,7 +105,7 @@ export function projectApiTimestamps(pathname, value) {
   if (pathname === '/api/auth/token') return project(value, ms('expires_at'));
   if (pathname === '/api/keys' || pathname.startsWith('/api/keys/')) return project(value,
     ms('created_at', 'last_used_at', 'revoked_at', 'key.created_at', 'key.last_used_at', 'key.revoked_at',
-      'keys.*.created_at', 'keys.*.last_used_at', 'keys.*.revoked_at'));
+      'items.*.created_at', 'items.*.last_used_at', 'items.*.revoked_at'));
   if (pathname.startsWith('/api/chat/')) return project(value, [...CHAT, ...ACTIVITY]);
   if (pathname === '/api/observer/history/sessions') return project(value, ms('items.*.updatedAt'));
   if (pathname === '/api/observer/history/entries') return project(value, ms('items.*.ts', 'updates.*.ts'));

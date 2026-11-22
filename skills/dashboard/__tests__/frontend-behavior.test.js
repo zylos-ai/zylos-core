@@ -1521,7 +1521,7 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(app, /fetch\(api\('\/api\/fleet\/agents'\), \{ cache: 'no-store' \}\)/);
   assert.match(app, /fetch\(api\('\/api\/fleet\/agents\/test'\), \{/);
   assert.match(app, /fetch\(api\('\/api\/instance\/name'\), \{/);
-  assert.match(app, /fetch\(api\('\/api\/keys'\), \{ cache: 'no-store' \}\)/);
+  assert.match(app, /fetch\(api\(`\/api\/keys\?\$\{params\}`\), \{ cache: 'no-store' \}\)/);
   assert.match(app, /fetch\(api\('\/api\/keys'\), \{/);
   // Which request each key action makes is decided by keyActionRequest (wb-settings-wiring tests); the app sends it as built,
   // to this machine's own keys (no agentPath).
@@ -1545,9 +1545,10 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(app, /function renderCreatedApiKey\(createdKey\)/);
   assert.match(app, /fleetManageModal\._createdKey = createdKey \|\| null/);
   // What a key request sends and shows is decided in settings-wiring (wb-settings-wiring tests); the app only hands it the page.
-  assert.match(app, /renderKeys: renderApiKeys, renderCreated: renderCreatedApiKey, createdKey: \(\) => fleetManageModal\?\._createdKey \?\? null,/);
+  assert.match(app, /reload: \(\) => keyList\?\.refresh\(\), renderCreated: renderCreatedApiKey, createdKey: \(\) => fleetManageModal\?\._createdKey \?\? null,/);
   assert.match(app, /function purgeRevokedApiKeys\(\)/);
-  assert.match(app, /renderKeyTable\(fleetManageModal\.querySelector\('#api-key-list'\), keys/);
+  assert.match(app, /const root = fleetManageModal\.querySelector\('#api-key-list'\);/);
+  assert.match(app, /else settingsWiring\(\)\.renderKeyTable\(root, keys\);/);
   assert.match(app, /replace_created_key_confirm/);
   // Destructive key and machine actions confirm in the dashboard's own dialog, never the browser prompt.
   assert.doesNotMatch(app, /window\.confirm/);

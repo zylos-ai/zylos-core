@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { createDocument, allNodes, deferred } from './fixtures/workbench-dom.js';
 import { memoryBacklogView, memoryBacklogAge, memoryBacklogValueWidth, leaveMemoryConflict, memoryFileScope, memoryFlatFiles, memoryUpkeepNotice, memoryScope, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, applyMemorySave, memoryWriteAllowed, applyMemoryWriteAccess, renderMemoryPreservingEditor, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } from '../public/js/wb/memory-scope.js';
 import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
+import { memoryBacklogPage, parseBacklogQuery } from '../src/lib/workbench/memory-backlog.js';
 
 // Direct product imports and injected DOM/request. Run for memory scope, charts,
 // save-result interpretation or selection changes; skip unrelated collectors.
@@ -20,13 +21,24 @@ function tree() {
 }
 const startupBudgets = () => ({ limits: BUDGETS, warnings: WARN_THRESHOLDS, checks: { 'identity.md': measureMemoryText('identity.md', 'a'.repeat(17000)), 'references.md': measureMemoryText('references.md', 'a'.repeat(8000)) } });
 const nodesOfClass = (root, className) => allNodes(root).filter(node => node.className.split(' ').includes(className));
+// Each case lists every group; the page reads them through the server's own ordering, search and paging.
+const backlogPage = (value, path) => memoryBacklogPage({ groups: value.groups ?? [],
+  budgets: value.budgets ?? null, ...(value.originSync ? { originSync: value.originSync } : {}) },
+parseBacklogQuery(new URL(path, 'http://dashboard').searchParams));
+const served = read => async path => {
+  const value = await read(path);
+  return path.startsWith('/api/memory/backlog') ? backlogPage(value, path) : value;
+};
+// The backlog filter asks the server once typing pauses.
+const typed = () => new Promise(resolve => setTimeout(resolve, 350));
 function fixture(options = {}) {
   const document = createDocument(), root = document.createElement('div'), chartsRoot = document.createElement('div');
   const groups = [], files = [], changes = [];
   let data = tree();
   const controller = createMemoryScope({ document, root, chartsRoot, t, getTree: () => data,
-    request: async () => ({ groups: [], hasOlder: false }), onGroup: path => groups.push(path), onFile: path => files.push(path),
-    onChange: () => { changes.push(true); controller.render(); }, ...options });
+    onGroup: path => groups.push(path), onFile: path => files.push(path),
+    onChange: () => { changes.push(true); controller.render(); }, ...options,
+    request: served(options.request ?? (async () => ({ groups: [] }))) });
   controller.render();
   return { document, root, chartsRoot, groups, files, changes, controller, setTree: value => { data = value; } };
 }
@@ -76,7 +88,7 @@ test('technical charts show each threshold, unknown readings, age, Core budgets 
       { sessionGroup: 'telegram:dm-1001', count: 20, threshold: 15, syncing: true, aged: true },
       { sessionGroup: 'openmax:other', count: 3, threshold: 50, syncing: null },
       { sessionGroup: 'other', count: null, threshold: null, syncing: false, reason: '<script>' },
-    ], hasOlder: true, budgets: startupBudgets(),
+    ], budgets: startupBudgets(),
   }) });
   await f.controller.load();
   assert.equal(f.chartsRoot.hidden, false);
@@ -93,7 +105,7 @@ test('technical charts show each threshold, unknown readings, age, Core budgets 
 });
 
 test('backlog rows: waiting groups first, then by pending count, groups with nothing pending set apart', () => {
-  const view = memoryBacklogView([
+  const page = backlogPage({ groups: [
     { sessionGroup: 'quiet', count: 0, syncing: false, threshold: 15 },
     { sessionGroup: 'few', count: 3, syncing: false, threshold: 15 },
     { sessionGroup: 'unknown', count: null, syncing: null, threshold: 15 },
@@ -102,11 +114,12 @@ test('backlog rows: waiting groups first, then by pending count, groups with not
     { sessionGroup: 'old-big', count: 9, aged: true, firstAt: '2026-11-02 00:00:00', syncing: false, threshold: 15 },
     { sessionGroup: 'zero-syncing', count: 0, syncing: true, threshold: 15 },
     { sessionGroup: 'origin', count: 0, syncing: false, threshold: 30 },
-  ]);
+  ] }, '/api/memory/backlog');
+  const view = memoryBacklogView(page.items, page.summary.threshold);
   assert.deepEqual(view.active.map(row => row.sessionGroup), ['old-big', 'old-small', 'many', 'few', 'zero-syncing', 'unknown']);
-  assert.deepEqual(view.quiet.map(row => row.sessionGroup), ['quiet', 'origin']);
+  assert.deepEqual(view.quiet.map(row => row.sessionGroup), ['origin', 'quiet'], 'quiet groups last, by ID');
   assert.equal(view.threshold, 15, 'the header names the threshold most groups share');
-  assert.equal(view.quiet[1].ownThreshold, 30, 'a group with another threshold keeps it on its row');
+  assert.equal(view.quiet[0].ownThreshold, 30, 'a group with another threshold keeps it on its row');
   assert.equal(view.active[0].ownThreshold, null);
   assert.equal(memoryBacklogView(null).threshold, null);
 });
@@ -124,7 +137,7 @@ test('backlog card: threshold in the header, age as a mark on its row, quiet gro
   const hoursAgo = h => new Date(Date.now() - h * 3600e3).toISOString();
   const groups = [{ sessionGroup: 'telegram:dm-1', displayName: 'Waiting long', count: 20, threshold: 15, syncing: false, aged: true, firstAt: hoursAgo(9.5) }];
   for (let i = 0; i < 12; i++) groups.push({ sessionGroup: `telegram:dm-q${i}`, displayName: `Quiet ${i}`, count: 0, threshold: 15, syncing: false });
-  const f = fixture({ detail: () => 'technical', request: async () => ({ groups, hasOlder: false }) });
+  const f = fixture({ detail: () => 'technical', request: async () => ({ groups }) });
   await f.controller.load();
   const card = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
   assert.match(card.textContent, /wb.memory.thresholdHint \{"count":15\}/);
@@ -144,15 +157,17 @@ test('backlog card: threshold in the header, age as a mark on its row, quiet gro
   rest.open = true; rest.dispatch('toggle');
   f.controller.render();
   assert.equal(nodesOfClass(f.chartsRoot, 'wb-memory-rest')[0].open, true, 'an opened fold stays open across refreshes');
+  rest.open = false; rest.dispatch('toggle'); f.controller.render();
+  assert.equal(nodesOfClass(f.chartsRoot, 'wb-memory-rest')[0].open, true, 'a late toggle from a fold drawn over changes nothing');
   const mountedCard = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
   const filter = allNodes(mountedCard).find(node => node.tagName === 'INPUT');
   assert.ok(filter, 'thirteen groups get a filter');
   assert.equal(filter, originalFilter, 'refresh keeps the live filter input mounted');
-  filter.value = 'quiet 1'; filter.dispatch('input');
+  filter.value = 'quiet 1'; filter.dispatch('input'); await typed();
   const card2 = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
   assert.deepEqual(nodesOfClass(card2, 'wb-memory-chart-label').map(node => node.textContent), ['Quiet 1', 'Quiet 10', 'Quiet 11'], 'a search lists matching quiet groups unfolded');
   assert.equal(nodesOfClass(card2, 'wb-memory-rest').length, 0);
-  filter.value = 'nothing'; filter.dispatch('input');
+  filter.value = 'nothing'; filter.dispatch('input'); await typed();
   assert.match(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0].textContent, /wb.memory.noMatch/);
   f.controller.destroy();
 });
@@ -179,7 +194,7 @@ test('the cross-group Origin row leads the backlog with its own count, threshold
     { sessionGroup: 'telegram:dm-1', count: 0, threshold: 15, syncing: false },
   ];
   const originSync = { count: 60, pendingSummaries: 2, firstAt: hoursAgo(8.5), aged: true, syncing: false, threshold: 50 };
-  const f = fixture({ detail: () => 'technical', request: async () => ({ groups, originSync, hasOlder: false }) });
+  const f = fixture({ detail: () => 'technical', request: async () => ({ groups, originSync }) });
   await f.controller.load();
   const card = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
   assert.match(card.textContent, /wb.memory.thresholdHintOrigin \{"count":15,"origin":50\}/,
@@ -207,7 +222,7 @@ test('the cross-group Origin row leads the backlog with its own count, threshold
   f.controller.destroy();
   const swapped = fixture({ detail: () => 'technical', request: async () => ({
     groups: [{ sessionGroup: 'origin', count: 3, threshold: 15, syncing: false }],
-    originSync: { ...originSync, aged: false, syncing: true }, hasOlder: false }) });
+    originSync: { ...originSync, aged: false, syncing: true } }) });
   await swapped.controller.load();
   const [crossRow, ownRow] = nodesOfClass(swapped.chartsRoot, 'wb-memory-bl');
   assert.equal(nodesOfClass(crossRow, 'wb-memory-bl-tag').some(node => node.textContent === 'wb.memory.originSyncing'), true);
@@ -218,8 +233,7 @@ test('the cross-group Origin row leads the backlog with its own count, threshold
 test('an unreadable cross-group backlog shows unknown on its row only, and single mode has no such row', async () => {
   const f = fixture({ detail: () => 'technical', request: async () => ({
     groups: [{ sessionGroup: 'telegram:dm-1', count: 20, threshold: 15, syncing: false }],
-    originSync: { count: null, pendingSummaries: null, firstAt: null, aged: false, syncing: null, threshold: 50, reason: 'origin_backlog_failed' },
-    hasOlder: false }) });
+    originSync: { count: null, pendingSummaries: null, firstAt: null, aged: false, syncing: null, threshold: 50, reason: 'origin_backlog_failed' } }) });
   await f.controller.load();
   const [cross, group] = nodesOfClass(f.chartsRoot, 'wb-memory-bl');
   assert.equal(nodesOfClass(cross, 'wb-memory-chart-value')[0].textContent, 'wb.unknown');
@@ -228,7 +242,7 @@ test('an unreadable cross-group backlog shows unknown on its row only, and singl
   assert.deepEqual(nodesOfClass(group, 'wb-memory-bl-tag').map(node => node.textContent), ['wb.memory.overThreshold']);
   f.controller.destroy();
   const single = fixture({ detail: () => 'technical', request: async () => ({
-    groups: [{ sessionGroup: 'telegram:dm-1', count: 2, threshold: 15, syncing: false }], hasOlder: false }) });
+    groups: [{ sessionGroup: 'telegram:dm-1', count: 2, threshold: 15, syncing: false }] }) });
   await single.controller.load();
   assert.equal(nodesOfClass(single.chartsRoot, 'wb-memory-bl-cross').length, 0);
   const singleCard = nodesOfClass(single.chartsRoot, 'wb-memory-progress')[0].textContent;
@@ -240,7 +254,7 @@ test('an unreadable cross-group backlog shows unknown on its row only, and singl
 test('the cross-group row name explains itself in plain words with its actual threshold', async () => {
   const label = async threshold => {
     const f = fixture({ detail: () => 'technical', request: async () => ({ groups: [],
-      originSync: { count: 4, pendingSummaries: 0, firstAt: null, aged: false, syncing: false, threshold }, hasOlder: false }) });
+      originSync: { count: 4, pendingSummaries: 0, firstAt: null, aged: false, syncing: false, threshold } }) });
     await f.controller.load();
     const title = nodesOfClass(f.chartsRoot, 'wb-memory-chart-label')[0].title;
     f.controller.destroy();
@@ -262,7 +276,7 @@ test('the ordinary summary reports a late or running cross-group sync', async ()
   const document = createDocument(), summaryRoot = document.createElement('div');
   const f = fixture({ document, summaryRoot, detail: () => 'plain', request: async () => ({
     groups: [{ sessionGroup: 'telegram:dm-1', count: 0, threshold: 15, syncing: false }],
-    originSync: { count: 60, pendingSummaries: 0, firstAt: null, aged: true, syncing: true, threshold: 50 }, hasOlder: false }) });
+    originSync: { count: 60, pendingSummaries: 0, firstAt: null, aged: true, syncing: true, threshold: 50 } }) });
   await f.controller.load();
   assert.match(summaryRoot.className, /\bwb-warn\b/);
   assert.match(summaryRoot.textContent, /wb.memory.summaryOriginLate/);
@@ -274,7 +288,7 @@ test('the ordinary summary is unknown when only the cross-group backlog cannot b
   const summaryWith = async originSync => {
     const document = createDocument(), summaryRoot = document.createElement('div');
     const f = fixture({ document, summaryRoot, detail: () => 'plain', request: async () => ({
-      groups: [{ sessionGroup: 'telegram:dm-1', count: 2, threshold: 15, syncing: false, aged: false }], originSync, hasOlder: false }) });
+      groups: [{ sessionGroup: 'telegram:dm-1', count: 2, threshold: 15, syncing: false, aged: false }], originSync }) });
     await f.controller.load();
     const text = summaryRoot.textContent;
     f.controller.destroy();
@@ -296,20 +310,20 @@ test('the ordinary summary is unknown when only the cross-group backlog cannot b
 test('a backlog search keeps the cross-group row only when its name matches', async () => {
   const groups = Array.from({ length: 12 }, (_, i) => ({ sessionGroup: `telegram:dm-q${i}`, displayName: `Quiet ${i}`, count: 0, threshold: 15, syncing: false }));
   const originSync = { count: 60, pendingSummaries: 2, firstAt: null, aged: false, syncing: false, threshold: 50 };
-  const f = fixture({ detail: () => 'technical', request: async () => ({ groups, originSync, hasOlder: false }) });
+  const f = fixture({ detail: () => 'technical', request: async () => ({ groups, originSync }) });
   await f.controller.load();
-  const search = value => {
+  const search = async value => {
     const filter = allNodes(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0]).find(node => node.tagName === 'INPUT');
-    filter.value = value; filter.dispatch('input');
+    filter.value = value; filter.dispatch('input'); await typed();
     const card = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
     return { cross: nodesOfClass(card, 'wb-memory-bl-cross').length, rows: nodesOfClass(card, 'wb-memory-bl').length,
       noMatch: /wb\.memory\.noMatch/.test(card.textContent) };
   };
   // The test translator returns keys, so the row's name reads `wb.memory.originSync`.
-  assert.deepEqual(search('ORIGINSYNC'), { cross: 1, rows: 1, noMatch: false }, 'a matching search keeps the row and is not "no match"');
-  assert.deepEqual(search('quiet 1'), { cross: 0, rows: 3, noMatch: false }, 'a group search hides the cross-group row');
-  assert.deepEqual(search('nothing'), { cross: 0, rows: 0, noMatch: true }, 'with neither matching, "no match" still shows');
-  assert.deepEqual(search(''), { cross: 1, rows: 13, noMatch: false }, 'clearing the search brings the row back');
+  assert.deepEqual(await search('ORIGINSYNC'), { cross: 1, rows: 1, noMatch: false }, 'a matching search keeps the row and is not "no match"');
+  assert.deepEqual(await search('quiet 1'), { cross: 0, rows: 3, noMatch: false }, 'a group search hides the cross-group row');
+  assert.deepEqual(await search('nothing'), { cross: 0, rows: 0, noMatch: true }, 'with neither matching, "no match" still shows');
+  assert.deepEqual(await search(''), { cross: 1, rows: 13, noMatch: false }, 'clearing the search brings the row back');
   f.controller.destroy();
 });
 
@@ -340,7 +354,7 @@ test('only a count past the threshold is labelled over it', async () => {
 });
 
 test('the header threshold is the one most groups share, not the first or the smallest', () => {
-  const view = thresholds => memoryBacklogView(thresholds.map((threshold, i) => ({ sessionGroup: `g${i}`, count: 1, threshold, syncing: false }))).threshold;
+  const view = thresholds => backlogPage({ groups: thresholds.map((threshold, i) => ({ sessionGroup: `g${i}`, count: 1, threshold, syncing: false })) }, '/api/memory/backlog').summary.threshold;
   assert.equal(view([30, 15, 15]), 15);
   assert.equal(view([10, 15, 15]), 15);
   assert.equal(view([15, 30]), 15, 'a tie goes to the smaller threshold');
@@ -438,7 +452,7 @@ test('save completion is fenced when the instance or selected file changes', asy
 
 test('a redraw after the detail level changes shows or hides the memory charts without reading again', async () => {
   let reads = 0;
-  const f = fixture({ request: async () => { reads++; return { groups: [] }; } });
+  const f = fixture({ request: async path => { if (path.startsWith('/api/memory/backlog')) reads++; return { groups: [] }; } });
   await f.controller.load(); assert.equal(f.chartsRoot.hidden, true);
   f.document.documentElement.dataset.detail = 'technical'; f.controller.render();
   assert.equal(f.chartsRoot.hidden, false); assert.equal(reads, 1);
@@ -697,12 +711,20 @@ test('memory files list flat per section, skip dot files and know their scope', 
   assert.deepEqual(memoryFileScope(value, 'session-groups/telegram:dm-1001'), { kind: 'invalid' });
 });
 
-test('the file list folds by section, keeps search results open and names the folding state', () => {
+test('the file list folds by section, keeps search results open and names the folding state', async () => {
   const collapsed = new Set(), toggled = [], listRoot = createDocument().createElement('div');
-  const f = fixture({ listRoot, isCollapsed: key => collapsed.has(key), toggleCollapsed: key => toggled.push(key) });
+  // The tree first answers without badges; once the backlog card has read the groups, the tree is read again.
+  const backlogRow = { sessionGroup: 'telegram:dm-1001', count: 12, threshold: 15, syncing: false };
+  const f = fixture({ listRoot, isCollapsed: key => collapsed.has(key), toggleCollapsed: key => toggled.push(key),
+    request: async path => path.startsWith('/api/memory/tree')
+      ? { sessionGroups: [{ sessionGroup: 'telegram:dm-1001', backlog: { count: backlogRow.count, syncing: false } }] } : { groups: [backlogRow] } });
   assert.deepEqual(f.controller.sectionKeys(), ['shared', 'session-groups/telegram:dm-1001']);
   f.controller.renderList();
   const heads = () => nodesOfClass(listRoot, 'wb-memory-section-h').concat(nodesOfClass(listRoot, 'wb-memory-group-h'));
+  assert.deepEqual(nodesOfClass(listRoot, 'wb-memory-count'), [], 'no badge before the backlog is read');
+  await f.controller.load();
+  assert.deepEqual(nodesOfClass(listRoot, 'wb-memory-count').map(node => node.textContent), [t('wb.memory.pending', { count: 12 })],
+    'after the backlog read the group shows the same pending count as the backlog card');
   assert.deepEqual(heads().map(node => node.attributes['aria-expanded']), ['true', 'true']);
   const paths = () => allNodes(listRoot).filter(node => node.dataset.path).map(node => node.dataset.path);
   assert.ok(paths().includes('state.md') && paths().includes('session-groups/telegram:dm-1001/handoff.md'));
@@ -808,7 +830,7 @@ test('the cross-group row name keeps the label layout without the link cursor or
 
 test('the backlog subtitle names the gathering threshold even when no group threshold is known', async () => {
   const f = fixture({ detail: () => 'technical', request: async () => ({ groups: [],
-    originSync: { count: 4, pendingSummaries: 0, firstAt: null, aged: false, syncing: false, threshold: 50 }, hasOlder: false }) });
+    originSync: { count: 4, pendingSummaries: 0, firstAt: null, aged: false, syncing: false, threshold: 50 } }) });
   await f.controller.load();
   assert.match(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0].textContent, /wb.memory.backlogHintOrigin \{"origin":50\}/);
   f.controller.destroy();

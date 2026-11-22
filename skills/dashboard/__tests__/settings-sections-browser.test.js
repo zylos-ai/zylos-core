@@ -7,6 +7,7 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 import { startPage } from './helpers/workbench-browser.js';
 import { openDashboardTab } from './helpers/browser-navigation.js';
 import { GROUP, workbenchAnswer } from './fixtures/workbench-browser-api.js';
+import { keyPage } from './fixtures/key-pages.js';
 
 // Boundary: the real settings page in a local browser with fixed API answers (the workbench fixture plus this case's
 // update check, keys, machines, prices and session hosting); writes are recorded and answered, nothing runs.
@@ -65,7 +66,7 @@ test('the settings page keeps its sections in order, offers the right upgrades a
           return route.fulfill({ json: value });
         }
         if (url.pathname === '/api/instance/actions/upgrade-runtime') return route.fulfill({ json: { ok: true } });
-        if (url.pathname === '/api/keys' && method === 'GET') return route.fulfill({ json: { keys: fixtures.keys } });
+        if (url.pathname === '/api/keys' && method === 'GET') return route.fulfill({ json: keyPage(fixtures.keys, url) });
         if (url.pathname === '/api/fleet/agents' && method === 'GET') return route.fulfill({ json: { self: { name: 'browser-case' }, agents: fixtures.machines } });
         if (url.pathname === '/api/settings/pricing' && method === 'PUT') return route.fulfill({ json: { ok: true } });
         if (url.pathname === '/api/settings/pricing' && method === 'GET') return route.fulfill({ json: { active: 'claude', runtimes: {
@@ -209,20 +210,25 @@ test('the settings page keeps its sections in order, offers the right upgrades a
         await list.locator(rowSelector).first().waitFor({ state: 'attached' });
         assert.match(await card.locator('.wb-set-card-sub').allTextContents().then(texts => texts.join(' ')), new RegExp(total), `${section}: the total beside the title`);
         const rows = () => list.locator(rowSelector).evaluateAll(nodes => nodes.filter(node => !node.hidden).length);
+        // The key list asks the server (after the typing pauses); the others page rows already on the page.
+        const rowsAre = async (count, message) => {
+          for (const end = Date.now() + 5000; await rows() !== count && Date.now() < end;) await page.waitForTimeout(50);
+          assert.equal(await rows(), count, message);
+        };
         const pager = card.locator('.wb-plist-pager'), search = card.locator('.wb-plist-search input');
         assert.equal(await rows(), 8, `${section}: eight on the first page`);
         assert.equal(await pager.locator('.wb-plist-at').textContent(), '第 1 / 2 页');
         const height = await list.evaluate(node => node.getBoundingClientRect().height);
         await pager.locator('.wb-plist-next').click();
-        assert.equal(await rows(), 3, `${section}: three on the second page`);
+        await rowsAre(3, `${section}: three on the second page`);
         assert.equal(await pager.locator('.wb-plist-at').textContent(), '第 2 / 2 页');
         assert.ok(Math.abs(await list.evaluate(node => node.getBoundingClientRect().height) - height) <= 1, `${section}: a shorter last page keeps the list height`);
         await search.fill(prefix + '1');
-        assert.equal(await rows(), 3, `${section}: the search finds ${prefix}1, ${prefix}10 and ${prefix}11 across both pages`);
-        assert.equal(await pager.isVisible(), false);
+        await rowsAre(3, `${section}: the search finds ${prefix}1, ${prefix}10 and ${prefix}11 across both pages`);
+        await pager.waitFor({ state: 'hidden' });
         await search.fill('不存在');
         await card.getByText('没有匹配的结果').waitFor();
-        assert.equal(await rows(), 0);
+        await rowsAre(0);
         await shot(`${section}-no-match`);
         await search.fill('');
       }

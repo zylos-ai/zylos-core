@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { confirmedRunner, keyActionRequest, wireSettingsConfirmations } from '../public/js/wb/settings-wiring.js';
+import { confirmedRunner, keyActionRequest, keyStillListed, wireSettingsConfirmations } from '../public/js/wb/settings-wiring.js';
 import { createSettingsLoader } from '../public/js/wb/settings.js';
 import { createActionRunner } from '../public/js/wb/action-runner.js';
 import { fleetPageOptions, renderFleetPage } from '../public/js/agent-fleet.js';
@@ -29,11 +29,11 @@ function page({ answer = true } = {}) {
 }
 
 // The page side of key requests: records each request as method and path, answers `answer`, and records what it shows.
-function keyRequests(sent, { answer = { ok: true, data: { keys: [] } }, created = null } = {}) {
-  const shown = { keys: [], created: [], status: [], busy: [] };
+function keyRequests(sent, { answer = { ok: true, data: {} }, created = null } = {}) {
+  const shown = { reloads: 0, created: [], status: [], busy: [] };
   const keyPage = {
     request: async (method, path) => { sent.push([method, path]); return typeof answer === 'function' ? answer(method, path) : answer; },
-    renderKeys: data => shown.keys.push(data), renderCreated: key => { shown.created.push(key); created = key; }, createdKey: () => created,
+    reload: () => { shown.reloads++; }, renderCreated: key => { shown.created.push(key); created = key; }, createdKey: () => created,
     status: (text, kind) => shown.status.push([text, kind]), busy: on => shown.busy.push(on), errorText: (code, fallback) => code ?? fallback,
   };
   return Object.assign(keyPage, { shown });
@@ -114,13 +114,13 @@ test('each key action sends its own request after the table confirms it', async 
 
 test('rotating a key shows the new key once, with the name the server gave it', async () => {
   const p = page(), sent = [];
-  const keyPage = keyRequests(sent, { answer: { ok: true, data: { keys: [{ name: 'ops' }], key: { name: 'ops' }, plaintext_key: 'zdk_new' } } });
+  const keyPage = keyRequests(sent, { answer: { ok: true, data: { key: { name: 'ops' }, plaintext_key: 'zdk_new' } } });
   const root = node(p.document, 'div');
   wired(p, { keyPage }).renderKeyTable(root, [{ name: 'ops', scope: 'admin', status: 'active' }]);
   await root.querySelector('.api-key-rotate').dispatch('click');
   assert.deepEqual(sent, [['POST', '/api/keys/ops/rotate']]);
   assert.deepEqual(keyPage.shown.created, [{ name: 'ops', plaintext_key: 'zdk_new' }], 'the new key is shown');
-  assert.deepEqual(keyPage.shown.keys, [{ keys: [{ name: 'ops' }], key: { name: 'ops' }, plaintext_key: 'zdk_new' }], 'the list is redrawn from the answer');
+  assert.equal(keyPage.shown.reloads, 1, 'the page shown is read again from the server');
   assert.deepEqual(keyPage.shown.status.at(-1), ['fleet_manage.key_rotated_status', 'success']);
   assert.deepEqual(keyPage.shown.busy, [true, false]);
 });
@@ -149,7 +149,7 @@ test('revoking the key that is shown hides it; a refused request shows why and c
   const other = node(p.document, 'div');
   wired(p, { keyPage: refused }).renderKeyTable(other, [{ name: 'ops', scope: 'admin', status: 'active' }]);
   await other.querySelector('.api-key-rotate').dispatch('click');
-  assert.deepEqual(refused.shown.keys, []); assert.deepEqual(refused.shown.created, []);
+  assert.equal(refused.shown.reloads, 0); assert.deepEqual(refused.shown.created, []);
   assert.deepEqual(refused.shown.status.at(-1), ['must_revoke_first', 'error']);
   assert.deepEqual(refused.shown.busy, [true, false]);
 });
@@ -163,6 +163,15 @@ test('revoking a different key keeps the new key that is shown once', async () =
   assert.deepEqual(sent, [['DELETE', '/api/keys/ops']], 'the other key is revoked');
   assert.deepEqual(keyPage.shown.created, [], 'the shown key is not hidden');
   assert.deepEqual(keyPage.createdKey(), { name: 'ci', plaintext_key: 'zdk_ci' });
+});
+
+test('after clearing revoked keys, the key shown once counts as gone only when its exact name is no longer listed', async () => {
+  const pages = { null: { items: [{ name: 'ci-old' }, { name: 'ci-older' }], nextCursor: 'next' }, next: { items: [{ name: 'ci' }], nextCursor: null } };
+  const asked = [];
+  const readPage = async query => { asked.push(query); return pages[query.cursor]; };
+  assert.equal(await keyStillListed(readPage, 'ci'), true, 'found on the second page of the name search');
+  assert.deepEqual(asked, [{ q: 'ci', cursor: null, limit: 100 }, { q: 'ci', cursor: 'next', limit: 100 }]);
+  assert.equal(await keyStillListed(async () => ({ items: [{ name: 'ci-old' }], nextCursor: null }), 'ci'), false, 'a longer name is not the key');
 });
 
 test('key requests: revoking keeps the key, deleting removes it for good, rotating shows the new key once', () => {

@@ -82,7 +82,7 @@ test('chat, observer, fleet and key projections keep user content and identifier
   assert.deepEqual(projected.items[0].content, chat.items[0].content);
   assert.equal(projected.items[0].id, 1700000000);
   assert.equal(projectApiTimestamps('/api/observer/leases', { expiresAt: at }).expiresAt, iso);
-  assert.equal(projectApiTimestamps('/api/keys', { keys: [{ created_at: '2026-11-16 02:03:04' }] }).keys[0].created_at, iso);
+  assert.equal(projectApiTimestamps('/api/keys', { items: [{ created_at: '2026-11-16 02:03:04' }], nextCursor: 'opaque' }).items[0].created_at, iso);
   assert.equal(projectApiTimestamps('/api/fleet', { self: { system_metrics: { sampledAt: at } }, agents: [{ rate_limit_7d_recorded_at: at }] }).agents[0].rate_limit_7d_recorded_at, iso);
 });
 
@@ -116,6 +116,10 @@ test('zero clocks are unknown and event, Git and preview fields normalize actual
   assert.equal(event.events[0].metadata.pasted_at, iso);
   assert.equal(event.events[0].metadata.source_time, 9);
   assert.equal(event.events[0].metadata.received_at, 8);
+  const backlog = projectApiTimestamps('/api/memory/backlog', { items: [{ firstAt: '2026-11-16 02:03:04' }], originSync: { firstAt: '2026-11-16 02:03:04' }, nextCursor: 'opaque' });
+  assert.equal(backlog.items[0].firstAt, iso);
+  assert.equal(backlog.originSync.firstAt, iso);
+  assert.equal(backlog.nextCursor, 'opaque');
   assert.equal(projectApiTimestamps('/api/memory/git', { commit: { author_date: '2026-11-16T10:03:04+08:00' } }).commit.author_date, iso);
   assert.equal(projectApiTimestamps('/api/schedules/preview', { iso: '2026-11-16T10:03:04+08:00' }).iso, iso);
 });
