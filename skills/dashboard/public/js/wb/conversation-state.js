@@ -245,6 +245,15 @@ export function createConversationState({
       || !previous.origin && !isOriginConversation(previous.id) && !Number.isInteger(previous.pinOrder))
       && activityOrder(row, previous) < 0)) listUpdates.add(row.id);
   }
+  function moveSentRowToFront(row) {
+    listUpdates.delete(row.id);
+    if (!search && (isOriginConversation(row.id) || Number.isInteger(row.pinOrder))) return;
+    const others = items.filter(item => item.id !== row.id);
+    const firstOrdinary = others.findIndex(item => search ||
+      !isOriginConversation(item.id) && !Number.isInteger(item.pinOrder));
+    others.splice(firstOrdinary < 0 ? others.length : firstOrdinary, 0, row);
+    items = others;
+  }
   function updateCurrentItem(id, newer) {
     if (!newer.length) return;
     const latest = newer.findLast(row => row.channel !== 'internal');
@@ -466,7 +475,7 @@ export function createConversationState({
   const localeHeaders = () => ({ 'X-Zylos-Locale': document?.documentElement?.lang?.startsWith('en') ? 'en' : 'zh' });
   const listPage = (currentTab, q, cursor) => request(`${base}?${query({ tab: currentTab, q: q || null, limit: 50, cursor })}`,
     { headers: localeHeaders() });
-  async function list(more = false, quiet = false) {
+  async function list(more = false, quiet = false, sentId = null) {
     if (!active || blocked || quiet && loadingMore || more && (loading || !nextCursor)) return;
     const e = epoch, version = ++listVersion, currentTab = tab, q = search;
     const ownsList = () => valid(e) && version === listVersion && currentTab === tab && q === search;
@@ -530,6 +539,8 @@ export function createConversationState({
         }
         const displayed = new Set(items.map(row => row.id));
         for (const row of rows) if (!known.has(row.id) && !displayed.has(row.id)) listUpdates.add(row.id);
+        // A conversation opened directly may only reach this page after the send.
+        if (sentId && !displayed.has(sentId) && incoming.has(sentId)) moveSentRowToFront(incoming.get(sentId));
       } else if (more) {
         items = merge(items, rows);
         for (const row of rows) listUpdates.delete(row.id);
@@ -1429,19 +1440,22 @@ export function createConversationState({
       else current.pending = null;
       if (result.error) current.error = result.error;
       const canonical = result.conversationId || id;
-      // The user already sees this draft. Promote its row in place before any
-      // overlapping list read can classify the canonical ID as new activity.
-      if (result.stored === true && id.startsWith('d:') && canonical !== id && tab === currentTab
-          && items.some(row => row.id === id)) {
-        listUpdates.delete(canonical);
-        if (items.some(row => row.id === canonical)) items = items.filter(row => row.id !== id);
-        else items = items.map(row => row.id === id ? { ...row, id: canonical, draft: false, state: 'active' } : row);
+      const ownSend = result.stored === true;
+      if (ownSend && valid(e) && tab === currentTab) {
+        let row = items.find(item => item.id === canonical);
+        if (id.startsWith('d:') && canonical !== id) {
+          const draft = items.find(item => item.id === id);
+          if (!row && draft) row = { ...draft, id: canonical, draft: false, state: 'active' };
+          items = items.filter(item => item.id !== id);
+        }
+        if (row) moveSentRowToFront(row);
       }
       cells.set(`${currentTab}:${canonical}`, current);
       moveCompose(current, canonical);
       persistCompose(current);
       if (selectedId === id && tab === currentTab) selectedId = canonical;
       if (valid(e)) {
+        if (ownSend && tab === currentTab) emit();
         await run(() => request(pathFor(canonical)), data => {
           current.conversation = data.conversation;
           emit();
@@ -1454,7 +1468,7 @@ export function createConversationState({
             readGroupPresence(current, currentTab, e);
           }
         }
-        await list(false, canonical === id);
+        await list(false, ownSend || canonical === id, ownSend ? canonical : null);
         if (!valid(e) || tab !== currentTab) return outcome;
         if (!canonical.startsWith('d:')) await syncAfterSend(current, canonical, currentTab, e);
       }

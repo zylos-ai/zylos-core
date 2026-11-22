@@ -1837,7 +1837,7 @@ export function mountConversationPage({
     }
     positionChildren(list, ordered);
     newConversations.hidden = !s.listUpdates;
-    text(newConversations.label, t('chat.page.newConversations').replace('{count}', String(s.listUpdates)));
+    text(newConversations.label, countLabel(t, 'chat.page.newConversations', s.listUpdates, {}).replace('{count}', String(s.listUpdates)));
     newConversations.setAttribute('aria-label', newConversations.label.textContent);
     listNotice.hidden = !!s.items.length && !s.loading;
     text(listNotice, t(s.loading ? 'chat.loading' : s.search ? 'wb.list.noMatch'

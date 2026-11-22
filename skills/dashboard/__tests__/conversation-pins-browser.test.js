@@ -105,7 +105,7 @@ test('pins replace the whole order over the real chat HTTP routes and stay out o
     });
   });
 
-test('the mounted list keeps its order until the activity notice is clicked at 1280px and 390px',
+test('the mounted list moves local sends forward and holds other activity behind the notice at 1280px and 390px',
   { skip: !chatEnabled(), timeout: 60000 }, async t => {
     const sandbox = createChatSandbox(t);
     await sandbox.runCase(async () => {
@@ -139,8 +139,10 @@ test('the mounted list keeps its order until the activity notice is clicked at 1
           assert.equal((await putPins(fixture, [bId, aId])).status, 200);
           const initial = await fixture.request(listPath);
           assert.deepEqual(ordered(initial.body.items), [origin, bId, aId, cId, dId]);
+          const locale = width === 1280 ? 'en' : 'zh';
           const context = await browser.newContext({ viewport: { width, height: 900 } });
           try {
+            await context.addInitScript(value => localStorage.setItem('zylos-dashboard-locale', value), locale);
             let listReads = 0;
             await context.route('**/*', route => {
               const url = new URL(route.request().url());
@@ -221,10 +223,27 @@ test('the mounted list keeps its order until the activity notice is clicked at 1
             const added = await fixture.createConversation('First incoming message in a new conversation');
             await hint.waitFor();
             assert.equal(await page.locator(`#wb-chat [data-conversation-id="${idOf(added)}"]`).count(), 0);
-            assert.match(await hint.innerText(), /1/);
+            const singular = locale === 'en' ? '1 conversation has new messages' : '有 1 个对话有新消息';
+            assert.equal(await hint.innerText(), singular);
             assert.deepEqual(await ids(), [origin, aId, bId, dId, cId]);
+
+            await page.locator(`#wb-chat [data-conversation-id="${cId}"]`).click();
+            const composer = page.locator('#wb-chat .conversation-input:enabled');
+            await composer.fill('Sent from the mounted dashboard page');
+            const sent = page.waitForResponse(response => new URL(response.url()).pathname === `${c.route}/send`);
+            await page.locator('#wb-chat [data-action="send"]').click();
+            assert.equal((await (await sent).json()).stored, true);
+            await page.locator('#wb-chat .conversation-message-list').getByText('Sent from the mounted dashboard page').waitFor();
+            if (width === 390) await page.locator('#wb-chat .conversation-back').click();
+            assert.deepEqual(await ids(), [origin, aId, bId, cId, dId], 'the local send moves ahead of unpinned rows');
+            assert.equal(await hint.innerText(), singular, 'the existing notice still counts only the other conversation');
+
+            const second = await fixture.createConversation('Second incoming message in a new conversation');
+            const plural = locale === 'en' ? '2 conversations have new messages' : '有 2 个对话有新消息';
+            await page.waitForFunction(expected => document.querySelector('#wb-chat [data-action="page.newConversations"]').innerText === expected, plural);
             await hint.click();
             await page.locator(`#wb-chat [data-conversation-id="${idOf(added)}"]`).waitFor();
+            await page.locator(`#wb-chat [data-conversation-id="${idOf(second)}"]`).waitFor();
             assert.equal(await page.evaluate(() => document.scrollingElement.scrollWidth <= innerWidth + 1), true);
           } finally {
             await context.unrouteAll({ behavior: 'ignoreErrors' });
