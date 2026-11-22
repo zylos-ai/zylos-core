@@ -6,10 +6,14 @@ export const ORIGINAL_GROUP_NAME_PATH = '~/zylos/.claude/skills/dashboard/script
 export const NAME_PROMPT = `请给 Dashboard 里还没有名字的会话组起个名字：
 
 1. 运行 node ~/zylos/.claude/skills/dashboard/scripts/group-name.js list --unnamed --active 3d，列出最近 3 天有活动、还没有名字的组。
-2. 给每个组找出一个人能认出来的名字：群聊用群名，私聊用对方的名字。不同渠道拿名字的办法不一样，你自己判断：有的消息开头就写着（比如「[TG GROUP:产品周会]」「howard said」），有的只有编号，要用这个渠道的工具或接口去查。实在查不到就先跳过，最后告诉我。
-3. 用 group-name.js set <组键> "名字" 设置。名字要短，让人一眼认出是哪个群、或者和谁的私聊。
+2. 先根据组键判断会话类型，按下面的优先级取名：
+   - 论坛话题用话题标题，可以在前面加一个短群名。从对应渠道组件的话题记录里查标题。Telegram 话题的组键形如 telegram:group<群ID>:topic-<话题ID>，按 Telegram 技能的说明运行 topics.js list --chat <群ID>，用话题 ID 找到对应条目的 name。找不到非空的标题时，直接按最近对话内容取名。
+   - 普通群聊用群名，私聊用对方的名字。可以从消息开头（如「[TG GROUP:产品周会]」「howard said」）辨认，或用对应渠道的工具查询。
+   - 查不到该会话类型对应的名称时，只读该组最近的对话内容，根据主要话题起一个有意义的短名。只有连对话内容都没有时才跳过。
+   - 禁止用纯编号、ID 或「群名 · 话题编号」这类名字。
+3. 用 group-name.js set <组键> "名字" 设置。名字要短，让人一眼认出哪个话题、哪个群或和谁的私聊。
 4. 已经有名字的组不要动。
-5. 做完列出你给每个组起的名字。`;
+5. 做完列出你给每个组起的名字，以及因没有对话内容而跳过的组。`;
 
 /** Preserve the supplied prompt verbatim apart from its known CLI path. */
 export function namePromptText(scriptPath, template, originalPath) {
