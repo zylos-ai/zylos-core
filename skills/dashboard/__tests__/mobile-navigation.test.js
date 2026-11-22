@@ -44,9 +44,8 @@ function navigationDocument() {
     parent.append(node); return node;
   };
   const header = add(document.body, 'header', { cls: 'app-header' });
-  const sourceTabs = ['overview', 'chat', 'schedule', 'memory', 'trends', 'observer'].map(tab => add(header, 'button', { cls: 'tab', tab, id: tab === 'observer' ? 'observer-tab' : undefined }));
+  const sourceTabs = ['overview', 'chat', 'schedule', 'memory', 'trends'].map(tab => add(header, 'button', { cls: 'tab', tab }));
   for (const id of ['wb-settings-btn', 'fleet-manage-btn', 'wb-tech-btn', 'wb-theme-toggle', 'wb-detail-toggle', 'tab-bar-agent-name', 'tab-bar-core-version']) add(header, 'button', { id });
-  document.querySelector('#observer-tab').hidden = true;
   add(document.body, 'section', { id: 'tab-settings' });
   const chat = add(document.body, 'section', { id: 'wb-chat' });
   const reload = add(chat, 'button', { cls: 'conversation-reload' });

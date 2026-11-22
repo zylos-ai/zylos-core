@@ -28,7 +28,8 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     slice('function initFleetMode(', 'async function changeLocale('),
     slice('function initTabs(', 'function initObserverControls('),
     slice('function resetAgentData(', 'function initFleetMode('),
-    slice('function observerStatusLabel(', 'let settingsPage = null;')
+    slice('function observerStatusLabel(', 'let settingsPage = null;'),
+    slice('function observerOpenable(', 'function openGroupMemory(')
   ].join('\n');
   let autoFrameReady = true;
   const elements = {
@@ -42,7 +43,6 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     '#observer-back': { hidden: true },
     '#observer-title': {},
     '#observer-notice-history': { hidden: true },
-    '#observer-tab': { hidden: false },
     '#observer-size-form': { hidden: false, dataset: {} },
     '#observer-size-cols': { value: '120' },
     '#observer-size-rows': { value: '50' },
@@ -61,16 +61,16 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
   const intervals = [];
   const timeouts = [];
   const listeners = {};
-  const tabs = ['overview', 'trends', 'memory', 'observer'].map((name) => ({
+  const tabs = ['overview', 'trends', 'memory'].map((name) => ({
     dataset: { tab: name },
     classList: { toggle(_className, active) { this.active = active; } },
     setAttribute(name, value) { this[name] = value; },
     removeAttribute(name) { delete this[name]; },
     addEventListener(event, handler) { this[event] = handler; }
   }));
-  const panels = tabs.map(({ dataset }) => ({
-    id: `tab-${dataset.tab}`,
-    hidden: true,
+  const panels = [...tabs.map(tab => tab.dataset.tab), 'observer'].map(name => ({
+    id: `tab-${name}`,
+    hidden: name !== 'overview',
     classList: { toggle() {} }
   }));
   let fetchImpl = async () => { throw new Error('unexpected fetch'); };
@@ -90,7 +90,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     $: (selector) => elements[selector],
     document: {
       querySelectorAll: (selector) => selector === '.tab' ? tabs : selector === '.tab-panel' ? panels : [],
-      querySelector: (selector) => selector === '.tab.active' ? tabs.find((tab) => tab.classList.active) || null : null,
+      querySelector: (selector) => selector === '.tab-panel.active' ? panels.find(panel => !panel.hidden) : null,
       addEventListener() {},
       createElement: () => ({}),
       visibilityState: 'visible'
@@ -801,7 +801,7 @@ test('Observer UI is optional, read-only, agent-routed, and releases leases on e
   const css = fs.readFileSync(new URL('../public/css/style.css', import.meta.url).pathname, 'utf8');
   const en = JSON.parse(fs.readFileSync(new URL('../public/i18n/en.json', import.meta.url).pathname, 'utf8'));
   const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/zh.json', import.meta.url).pathname, 'utf8'));
-  assert.match(index, /id="observer-tab"[^>]+hidden/);
+  assert.doesNotMatch(index, /data-tab="observer"/);
   assert.match(index, /id="tab-observer"/);
   assert.match(index, /sandbox="allow-scripts"/);
   assert.match(app, /new MessageChannel\(\)/);
@@ -1049,7 +1049,6 @@ test('Observer reset uses the real resetAgentData path to clear target status be
   const harness = observerUiHarness();
   harness.context.state.observer.statusGeneration = 4;
   harness.context.state.observer.status = { state: 'installed', desired: { enabled: true } };
-  harness.elements['#observer-tab'].hidden = false;
 
   harness.context.resetAgentData();
 
@@ -1511,7 +1510,7 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(index, /id="fleet-manage-btn"/);
   assert.match(index, /data-i18n-title="fleet_manage\.open"/);
   assert.match(index, /app\.js/);
-  assert.match(index, /id="fleet-manage-btn"[^>]*><i class="wb-ico wb-ico-fleet" aria-hidden="true"><\/i>/);
+  assert.match(index, /id="fleet-manage-btn"[^>]*><i class="wb-ico wb-ico-server" aria-hidden="true"><\/i>/);
   // The icon is shown on every page, a remote machine's own page included: it is the way back to the machines page.
   assert.doesNotMatch(app.slice(app.indexOf('function initFleetManageButton('), app.indexOf('function initTechButton(')), /hidden/);
   assert.match(app, /if \(e\.target\.closest\('#fleet-manage-btn'\)\) \{ e\.preventDefault\(\); openFleetFromIcon\(\); \}/);
@@ -2048,7 +2047,7 @@ test('usage and legacy trends paths share tab mapping across local and fleet his
 });
 test('unchanged navigation labels stay in the primary language pack', () => {
   const index = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
-  for (const tab of ['overview', 'memory', 'observer']) {
+  for (const tab of ['overview', 'memory']) {
     assert.ok(index.includes('data-tab="' + tab + '" data-i18n="tab.' + tab + '"'));
   }
   assert.match(index, /data-tab="trends" data-i18n="wb\.nav\.usage"/);
@@ -2066,7 +2065,7 @@ function workbenchSnapshot(kind = 'idle', key = 'a') {
 }
 function workbenchHarness(context, read, options = {}) {
   const document = wbDocument(), listeners = new Map(), windowListeners = new Map();
-  const selectors = ['#wb-board', '#wb-search', '#wb-range', '#wb-detail-toggle', '#observer-tab', '#wb-instance', '#wb-attention', '#wb-side', '#wb-auto-name', '#wb-auto-name-dialog', '#tab-overview', '#agent-detail'];
+  const selectors = ['#wb-board', '#wb-search', '#wb-range', '#wb-detail-toggle', '#wb-instance', '#wb-attention', '#wb-side', '#wb-auto-name', '#wb-auto-name-dialog', '#tab-overview', '#agent-detail'];
   const nodes = new Map(selectors.map(selector => [selector, document.createElement('div')]));
   nodes.get('#tab-overview').append(nodes.get('#wb-board'));
   nodes.get('#wb-side').hidden = true;
@@ -2457,48 +2456,6 @@ test('workbench shell navigation preserves the current agent snapshot and search
   assert.match(mount, /identity: \(\) => state\.remoteAgent \?\? REMOTE_AGENT \?\? 'local'/);
   assert.doesNotMatch(mount, /navigationGeneration/);
 });
-// Observer visibility and click integration: run when shell/app availability wiring
-// changes; skip server-only work. Uses the injected DOM/API/timers above; no live
-// resources. The shared teardown unmounts listeners, observers and fake timers.
-test('workbench shell hides unknown recovering and unavailable observer navigation and lets a missing observer open its page', async context => {
-  let status = null, readOnly = false;
-  const settings = [];
-  const h = workbenchHarness(context, null, { storage: { 'zylos-dashboard-detail-level': 'technical' },
-    observerStatus: () => status,
-    observerAvailable: value => !readOnly && !value?.recoveryReason });
-  await wbTick(); await wbTick();
-  const nav = h.nodes.get('#observer-tab');
-  const redraw = () => h.listeners.get('dashboard-locale-change')();
-  const click = () => {
-    let prevented = 0, stopped = 0;
-    nav.dispatch('click', { preventDefault: () => prevented++, stopImmediatePropagation: () => stopped++ });
-    return { prevented, stopped };
-  };
-  assert.equal(nav.hidden, true);
-  assert.equal(click().prevented, 1);
-  status = { installed: true, enabled: true }; redraw(); assert.equal(nav.hidden, false);
-  assert.equal(nav.textContent, 'tab.observer');
-  assert.equal(click().prevented, 0);
-  readOnly = true; redraw(); assert.equal(nav.hidden, true);
-  nav.hidden = false; h.mutate(); assert.equal(nav.hidden, true);
-  assert.equal(click().stopped, 1); assert.equal(settings.length, 0);
-  readOnly = false; redraw(); assert.equal(nav.hidden, false);
-  status = { installed: true, enabled: true, recoveryReason: 'recovering' }; redraw();
-  assert.equal(nav.hidden, true);
-  nav.hidden = false; h.mutate(); assert.equal(nav.hidden, true);
-  assert.equal(click().stopped, 1); assert.equal(settings.length, 0);
-  status = { installed: false }; redraw();
-  assert.equal(nav.hidden, false); assert.equal(nav.textContent, 'tab.observer'); assert.equal(nav.title, 'wb.observerInstall'); assert.equal(nav.dataset.wbHint, 'wb.observerInstall', 'app.js restores this hint after its Origin lock');
-  assert.equal(nav.classList.contains('wb-tab-muted'), true);
-  // The observer page itself explains a missing or disabled observer and links to settings.
-  assert.equal(click().prevented, 0);
-  status = { installed: true, enabled: false }; redraw();
-  assert.equal(nav.hidden, false); assert.equal(nav.textContent, 'tab.observer'); assert.equal(nav.title, 'wb.observerDisabled');
-  assert.equal(click().prevented, 0); assert.equal(settings.length, 0);
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
-  assert.match(app, /observerAvailable: observerOpenable,/);
-});
-
 // Detail mounting boundary: real shell row selection and injected transport only;
 // run for detail/shell wiring, skip backend-only work. The harness owns timers,
 // DOM, and fetches, and teardown releases all listeners without live resources.

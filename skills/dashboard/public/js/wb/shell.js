@@ -1,7 +1,7 @@
 import { readGroupSnapshot, readGroupPage, readGroupPages, groupSnapshot, displayGroupRow, groupDetailPath } from './group-data.js';
 import { withRequestTimeout } from '../request-timeout.js';
 import { countLabel } from '../count-label.js';
-import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js';
+import { createViewMode, groupObservable } from './view-mode.js';
 import { boardController, keepGroupOrder, renderBoard, renderDistribution } from './board.js';
 import { createBoardSearch } from './board-search.js';
 import { instanceStrip, accountRuntimes } from './instance-strip.js';
@@ -26,7 +26,6 @@ export function mountWorkbench({ document = globalThis.document, window = global
   const searchInput = document.querySelector('#wb-search');
   const rangeInput = document.querySelector('#wb-range');
   const toggle = document.querySelector('#wb-detail-toggle');
-  const nav = document.querySelector('#observer-tab');
   let groupSide = 'running', groupDepth = 1, searchDepth = 1, pushedCounts = null, instanceRead = null;
   let searchPage = null, locatedRow = null, moreRequest = null;
   const groupPending = new Set(), searchPending = new Set();
@@ -76,24 +75,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     }
     return instanceRead.promise;
   };
-  const observerEntry = () => {
-    const status = observerStatus();
-    return observerAvailable(status) ? observerNavEntry(status, mode.detailLevel(), t) : null;
-  };
-  const syncNav = () => {
-    const entry = observerEntry();
-    if (nav) {
-      // The page name stays fixed; an unavailable observer says why in the tooltip and on its page.
-      const label = entry ? t('tab.observer') : '', hint = entry?.target === 'settings' ? entry.label : '';
-      if (nav.hidden !== !entry) nav.hidden = !entry;
-      if (nav.textContent !== label) nav.textContent = label;
-      nav.dataset.wbHint = hint;
-      if (nav.title !== hint) nav.title = hint;
-      nav.classList.toggle('wb-tab-muted', Boolean(hint));
-    }
-  };
   function redraw() {
-    syncNav();
     groupDetail?.setViewDetail();
     hostPanel?.setViewDetail();
     if (!hostPanel?.active) document.querySelector('#wb-side')?.setAttribute('aria-label', t('wb.detail.title'));
@@ -255,7 +237,10 @@ export function mountWorkbench({ document = globalThis.document, window = global
   groupDetail = createGroupDetail({ root: document.querySelector('#wb-side'), document, t,
     fetch: (path, options) => fetch(endpoint(path), options), identity, writable,
     detail: () => mode.detailLevel(), isVisible: visible, onMemory, onConversation, conversationAvailable, onObserve,
-    observable: row => groupObservable(observerEntry(), row),
+    observable: row => {
+      const status = observerStatus();
+      return observerAvailable(status) && groupObservable(status, mode.detailLevel(), row);
+    },
     onRename: () => controller.refresh(), onClose: () => { if (!stopped) redraw(); },
   });
   hostPanel = createHostPanel({ root: document.querySelector('#wb-side'), document, t, read, identity,
@@ -495,18 +480,11 @@ export function mountWorkbench({ document = globalThis.document, window = global
   const visibility = () => {
     if (document.visibilityState === 'visible') { instanceRead = null; controller.refresh(); costController.refresh(); }
   };
-  // An installed-but-unavailable observer still opens its page, which explains why and links to settings.
-  const observerClick = event => {
-    if (observerEntry()) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-  };
   toggle.checked = mode.detailLevel() === 'technical';
   toggle.addEventListener('change', changeDetail);
   const unsubscribe = mode.subscribe(redraw);
   searchInput.addEventListener('input', input);
   document.addEventListener('keydown', keydown);
-  nav?.addEventListener('click', observerClick, true);
   document.addEventListener('visibilitychange', visibility);
   const localeChange = () => redraw();
   document.addEventListener('dashboard-locale-change', localeChange);
@@ -520,13 +498,11 @@ export function mountWorkbench({ document = globalThis.document, window = global
   const observer = window.MutationObserver ? new window.MutationObserver(() => {
     const changed = resetOwner();
     const active = visible();
-    syncNav();
     if (active && (changed || !previousVisible)) instanceRead = null;
     if (!syncPageOpen()) hostPanel.close();
     if (active && (changed || !previousVisible)) { controller.refresh(); costController.refresh(); }
     previousVisible = active;
   }) : null;
-  if (nav) observer?.observe(nav, { attributes: true, attributeFilter: ['hidden'] });
   observer?.observe(document.querySelector('#tab-overview'), { attributes: true, attributeFilter: ['class'] });
   const detail = document.querySelector('#agent-detail');
   if (detail) observer?.observe(detail, { attributes: true, attributeFilter: ['hidden'] });
@@ -557,7 +533,6 @@ export function mountWorkbench({ document = globalThis.document, window = global
     toggle.removeEventListener('change', changeDetail);
     searchInput.removeEventListener('input', input);
     document.removeEventListener('keydown', keydown);
-    nav?.removeEventListener('click', observerClick, true);
     document.removeEventListener('visibilitychange', visibility);
     document.removeEventListener('dashboard-locale-change', localeChange);
     window.removeEventListener('popstate', visibility);
@@ -575,7 +550,6 @@ export function mountWorkbench({ document = globalThis.document, window = global
       if (snapshot && counts) { snapshot = groupSnapshot(snapshot.instance, counts, snapshot); redraw(); }
       return controller.refresh().finally(() => { pushedCounts = null; });
     },
-    selectedGroup: () => groupDetail?.state.row?.sessionGroup,
     async locateGroup(key) {
       if (stopped) return;
       resetOwner();

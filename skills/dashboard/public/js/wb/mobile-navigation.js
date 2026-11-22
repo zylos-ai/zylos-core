@@ -1,10 +1,20 @@
 import { element, icon } from './plain-text.js';
 
+const PAGE_TITLES = {
+  fleet: 'wb.fleet.title',
+  overview: 'wb.nav.overview',
+  chat: 'chat.title',
+  trends: 'wb.nav.usage',
+  schedule: 'wb.nav.schedule',
+  memory: 'tab.memory',
+  observer: 'tab.observer',
+  settings: 'wb.settings',
+};
+
 const SECTIONS = [
-  ['overview', 'wb.nav.overview', 'fleet'],
-  ['chat', 'chat.title', 'chat'],
-  ['schedule', 'wb.nav.schedule', 'clock'],
-  ['memory', 'tab.memory', 'book'],
+  ['overview', 'wb.nav.overview', 'activity'],
+  ['chat', 'wb.mobile.chats', 'chat'],
+  ['trends', 'wb.mobile.usage', 'chart'],
 ];
 
 /** Mobile chrome delegates to the same navigation and controls as the desktop header. */
@@ -33,6 +43,11 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
   topbar.append(listRefresh, listCreate);
 
   const nav = node('nav', undefined, 'wb-mobile-tabs'); nav.id = 'wb-mobile-nav';
+  const fleetSelector = '#fleet-manage-btn';
+  const fleetTab = button('wb-mobile-tab', 'server', 'wb.mobile.fleet');
+  fleetTab.dataset.mobileTab = 'fleet';
+  fleetTab.addEventListener('click', () => original(fleetSelector)?.click());
+  nav.append(fleetTab);
   const tabs = SECTIONS.map(([name, key, ico]) => {
     const el = button('wb-mobile-tab', ico, key); el.dataset.mobileTab = name;
     el.addEventListener('click', () => {
@@ -66,15 +81,10 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
     sheet.append(el); menuRows.push({ el, name, selector, toggle });
     return el;
   };
-  addMenu('usage', 'chart', 'wb.nav.usage', '.tab[data-tab="trends"]', false, 'trends');
-  const observerRow = addMenu('observer', 'term', 'tab.observer', '#observer-tab', false, 'observer');
-  const observerLabel = observerRow.querySelector('span');
-  const observerCopy = node('span', undefined, 'wb-mobile-item-copy');
-  observerLabel.replaceWith(observerCopy);
-  const observerHint = node('span', undefined, 'wb-mobile-item-hint');
-  observerCopy.append(observerLabel, observerHint);
+  addMenu('schedule', 'clock', 'wb.nav.schedule', '.tab[data-tab="schedule"]', false, 'schedule');
+  addMenu('memory', 'book', 'tab.memory', '.tab[data-tab="memory"]', false, 'memory');
   addMenu('settings', 'gear', 'wb.settings', '#wb-settings-btn');
-  addMenu('machines', 'server', 'wb.fleet.title', '#fleet-manage-btn');
+  addMenu('machines', 'server', 'wb.fleet.title', fleetSelector);
   const separator = node('div', undefined, 'wb-mobile-sheet-separator'); sheet.append(separator);
   addMenu('detail', 'code', 'wb.detail', '#wb-tech-btn', true);
   addMenu('theme', 'moon', 'wb.mobile.darkTheme', '#wb-theme-toggle', true);
@@ -109,11 +119,8 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
   proxyList(listRefresh, '.conversation-reload'); proxyList(listCreate, '.conversation-create');
   const setText = (el, value) => { if (el.textContent !== value) el.textContent = value; };
   function sync() {
-    const current = getView(), active = current.fleet ? 'fleet' :
-      original('#tab-settings')?.classList.contains('active') ? 'settings' : current.tab;
-    const key = active === 'fleet' ? 'wb.fleet.title' :
-      SECTIONS.find(([name]) => name === active)?.[1] ?? (active === 'trends' ? 'wb.nav.usage' : active === 'observer' ? 'tab.observer' : 'wb.settings');
-    setText(title, t(key));
+    const current = getView(), active = current.fleet ? 'fleet' : current.tab;
+    setText(title, t(PAGE_TITLES[active] ?? PAGE_TITLES.settings));
     const instance = ['#tab-bar-agent-name', '#tab-bar-core-version'].map(selector => original(selector))
       .filter(el => el && !el.hidden && el.textContent.trim()).map(el => el.textContent.trim());
     setText(brand, instance.join(' · '));
@@ -121,18 +128,26 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
       setText(record.label, t(record.key)); record.el.setAttribute('aria-label', t(record.key));
     }
     setText(sheetTitle, t('wb.mobile.more')); scrim.setAttribute('aria-label', t('wb.close'));
-    setText(observerHint, t('wb.mobile.observerHint'));
     nav.setAttribute('aria-label', t('wb.mobile.sections'));
+    const fleetTarget = original(fleetSelector);
+    fleetTab.hidden = !current.multiAgent || !menuAvailable(fleetTarget);
+    fleetTab.disabled = Boolean(fleetTarget?.disabled);
     for (const tab of tabs) {
       const target = original(`.tab[data-tab="${tab.dataset.mobileTab}"]`);
-      tab.hidden = !target || target.hidden; tab.disabled = Boolean(target?.disabled);
-      tab.classList.toggle('active', tab.dataset.mobileTab === active);
-      if (tab.dataset.mobileTab === active) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
+      tab.hidden = !menuAvailable(target); tab.disabled = Boolean(target?.disabled);
     }
-    more.classList.toggle('active', !SECTIONS.some(([name]) => name === active));
+    let hasActiveTab = false;
+    for (const tab of [fleetTab, ...tabs]) {
+      const selected = !tab.hidden && tab.dataset.mobileTab === active;
+      tab.classList.toggle('active', selected);
+      if (selected) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
+      hasActiveTab ||= selected;
+    }
+    more.classList.toggle('active', !hasActiveTab);
+    if (hasActiveTab) more.removeAttribute('aria-current'); else more.setAttribute('aria-current', 'true');
     for (const row of menuRows) {
       const target = original(row.selector);
-      row.el.hidden = !menuAvailable(target); row.el.disabled = Boolean(target?.disabled);
+      row.el.hidden = !menuAvailable(target) || (row.name === 'machines' && !fleetTab.hidden); row.el.disabled = Boolean(target?.disabled);
       if (row.toggle) row.el.setAttribute('aria-checked', String(row.name === 'detail'
         ? original('#wb-detail-toggle')?.checked === true : document.documentElement.dataset.theme === 'dark'));
     }
