@@ -79,7 +79,7 @@ export async function handleAction(action, body, config, { timezone } = {}) {
       case 'switch-mode':
       case 'switch-runtime': result = await handleCoreAction(action, body, { ...config, zylosDir }); break;
       case 'switch-model': result = await switchModel(reqId, body, config, zylosDir); break;
-      case 'switch-effort': result = switchEffort(reqId, body, config, zylosDir); break;
+      case 'switch-effort': result = await switchEffort(reqId, body, config, zylosDir); break;
       case 'set-threshold': result = await setThreshold(reqId, body, config, zylosDir); break;
       case 'set-session-hot-ttl': result = await setSessionHotTtl(reqId, body, zylosDir); break;
       case 'upgrade-cc': result = await upgradeRuntimeCli(reqId, body.runtime, zylosDir); break;
@@ -147,7 +147,7 @@ async function switchModel(reqId, body, config, zylosDir) {
   }
   await migrateModelThresholds({ zylosDir });
   // Discovery yields to other writes. Core reads the current file at save time.
-  const { changed, previous, file, key } = modelConfig.write(zylosDir, 'model', model);
+  const { changed, previous, file, key } = await modelConfig.write(zylosDir, 'model', model);
   if (!changed) {
     log(reqId, `no-op: ${file}: ${key} already "${model}"`);
     return alreadySet();
@@ -162,7 +162,7 @@ async function switchModel(reqId, body, config, zylosDir) {
     ...(observed && { data: observed }), messageKey: 'result.model_changed', messageParams: { value: model, runtime } };
 }
 
-function switchEffort(reqId, body, config, zylosDir) {
+async function switchEffort(reqId, body, config, zylosDir) {
   const resolved = resolveModelRuntime(body, config);
   if (!resolved) return { ok: false, error: 'INVALID_RUNTIME' };
   const { runtime, config: modelConfig, catalog } = resolved;
@@ -177,7 +177,7 @@ function switchEffort(reqId, body, config, zylosDir) {
     return { ok: false, error: 'invalid_effort', message: `effort must be one of: ${values}`, messageKey: 'result.invalid_effort', messageParams: { values } };
   }
 
-  const { changed, previous, file, key } = modelConfig.write(zylosDir, 'effort', effort);
+  const { changed, previous, file, key } = await modelConfig.write(zylosDir, 'effort', effort);
   if (!changed) {
     log(reqId, `no-op: ${file}: ${key} already "${effort}"`);
     return { ok: false, error: 'already_set', message: `Effort already set to ${effort}`, messageKey: 'result.already_set_effort', messageParams: { value: effort } };

@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { CLAUDE_BUILTIN_ENV_KEYS, ZYLOS_DIR } from '../../config.js';
 import { claudeProbeEnvironment } from './auth.js';
 import { context } from './context.js';
+import { repairProjectSettings } from './hooks.js';
 import { writePrivateFile } from '../../private-file.js';
 import { memoryMcpServerPath } from '../session-command.js';
 
@@ -110,6 +111,8 @@ async function ensureOnboardingComplete(projectDir, env, preApprove = []) {
 
 export async function prepare(options = {}) {
   const root = options.root || ZYLOS_DIR, env = options.env || process.env;
+  const settingsPath = path.join(root, '.claude/settings.json');
+  if (readProjectSettings(settingsPath) === null) await repairProjectSettings(root, settingsPath);
   let sessionEnv = {};
   try { sessionEnv = claudeProbeEnvironment(root, env); } catch { /* launch reports an unreadable .env */ }
   await ensureOnboardingComplete(root, env, PRE_APPROVED_KEYS.map(key => sessionEnv[key]).filter(Boolean));
@@ -165,6 +168,24 @@ export function preAccept() {
   return changed;
 }
 
+// A missing file can start empty. A damaged file must be renamed first.
+function readProjectSettings(file) {
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return {};
+    throw error;
+  }
+  try {
+    const settings = JSON.parse(text);
+    return settings && typeof settings === 'object' && !Array.isArray(settings) ? settings : null;
+  } catch {
+    // JSON.parse diagnostics can quote settings content, including credentials.
+    return null;
+  }
+}
+
 export const modelConfig = Object.freeze({
   read(zylosDir) {
     const model = context.readDefaultModel({ zylosDir });
@@ -176,30 +197,19 @@ export const modelConfig = Object.freeze({
     }
   },
 
-  write(zylosDir, field, value) {
+  async write(zylosDir, field, value) {
     const file = path.join(zylosDir, '.claude/settings.json');
     const key = field === 'model' ? 'model' : 'effortLevel';
-    let text;
-    try {
-      text = fs.readFileSync(file, 'utf8');
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-      text = '{}';
-    }
-
-    let settings;
-    try {
-      settings = JSON.parse(text);
-    } catch (error) {
-      // JSON.parse diagnostics can quote settings content, including credentials.
-      throw new Error(`${file}: invalid JSON`, { cause: error });
-    }
-    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
-      throw new Error(`${file}: not a JSON object`);
+    let settings = readProjectSettings(file);
+    const repaired = settings === null;
+    if (repaired) {
+      await repairProjectSettings(zylosDir, file);
+      settings = readProjectSettings(file);
+      if (settings === null) throw new Error(`${file}: could not read rebuilt Claude settings`);
     }
 
     const previous = settings[key];
-    if (previous === value) return { changed: false, previous, file, key };
+    if (!repaired && previous === value) return { changed: false, previous, file, key };
     settings[key] = value;
     // Claude settings may carry credentials in env.
     writePrivateFile(file, JSON.stringify(settings, null, 2) + '\n');

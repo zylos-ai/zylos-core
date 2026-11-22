@@ -116,10 +116,36 @@ test('Claude launch tightens world-readable confirmation files it repairs', asyn
 test('Claude launch leaves true confirmations and user files byte-identical', async t => {
   const f = fixture(t);
   f.write();
+  const projectSettings = path.join(f.root, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(projectSettings));
+  fs.writeFileSync(projectSettings, '{ "model": "sonnet", "effortLevel": "high" }\n\n');
+  f.files.projectSettings = projectSettings;
   const before = Object.fromEntries(Object.entries(f.files).map(([name, file]) => [name, fs.readFileSync(file)]));
   await f.launch();
   for (const [name, file] of Object.entries(f.files)) assert.deepEqual(fs.readFileSync(file), before[name]);
+  assert.deepEqual(fs.readdirSync(path.dirname(projectSettings)), ['settings.json']);
 });
+
+for (const content of ['{坏', '[]']) {
+  test(`Claude launch rebuilds damaged project settings (${content}) before starting`, async t => {
+    const f = fixture(t);
+    const dir = path.join(f.root, '.claude');
+    const file = path.join(dir, 'settings.json');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(file, content);
+
+    await f.launch();
+
+    const backup = fs.readdirSync(dir).find(name => /^settings\.json\.corrupt\.\d+$/.test(name));
+    assert.ok(backup);
+    assert.deepEqual(fs.readFileSync(path.join(dir, backup)), Buffer.from(content));
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const template = JSON.parse(fs.readFileSync(new URL('../../../../templates/.claude/settings.json', import.meta.url)));
+    assert.deepEqual(settings.statusLine, template.statusLine);
+    assert.ok(settings.hooks.SessionStart.find(group => group.matcher === 'startup')
+      .hooks.some(hook => hook.command.includes(path.join(f.root, '.claude', 'skills/activity-monitor/scripts/hook-health.js'))));
+  });
+}
 
 for (const content of ['{invalid JSON', 'null', '[]', '42', '"text"']) {
   test(`Claude launch repairs non-object confirmation files (${content})`, async t => {
