@@ -118,10 +118,5 @@
     "file": "skills/dashboard/public/js/runtime-ui.js",
     "text": "return meta.catalog_strict ?? (meta.runtime === 'codex');",
     "reason": "legacy: Preserves strict catalog behavior for older fleet peers that do not return catalog_strict."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-defaults.js",
-    "text": "const runtimes = ['claude', 'codex'];",
-    "reason": "gap: Default-engine settings currently offer only Claude and Codex."
   }
 ]

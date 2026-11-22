@@ -1,4 +1,4 @@
-import { runtimesWith } from '../../runtime-descriptors.js';
+import { SUPPORTED_RUNTIMES, runtimesWith } from '../../runtime-descriptors.js';
 import { element, icon } from './plain-text.js';
 import { createSettingsNavigation } from './settings-navigation.js';
 
@@ -192,7 +192,7 @@ export function createSettingsLoader({ read, onLoad }) {
         read('/api/instance'), read('/api/settings/pricing'), read('/api/usage/pricing'),
         ...modelIds.map(id => read('/api/instance/runtime-options?' + new URLSearchParams({ runtime: id }))),
         count(runtimeFollowerFilter), count(runtimeOverrideFilter),
-        ...modelIds.map(id => count(modelFollowerFilter(id))),
+        ...SUPPORTED_RUNTIMES.map(id => count(modelFollowerFilter(id))),
         ...priceIds.map(id => count(priceUserFilter(id))),
       ]);
       if (current !== generation) return;
@@ -203,7 +203,7 @@ export function createSettingsLoader({ read, onLoad }) {
         instance: value(0), prices: value(1), usage: value(2), metadata: byRuntime(modelIds, 3),
         groupCounts: {
           followers: value(counts), overrides: value(counts + 1),
-          models: byRuntime(modelIds, counts + 2), pricing: byRuntime(priceIds, counts + 2 + modelIds.length),
+          models: byRuntime(SUPPORTED_RUNTIMES, counts + 2), pricing: byRuntime(priceIds, counts + 2 + SUPPORTED_RUNTIMES.length),
         },
       });
     },

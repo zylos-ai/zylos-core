@@ -1,4 +1,4 @@
-import { DEFAULT_RUNTIME, runtimeInstallPolicy } from '../../runtime-descriptors.js';
+import { SUPPORTED_RUNTIMES, runtimeInstallPolicy, runtimesWith } from '../../runtime-descriptors.js';
 import { countLabel } from '../count-label.js';
 import { effortOptionState, modelOptionState } from '../runtime-ui.js';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js';
@@ -23,11 +23,10 @@ function interruptFollowers(page, t, label = 'wb.settings.interruptFollowers') {
     ...(count > 5 ? [t('wb.settings.moreGroups', { count })] : [])].join('\n');
 }
 
-const runtimes = ['claude', 'codex'];
 /** Drafted model/effort pairs that differ from what each engine's metadata reports. */
 export function modelDraftChanges(metadata = {}, drafts = {}) {
   const changes = [];
-  for (const runtime of runtimes) {
+  for (const runtime of runtimesWith('modelOverride')) {
     const meta = metadata[runtime], draft = drafts[runtime];
     if (!meta || !draft) continue;
     if (draft.model && draft.model !== (meta.current_model ?? '')) changes.push({ runtime, action: 'switch-model', key: 'model', value: draft.model });
@@ -78,7 +77,7 @@ export function runtimeSaveConfirmation(runtime, page, t = key => key) {
 }
 
 export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}, sessionRoot, document = root.ownerDocument,
-  t = key => key, read, execute, confirm = async () => false, writable = () => true, onGroup = () => {}, version = () => {} } = {}) {
+  t = key => key, read, recheck, execute, confirm = async () => false, writable = () => true, onGroup = () => {}, version = () => {} } = {}) {
   root.replaceChildren();
   let baselineRuntime = instance?.default_runtime ?? null, destroyed = false;
   const loadedNames = new Map();
@@ -167,33 +166,30 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
   // ─── Default engine ───
   const engine = settingsCard(document, { icon: 'bot', title: t('wb.settings.currentRuntime'), sub: technical() ? 'zylos runtime' : '' });
   engine.card.id = 'settings-current-runtime';
-  let draftRuntime = baselineRuntime, savingRuntime = false;
+  let view = baselineRuntime ?? SUPPORTED_RUNTIMES[0], savingRuntime = false, recheckBusy = false;
   const line = element(document, 'div', undefined, 'wb-set-inline');
-  // Each engine's choice carries its own sign-in state, so the state stays under the engine it describes on any width.
-  const seg = element(document, 'div', undefined, 'wb-seg2 wb-seg-engine'); seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', t('wb.settings.currentRuntime'));
-  const segButtons = {}, segNames = {};
-  for (const runtime of runtimes) {
-    const health = runtimeHealth(instance, runtime);
-    const button = element(document, 'button', undefined); button.type = 'button'; button.id = 'settings-use-' + runtime;
-    const login = element(document, 'span', undefined, 'wb-login wb-login-' + health);
-    login.append(element(document, 'span', undefined, 'wb-hdot'), element(document, 'span', t('wb.settings.health.' + health)));
-    const name = element(document, 'span', undefined, 'wb-engine-name');
-    button.append(name, login);
-    segNames[runtime] = name;
-    button.title = health === 'unavailable' ? t('wb.settings.health.unavailable') : '';
-    button.addEventListener('click', () => { draftRuntime = runtime; redrawEngine(); });
-    lock(button, () => savingRuntime || !writable() || health === 'unavailable');
-    seg.append(button); segButtons[runtime] = button;
-  }
-  line.append(seg);
-  const saveRuntime = element(document, 'button', t('wb.settings.saveRuntime'), 'wb-btn wb-btn-primary'); saveRuntime.type = 'button'; saveRuntime.id = 'settings-save-runtime';
-  const undoRuntime = element(document, 'button', t('wb.settings.undo'), 'wb-btn'); undoRuntime.type = 'button'; undoRuntime.id = 'settings-undo-runtime';
-  undoRuntime.addEventListener('click', () => { draftRuntime = baselineRuntime; redrawEngine(); });
-  lock(undoRuntime, () => savingRuntime || !writable());
-  lock(saveRuntime, () => savingRuntime || !writable() || draftRuntime == null || draftRuntime === baselineRuntime || runtimeHealth(instance, draftRuntime) === 'unavailable');
-  saveRuntime.addEventListener('click', async () => {
-    if (saveRuntime.disabled) return;
-    const runtime = draftRuntime;
+  const select = element(document, 'select', undefined, 'wb-input wb-select');
+  select.id = 'settings-engine';
+  select.setAttribute('aria-label', t('wb.settings.currentRuntime'));
+  const options = SUPPORTED_RUNTIMES.map(runtime => {
+    const option = element(document, 'option');
+    option.value = runtime;
+    select.append(option);
+    return option;
+  });
+  const selectWrap = wrapSelect(document, select, 'wb-select-wrap wb-engine-select');
+  const defaultBadge = element(document, 'span', t('wb.settings.defaultEngineBadge'), 'wb-default-badge');
+  const setDefault = element(document, 'button', t('wb.settings.setDefault'), 'wb-btn wb-btn-primary');
+  setDefault.type = 'button';
+  setDefault.id = 'settings-set-default';
+  line.append(selectWrap, defaultBadge, setDefault);
+  const unavailable = () => runtimeHealth(instance, view) === 'unavailable';
+  const notFound = () => runtimeNotFound({ instance }, view);
+  lock(select, () => savingRuntime);
+  lock(setDefault, () => savingRuntime || !writable() || unavailable() || notFound());
+  setDefault.addEventListener('click', async () => {
+    if (setDefault.disabled || view === baselineRuntime) return;
+    const runtime = view;
     savingRuntime = true;
     refreshLocks();
     try {
@@ -208,16 +204,15 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
         engineResult.textContent = t('wb.settings.saveFailed');
         return;
       }
-      baselineRuntime = draftRuntime = result?.data?.baseline ?? runtime;
+      baselineRuntime = runtime;
       const saved = t(result?.messageKey ?? 'result.runtime_saved', {
         ...result?.messageParams, value: runtimeName(baselineRuntime),
       });
       engineResult.textContent = [saved, ...await restartFailures(result?.data, resultName, t)].join('\n');
-      redrawEngine();
+      if (!destroyed) redrawEngine();
     } catch (error) { engineResult.textContent = error.message; }
     finally { savingRuntime = false; refreshLocks(); }
   });
-  line.append(saveRuntime, undoRuntime);
   const engineResult = element(document, 'p', '', 'wb-note'); engineResult.id = 'settings-engine-result'; engineResult.setAttribute('role', 'status');
   const split = element(document, 'div', undefined, 'wb-set-split');
   // A count of zero tells nothing, so its line is left out.
@@ -233,42 +228,83 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
     groupColumn('wb.settings.followers', groupCounts.followers, runtimeFollowerFilter, stateText),
     groupColumn('wb.settings.overrides', groupCounts.overrides, runtimeOverrideFilter, row => runtimeName(row.runtime)),
   );
-  const engineNote = element(document, 'p', t('wb.settings.runtimeNote'), 'wb-note');
-  // The chosen engine's CLI version and its upgrade button: choosing the other engine shows and upgrades that one.
-  const engineVersion = element(document, 'div', undefined, 'wb-engine-version'); engineVersion.id = 'settings-engine-version';
-  const selectedRuntime = () => draftRuntime ?? baselineRuntime ?? DEFAULT_RUNTIME;
-  const drawVersion = () => version(engineVersion, selectedRuntime());
-  engine.card.append(line, engineVersion, engineResult, split, engineNote); root.append(engine.card);
-  function redrawEngine() {
-    for (const runtime of runtimes) {
-      segButtons[runtime].setAttribute('aria-pressed', String(draftRuntime === runtime));
-      const name = segNames[runtime];
-      name.textContent = runtimeName(runtime);
-      if (runtime === baselineRuntime) {
-        name.textContent += ' ';
-        name.append(element(document, 'span', t('wb.settings.defaultEngineBadge'), 'wb-tag'));
-      }
+  const loginNote = element(document, 'p', t('wb.settings.runtimeNote'), 'wb-note');
+  const installNote = element(document, 'p', undefined, 'wb-note wb-note-act');
+  const installText = element(document, 'span');
+  const recheckButton = element(document, 'button', t('wb.recheck'), 'wb-btn wb-btn-sm');
+  recheckButton.type = 'button';
+  installNote.append(installText, recheckButton);
+  lock(recheckButton, () => !writable() || recheckBusy);
+  recheckButton.addEventListener('click', async () => {
+    if (recheckButton.disabled || recheckBusy) return;
+    recheckBusy = true;
+    refreshLocks();
+    try {
+      await recheck();
+      if (destroyed) return;
+      const current = await read('/api/instance');
+      if (destroyed) return;
+      instance = { ...instance, versions: current.versions };
+      engineResult.textContent = '';
+      redrawEngine();
+    } catch (error) {
+      engineResult.textContent = t('status.failed', { error: error.message });
+    } finally {
+      recheckBusy = false;
+      refreshLocks();
     }
-    const changed = draftRuntime != null && draftRuntime !== baselineRuntime;
-    saveRuntime.hidden = undoRuntime.hidden = !changed;
+  });
+  const engineVersion = element(document, 'div', undefined, 'wb-engine-version');
+  engineVersion.id = 'settings-engine-version';
+  const selectedRuntime = () => view;
+  const drawVersion = () => version(engineVersion, selectedRuntime());
+  const modelSettings = element(document, 'div', undefined, 'wb-engine-models');
+  engine.card.append(line, loginNote, installNote, engineVersion, engineResult, split, modelSettings);
+  root.append(engine.card);
+  function redrawEngine() {
+    for (const option of options) {
+      const runtime = option.value;
+      option.textContent = [runtimeName(runtime), t('wb.settings.health.' + runtimeHealth(instance, runtime)),
+        ...(runtime === baselineRuntime ? [t('wb.settings.defaultEngineBadge')] : [])].join(' · ');
+    }
+    select.value = view;
+    const isDefault = view === baselineRuntime;
+    const missing = notFound();
+    const signedOut = unavailable();
+    defaultBadge.hidden = !isDefault;
+    setDefault.hidden = isDefault;
+    loginNote.hidden = isDefault || !signedOut || missing;
+    installNote.hidden = isDefault || !missing;
+    if (!installNote.hidden) {
+      installText.textContent = t('wb.runtimeNotFound', { runtime: runtimeName(view), command: `zylos runtime ${view}` });
+    }
+    split.hidden = isDefault || signedOut || missing;
     drawVersion();
     refreshLocks();
   }
 
   // ─── Default model, effort and rotation threshold per engine ───
-  const models = settingsCard(document, { icon: 'sliders', title: t('wb.settings.modelsTitle'), sub: t('wb.settings.modelsSub') });
   const drafts = {}, rows = {};
   const result = element(document, 'p', '', 'wb-note'); result.id = 'settings-model-result'; result.setAttribute('role', 'status');
   let savingModels = false;
   const undo = element(document, 'button', t('wb.settings.undo'), 'wb-btn'); undo.type = 'button';
   const save = element(document, 'button', t('btn.save'), 'wb-btn wb-btn-primary'); save.type = 'button'; save.id = 'settings-save-models';
-  models.acts.append(undo, save);
-  for (const runtime of runtimes) {
+  const actions = element(document, 'div', undefined, 'wb-engine-model-actions');
+  actions.append(undo, save);
+  const boxes = {};
+  const editableRuntimes = runtimesWith('modelOverride');
+  function appendModelFollowers(box, runtime) {
+    const users = groupCounts.models?.[runtime];
+    box.append(element(document, 'small', users == null ? t('wb.unknown') : users
+      ? countLabel(t, 'wb.settings.modelFollowers', users) : t('wb.settings.noFollowers'), 'wb-pref-note'));
+    if (users > 0) box.append(groupList(users, modelFollowerFilter(runtime), stateText));
+  }
+  for (const runtime of editableRuntimes) {
     let meta = metadata[runtime];
-    const row = element(document, 'div', undefined, 'wb-pref');
-    const label = element(document, 'span', undefined, 'wb-pref-l'); label.append(element(document, 'i', undefined, 'wb-sw wb-sw-' + runtime), element(document, 'span', runtimeName(runtime)));
-    const cell = element(document, 'div', undefined, 'wb-pref-c'); row.append(label, cell); models.card.append(row);
-    if (!meta) { cell.append(element(document, 'span', t('wb.unknown'), 'wb-note')); continue; }
+    const box = element(document, 'div', undefined, 'wb-pref-c');
+    boxes[runtime] = box;
+    modelSettings.append(box);
+    if (!meta) { box.append(element(document, 'span', t('wb.unknown'), 'wb-note')); continue; }
     drafts[runtime] = { model: meta.current_model ?? '', effort: meta.current_effort ?? '' };
     const fields = element(document, 'div', undefined, 'wb-model-fields');
     const model = element(document, 'select', undefined, 'wb-input wb-select'); model.id = 'settings-model-' + runtime; model.setAttribute('aria-label', t('actions.model'));
@@ -329,10 +365,8 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
     const thresholdBox = element(document, 'span', undefined, 'wb-set-inline'); thresholdBox.append(threshold, element(document, 'span', '%'));
     effortField.append(element(document, 'span', t('actions.effort'), 'wb-fld-l'), wrapSelect(document, effort));
     fields.append(field(t('actions.model'), wrapSelect(document, model), custom), effortField, field(t('actions.threshold'), thresholdBox), dirty);
-    const users = groupCounts.models?.[runtime];
-    const count = element(document, 'small', users == null ? t('wb.unknown') : users ? countLabel(t, 'wb.settings.modelFollowers', users) : t('wb.settings.noFollowers'), 'wb-pref-note');
-    cell.append(fields, count);
-    if (users > 0) cell.append(groupList(users, modelFollowerFilter(runtime), stateText));
+    box.append(fields);
+    appendModelFollowers(box, runtime);
     rows[runtime] = { model, custom, effort, threshold, thresholdEdits, dirty, meta, renderEffort, renderThreshold,
       thresholdInvalid: () => modelValue() && (modelThresholdValue(rows[runtime]?.meta ?? meta, modelValue()) == null
         ? Boolean((rows[runtime]?.meta ?? meta).model_thresholds)
@@ -343,24 +377,41 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
     lock(threshold, () => savingModels || !writable() || !modelValue() || modelThresholdValue(rows[runtime]?.meta ?? meta, modelValue()) == null);
     void loadThreshold();
   }
-  models.card.append(element(document, 'p', t('wb.settings.nextStartNote'), 'wb-note'), result);
-  root.append(models.card);
-  const changes = () => modelDraftChanges(metadata, drafts);
+  for (const runtime of runtimesWith('modelOverride', 'unsupported')) {
+    const box = element(document, 'div', undefined, 'wb-pref-c');
+    box.append(element(document, 'p', t('wb.config.modelUnavailable', { runtime: runtimeName(runtime) }), 'wb-note'));
+    appendModelFollowers(box, runtime);
+    boxes[runtime] = box;
+    modelSettings.append(box);
+  }
+  const nextStartNote = element(document, 'p', t('wb.settings.nextStartNote'), 'wb-note');
+  modelSettings.append(nextStartNote, result, actions);
+  const changes = () => modelDraftChanges(metadata, drafts).filter(change => change.runtime === view);
+  select.addEventListener('change', () => {
+    if (select.disabled) return;
+    view = select.value;
+    result.textContent = '';
+    redrawEngine();
+    redrawModels();
+  });
   function redrawModels() {
-    const pending = changes();
+    const pending = modelDraftChanges(metadata, drafts);
+    const editing = editableRuntimes.includes(view);
+    for (const [runtime, box] of Object.entries(boxes)) box.hidden = runtime !== view;
     for (const [runtime, row] of Object.entries(rows)) row.dirty.hidden = !pending.some(change => change.runtime === runtime);
-    undo.hidden = save.hidden = !pending.length;
+    nextStartNote.hidden = result.hidden = !editing;
+    actions.hidden = undo.hidden = save.hidden = !pending.some(change => change.runtime === view);
     refreshLocks();
   }
   lock(undo, () => savingModels || !writable());
-  lock(save, () => savingModels || !writable() || !changes().length || Object.values(rows).some(row => row.thresholdInvalid()));
+  lock(save, () => savingModels || !writable() || !changes().length || Boolean(rows[view]?.thresholdInvalid()));
   undo.addEventListener('click', () => {
-    for (const [runtime, row] of Object.entries(rows)) {
-      drafts[runtime] = { model: row.meta.current_model ?? '', effort: row.meta.current_effort ?? '' };
-      const initial = modelOptionState(row.meta); row.model.value = initial.custom ? '__custom__' : row.meta.current_model ?? ''; row.custom.value = initial.customValue; row.custom.hidden = !initial.custom; row.renderEffort(); drafts[runtime].effort = row.meta.current_effort ?? '';
-      row.effort.value = drafts[runtime].effort;
-      row.thresholdEdits.clear(); row.renderThreshold();
-    }
+    const runtime = view, row = rows[runtime];
+    if (undo.disabled || !row) return;
+    drafts[runtime] = { model: row.meta.current_model ?? '', effort: row.meta.current_effort ?? '' };
+    const initial = modelOptionState(row.meta); row.model.value = initial.custom ? '__custom__' : row.meta.current_model ?? ''; row.custom.value = initial.customValue; row.custom.hidden = !initial.custom; row.renderEffort(); drafts[runtime].effort = row.meta.current_effort ?? '';
+    row.effort.value = drafts[runtime].effort;
+    row.thresholdEdits.clear(); row.renderThreshold();
     redrawModels();
   });
   save.addEventListener('click', async () => {
@@ -406,9 +457,10 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
             : { ...row.meta, ['current_' + change.key]: change.value };
         }
       }
-      result.textContent = [report(), ...failures].join('\n');
-    } catch (error) { result.textContent = [...(applied.length ? [report(), ...failures] : []), error.message].join('\n'); }
-    finally {
+      if (view === pending[0].runtime) result.textContent = [report(), ...failures].join('\n');
+    } catch (error) {
+      if (view === pending[0].runtime) result.textContent = [...(applied.length ? [report(), ...failures] : []), error.message].join('\n');
+    } finally {
       if (applied.length) metadata = Object.fromEntries(Object.entries(rows).map(([runtime, row]) => [runtime, row.meta]));
       savingModels = false;
       redrawModels();
@@ -478,7 +530,7 @@ export function renderHotTtl(root, { metadata = {}, document = root.ownerDocumen
   root.append(label, row, help, range, source, result); redraw();
 }
 
-function wrapSelect(document, select) {
-  const wrap = element(document, 'span', undefined, 'wb-select-wrap'); wrap.append(select, icon(document, 'chev', 'xs'));
+function wrapSelect(document, select, className = 'wb-select-wrap') {
+  const wrap = element(document, 'span', undefined, className); wrap.append(select, icon(document, 'chev', 'xs'));
   return wrap;
 }

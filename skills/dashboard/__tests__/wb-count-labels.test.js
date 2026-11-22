@@ -49,14 +49,19 @@ for (const count of [1, 2]) {
     assert.ok(root.textContent.includes(`Memory: ${count} new conversation${noun} to save`));
     assert.ok(systemItems(document, { cpu_count: count, cpu_pct: 10, sampledAt: 100 }, { t, readAt: 100 }).some(item => item.title.includes(`${count} core${noun}`)));
   });
-  test(`Workbench defaults render English count ${count}`, () => {
+  test(`Workbench defaults render English count ${count}`, async () => {
     const document = documentFixture(), root = document.createElement('div');
     const page = { items: groups(count).map(row => ({ id: row.sessionGroup, displayName: row.name.displayName })), total: count, listKnown: true };
     const panel = renderDefaults(root, { document, t, instance: { default_runtime: 'claude' }, groupCounts: { followers: count, overrides: count, models: { claude: count } }, metadata: { claude: { runtime: 'claude', current_model: 'one', current_effort: 'high', models: [{ id: 'one' }], efforts_by_model: { one: ['high'] } } }, read: async () => ({}) });
+    const engine = root.querySelector('#settings-engine');
+    assert.equal(root.querySelector('.wb-set-split').hidden, true);
+    assert.ok(root.textContent.includes(`${count} running group${noun} ${count === 1 ? 'uses' : 'use'} these defaults`), root.textContent);
+    engine.value = 'codex';
+    await engine.dispatch('change');
+    assert.equal(root.querySelector('.wb-set-split').hidden, false);
     assert.ok(root.textContent.includes(`Switching interrupts ${count} running group${noun}`));
     assert.ok(root.textContent.includes(`${count} group${noun} ${count === 1 ? 'sets its' : 'set their'} own engine`));
     assert.ok(root.textContent.includes(count === 1 ? 'Show this group' : 'Show these 2 groups'));
-    assert.ok(root.textContent.includes(`${count} running group${noun} ${count === 1 ? 'uses' : 'use'} these defaults`), root.textContent);
     assert.ok(runtimeSaveConfirmation('claude', page, t).includes(`${count} running group${noun} that ${count === 1 ? 'follows' : 'follow'} the default`));
     const modelQuestion = modelSaveConfirmation([{ runtime: 'claude', action: 'switch-model', key: 'model', value: 'one' }],
       t, {}, { claude: page });
