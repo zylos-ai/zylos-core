@@ -45,7 +45,12 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       if (!url.href.startsWith(base + '/')) return route.abort();
       if (url.pathname === '/api/fleet') {
         const machine = (name, extra = {}) => ({ name, state: 'IDLE', access: 'admin', health_reason: null, pulse_rate: 1, updated_at: new Date().toISOString(), ...extra });
-        return route.fulfill({ json: fleetPageFixture({ agents: [machine('browser-case', { self: true }), machine(REMOTE)], updated_at: new Date().toISOString() }, url.search) });
+        const agents = [
+          machine('browser-case', { self: true }),
+          machine('offline-reader', { state: 'OFFLINE', pulse_rate: 0, access: 'read' }),
+          machine(REMOTE),
+        ];
+        return route.fulfill({ json: fleetPageFixture({ agents, updated_at: new Date().toISOString() }, url.search) });
       }
       const remote = url.pathname.match(/^\/fleet\/([^/]+)(\/api\/.*)$/);
       if (!remote) return route.fallback();
@@ -93,6 +98,8 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       await page.locator(`.wb-row[data-group="${GROUP}"]`).click();
       const side = page.locator('#wb-side'), action = side.locator('[data-action="viewConversation"]');
       await side.waitFor();
+      // The offline read-only machine sorts first, but Spark has admin access.
+      await side.getByRole('button', { name: 'Rename', exact: true }).and(side.locator('button:enabled')).waitFor();
       assert.equal(await action.count(), 0);
       assert.equal(await side.locator('.wb-group-head .wb-state.wb-idle').count(), 1, 'header follows idle working despite busy runtime state');
       assert.match(await side.locator('.wb-now-title').first().innerText(), /Idle/, 'now card uses the same working state');

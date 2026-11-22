@@ -36,7 +36,9 @@ test('the owner can manage session hosting at desktop and phone widths', {
     const insert = database.prepare('INSERT INTO session_hosts VALUES (?, ?, ?, ?)');
     for (let i = 1; i <= 59; i++) {
       const id = String(i).padStart(2, '0');
-      insert.run(`telegram:source-${id}`, `multica:target-${id}`, 'origin', 1760000000);
+      const sourceGroup = i === 59 ? 'telegram:Source-59' : `telegram:source-${id}`;
+      const targetGroup = i >= 51 && i <= 58 ? `multica:batch-target-${id}` : `multica:target-${id}`;
+      insert.run(sourceGroup, targetGroup, 'origin', 1760000000);
     }
     database.prepare('INSERT OR IGNORE INTO channel_namespaces (namespace, component_name) VALUES (?, ?)').run('multica', 'multica');
     const notices = [];
@@ -87,11 +89,14 @@ test('the owner can manage session hosting at desktop and phone widths', {
     assert.equal(cursor, null);
     assert.equal(new Set(keys).size, 60);
     assert.deepEqual(keys, [...keys].sort());
-    for (const search of ['SOURCE-59', 'Target-59']) {
+    for (const search of ['source-59', 'target-59']) {
       const match = await get('?q=' + search);
-      assert.deepEqual(match.items.map(row => row.source_group), ['telegram:source-59']);
+      assert.deepEqual(match.items.map(row => row.source_group), ['telegram:Source-59']);
       assert.equal(Object.hasOwn(match, 'total'), false);
     }
+    const exactPage = await get('?q=batch-target-&limit=8');
+    assert.equal(exactPage.items.length, 8);
+    assert.equal(exactPage.nextCursor, null);
     for (const [params, param] of [['extra=1', 'extra'], ['q=one&q=two', 'q'], ['limit=0', 'limit']]) {
       const response = await get('?' + params, 400);
       assert.equal(response.error.code, 'invalid_parameter');
@@ -142,11 +147,11 @@ test('the owner can manage session hosting at desktop and phone widths', {
         if (width === 390 && locale === 'zh' && theme === 'dark') {
           const relationships = panel.locator('#settings-host-relationships');
           await relationships.locator('.wb-plist-next').click();
-          await relationships.locator('.wb-host-row').filter({ hasText: 'source-08' }).waitFor();
+          await relationships.locator('.wb-host-row').filter({ hasText: 'source-07' }).waitFor();
           const search = relationships.locator('input[type=search]');
           for (const q of ['source-59', 'target-59']) {
             await search.fill(q);
-            await relationships.locator('.wb-host-row').filter({ hasText: 'source-59' }).waitFor();
+            await relationships.locator('.wb-host-row').filter({ hasText: 'Source-59' }).waitFor();
             assert.equal(await relationships.locator('.wb-host-row').count(), 1);
           }
           await search.fill('');

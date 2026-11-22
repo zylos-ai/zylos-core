@@ -1692,7 +1692,9 @@ test('the Fleet routes page 20 machines, preserve the summary and reject invalid
     assert.deepEqual(observed, [...names, 'local']);
     const exact = await get(wall + '?name=remote-19&include=total');
     assert.equal(exact.total, 1);
+    assert.equal(exact.summary.count, 20);
     assert.equal(exact.items[0].access, 'read');
+    assert.deepEqual((await get(wall + '?q=REMOTE-19')).items.map(row => row.name), ['remote-19']);
     assert.equal((await get(wall + '?name=remote')).items.length, 0);
     const first = await get(settings + '?limit=8&include=total');
     const next = await get(settings + '?limit=8&cursor=' + encodeURIComponent(first.nextCursor));
