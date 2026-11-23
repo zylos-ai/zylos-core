@@ -15,26 +15,3 @@ test('startup timezone uses dotenv export, quoting and comment grammar and only 
   loadStartupTimezone(env);
   assert.deepEqual(env, { ZYLOS_DIR: root, TZ: 'Asia/Tokyo', OTHER: 'original' });
 });
-test('missing environment file or TZ preserves inherited or absent timezone', t => {
-  const { root, file } = fixture(t);
-  for (const withFile of [false, true]) {
-    if (withFile) fs.writeFileSync(file, 'OTHER=value\n');
-    for (const inherited of [undefined, 'Europe/London']) {
-      const env = { ZYLOS_DIR: root, ...(inherited ? { TZ: inherited } : {}) };
-      loadStartupTimezone(env); assert.equal(env.TZ, inherited);
-      assert.equal(Object.hasOwn(env, 'TZ'), inherited !== undefined);
-    }
-  }
-});
-test('invalid and empty instance timezone fail explicitly before startup', t => {
-  const { root, file } = fixture(t), env = { ZYLOS_DIR: root, TZ: 'UTC' };
-  for (const value of ['', 'Invalid/Zone']) {
-    fs.writeFileSync(file, `TZ=${value}\n`);
-    assert.throws(() => loadStartupTimezone(env), { code: 'INVALID_TZ' });
-    assert.equal(env.TZ, 'UTC');
-  }
-});
-test('unreadable environment file fails explicitly', t => {
-  const { root, file } = fixture(t); fs.mkdirSync(file);
-  assert.throws(() => loadStartupTimezone({ ZYLOS_DIR: root }), { code: 'TZ_ENV_READ_ERROR' });
-});

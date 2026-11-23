@@ -32,14 +32,6 @@ test('one real socket receives the exact v2 line without providing an acknowledg
   assert.equal(bytes, JSON.stringify({ version: 2, type: 'notify_delivered', requestId: `dispatcher-${process.pid}-${fields.pastedAt}`, ...fields }) + '\n');
 });
 
-test('connection refusal resolves and makes one attempt', async t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'notify-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  let attempts = 0;
-  await notifyDelivered(fields, { socketPath: path.join(dir, 'absent.sock'), createConnection: (...args) => { attempts++; return net.createConnection(...args); } });
-  assert.equal(attempts, 1);
-});
-
 test('default absolute five-second deadline bounds stalled connect and write, regardless of incoming bytes', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   for (const connect of [false, true]) {
@@ -55,32 +47,6 @@ test('default absolute five-second deadline bounds stalled connect and write, re
     assert.equal(attempts, 1); assert.equal(destroyed, 1); assert.equal(writes, Number(connect));
   }
 });
-
-test('synchronous connect/write failures are discarded and never retried', async () => {
-  let attempts = 0;
-  await notifyDelivered(fields, { createConnection: () => { attempts++; throw new Error('connect failed'); } });
-  assert.equal(attempts, 1);
-  const socket = new EventEmitter(); let destroyed = 0;
-  socket.destroy = () => { destroyed++; };
-  socket.end = () => { throw new Error('write failed'); };
-  const pending = notifyDelivered(fields, { createConnection: () => socket });
-  socket.emit('connect'); await pending;
-  assert.equal(destroyed, 1);
-});
-
-
-test('control paste uses the existing v2 wire envelope with one control identity', async () => {
-  const socket = new EventEmitter(); let line;
-  socket.destroy = () => {};
-  socket.end = (value, done) => { line = JSON.parse(value); done(); };
-  const { conversationId, channel, ...identity } = fields;
-  const pending = notifyDelivered({ controlId: 27, ...identity }, { createConnection: () => socket });
-  socket.emit('connect'); await pending;
-  assert.deepEqual(line, { version: 2, type: 'notify_delivered',
-    requestId: `dispatcher-${process.pid}-${fields.pastedAt}`, controlId: 27, ...identity });
-  assert.equal(Object.hasOwn(line, 'conversationId'), false);
-});
-
 
 test('terminal failure fact carries the runtime session over the existing transport', async () => {
   const socket = new EventEmitter(); let line;

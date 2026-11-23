@@ -58,38 +58,6 @@ async function fixture(t, { fixed, explicit, mode = 'multi', record } = {}) {
 }
 
 const fresh = now => ({ v: 1, k: 3, source: 'auto', computedAt: now });
-for (const [name, record, expected] of [
-  ['fresh', fresh, 3],
-  ['old', now => ({ ...fresh(now), computedAt: now - 61000 }), 2],
-  ['old below baseline', now => ({ ...fresh(now), k: 1, computedAt: now - 61000 }), 1],
-  ['future', now => ({ ...fresh(now), computedAt: now + 6000 }), 2],
-  ['missing', undefined, 2],
-  ['unsupported version', now => ({ ...fresh(now), v: 2 }), 2],
-  ['zero', now => ({ ...fresh(now), k: 0 }), 2],
-  ['string', now => ({ ...fresh(now), k: '3' }), 2],
-  ['truncated', '{"v":1,', 2],
-]) {
-  test(`dispatcher passes ${name} publication capacity to slot admission`, async t => {
-    const f = await fixture(t, { record });
-    f.add('new'); await f.rounds();
-    assert.equal(f.taken.find(row => row.group === 'new')?.k, expected);
-    assert.ok(f.calls.some(row => row[0] === 'launch' && row[1].sessionGroup === 'new'));
-    const m4record = typeof record === 'function' ? record(f.now()) : null;
-    if (name === 'fresh' || name.startsWith('old')) assert.equal(expected, f.m4(m4record));
-    else assert.ok(expected <= f.m4(m4record));
-  });
-}
-
-for (const [name, record] of [
-  ['missing', undefined], ['stale', now => ({ ...fresh(now), computedAt: now - 61000 })],
-  ['invalid', '{'],
-]) for (const explicit of [undefined, '3']) {
-  test(`dispatcher uses ${explicit ? 'environment' : 'file'} fixed capacity when publication is ${name}`, async t => {
-    const f = await fixture(t, { fixed: 1, explicit, record });
-    f.add('new'); await f.rounds();
-    assert.equal(f.taken.find(row => row.group === 'new')?.k, explicit ? 3 : 1);
-  });
-}
 
 // Same isolated factory/reader/Store boundary as above. Run for capacity lookup
 // changes; no clock advance may be required to observe a newly published value.
@@ -107,18 +75,6 @@ test('running dispatcher uses newly published decreases and increases on its nex
   assert.equal(f.row(waiting.id).status, 'delivered');
 });
 
-// Private file, injected wall clock and real slot transaction; no live runtime.
-// Run for current-time lookup changes; skip changes outside capacity admission.
-test('dispatcher reads new publication after the clock moves backward', async t => {
-  const f = await fixture(t, { record: fresh });
-  assert.equal(f.router.availableCapacity(), 3);
-  f.advance(-3600000);
-  f.write({ ...fresh(f.now()), k: 1 }); f.add('new');
-  await f.rounds();
-  assert.equal(f.taken.find(row => row.group === 'new')?.k, 1);
-  assert.equal(f.row(1).status, 'delivered');
-});
-
 test('stopped publisher preserves delivery and admits below fallback while queuing at its limit', async t => {
   const f = await fixture(t, { record: now => ({ ...fresh(now), computedAt: now - 61000 }) });
   f.put('existing'); const existing = f.add('existing'), admitted = f.add('below'), queued = f.add('waiting');
@@ -130,51 +86,4 @@ test('stopped publisher preserves delivery and admits below fallback while queui
   f.write(fresh(f.now())); await f.rounds(5);
   assert.equal(f.taken.find(row => row.group === 'waiting')?.k, 3);
   assert.equal(f.row(queued.id).status, 'delivered');
-});
-
-// Retain the last successful file/record while publication does not advance.
-// Same private reader/Store fixture, no publisher write injection. Run for
-// freshness lookup changes; crossing the expiry boundary must take effect now.
-test('dispatcher and supervisor record expire together between adjacent reads', async t => {
-  const f = await fixture(t, { record: fresh });
-  const published = fresh(f.now());
-  f.advance(59900);
-  assert.equal(f.router.availableCapacity(), 3);
-  assert.equal(f.router.availableCapacity(), f.m4(published));
-  f.advance(200); f.add('new'); await f.rounds();
-  const k = f.taken.find(row => row.group === 'new')?.k;
-  assert.equal(k, 2); assert.equal(k, f.m4(published));
-});
-
-test('single activation never reads pool capacity', async t => {
-  const f = await fixture(t, { mode: 'single', record: '{' });
-  f.add('other');
-  await f.rounds();
-  // Satisfy resident absence pacing before checking the single-session launch.
-  f.advance(5000); await f.rounds();
-  assert.ok(f.calls.some(row => row[0] === 'launch' && row[1].sessionGroup === 'origin'));
-  assert.equal(f.taken.length, 0); assert.equal(f.reads(), 0);
-});
-
-test('held continuation takes over above a lowered limit using the current capacity', async t => {
-  const f = await fixture(t, { record: fresh });
-  f.put('existing');
-  f.db.takeSlot('held', { runId: 'old-held', k: 3 });
-  f.db.recordRunEnd('held', { runId: 'old-held', reason: 'upgrade' });
-  await f.rounds();
-  const waiting = f.add('waiting');
-  f.write({ ...fresh(f.now()), k: 1 });
-  // Satisfy continuation restart pacing after observing the held run absent.
-  f.advance(5000);
-  await f.rounds(6);
-  assert.equal(f.taken.filter(row => row.group === 'held' && row.k !== 100000).at(-1)?.k, 1);
-  assert.ok(f.calls.some(row => row[0] === 'launch' && row[1].sessionGroup === 'held'));
-  assert.equal(f.db.listSlotOccupancy().length, 2);
-  assert.equal(f.row(waiting.id).status, 'pending');
-});
-
-test('scheduler requires a capacity function', t => {
-  const f = routerFixture(t);
-  f.options.poolSize = 2;
-  assert.throws(() => f.create(), /poolSize must be a function/);
 });

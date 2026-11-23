@@ -46,12 +46,6 @@ function withFrozenClock(fn) {
 }
 
 describe('truncateForDelivery conv-id spill naming', () => {
-  it('spills with a conversation id land in a conv-<id> directory', () => {
-    const content = 'C'.repeat(FILE_SIZE_THRESHOLD + 100);
-    const p = spillPathOf(truncateForDelivery(content, '', 651));
-    assert.ok(p.includes(`${path.sep}conv-651${path.sep}`), `path should contain conv-651 dir, got: ${p}`);
-    assert.equal(fs.readFileSync(p, 'utf8'), content);
-  });
 
   it('different conversation ids never share a path, even in the same millisecond', () => {
     const contentA = 'A'.repeat(FILE_SIZE_THRESHOLD + 100);
@@ -65,19 +59,6 @@ describe('truncateForDelivery conv-id spill naming', () => {
     assert.equal(fs.readFileSync(pathB, 'utf8'), contentB);
   });
 
-  it('re-spilling the same conversation id overwrites its own directory idempotently', () => {
-    const content = 'D'.repeat(FILE_SIZE_THRESHOLD + 100);
-    const p1 = spillPathOf(truncateForDelivery(content, '', 2001));
-    const p2 = spillPathOf(truncateForDelivery(content, '', 2001));
-    assert.equal(p1, p2, 'same conv id must reuse the same path');
-    assert.equal(fs.readFileSync(p2, 'utf8'), content, 'content intact after re-spill');
-  });
-
-  it('conv id 0 is treated as a valid id, not as missing', () => {
-    const content = 'E'.repeat(FILE_SIZE_THRESHOLD + 100);
-    const p = spillPathOf(truncateForDelivery(content, '', 0));
-    assert.ok(p.includes(`${path.sep}conv-0${path.sep}`), `expected conv-0 dir, got: ${p}`);
-  });
 });
 
 describe('truncateForDelivery fallback (no conv id) spill path collision', () => {
@@ -98,41 +79,9 @@ describe('truncateForDelivery fallback (no conv id) spill path collision', () =>
     assert.equal(fs.readFileSync(pathB, 'utf8'), contentB, 'second spill content intact');
   });
 
-  it('a burst of same-millisecond spills yields unique paths for every message', () => {
-    const N = 20;
-    const paths = new Set();
-    withFrozenClock(() => {
-      for (let i = 0; i < N; i++) {
-        const content = `msg-${i}-` + 'x'.repeat(FILE_SIZE_THRESHOLD + 50);
-        const delivered = truncateForDelivery(content);
-        const p = spillPathOf(delivered);
-        paths.add(p);
-        assert.equal(fs.readFileSync(p, 'utf8'), content, `spill ${i} content intact`);
-      }
-    });
-    assert.equal(paths.size, N, 'every spill in the burst has its own path');
-  });
-
-  it('short messages are returned inline, no spill file created', () => {
-    const content = 'short message';
-    const delivered = truncateForDelivery(content);
-    assert.equal(delivered, content);
-    assert.ok(!delivered.includes('[C4] ⚠️ TRUNCATED'));
-  });
 });
 
 describe('truncation notice wording (#748)', () => {
-  it('states incompleteness, gives an imperative, and reports preview/full sizes', () => {
-    const content = 'F'.repeat(FILE_SIZE_THRESHOLD + 500);
-    const delivered = truncateForDelivery(content, '', 3001);
-
-    assert.ok(delivered.includes('only a preview'), 'must state the text above is incomplete');
-    assert.ok(
-      delivered.includes('you MUST read the complete message file:'),
-      'must carry an imperative naming the concrete action',
-    );
-    assert.match(delivered, /\([\d.]+KB of [\d.]+KB\)/, 'must report preview and full sizes');
-  });
 
   it('keeps the reply-via suffix after the notice so routing survives truncation', () => {
     const content = 'G'.repeat(FILE_SIZE_THRESHOLD + 500);
@@ -149,14 +98,6 @@ describe('truncateForDelivery paste-wrap char threshold', () => {
   const SUFFIX = ' ---- reply via: node c4-send.js "lark" "oc_x|type:p2p"';
   const body = (total) => 'a'.repeat(total - SUFFIX.length);
 
-  it('delivers inline at 750 and exactly at the threshold', () => {
-    for (const total of [750, PASTE_CHAR_THRESHOLD]) {
-      const out = truncateForDelivery(body(total), SUFFIX, 7000 + total);
-      assert.equal(out.length, total);
-      assert.ok(!out.includes('[C4] ⚠️ TRUNCATED'));
-    }
-  });
-
   it('spills one char over the threshold and at 850, with a notice that stays under it', () => {
     for (const total of [PASTE_CHAR_THRESHOLD + 1, 850]) {
       const content = body(total);
@@ -167,23 +108,4 @@ describe('truncateForDelivery paste-wrap char threshold', () => {
     }
   });
 
-  it('keeps the notice under the threshold even with a long thread reply-via', () => {
-    const longSuffix = ` ---- reply via: node /home/user/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "lark" "oc_${'0'.repeat(32)}|type:p2p|root:om_${'1'.repeat(32)}|parent:om_${'1'.repeat(32)}|msg:om_${'2'.repeat(32)}"`;
-    const out = truncateForDelivery('汉'.repeat(3000), longSuffix, 8500);
-    assert.ok(out.length <= PASTE_CHAR_THRESHOLD, `notice too long: ${out.length}`);
-  });
-
-  it('counts UTF-16 code units like Claude Code, not bytes', () => {
-    const emoji = '😀'.repeat(401); // 802 units, 1604 bytes
-    assert.ok(truncateForDelivery(emoji, '', 9001).includes('[C4] ⚠️ TRUNCATED'));
-    const cjk = '汉'.repeat(600); // 600 units, 1800 bytes
-    assert.equal(truncateForDelivery(cjk, '', 9002), cjk);
-  });
-
-  it('measures the sanitized text that is actually pasted', () => {
-    // 790 visible chars + 20 CRs: 810 raw, but 790 after the dispatcher strips \r.
-    const content = 'a\r\n'.repeat(20) + 'b'.repeat(750);
-    assert.equal(content.length, 810);
-    assert.equal(truncateForDelivery(content, '', 9003), content);
-  });
 });

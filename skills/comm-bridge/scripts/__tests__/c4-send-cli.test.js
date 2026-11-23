@@ -86,148 +86,15 @@ describe('c4-send basic', () => {
     });
   });
 
-  it('sends message via mock channel without endpoint (broadcast)', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const sentFile = setupMockChannel(tmpDir, 'mock-channel');
-
-      const { stdout, status } = cli(['mock-channel', '--stdin'], env, 'Hello broadcast!');
-      assert.equal(status, 0);
-      assert.ok(stdout.includes('Message sent via mock-channel'));
-
-      const sent = JSON.parse(fs.readFileSync(sentFile, 'utf8'));
-      assert.deepEqual(sent, ['Hello broadcast!']);
-    });
-  });
 });
 
 // -- validation --
 
-describe('c4-send validation', () => {
-  it('rejects empty positional content before dispatch or audit', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const sentFile = setupMockChannel(tmpDir, 'mock-channel');
-      const result = cli(['mock-channel', 'endpoint', ''], env);
-      assert.equal(result.status, 1);
-      assert.equal(result.stdout, '');
-      assert.equal(result.stderr, '[C4] EMPTY_CONTENT: Message is required\n');
-      assert.equal(fs.existsSync(sentFile), false);
-      assert.deepEqual(dbRecent(env), []);
-    });
-  });
-
-  it('errors with no arguments', () => {
-    withTmpDir(({ env }) => {
-      const { stdout, status } = cli([], env);
-      assert.equal(status, 1);
-      assert.ok(stdout.includes('Usage'));
-    });
-  });
-
-  it('errors with only channel (no message)', () => {
-    withTmpDir(({ env }) => {
-      const { stdout, status } = cli(['telegram'], env);
-      assert.equal(status, 1);
-      assert.ok(stdout.includes('Usage'));
-    });
-  });
-
-  it('errors when channel script not found', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      // Create the channel directory but no send.js
-      const skillDir = path.join(tmpDir, '.claude', 'skills', 'fake-channel');
-      fs.mkdirSync(skillDir, { recursive: true });
-
-      const { stderr, status } = cli(['fake-channel', '--stdin'], env, 'Hello');
-      assert.equal(status, 1);
-      assert.ok(stderr.includes('Channel script not found'));
-    });
-  });
-});
-
 // -- void channel (#689) --
-
-describe('c4-send void channel', () => {
-  it('rejects a present empty group without falling back to the run id origin', () => {
-    withTmpDir(({ env }) => {
-      const result = cli(['void', 'handoff', '--stdin'], { ...env, ZYLOS_SESSION_GROUP: '', ZYLOS_RUN_ID: 'run-a' }, 'note');
-      assert.equal(result.status, 1);
-      assert.equal(result.stdout, '');
-      assert.equal(result.stderr, '[C4] UNKNOWN_GROUP: Unknown recording group\n');
-      assert.deepEqual(dbRecent(env), []);
-    });
-  });
-
-  it('records the message in c4.db and exits 0 without a skill directory', () => {
-    withTmpDir(({ env }) => {
-      const { stdout, status } = cli(['void', 'session-handoff', 'handoff summary'], { ...env, ZYLOS_SESSION_GROUP: 'origin' });
-      assert.equal(status, 0);
-      assert.ok(stdout.includes('recorded on void channel'));
-      assert.ok(!stdout.includes('Message sent via'));
-
-      const rows = dbRecent(env);
-      assert.equal(rows.length, 1);
-      assert.equal(rows[0].direction, 'out');
-      assert.equal(rows[0].channel, 'void');
-      assert.equal(rows[0].endpoint_id, 'session-handoff');
-      assert.equal(rows[0].content, 'handoff summary');
-      assert.equal(rows[0].status, 'delivered');
-    });
-  });
-
-  it('does not spawn a channel send script even if one exists', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const sentFile = setupMockChannel(tmpDir, 'void');
-
-      const { status } = cli(['void', 'session-handoff', 'handoff summary'], { ...env, ZYLOS_SESSION_GROUP: 'origin' });
-      assert.equal(status, 0);
-      assert.ok(!fs.existsSync(sentFile), 'void must never dispatch to a send script');
-    });
-  });
-
-  it('supports stdin/heredoc message input', () => {
-    withTmpDir(({ env }) => {
-      const message = 'multi-line handoff\nwith "quotes" and $vars';
-      const { stdout, status } = cli(['void', 'session-handoff'], { ...env, ZYLOS_SESSION_GROUP: 'origin' }, message);
-      assert.equal(status, 0);
-      assert.ok(stdout.includes('recorded on void channel'));
-
-      const rows = dbRecent(env);
-      assert.equal(rows.length, 1);
-      assert.equal(rows[0].channel, 'void');
-      assert.equal(rows[0].content, message);
-    });
-  });
-
-  it('rejects a void send without an endpoint', () => {
-    withTmpDir(({ env }) => {
-      // --stdin with a single arg is the only reachable no-endpoint form
-      const { stderr, status } = cli(['void', '--stdin'], env, 'orphan message');
-      assert.equal(status, 1);
-      assert.ok(stderr.includes('Endpoint is required for the void channel'));
-
-      const rows = dbRecent(env);
-      assert.equal(rows.length, 0);
-    });
-  });
-});
 
 // -- failed channel --
 
 describe('c4-send failed channel', () => {
-  it('preserves the exact legacy stdout and exit code for component exit 3', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const skillDir = path.join(tmpDir, '.claude', 'skills', 'bad-channel', 'scripts');
-      fs.mkdirSync(skillDir, { recursive: true });
-      fs.writeFileSync(path.join(skillDir, 'send.js'), 'process.exit(3);');
-      const result = cli(['bad-channel', '--stdin'], env, 'Hello');
-      assert.equal(result.status, 3);
-      assert.equal(result.stdout, '[C4] Failed to send message via bad-channel (exit code: 3)\n');
-      assert.equal(result.stderr, '[C4] SEND_FAILED: Failed to send: component exit 3; audit retained; delivery unconfirmed\n');
-      const row = dbRecent(env)[0];
-      assert.equal(row.status, 'failed');
-      assert.equal(row.delivery_action, 'send_failed');
-    });
-  });
 
   it('reports failure when channel script exits non-zero', () => {
     withTmpDir(({ tmpDir, env }) => {

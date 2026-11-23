@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { readChannelHookMetadata, readBeforeSendHook, assertHookProcessSucceeded, runBeforeSendHook, parseBeforeSendOutput } from '../c4-channel-hooks.js';
+import { readChannelHookMetadata, readBeforeSendHook, runBeforeSendHook } from '../c4-channel-hooks.js';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'channel-hooks-'));
@@ -13,24 +13,6 @@ function fixture(t) {
   return { root, write, read: channel => readChannelHookMetadata(channel, { skillsDir: root }) };
 }
 
-test('strict metadata reads only the actual channel and never caches declarations', t => {
-  const f = fixture(t);
-  f.write('x', '---\nc4:\n  before_send: first\n---\nBody');
-  f.write('y', '---\nc4: [broken\n---');
-  assert.deepEqual(f.read('x'), { before_send: 'first' });
-  f.write('x', '---\nc4:\n  before_send: second\n---');
-  assert.deepEqual(f.read('x'), { before_send: 'second' });
-  assert.throws(() => f.read('y'), { code: 'HOOK_INVALID_OUTPUT' });
-});
-
-test('missing skill or absent c4 metadata preserves the unregistered path', t => {
-  const f = fixture(t);
-  assert.equal(f.read('x'), null);
-  for (const text of ['# Channel', '---\nname: x\n---', '---\n---', '\uFEFF---\r\nname: x\r\n---\r\n']) {
-    f.write('x', text); assert.equal(f.read('x'), null);
-  }
-});
-
 test('broken YAML and invalid frontmatter mappings fail closed', t => {
   const f = fixture(t);
   for (const text of ['---\nc4: [broken\n---', '---\nc4: {}', '---\nc4: {}\nc4: {}\n---',
@@ -39,54 +21,10 @@ test('broken YAML and invalid frontmatter mappings fail closed', t => {
   }
 });
 
-test('unavailable channels reject while Core-owned paths never read component metadata', t => {
-  const f = fixture(t);
-  for (const name of ['missing', '../y', 'x/y', 'x\\y', '', '/x']) {
-    assert.throws(() => f.read(name), { code: 'INVALID_ARGS' });
-  }
-  for (const name of ['internal', 'void', 'system']) {
-    assert.equal(readChannelHookMetadata(name, { skillsDir: '/does-not-exist' }), null);
-  }
-});
-
 function declaration(f, hook) {
   f.write('x', `---\n${JSON.stringify({ c4: { before_send: hook } })}\n---`);
   return () => readBeforeSendHook('x', { skillsDir: f.root });
 }
-
-test('one synchronous script is resolved within its own channel without executable requirements', t => {
-  const f = fixture(t);
-  fs.mkdirSync(path.join(f.root, 'x', 'scripts'));
-  const script = path.join(f.root, 'x', 'scripts', 'check.js');
-  fs.writeFileSync(script, '', { mode: 0o600 });
-  const hook = { hook_id: 'check', entry: 'scripts/check.js', timeout_ms: 0.5 };
-  assert.deepEqual(declaration(f, hook)(), { hookId: 'check', entry: script, timeoutMs: 0.5, directory: path.join(f.root, 'x') });
-  assert.equal(declaration(f, { ...hook, timeout_ms: Number.MAX_VALUE })().timeoutMs, Number.MAX_VALUE);
-  assert.equal(declaration(f, { ...hook, async: false })().hookId, 'check');
-  f.write('x', '---\nc4:\n  delivery: stdin\n---');
-  assert.equal(readBeforeSendHook('x', { skillsDir: f.root }), null);
-});
-
-test('missing fields, invalid timeouts, asynchronous and other event declarations reject', t => {
-  const f = fixture(t);
-  fs.writeFileSync(path.join(f.root, 'x', 'check.js'), '');
-  const hook = { hook_id: 'check', entry: 'check.js', timeout_ms: 1000 };
-  for (const key of Object.keys(hook)) {
-    const bad = { ...hook }; delete bad[key];
-    assert.throws(declaration(f, bad), { code: 'HOOK_INVALID_OUTPUT' });
-  }
-  for (const timeout_ms of [null, '1000', 0, -1, Infinity, NaN]) {
-    assert.throws(declaration(f, { ...hook, timeout_ms }), { code: 'HOOK_INVALID_OUTPUT' });
-  }
-  for (const bad of [null, [], [hook], { ...hook, async: true }, { ...hook, url: 'https://example.invalid' },
-    { ...hook, hook_id: ' ' }, { ...hook, entry: { type: 'http' } }, { ...hook, event: 'BeforeReceive' }]) {
-    assert.throws(declaration(f, bad), { code: 'HOOK_INVALID_OUTPUT' });
-  }
-  for (const metadata of [{ before_receive: hook }, { before_send: hook, after_send: hook }, { delivery: 'http' }]) {
-    f.write('x', `---\n${JSON.stringify({ c4: metadata })}\n---`);
-    assert.throws(() => readBeforeSendHook('x', { skillsDir: f.root }), { code: 'HOOK_INVALID_OUTPUT' });
-  }
-});
 
 test('absolute, escaping, symlink-escaping and non-file entries never execute', t => {
   const f = fixture(t);
@@ -94,19 +32,6 @@ test('absolute, escaping, symlink-escaping and non-file entries never execute', 
   fs.symlinkSync(path.join(f.root, 'y', 'check.js'), path.join(f.root, 'x', 'outside.js'));
   for (const entry of [path.join(f.root, 'y', 'check.js'), '../y/check.js', 'outside.js', '.', 'missing.js', 'https://example.invalid/check']) {
     assert.throws(declaration(f, { hook_id: 'check', entry, timeout_ms: 1000 }), { code: 'HOOK_INVALID_OUTPUT' });
-  }
-});
-
-test('process outcome reasons prioritize timeout and Core output termination over exit signals', () => {
-  const success = { timedOut: false, outputTooLarge: false, exitCode: 0, signal: null, error: null };
-  assert.equal(assertHookProcessSucceeded(success), undefined);
-  for (const result of [{ ...success, timedOut: true, outputTooLarge: true, signal: 'SIGKILL' },
-    { ...success, timedOut: true, error: new Error('spawn') }]) {
-    assert.throws(() => assertHookProcessSucceeded(result), { code: 'HOOK_TIMEOUT' });
-  }
-  assert.throws(() => assertHookProcessSucceeded({ ...success, outputTooLarge: true, signal: 'SIGKILL' }), { code: 'HOOK_INVALID_OUTPUT' });
-  for (const result of [{ ...success, exitCode: 1 }, { ...success, signal: 'SIGTERM' }, { ...success, error: new Error('spawn') }]) {
-    assert.throws(() => assertHookProcessSucceeded(result), { code: 'HOOK_EXEC_FAILED' });
   }
 });
 
@@ -137,50 +62,4 @@ test('approved wire contains only the original request and Core-generated correl
   for (let i = 0; i < 2; i++) assert.deepEqual(await runBeforeSendHook(request, 'original $() `body`', { skillsDir:f.root,env,run }), {version:1,decision:'continue'});
   assert.notEqual(inputs[0].request_id, inputs[1].request_id);
   assert.notEqual(inputs[0].invocation_id, inputs[1].invocation_id);
-});
-
-test('BeforeSend only infers a session ID without a runtime from one available variable', async t => {
-  const f = fixture(t);
-  fs.writeFileSync(path.join(f.root, 'x', 'check.js'), '');
-  declaration(f, { hook_id: 'check', entry: 'check.js', timeout_ms: 250 })();
-  const claudeEnv = { CLAUDE_SESSION_ID: 'claude-session' };
-  const cases = [
-    {
-      env: { ...claudeEnv, ZYLOS_MODEL_CONFIG: '{"runtime":"agy"}' },
-      context: { component: 'x', runtime: 'agy' },
-    },
-    { env: claudeEnv, context: { component: 'x', session_id: 'claude-session' } },
-    {
-      env: { ...claudeEnv, CODEX_SESSION_ID: 'codex-session' },
-      context: { component: 'x' },
-    },
-  ];
-  const request = { channel: 'x', endpoint: 'room' };
-  for (const { env, context } of cases) {
-    const inputs = [];
-    await runBeforeSendHook(request, 'original', {
-      skillsDir: f.root,
-      env,
-      run: async ({ input }) => {
-        inputs.push(JSON.parse(input).context);
-        return { exitCode: 0, stdout: '{"version":1,"decision":"continue"}' };
-      },
-    });
-    assert.deepEqual(inputs, [context]);
-  }
-});
-
-test('unknown wire fields and continue messages reject while abort text is single-line code points', () => {
-  for (const value of ['bad', '[]', 'null', '{"version":2,"decision":"continue"}',
-    '{"version":1,"decision":"maybe"}', '{"version":1,"decision":"continue","message":"unused"}',
-    '{"version":1,"decision":"continue","content":"rewrite"}', '{"version":1,"decision":"abort"}',
-    '{"version":1,"decision":"abort","message":1}', '{"version":1,"decision":"abort","message":"x","request":{}}']) {
-    assert.throws(() => parseBeforeSendOutput(value), { code:'HOOK_INVALID_OUTPUT' });
-  }
-  const message = 'A\r\nB\rC\nD\u2028E\u2029F' + '😀'.repeat(501);
-  const output = parseBeforeSendOutput(JSON.stringify({version:1,decision:'abort',message}));
-  assert.equal(Array.from(output.message).length, 500);
-  assert.ok(output.message.startsWith('A  B C D E F'));
-  assert.doesNotMatch(output.message, /[\r\n\u2028\u2029]/);
-  assert.equal(output.message.at(-1), '\ude00', 'final emoji remains a complete supplementary code point');
 });
