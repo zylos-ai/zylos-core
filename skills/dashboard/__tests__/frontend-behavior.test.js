@@ -423,12 +423,10 @@ test('problem cards say why in plain words, keep the precise reason for technica
   assert.equal((html.match(/data-fleet-action="refresh"/g) || []).length, 2);
 });
 
-test('Agent Fleet keeps self first among healthy machines and preserves color mapping when response order changes', () => {
+test('Agent Fleet keeps this machine first and preserves color mapping when response order changes', () => {
   const fixture = fleetFixture();
-  fixture.agents[0].self = true;
   const original = buildAgentFleetView(fixture);
   const shuffledFixture = fleetFixture();
-  shuffledFixture.agents[0].self = true;
   shuffledFixture.agents = [...shuffledFixture.agents].reverse();
   const shuffled = buildAgentFleetView(shuffledFixture);
 
@@ -439,8 +437,8 @@ test('Agent Fleet keeps self first among healthy machines and preserves color ma
   assert.deepEqual(shuffledColors, originalColors);
   assert.deepEqual(shuffledHues, originalHues);
   assert.ok(Object.values(originalHues).some((hue) => hue !== 0));
-  assert.equal(shuffled.tiles[2].name, 'zylos02');
-  assert.equal(shuffled.tiles[2].isSelf, true);
+  assert.equal(shuffled.tiles[0].name, 'zylos02');
+  assert.equal(shuffled.tiles[0].isSelf, true);
 });
 
 test('Agent Fleet uses SSE fleet events with one-shot fetch fallback', () => {

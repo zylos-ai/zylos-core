@@ -90,7 +90,7 @@ test('Fleet list persists, pages and links the same machines as cards across des
             await cards.first().waitFor();
             assert.equal(await cardMode.getAttribute('aria-pressed'), 'true');
             assert.deepEqual(await names(cards), firstPage);
-            assert.match(await cards.locator('[data-agent="Node 03"]').innerText(), /Group one · Start failed/);
+            assert.match(await cards.locator('[data-agent="Node 03"] .wb-f-problem').first().innerText(), /Group one\s+Start failed/);
             const offlineCard = cards.locator('[data-agent="Node 05"]');
             assert.equal(await offlineCard.getByRole('link').count(), 0);
             const refresh = offlineCard.getByRole('button', { name: 'Refresh status' });
