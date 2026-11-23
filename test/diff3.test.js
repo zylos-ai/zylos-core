@@ -1,9 +1,10 @@
-import { describe, test, expect } from '@jest/globals';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 import { isDiff3Available, merge3 } from '../cli/lib/diff3.js';
 
 describe('isDiff3Available', () => {
   test('returns true when diff3 is installed', () => {
-    expect(isDiff3Available()).toBe(true);
+    assert.equal(isDiff3Available(), true);
   });
 });
 
@@ -14,8 +15,8 @@ describe('merge3', () => {
     const remote = 'line1\nline2\nline3\n';
 
     const result = merge3(base, local, remote);
-    expect(result.clean).toBe(true);
-    expect(result.content).toBe('line1\nmodified\nline3\n');
+    assert.equal(result.clean, true);
+    assert.equal(result.content, 'line1\nmodified\nline3\n');
   });
 
   test('clean merge: only remote changed', () => {
@@ -24,8 +25,8 @@ describe('merge3', () => {
     const remote = 'line1\nline2\nnew-line3\n';
 
     const result = merge3(base, local, remote);
-    expect(result.clean).toBe(true);
-    expect(result.content).toBe('line1\nline2\nnew-line3\n');
+    assert.equal(result.clean, true);
+    assert.equal(result.content, 'line1\nline2\nnew-line3\n');
   });
 
   test('clean merge: both changed different sections', () => {
@@ -34,8 +35,8 @@ describe('merge3', () => {
     const remote = 'a\nb\nc\nd\nE\n';
 
     const result = merge3(base, local, remote);
-    expect(result.clean).toBe(true);
-    expect(result.content).toBe('a\nB\nc\nd\nE\n');
+    assert.equal(result.clean, true);
+    assert.equal(result.content, 'a\nB\nc\nd\nE\n');
   });
 
   test('conflict: both changed same line', () => {
@@ -44,17 +45,17 @@ describe('merge3', () => {
     const remote = 'line1\nremote-change\nline3\n';
 
     const result = merge3(base, local, remote);
-    expect(result.clean).toBe(false);
-    expect(result.content).toContain('<<<<<<<');
-    expect(result.content).toContain('>>>>>>>');
+    assert.equal(result.clean, false);
+    assert.ok(result.content.includes('<<<<<<<'));
+    assert.ok(result.content.includes('>>>>>>>'));
   });
 
   test('identical content: no changes', () => {
     const content = 'same\ncontent\nhere\n';
 
     const result = merge3(content, content, content);
-    expect(result.clean).toBe(true);
-    expect(result.content).toBe(content);
+    assert.equal(result.clean, true);
+    assert.equal(result.content, content);
   });
 
   test('handles empty base (all content is new)', () => {
@@ -64,7 +65,7 @@ describe('merge3', () => {
 
     const result = merge3(base, local, remote);
     // Both added content to empty base — likely a conflict
-    expect(result.clean).toBe(false);
+    assert.equal(result.clean, false);
   });
 
   test('handles multiline additions', () => {
@@ -73,8 +74,8 @@ describe('merge3', () => {
     const remote = 'start\nend\nremote-added\n';
 
     const result = merge3(base, local, remote);
-    expect(result.clean).toBe(true);
-    expect(result.content).toContain('local-added');
-    expect(result.content).toContain('remote-added');
+    assert.equal(result.clean, true);
+    assert.ok(result.content.includes('local-added'));
+    assert.ok(result.content.includes('remote-added'));
   });
 });

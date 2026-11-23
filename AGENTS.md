@@ -57,9 +57,13 @@ A PR adding or changing a Dashboard collection (list) endpoint must follow [the 
 
 ## Testing
 
-Tests never touch a live instance. The Node and Jest test runners set `HOME` and
+Run `npm test` for the default suite or `node scripts/run-node-tests.js --list`
+to see the collected paths. The runner discovers `*.test.js` under the root
+`test/` and the existing module test directories.
+
+Tests never touch a live instance. The Node test runner sets `HOME` and
 `ZYLOS_DIR` to fresh temporary directories before any test module loads; do not
-bypass these runners. Tests may override these defaults with their own isolated
+bypass this runner. Tests may override these defaults with their own isolated
 fixtures. On a machine running a live Zylos instance, run `npm install`, `npm ci`,
 or `npm test` only in an isolated environment: a separate Unix user, or temporary
 `HOME` and `ZYLOS_DIR` with `--ignore-scripts`. The package's `postinstall` syncs
@@ -68,8 +72,8 @@ dependencies separately in that isolated environment.
 
 Slow tests use `*.slow.test.js` and begin with `// covers: ` followed by
 space-separated repository-relative source files/directories and directly used
-test helpers or fixtures. Both default runners skip them. Set `ZYLOS_SLOW_TESTS=1` to include them, or pass an explicit
-slow path to `node scripts/run-node-tests.js` (Jest still requires the variable).
+test helpers or fixtures. The default runner skips them. Set `ZYLOS_SLOW_TESTS=1`
+to include them, or pass an explicit slow path to `node scripts/run-node-tests.js`.
 Run `node scripts/select-slow-tests.js --since <git-ref>` to list slow tests whose
 own file or covered paths changed, including staged and unstaged changes.
 Developers and reviewers must run the selected tests when those boundaries change;

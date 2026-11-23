@@ -6,93 +6,8 @@ import { spawnSync } from 'node:child_process';
 import { createTestEnvironment } from './test-environment.js';
 
 const ROOT = process.cwd();
-const ROOT_NODE_TESTS = [
-  'test/single-origin-scheduler.test.js',
-  'test/mode-switch-status-lifecycle.test.js',
-  'test/supervisor-manual.integration.test.js',
-  'test/manual-restart-scenes.integration.test.js',
-  'test/manual-restart-router.integration.test.js',
-  'test/reclaim-crash.integration.test.js',
-  'test/mode-switch-upgrade-boundary.test.js',
-  'test/mode-switch-native.integration.test.js',
-  'test/global-memory-handover.integration.test.js',
-  'test/failure-continuation.integration.test.js',
-  'test/claude-auth-confirmation.integration.test.js',
-  'test/group-sync-run.integration.test.js',
-  'test/memory-budget-browser.test.js',
-  'test/memory-startup-budget.integration.test.js',
-  'test/session-start-failure.integration.test.js',
-  'test/upgrade-confirmation.integration.test.js',
-  'test/dispatcher-startup.integration.test.js',
-  'test/instruction-deployment.integration.test.js',
-  'test/init-onboarding.integration.test.js',
-  'test/tmux-dashboard-reads.integration.test.js',
-  'test/claude-upgrade-process.integration.test.js',
-  'test/dashboard-display-browser.test.js',
-  'test/session-host-browser.test.js',
-  'test/session-host-channels.integration.test.js',
-  'test/session-host-cli.integration.test.js',
-  'test/self-upgrade-output.integration.test.js',
-  'test/upgrade-running-output.integration.test.js',
-  'test/fleet-attention.integration.test.js',
-  'test/fleet-attention-browser.test.js',
-  'test/fleet-list-browser.test.js',
-  'test/channel-delivery.integration.test.js',
-  'test/channel-sync.integration.test.js',
-  'test/self-upgrade-private-host.integration.test.js',
-  'test/require-idle-turn.integration.test.js',
-  'test/single-origin-activity.integration.test.js',
-  'test/single-origin-supervisor.integration.test.js',
-  'test/dashboard-demand-poll.integration.test.js',
-  'test/legacy-group-reads-browser.test.js',
-  'test/dashboard-object-api.integration.test.js',
-  'test/dashboard-memory-backlog-core.integration.test.js',
-  'test/dashboard-static-cache-browser.integration.test.js',
-  'test/account-usage-cache.integration.test.js',
-  'test/dashboard-transcript-idle.integration.test.js',
-  'test/session-batch-reader.integration.test.js',
-  'test/tmux-client-environment.integration.test.js',
-  'test/account-quota-browser.test.js',
-  'test/dashboard-initial-timezone.integration.test.js',
-  'test/skill-command-arguments.test.js',
-  'test/delivery-failure-recovery.integration.test.js',
-  'test/pool-capacity-browser.test.js',
-  'test/diagram-browser.integration.test.js',
-  'test/diagram-components.integration.test.js',
-  'test/fleet-summary-refresh.integration.test.js',
-  'test/supervisor-pause-browser.test.js',
-  'test/component-shard-hooks.integration.test.js',
-  'test/dashboard-stale-status.integration.test.js',
-  'test/dashboard-startup-timeouts.integration.test.js',
-  'test/dashboard-startup-parallel.integration.test.js',
-  'test/dashboard-focus-clipping.integration.test.js',
-  'test/overview-read-state.integration.test.js',
-  'test/router-stale-state.integration.test.js',
-  'test/dashboard-readiness.integration.test.js',
-  'test/supervisor-reclaim-deferral.integration.test.js',
-  'test/history-reminders.integration.test.js',
-  'test/observer-history-pagination.test.js',
-  'test/chat-quote.integration.test.js',
-  'test/origin-conversation.integration.test.js',
-  'test/runtime-literal-guard.test.js',
-  'test/test-location.test.js',
-  'test/control-prompt-length.test.js',
-  'test/group-deletion.integration.test.js',
-  'test/group-deletion-storage.integration.test.js',
-  'test/deleted-group-cutover.integration.test.js',
-  'test/reference-memory-templates.test.js',
-  'test/owned-tree-deletion-policy.test.js',
-  'test/owned-removal-callers.integration.test.js',
-  'test/test-environment-cleanup.test.js',
-  'test/exit-control.integration.test.js',
-  'test/upgrade-npm-prefix.integration.test.js',
-  'test/upgrade-db-maintenance.integration.test.js',
-  'test/session-release.integration.test.js',
-  'test/session-launch-cleanup.integration.test.js',
-  'test/component-source-record.integration.test.js',
-  'test/runtime-auth-display.integration.test.js',
-];
 const TEST_ROOTS = [
+  path.join(ROOT, 'test'),
   path.join(ROOT, 'skills', 'dashboard', '__tests__'),
   path.join(ROOT, 'skills', 'dashboard', 'src', 'lib'),
   path.join(ROOT, 'cli', 'lib', '__tests__'),
@@ -119,7 +34,7 @@ function walk(dir, files = []) {
 
 function isNodeTest(file) {
   const rel = path.relative(ROOT, file).split(path.sep).join('/');
-  if (ROOT_NODE_TESTS.includes(rel)) return true;
+  if (rel.startsWith('test/')) return true;
   if (rel.startsWith('skills/dashboard/__tests__/')) return true;
   if (rel.startsWith('skills/dashboard/src/lib/') && rel.includes('/__tests__/')) return true;
   if (rel.startsWith('cli/lib/__tests__/')) return true;
@@ -132,9 +47,7 @@ function isNodeTest(file) {
   return false;
 }
 
-const discoveredFiles = [...ROOT_NODE_TESTS.map(file => path.join(ROOT, file)).filter(file => fs.existsSync(file)), ...TEST_ROOTS
-  .flatMap((dir) => walk(dir))
-  ]
+const discoveredFiles = TEST_ROOTS.flatMap(dir => walk(dir))
   .filter(isNodeTest)
   .sort()
   .map((file) => path.relative(ROOT, file));

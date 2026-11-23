@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
-import { afterEach, describe, expect, test } from '@jest/globals';
+import { afterEach, describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 
 /*
  * Runs the real scripts/install.sh to cover how it decides whether a terminal
@@ -138,14 +139,14 @@ ${stubBody(name)}
   };
   // Read back every path the installer or a stub may use, failing closed on drift.
   for (const value of Object.values(env)) {
-    expect(path.resolve(value).startsWith(fixture + path.sep)).toBe(true);
+    assert.equal(path.resolve(value).startsWith(fixture + path.sep), true);
   }
-  for (const dir of Object.values(dirs)) expect(fs.realpathSync(dir)).toBe(dir);
+  for (const dir of Object.values(dirs)) assert.equal(fs.realpathSync(dir), dir);
   console.log('Installer isolation:', JSON.stringify({ HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR,
     PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR, PATH: env.PATH,
     socket: path.join(env.TMPDIR, 'tmux.sock'), database: path.join(env.ZYLOS_DIR, 'comm-bridge/c4.db') }));
   env.INSTALL_TEST_VERSION = version;
-  expect(fs.readdirSync(dirs.home)).toEqual([]);
+  assert.deepEqual(fs.readdirSync(dirs.home), []);
   return { fixture, dirs, env, calls, bash };
 }
 
@@ -207,60 +208,60 @@ suite('scripts/install.sh terminal handling', () => {
   // Boundary: `curl ... | bash` without a controlling terminal (ssh -T, cron,
   // CI). /dev/tty exists but cannot be opened, so the consent prompt must be
   // skipped and zylos init must run without reading from /dev/tty.
-  test('without a controlling terminal skips the consent prompt and runs init', async () => {
+  test('without a controlling terminal skips the consent prompt and runs init', { timeout: TEST_TIMEOUT_MS }, async () => {
     const context = makeFixture();
     const result = await run(context.bash, ['-s'], {
       env: context.env, cwd: context.dirs.home, input: fs.readFileSync(installer, 'utf8'),
     });
 
-    expect(result.signal).toBeNull();
-    expect(result.status).toBe(0);
-    expect(result.output).not.toContain('Security Notice');
-    expect(result.output).not.toContain('/dev/tty');
-    expect(result.output).toContain('Installation complete!');
-    expect(readCalls(context.calls)).toEqual(fullInstallCalls('zylos init', 'stdin=other'));
-  }, TEST_TIMEOUT_MS);
+    assert.equal(result.signal, null);
+    assert.equal(result.status, 0);
+    assert.ok(!result.output.includes('Security Notice'));
+    assert.ok(!result.output.includes('/dev/tty'));
+    assert.ok(result.output.includes('Installation complete!'));
+    assert.deepEqual(readCalls(context.calls), fullInstallCalls('zylos init', 'stdin=other'));
+  });
 
   // Boundary: `curl ... | bash` in an interactive terminal, user declines. Nothing past the
   // release lookup may run and HOME must stay untouched.
-  ptyTest('in a terminal, answering n cancels before anything is installed', async () => {
+  ptyTest('in a terminal, answering n cancels before anything is installed', { timeout: TEST_TIMEOUT_MS }, async () => {
     const context = makeFixture();
     const result = await runInPty(context, 'n');
 
-    expect(result.signal).toBeNull();
-    expect(result.status).toBe(0);
-    expect(result.output).toContain('Security Notice');
-    expect(result.output).toContain('Installation cancelled. No changes were made.');
-    expect(readCalls(context.calls)).toEqual([RELEASE_LOOKUP]);
-    expect(fs.readdirSync(context.dirs.home)).toEqual([]);
-  }, TEST_TIMEOUT_MS);
+    assert.equal(result.signal, null);
+    assert.equal(result.status, 0);
+    assert.ok(result.output.includes('Security Notice'));
+    assert.ok(result.output.includes('Installation cancelled. No changes were made.'));
+    assert.deepEqual(readCalls(context.calls), [RELEASE_LOOKUP]);
+    assert.deepEqual(fs.readdirSync(context.dirs.home), []);
+  });
 
   // Boundary: `curl ... | bash` in an interactive terminal, user accepts. The
   // installer must pass --skip-consent so zylos init does not ask again, and
   // hand init the terminal instead of the piped script on stdin.
-  ptyTest('in a terminal, answering y runs zylos init --skip-consent on the terminal', async () => {
+  ptyTest('in a terminal, answering y runs zylos init --skip-consent on the terminal', { timeout: TEST_TIMEOUT_MS }, async () => {
     const context = makeFixture();
     const result = await runInPty(context, 'y');
 
-    expect(result.signal).toBeNull();
-    expect(result.status).toBe(0);
-    expect(result.output).toContain('Security Notice');
-    expect(result.output).not.toContain('Installation cancelled');
-    expect(readCalls(context.calls)).toEqual(fullInstallCalls('zylos init --skip-consent', 'stdin=tty'));
-  }, TEST_TIMEOUT_MS);
+    assert.equal(result.signal, null);
+    assert.equal(result.status, 0);
+    assert.ok(result.output.includes('Security Notice'));
+    assert.ok(!result.output.includes('Installation cancelled'));
+    assert.deepEqual(readCalls(context.calls), fullInstallCalls('zylos init --skip-consent', 'stdin=tty'));
+  });
 
   // Boundary: `curl ... | bash` in an interactive terminal, user presses Enter.
   // The prompt defaults to Y, so an empty answer must install exactly like y.
-  ptyTest('in a terminal, pressing Enter accepts the default like answering y', async () => {
+  ptyTest('in a terminal, pressing Enter accepts the default like answering y', { timeout: TEST_TIMEOUT_MS }, async () => {
     const context = makeFixture();
     const result = await runInPty(context, '');
 
-    expect(result.signal).toBeNull();
-    expect(result.status).toBe(0);
-    expect(result.output).toContain('Security Notice');
-    expect(result.output).not.toContain('Installation cancelled');
-    expect(readCalls(context.calls)).toEqual(fullInstallCalls('zylos init --skip-consent', 'stdin=tty'));
-  }, TEST_TIMEOUT_MS);
+    assert.equal(result.signal, null);
+    assert.equal(result.status, 0);
+    assert.ok(result.output.includes('Security Notice'));
+    assert.ok(!result.output.includes('Installation cancelled'));
+    assert.deepEqual(readCalls(context.calls), fullInstallCalls('zylos init --skip-consent', 'stdin=tty'));
+  });
 });
 
 // Boundary: real install.sh prerequisite selection and failure propagation, with
@@ -272,116 +273,116 @@ suite('scripts/install.sh terminal handling', () => {
 // Commands are local stubs, bounded child groups are reaped, and fixtures removed.
 for (const manager of ['apt-get', 'dnf', 'yum']) {
   for (const missing of [['ps'], ['ps', 'pgrep']]) {
-    test(`installer selects ${manager} package when missing ${missing.join(' and ')}`, async () => {
+    test(`installer selects ${manager} package when missing ${missing.join(' and ')}`, { timeout: TEST_TIMEOUT_MS }, async () => {
       const context = makeFixture({ missing, manager });
       const result = await run(context.bash, [installer, '--branch', STUB_TAG, '--no-init'], {
         env: context.env, cwd: context.dirs.home,
       });
-      expect(result.status).toBe(0);
+      assert.equal(result.status, 0);
       const calls = readCalls(context.calls);
-      expect(calls.filter(call => call.startsWith(`${manager} `))).toEqual(manager === 'apt-get'
+      assert.deepEqual(calls.filter(call => call.startsWith(`${manager} `)), manager === 'apt-get'
         ? ['apt-get update -qq', 'apt-get install -y -qq procps'] : [`${manager} install -y procps-ng`]);
-      expect(result.output).toContain('procps: installed');
-      expect(result.output).toContain('Installation complete!');
-    }, TEST_TIMEOUT_MS);
+      assert.ok(result.output.includes('procps: installed'));
+      assert.ok(result.output.includes('Installation complete!'));
+    });
   }
 }
 
 for (const missing of [[], ['pgrep']]) {
-  test(`installer reports existing ps without package installation${missing.length ? ' when pgrep is absent' : ''}`, async () => {
+  test(`installer reports existing ps without package installation${missing.length ? ' when pgrep is absent' : ''}`, { timeout: TEST_TIMEOUT_MS }, async () => {
     const context = makeFixture({ missing });
     const result = await run(context.bash, [installer, '--branch', STUB_TAG, '--no-init'], {
       env: context.env, cwd: context.dirs.home,
     });
-    expect(result.status).toBe(0);
-    expect(result.output.match(/procps: ps available/g)).toHaveLength(1);
-    expect(readCalls(context.calls).some(call => /^(apt-get|dnf|yum|brew) /.test(call))).toBe(false);
-  }, TEST_TIMEOUT_MS);
+    assert.equal(result.status, 0);
+    assert.equal(result.output.match(/procps: ps available/g).length, 1);
+    assert.equal(readCalls(context.calls).some(call => /^(apt-get|dnf|yum|brew) /.test(call)), false);
+  });
 }
 
-test('installer requires manual procps installation without root or sudo', async () => {
+test('installer requires manual procps installation without root or sudo', { timeout: TEST_TIMEOUT_MS }, async () => {
   const context = makeFixture({ missing: ['ps'], uid: '1000' });
   const result = await run(context.bash, [installer, '--branch', STUB_TAG, '--no-init'], {
     env: context.env, cwd: context.dirs.home,
   });
-  expect(result.status).toBe(1);
-  expect(result.output).toContain('sudo not found and not running as root. Please install procps manually as root');
-  expect(readCalls(context.calls).some(call => /^(apt-get|npm) /.test(call))).toBe(false);
-}, TEST_TIMEOUT_MS);
+  assert.equal(result.status, 1);
+  assert.ok(result.output.includes('sudo not found and not running as root. Please install procps manually as root'));
+  assert.equal(readCalls(context.calls).some(call => /^(apt-get|npm) /.test(call)), false);
+});
 
-test('installer leaves macOS procps unchanged even when commands are missing', async () => {
+test('installer leaves macOS procps unchanged even when commands are missing', { timeout: TEST_TIMEOUT_MS }, async () => {
   const context = makeFixture({ missing: ['ps', 'pgrep'], osName: 'Darwin' });
   const result = await run(context.bash, [installer, '--branch', STUB_TAG, '--no-init'], {
     env: context.env, cwd: context.dirs.home,
   });
-  expect(result.status).toBe(0);
-  expect(result.output).not.toContain('procps:');
-  expect(readCalls(context.calls).some(call => /^(apt-get|dnf|yum|brew) /.test(call))).toBe(false);
-}, TEST_TIMEOUT_MS);
+  assert.equal(result.status, 0);
+  assert.ok(!result.output.includes('procps:'));
+  assert.equal(readCalls(context.calls).some(call => /^(apt-get|dnf|yum|brew) /.test(call)), false);
+});
 
-test('installer stops when procps package installation fails', async () => {
+test('installer stops when procps package installation fails', { timeout: TEST_TIMEOUT_MS }, async () => {
   const context = makeFixture({ missing: ['ps'], installStatus: 42 });
   const result = await run(context.bash, [installer, '--branch', STUB_TAG, '--no-init'], {
     env: context.env, cwd: context.dirs.home,
   });
-  expect(result.status).toBe(42);
-  expect(result.output).not.toContain('procps: installed');
-  expect(readCalls(context.calls).some(call => call.startsWith('npm '))).toBe(false);
-}, TEST_TIMEOUT_MS);
+  assert.equal(result.status, 42);
+  assert.ok(!result.output.includes('procps: installed'));
+  assert.equal(readCalls(context.calls).some(call => call.startsWith('npm ')), false);
+});
 
 // Boundary: installer command routing and PATH/init continuation with isolated
 // command doubles. Run for install_zylos or branch argument changes; skip for
 // unrelated code. This does not cover npm's real Git installation internals.
 suite('scripts/install.sh existing installations', () => {
-  test('a fresh installation keeps the GitHub source URL and install flags', async () => {
+  test('a fresh installation keeps the GitHub source URL and install flags', { timeout: TEST_TIMEOUT_MS }, async () => {
     const context = makeFixture({ installed: false });
     const result = await run(context.bash, [installer, '--no-init'], {
       env: context.env, cwd: context.dirs.home,
     });
-    expect(result.signal).toBeNull();
-    expect(result.status).toBe(0);
-    expect(readCalls(context.calls)).toEqual([
+    assert.equal(result.signal, null);
+    assert.equal(result.status, 0);
+    assert.deepEqual(readCalls(context.calls), [
       RELEASE_LOOKUP, 'git --version', 'tmux -V', 'node -v', 'node -v',
       'npm config get prefix', `npm install -g --install-links ${INSTALL_URL}`,
       'zylos --version',
     ]);
-    expect(result.output).toContain(`Installing zylos from GitHub (${STUB_TAG})...`);
-    expect(result.output).toContain('Skipping zylos init (--no-init).');
-  }, TEST_TIMEOUT_MS);
+    assert.ok(result.output.includes(`Installing zylos from GitHub (${STUB_TAG})...`));
+    assert.ok(result.output.includes('Skipping zylos init (--no-init).'));
+  });
 
-  test.each(['0.9.6', '1.0.0-beta.11'])(
-    'preserves installed version %s and continues PATH setup without init', async (version) => {
+  for (const version of ['0.9.6', '1.0.0-beta.11']) {
+    test(`preserves installed version ${version} and continues PATH setup without init`, { timeout: TEST_TIMEOUT_MS }, async () => {
       const context = makeFixture({ version });
       const executable = fs.readFileSync(context.env.INSTALL_TEST_ZYLOS, 'utf8');
       const result = await run(context.bash, [installer, '--no-init'], {
         env: context.env, cwd: context.dirs.home,
       });
-      expect(result.signal).toBeNull();
-      expect(result.status).toBe(0);
-      expect(readCalls(context.calls)).toEqual([
+      assert.equal(result.signal, null);
+      assert.equal(result.status, 0);
+      assert.deepEqual(readCalls(context.calls), [
         RELEASE_LOOKUP, 'git --version', 'tmux -V', 'node -v', 'node -v', 'zylos --version',
       ]);
-      expect(result.output).toContain(`zylos is already installed (${version}). To upgrade, run: zylos upgrade --self\n`);
-      expect(result.output).not.toContain('Upgrading...');
-      expect(result.output).not.toContain('ENOTEMPTY');
-      expect(result.output).toContain('Skipping zylos init (--no-init).');
-      expect(fs.readFileSync(context.env.INSTALL_TEST_ZYLOS, 'utf8')).toBe(executable);
-      expect(fs.readFileSync(path.join(context.dirs.home, '.bashrc'), 'utf8')).toContain('zylos-managed: bin PATH');
-    }, TEST_TIMEOUT_MS,
-  );
+      assert.ok(result.output.includes(`zylos is already installed (${version}). To upgrade, run: zylos upgrade --self\n`));
+      assert.ok(!result.output.includes('Upgrading...'));
+      assert.ok(!result.output.includes('ENOTEMPTY'));
+      assert.ok(result.output.includes('Skipping zylos init (--no-init).'));
+      assert.equal(fs.readFileSync(context.env.INSTALL_TEST_ZYLOS, 'utf8'), executable);
+      assert.ok(fs.readFileSync(path.join(context.dirs.home, '.bashrc'), 'utf8').includes('zylos-managed: bin PATH'));
+    });
+  }
 
-  test('an explicit branch only changes the upgrade hint and init still runs', async () => {
+  test('an explicit branch only changes the upgrade hint and init still runs', { timeout: TEST_TIMEOUT_MS }, async () => {
     const context = makeFixture({ version: '1.0.0-beta.11' });
     const result = await run(context.bash, [installer, '--branch', 'multi-session/prerelease', '-y'], {
       env: context.env, cwd: context.dirs.home,
     });
-    expect(result.signal).toBeNull();
-    expect(result.status).toBe(0);
-    expect(result.output).toContain('To upgrade, run: zylos upgrade --self --branch multi-session/prerelease');
-    expect(result.output).not.toContain('Upgrading...');
-    expect(readCalls(context.calls)).toEqual([
+    assert.equal(result.signal, null);
+    assert.equal(result.status, 0);
+    assert.ok(result.output.includes('To upgrade, run: zylos upgrade --self --branch multi-session/prerelease'));
+    assert.ok(!result.output.includes('Upgrading...'));
+    assert.deepEqual(readCalls(context.calls), [
       'git --version', 'tmux -V', 'node -v', 'node -v', 'zylos --version',
       'zylos init -y', 'stdin=other',
     ]);
-  }, TEST_TIMEOUT_MS);
+  });
 });

@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, test, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -42,8 +43,8 @@ function runScenario(scenario) {
     env: { ...process.env, ZYLOS_DIR: zylosDir, NO_COLOR: '1' },
     timeout: 60000,
   });
-  expect(child.error).toBeUndefined();
-  expect(child.status).toBe(0);
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 0);
   return JSON.parse(child.stdout);
 }
 
@@ -60,25 +61,28 @@ afterEach(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-describe('self-upgrade durable conflict backups (#717)', () => {
+// Run for self-upgrade conflict storage, reporting or rollback changes. Skip
+// for unrelated changes. The child uses a temporary instance and package tree,
+// injected service operations and the runner's isolated environment.
+describe('self-upgrade durable conflict backups', () => {
   test('protected merge prints every nested conflict path and success cleanup preserves durable backups', () => {
     prepareThreeWayConflictFixture();
 
     const { result, launcherOutput, operations, transactionBackupDir } = runScenario('success');
 
-    expect(result.success).toBe(true);
-    expect(result.mergeConflicts).toHaveLength(2);
-    expect(operations).toEqual(['save-package', 'save-code', 'snapshot-and-stop', 'install', 'release']);
-    expect(fs.existsSync(transactionBackupDir)).toBe(false);
+    assert.equal(result.success, true);
+    assert.equal(result.mergeConflicts.length, 2);
+    assert.deepEqual(operations, ['save-package', 'save-code', 'snapshot-and-stop', 'install', 'release']);
+    assert.equal(fs.existsSync(transactionBackupDir), false);
 
     for (const conflict of result.mergeConflicts) {
-      expect(conflict.backupPath.startsWith(path.join(zylosDir, '.backup') + path.sep)).toBe(true);
-      expect(fs.existsSync(conflict.backupPath)).toBe(true);
-      expect(launcherOutput.join('\n')).toContain(`${conflict.skill}/${conflict.file}`);
-      expect(launcherOutput.join('\n')).toContain(conflict.backupPath);
+      assert.equal(conflict.backupPath.startsWith(path.join(zylosDir, '.backup') + path.sep), true);
+      assert.equal(fs.existsSync(conflict.backupPath), true);
+      assert.ok(launcherOutput.join('\n').includes(`${conflict.skill}/${conflict.file}`));
+      assert.ok(launcherOutput.join('\n').includes(conflict.backupPath));
     }
-    expect(result.mergeConflicts.some(({ file }) => file === 'nested/settings.txt')).toBe(true);
-    expect(readFile(result.mergeConflicts.find(({ file }) => file === 'SKILL.md').backupPath)).toContain('value=local');
+    assert.equal(result.mergeConflicts.some(({ file }) => file === 'nested/settings.txt'), true);
+    assert.ok(readFile(result.mergeConflicts.find(({ file }) => file === 'SKILL.md').backupPath).includes('value=local'));
   });
 
   test('JSON success cleanup removes transaction backup and retains durable conflict paths', () => {
@@ -86,12 +90,12 @@ describe('self-upgrade durable conflict backups (#717)', () => {
 
     const { result, launcherOutput, transactionBackupDir } = runScenario('json');
 
-    expect(result.success).toBe(true);
-    expect(launcherOutput).toEqual([]);
-    expect(fs.existsSync(transactionBackupDir)).toBe(false);
-    expect(result.mergeConflicts).toHaveLength(2);
+    assert.equal(result.success, true);
+    assert.deepEqual(launcherOutput, []);
+    assert.equal(fs.existsSync(transactionBackupDir), false);
+    assert.equal(result.mergeConflicts.length, 2);
     for (const conflict of result.mergeConflicts) {
-      expect(fs.existsSync(conflict.backupPath)).toBe(true);
+      assert.equal(fs.existsSync(conflict.backupPath), true);
     }
   });
 
@@ -100,19 +104,19 @@ describe('self-upgrade durable conflict backups (#717)', () => {
 
     const { result, operations, transactionBackupDir } = runScenario('later-failure');
 
-    expect(result.success).toBe(false);
-    expect(result.failedStep).toBe(6);
-    expect(result.rollback).toEqual({attempted:true, completed:true, recovery_required:false, performed:true});
-    expect(operations.at(-1)).toBe('compensate');
-    expect(fs.existsSync(transactionBackupDir)).toBe(true);
-    expect(readFile(path.join(skillsDir, 'demo-skill/SKILL.md'))).toContain('value=local');
-    expect(readFile(path.join(skillsDir, 'demo-skill/nested/settings.txt'))).toBe('mode=local\n');
+    assert.equal(result.success, false);
+    assert.equal(result.failedStep, 6);
+    assert.deepEqual(result.rollback, {attempted:true, completed:true, recovery_required:false, performed:true});
+    assert.equal(operations.at(-1), 'compensate');
+    assert.equal(fs.existsSync(transactionBackupDir), true);
+    assert.ok(readFile(path.join(skillsDir, 'demo-skill/SKILL.md')).includes('value=local'));
+    assert.equal(readFile(path.join(skillsDir, 'demo-skill/nested/settings.txt')), 'mode=local\n');
 
     const durableRoot = path.join(zylosDir, '.backup');
     const durableFiles = fs.readdirSync(durableRoot, { recursive: true })
       .filter((entry) => entry.includes(`${path.sep}conflicts${path.sep}`) && !fs.statSync(path.join(durableRoot, entry)).isDirectory());
-    expect(durableFiles).toHaveLength(2);
-    expect(readFile(path.join(durableRoot, durableFiles.find((entry) => entry.endsWith('SKILL.md'))))).toContain('value=local');
+    assert.equal(durableFiles.length, 2);
+    assert.ok(readFile(path.join(durableRoot, durableFiles.find((entry) => entry.endsWith('SKILL.md')))).includes('value=local'));
   });
 
   test('no conflict does not create an empty durable backup directory', () => {
@@ -120,10 +124,10 @@ describe('self-upgrade durable conflict backups (#717)', () => {
 
     const { result } = runScenario('no-conflict');
 
-    expect(result.success).toBe(true);
-    expect(result.mergeConflicts).toBeNull();
+    assert.equal(result.success, true);
+    assert.equal(result.mergeConflicts, null);
     const conflictFiles = fs.readdirSync(path.join(zylosDir, '.backup'), {recursive:true})
       .filter(entry => entry.includes('conflicts'));
-    expect(conflictFiles).toEqual([]);
+    assert.deepEqual(conflictFiles, []);
   });
 });

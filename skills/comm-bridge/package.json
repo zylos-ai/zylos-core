@@ -6,7 +6,7 @@
   "main": "scripts/c4-db.js",
   "scripts": {
     "init": "node scripts/c4-db.js init",
-    "test": "node --test scripts/__tests__/*.test.js"
+    "test": "cd ../.. && files=$(node scripts/run-node-tests.js --list | grep '^skills/comm-bridge/') && node scripts/run-node-tests.js $files"
   },
   "keywords": ["zylos", "ai-agent", "communication"],
   "author": "Zylos AI",

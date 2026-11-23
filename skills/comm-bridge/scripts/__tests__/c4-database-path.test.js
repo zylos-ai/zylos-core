@@ -58,7 +58,7 @@ for (const liveTarget of [true, false]) {
     const entry = path.join(root, 'database.test.js');
     fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ type: 'module' }));
     // The runner preload marks children; remove those markers before loading product modules.
-    fs.writeFileSync(entry, `for (const key of ['NODE_TEST_CONTEXT','JEST_WORKER_ID','ZYLOS_TEST_RUN']) delete process.env[key];\nawait import(${JSON.stringify(pathToFileURL(opener).href)});\n`);
+    fs.writeFileSync(entry, `for (const key of ['NODE_TEST_CONTEXT','ZYLOS_TEST_RUN']) delete process.env[key];\nawait import(${JSON.stringify(pathToFileURL(opener).href)});\n`);
     t.diagnostic(JSON.stringify({ entry, target, accountHome, databaseBoundary: liveTarget ? 'rejected' : 'isolated' }));
     const result = spawnSync(process.execPath, [entry, target, '', accountHome], { encoding: 'utf8', timeout: 15000 });
     assert.equal(result.status, liveTarget ? 1 : 0, result.stdout + result.stderr);

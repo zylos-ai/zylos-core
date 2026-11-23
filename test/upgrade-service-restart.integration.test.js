@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
-import {test, expect} from '@jest/globals';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
 
 const pm2 = process.env.ZYLOS_SERVICE_INTEGRATION_PM2;
 const runTest = pm2 ? test : test.skip;
@@ -19,9 +20,9 @@ if (!pm2) console.info('Skipping private PM2 service restart: set ZYLOS_SERVICE_
 // PM2_HOME and a short TMPDIR; use a private tmux socket and test databases.
 // Read back actual arguments, environment and targets before launching, then
 // clean only the owned PM2 daemon, socket and fixture resources.
-runTest(title, () => {
-  expect(path.isAbsolute(pm2)).toBe(true);
-  expect(fs.statSync(fs.realpathSync(pm2)).isFile()).toBe(true);
+runTest(title, { timeout: 120000 }, () => {
+  assert.equal(path.isAbsolute(pm2), true);
+  assert.equal(fs.statSync(fs.realpathSync(pm2)).isFile(), true);
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'usr-')));
   fs.chmodSync(root, 0o700);
   const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -35,34 +36,34 @@ runTest(title, () => {
   const socket = path.join(root, 'tmux/private.sock');
   fs.writeFileSync(path.join(root, 'tools/tmux'), `#!/bin/sh\nexec /usr/bin/tmux -S '${socket}' "$@"\n`, {mode:0o700});
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) {
-    expect(fs.realpathSync(env[key])).toBe(env[key]);
-    expect(env[key].startsWith(root + path.sep)).toBe(true);
+    assert.equal(fs.realpathSync(env[key]), env[key]);
+    assert.equal(env[key].startsWith(root + path.sep), true);
   }
-  expect(fs.realpathSync(path.join(root, 'tools/pm2'))).toBe(fs.realpathSync(pm2));
+  assert.equal(fs.realpathSync(path.join(root, 'tools/pm2')), fs.realpathSync(pm2));
   const helper = path.join(repo, 'test/helpers/run-upgrade-service-restart.mjs');
   // Read back the exact child target and isolated environment before launch.
   const args = [helper, JSON.stringify({root, pm2})];
-  expect(args[0]).toBe(path.join(repo, 'test/helpers/run-upgrade-service-restart.mjs'));
-  expect(socket.startsWith(root + path.sep)).toBe(true);
-  expect(Buffer.byteLength(path.join(env.PM2_HOME, 'rpc.sock'))).toBeLessThan(100);
-  expect(Buffer.byteLength(socket)).toBeLessThan(100);
+  assert.equal(args[0], path.join(repo, 'test/helpers/run-upgrade-service-restart.mjs'));
+  assert.equal(socket.startsWith(root + path.sep), true);
+  assert.ok(Buffer.byteLength(path.join(env.PM2_HOME, 'rpc.sock')) < 100);
+  assert.ok(Buffer.byteLength(socket) < 100);
   process.stdout.write(JSON.stringify({helper, cwd:root, env, tmuxSocket:socket, databaseRoot:env.ZYLOS_DIR}) + '\n');
   try {
     const result = spawnSync(process.execPath, args, {cwd:root, env, encoding:'utf8', timeout:90000});
-    expect(result.error).toBeUndefined();
+    assert.equal(result.error, undefined);
     if (result.status !== 0) throw Error(`isolated PM2 helper failed (${result.status}): ${result.stdout}\n${result.stderr}`);
     const report = JSON.parse(result.stdout.trim().split('\n').at(-1));
-    expect(report.success).toBe(true);
-    expect(report.modes).toEqual(['step11','maintenance']);
-    expect(report.identityRejects).toEqual(['step11','maintenance']);
+    assert.equal(report.success, true);
+    assert.deepEqual(report.modes, ['step11','maintenance']);
+    assert.deepEqual(report.identityRejects, ['step11','maintenance']);
     for (const source of ['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db']) {
-      expect(fs.existsSync(path.join(env.ZYLOS_DIR,source))).toBe(false);
+      assert.equal(fs.existsSync(path.join(env.ZYLOS_DIR,source)), false);
     }
   } finally {
     if (fs.existsSync(path.join(env.PM2_HOME, 'pm2.pid'))) {
       const stopped = spawnSync(pm2, ['kill'], {cwd:root, env, encoding:'utf8', timeout:30000});
-      expect(stopped.status).toBe(0);
+      assert.equal(stopped.status, 0);
     }
     fs.rmSync(root, {recursive:true, force:true});
   }
-}, 120000);
+});

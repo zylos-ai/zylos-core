@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeAll, afterAll, beforeEach } from '@jest/globals';
+import { describe, test, before, after, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -11,7 +12,7 @@ let syncCoreSkills;
 let generateManifest;
 let saveManifest;
 
-beforeAll(async () => {
+before(async () => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-selfup-test-'));
   process.env.ZYLOS_DIR = tmpRoot;
   skillsDir = path.join(tmpRoot, '.claude', 'skills');
@@ -19,7 +20,7 @@ beforeAll(async () => {
   ({ generateManifest, saveManifest } = await import('../cli/lib/manifest.js'));
 });
 
-afterAll(() => {
+after(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
@@ -33,7 +34,7 @@ function writeFile(dir, relPath, content) {
   fs.writeFileSync(full, content);
 }
 
-describe('syncCoreSkills preserved aggregation (#715 review)', () => {
+describe('syncCoreSkills preserved aggregation', () => {
   test('preserved files are aggregated, skill counts as synced, no false "no changes"', () => {
     // Installed skill: manifest tracks a.js + gone.js
     const destDir = path.join(skillsDir, 'demo-skill');
@@ -51,15 +52,15 @@ describe('syncCoreSkills preserved aggregation (#715 review)', () => {
 
     const result = syncCoreSkills(newSkillsSrc, null);
 
-    expect(result.errors).toEqual([]);
-    expect(result.preserved).toContain('demo-skill/gone.js');
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.preserved.includes('demo-skill/gone.js'));
     // The skill must register as changed — previously this scenario
     // reported "no changes" while the manifest lost the file's ownership
-    expect(result.synced).toContain('demo-skill');
-    expect(result.pendingBaselines).toHaveLength(1);
-    expect(result.pendingBaselines[0].destDir).toBe(destDir);
+    assert.ok(result.synced.includes('demo-skill'));
+    assert.equal(result.pendingBaselines.length, 1);
+    assert.equal(result.pendingBaselines[0].destDir, destDir);
     // File kept in place with the user's content
-    expect(fs.readFileSync(path.join(destDir, 'gone.js'), 'utf8')).toBe('user changes');
+    assert.equal(fs.readFileSync(path.join(destDir, 'gone.js'), 'utf8'), 'user changes');
   });
 
   test('unmodified upstream-removed file: deleted, counted, not preserved', () => {
@@ -73,11 +74,11 @@ describe('syncCoreSkills preserved aggregation (#715 review)', () => {
 
     const result = syncCoreSkills(newSkillsSrc, null);
 
-    expect(result.errors).toEqual([]);
-    expect(result.deleted).toContain('demo-skill/gone.js');
-    expect(result.preserved).toEqual([]);
-    expect(result.synced).toContain('demo-skill');
-    expect(result.pendingBaselines).toHaveLength(1);
-    expect(fs.existsSync(path.join(destDir, 'gone.js'))).toBe(false);
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.deleted.includes('demo-skill/gone.js'));
+    assert.deepEqual(result.preserved, []);
+    assert.ok(result.synced.includes('demo-skill'));
+    assert.equal(result.pendingBaselines.length, 1);
+    assert.equal(fs.existsSync(path.join(destDir, 'gone.js')), false);
   });
 });
