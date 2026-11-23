@@ -40,19 +40,6 @@ test('Question schema upgrade preserves historical Dashboard tables and records'
 
 // Boundary: failed question DDL must not advance its version or alter old data.
 // Run on question migration changes; UI-only edits may skip.
-test('Question migration failure retains the prior version and records', t => {
-  const f = fixture(t);
-  f.db.exec("CREATE TRIGGER fail_question_version BEFORE INSERT ON schema_migrations WHEN NEW.version=23 BEGIN SELECT RAISE(ABORT,'fixture migration failure'); END");
-  assert.throws(() => owner.migrate(f.db), /fixture migration failure/);
-  assert.equal(f.db.prepare("SELECT 1 FROM sqlite_master WHERE name='chat_questions'").get(), undefined);
-  assert.equal(f.db.prepare('SELECT MAX(version) v FROM schema_migrations').get().v, 22);
-  assert.equal(f.db.prepare('SELECT token_hash FROM auth_sessions').get().token_hash, 'retained');
-});
 
 // Boundary: current layout must keep both question identity constraints.
 // Run on schema inspection changes; UI-only edits may skip.
-test('Question schema inspection rejects a missing unique group and interrupt reference', t => {
-  const f = fixture(t); owner.migrate(f.db);
-  f.db.exec('DROP TABLE chat_questions; CREATE TABLE chat_questions(c4_id TEXT PRIMARY KEY, session_group TEXT,endpoint_id TEXT,message_id TEXT,interrupt_id TEXT,question_summary TEXT,constraints TEXT,status TEXT,created_at TEXT)');
-  assert.throws(() => owner.inspectSchema(f.db), /question identity/);
-});

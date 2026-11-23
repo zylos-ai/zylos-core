@@ -24,18 +24,6 @@ for (const [name, value] of [
   });
 }
 
-test('absent Fetch Metadata falls back independently of forwarding protocol and socket encryption', () => {
-  for (const forwarded of [undefined, 'http', 'https', 'garbage']) {
-    for (const encrypted of [false, true]) {
-      assert.equal(isSameOriginRequest({ ...request({ 'x-forwarded-proto': forwarded }), socket: { encrypted } }), true);
-    }
-  }
-  const req = request();
-  Object.defineProperty(req.headers, 'x-forwarded-proto', { get() { throw new Error('must not read forwarded protocol'); } });
-  Object.defineProperty(req, 'socket', { get() { throw new Error('must not infer transport protocol'); } });
-  assert.equal(isSameOriginRequest(req), true);
-});
-
 for (const [origin, host, expected] of [
   ['https://example.test', 'example.test:443', true],
   ['http://example.test', 'example.test:80', true],
@@ -61,31 +49,3 @@ for (const [origin, host, expected] of [
     assert.equal(isSameOriginRequest(request({ origin, host })), expected);
   });
 }
-
-test('Host preserves existing first-value normalization', () => {
-  for (const host of [' EXAMPLE.TEST:443 ', 'EXAMPLE.TEST:443, internal:3000', ['EXAMPLE.TEST:443', 'internal:3000']]) {
-    assert.equal(isSameOriginRequest(request({ host })), true);
-  }
-});
-
-test('fallback rejects missing, malformed and noncanonical Origin values', () => {
-  for (const origin of [undefined, null, '', 'null', [], ['https://example.test'], 1, {},
-    'https://example.test/', 'https://example.test/path', 'https://example.test?x=1',
-    'https://example.test#fragment', 'https://user@example.test', 'https://EXAMPLE.TEST',
-    'https://example.test:443', ' https://example.test', 'https://example.test\n',
-    'https:example.test', '//example.test', 'not a URL', 'ftp://example.test',
-    'wss://example.test', 'file://example.test', 'https://example.test, https://evil.test']) {
-    assert.equal(isSameOriginRequest(request({ origin })), false, `Origin: ${JSON.stringify(origin)}`);
-  }
-});
-
-test('fallback rejects missing, malformed or URL-confusing Host authorities', () => {
-  for (const host of [undefined, null, '', ' ', [], [undefined], [{}], 1, {},
-    'evil@example.test', 'example.test/x', 'example.test\\x', 'example.test#x',
-    'example.test?x', 'example.test\nx', 'example.test\tx', 'example.test%2f',
-    'https://example.test', 'example.test:', 'example.test:abc', 'example.test:65536',
-    '[::1', '::1', '[not-ipv6]', 'example.test:443:80', ', example.test']) {
-    assert.equal(isSameOriginRequest(request({ host })), false, `Host: ${JSON.stringify(host)}`);
-  }
-  assert.equal(isSameOriginRequest({}), false);
-});

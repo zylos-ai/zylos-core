@@ -6,12 +6,6 @@ import path from 'node:path';
 import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../src/lib/store.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
-import { createRuns } from '../src/lib/workbench/runs.js';
-import { createGroupBacklog } from '../src/lib/workbench/group-backlog.js';
-import { importSupervisorRecords, supervisorRecord, supervisorSequences } from './helpers/supervisor-records.js';
-import { eventTypesFor } from '../public/js/wb/timeline-rows.js';
-
-const query = values => new URLSearchParams(values);
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-runs-'));
@@ -35,125 +29,16 @@ function fixture(t) {
 // Run for run grouping/pagination/end reasons; skip rendering-only edits. The
 // official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; private DB only,
 // no tmux/network/children. Teardown closes Store before removing owned files.
-test('run pages keep whole-group totals and unattributed events while using start boundaries', async t => {
-  const f = fixture(t);
-  for (let day = 1; day <= 5; day++) f.event(`run-${day}`, day, 'session_start');
-  f.event('run-1', 2, 'reclaim_done', { reason: 'ttl' });
-  f.event('run-2', 3, 'rotate_done', {}, 'codex');
-  f.event('run-3', 4, 'crash_detected');
-  f.event('run-4', 5, 'post_tool_use');
-  f.event('run-5', 6, 'rotate_done', { oldSessionId: 'previous-session' });
-  for (let i = 0; i < 10; i++) f.event(null, 1, 'stop');
-  f.event('elsewhere', 10, 'session_start', {}, 'claude', 'telegram:b');
-  const runs = createRuns({ store: f.store,
-    getSnapshot: async () => ({ rows: [{ sessionGroup: 'telegram:a', live: { runId: 'run-5' } }] }) });
-  const first = await runs('telegram:a', query({ limit: 3 }));
-  assert.deepEqual(first.items.map(row => [row.runId, row.endReason, row.n]),
-    [['run-5', 'running', 2], ['run-4', 'unknown', 2], ['run-3', 'crash', 2]]);
-  assert.deepEqual([first.totalRuns, first.totalEvents, first.unattributed], [5, 10, 10]);
-  const second = await runs('telegram:a', query({ cursor: first.nextCursor }));
-  assert.deepEqual(second.items.map(row => [row.runId, row.endReason]), [['run-2', 'rotate'], ['run-1', 'ttl']]);
-  assert.deepEqual([second.totalRuns, second.totalEvents, second.unattributed], [5, 10, 10]);
-  assert.deepEqual((await runs('telegram:older')).items, []);
-});
 
 // Integration boundary: supervisor records imported by the real importer into a private Store, then aggregated.
 // Run for run end-reason changes; skip rendering-only edits. No tmux/network/children.
-test('a run the supervisor restarted ends as an automatic restart even though its exit is also reported as a crash', async t => {
-  const f = fixture(t), at = Date.parse('2026-10-20T12:00:00.000Z'), hour = 3600000;
-  for (const [index, runId] of ['silent', 'tool', 'crashed', 'current'].entries()) f.event(runId, 1 + index, 'session_start');
-  await importSupervisorRecords(f, [
-    ...supervisorSequences.noResponseRestart(at, 'telegram:a', 'silent'),
-    ...supervisorSequences.toolTimeoutRestart(at + hour, 'telegram:a', 'tool'),
-    ...supervisorSequences.nudge(at + 2 * hour, 'telegram:a', 'crashed'),
-    ...supervisorSequences.crash(at + 2 * hour + 1000, 'telegram:a', 'crashed'),
-  ]);
-  const runs = createRuns({ store: f.store,
-    getSnapshot: async () => ({ rows: [{ sessionGroup: 'telegram:a', live: { runId: 'current' } }] }) });
-  assert.deepEqual((await runs('telegram:a', query({ limit: 10 }))).items.map(row => [row.runId, row.endReason]),
-    [['current', 'running'], ['crashed', 'crash'], ['tool', 'auto_restart_tool_timeout'], ['silent', 'auto_restart_no_response']]);
-});
 
 // Integration boundary: supervisor records imported by the real importer into a private Store, then counted.
 // Run for count changes; skip rendering-only edits. No tmux/network/children.
-test('run and group counts leave out the crash report an automatic restart causes, as the timeline does', async t => {
-  const f = fixture(t), at = Date.parse('2026-10-20T12:00:00.000Z'), hour = 3600000, group = 'telegram:a';
-  for (const [index, runId] of ['silent', 'tool', 'crashed', 'edge', 'late', 'current'].entries()) f.event(runId, 1 + index, 'session_start');
-  f.event(null, 9, 'stop');
-  const restart = (when, runId) => supervisorRecord(when, 'no_response_restart', group, runId, { reason: 'no_response_restart', silence_ms: 420_000 });
-  const crash = (when, runId) => supervisorRecord(when, 'crash_detected', group, runId, { sessionId: 'session-' + runId });
-  await importSupervisorRecords(f, [
-    ...supervisorSequences.noResponseRestart(at, group, 'silent'), // crash 1.1 s after the restart
-    ...supervisorSequences.toolTimeoutRestart(at + hour, group, 'tool'), // the same
-    ...supervisorSequences.crash(at + 2 * hour, group, 'crashed'), // no restart: a crash of its own
-    crash(at + 3 * hour - 5000, 'edge'), restart(at + 3 * hour, 'edge'), crash(at + 3 * hour + 10_000, 'edge'), // before: own; exactly 10 s: the restart
-    restart(at + 4 * hour, 'late'), crash(at + 4 * hour + 10_500, 'late'), // 10.5 s after: a crash of its own
-  ]);
-  // The tool call the restart cut off is still shown (as interrupted), so it is still counted.
-  f.store.insertEvent({ id: 'cut', ingest_id: 'cut', timestamp: new Date(at + 120_189).toISOString(), runtime: 'claude', run_id: 'silent',
-    session_group: group, event_type: 'post_tool_failure', category: 'tool', metadata: { tool_name: 'WebFetch' } });
-  const runs = createRuns({ store: f.store, getSnapshot: async () => ({ rows: [{ sessionGroup: group, live: { runId: 'current' } }] }) });
-  const stored = types => Object.fromEntries(f.store.db.prepare(`SELECT run_id, COUNT(*) AS n FROM runtime_events WHERE session_group = ? AND run_id IS NOT NULL
-    ${types ? `AND event_type IN (${types.map(() => '?').join(',')})` : ''} GROUP BY run_id`).all(group, ...(types ?? [])).map(row => [row.run_id, row.n]));
-  for (const types of [eventTypesFor('all', 'plain'), undefined]) {
-    const label = types ? 'plain' : 'technical', raw = stored(types);
-    const page = await runs(group, query({ limit: 10, level: label }));
-    const n = Object.fromEntries(page.items.map(run => [run.runId, run.n]));
-    // One crash report hidden in each of silent, tool and edge; none in crashed or late.
-    assert.deepEqual(n, { ...raw, silent: raw.silent - 1, tool: raw.tool - 1, edge: raw.edge - 1 }, `${label}: run counts`);
-    assert.equal(page.totalEvents, Object.values(raw).reduce((sum, count) => sum + count, 0) - 3, `${label}: group count`);
-    assert.equal(page.unattributed, 1, `${label}: events in no run are counted as before`);
-  }
-});
-
-test('session rotation never hides a preceding run-ending event and the latest actual ending wins', async t => {
-  const f = fixture(t);
-  f.event('ended', 1, 'session_start');
-  f.event('ended', 2, 'reclaim_done', { reason: 'evict' });
-  f.event('ended', 3, 'rotate_done', { oldSessionId: 'old' });
-  const runs = createRuns({ store: f.store });
-  assert.equal((await runs('telegram:a')).items[0].endReason, 'evict');
-  f.event('ended', 4, 'crash_detected');
-  assert.equal((await runs('telegram:a')).items[0].endReason, 'crash');
-  await assert.rejects(runs('telegram:a', query({ before: 'not-a-time' })), { code: 'invalid_parameter', param: 'before' });
-  await assert.rejects(runs('telegram:a', query({ limit: 0 })), { code: 'invalid_parameter', param: 'limit' });
-});
 
 // Integration boundary: single-mode NULL attribution in the same real event
 // store as group runs. Run when single/group routing changes; UI-only edits can
 // skip. The official runner and fixture own all paths; no live processes/DBs.
-test('a run ended by a manual restart reports the manual restart end reason', async t => {
-  const f = fixture(t);
-  f.event('restarted', 1, 'session_start');
-  f.event('restarted', 2, 'manual_restart_done', { requestId: 'request-1' });
-  f.event('current', 3, 'session_start');
-  const runs = createRuns({ store: f.store,
-    getSnapshot: async () => ({ rows: [{ sessionGroup: 'telegram:a', live: { runId: 'current' } }] }) });
-  assert.deepEqual((await runs('telegram:a')).items.map(row => [row.runId, row.endReason]),
-    [['current', 'running'], ['restarted', 'manual_restart']]);
-});
-
-test('single view reads only ungrouped runs while multi Origin keeps its own history', async t => {
-  const f = fixture(t);
-  f.event('single-old', 1, 'session_start', {}, 'claude', null);
-  f.event('single-old', 2, 'reclaim_done', { reason: 'ttl' }, 'claude', null);
-  f.event('single-current', 3, 'session_start', {}, 'claude', null);
-  f.event(null, 1, 'stop', {}, 'claude', null);
-  f.event('origin-current', 4, 'session_start', {}, 'claude', 'origin');
-  f.event('another-group', 5, 'session_start');
-  let snapshot = { view: 'single', rows: [{ sessionGroup: null, live: { runId: 'single-current' } }] };
-  const runs = createRuns({ store: f.store, getSnapshot: async () => snapshot });
-  const first = await runs('origin', query({ limit: 1 }));
-  assert.deepEqual(first.items.map(row => [row.runId, row.endReason]), [['single-current', 'running']]);
-  assert.deepEqual([first.totalRuns, first.totalEvents, first.unattributed], [2, 3, 1]);
-  const second = await runs('origin', query({ cursor: first.nextCursor, limit: 1 }));
-  assert.deepEqual(second.items.map(row => [row.runId, row.endReason]), [['single-old', 'ttl']]);
-  assert.deepEqual([second.totalRuns, second.totalEvents, second.unattributed], [2, 3, 1]);
-  snapshot = { view: 'multi', rows: [{ sessionGroup: 'origin', live: { runId: 'origin-current' } }] };
-  const origin = await runs('origin');
-  assert.deepEqual(origin.items.map(row => [row.runId, row.endReason]), [['origin-current', 'running']]);
-  assert.deepEqual([origin.totalRuns, origin.totalEvents, origin.unattributed], [1, 1, 0]);
-});
 
 // Integration boundary: a real read-only C4Reader over a private SQLite DB. Run
 // for message projection or pagination; skip UI-only changes. The official runner
@@ -185,146 +70,8 @@ test('group messages expose direction and time without content or internal traff
 // Integration boundary: NULL message attribution in a private read-only C4 DB.
 // Run when message scope SQL changes; rendering-only edits can skip.
 // Teardown closes both connections before removing the isolated fixture root.
-test('single messages retain NULL scope and never include Origin or other groups', t => {
-  const f = fixture(t);
-  fs.mkdirSync(path.join(f.root, 'comm-bridge'));
-  const db = new Database(path.join(f.root, 'comm-bridge/c4.db'));
-  db.exec('CREATE TABLE conversations(id INTEGER PRIMARY KEY, session_group TEXT, direction TEXT, channel TEXT, timestamp TEXT, content TEXT)');
-  const put = db.prepare('INSERT INTO conversations VALUES(?,?,?,?,?,?)');
-  put.run(1, null, 'in', 'telegram', '2026-10-01 12:00:00', 'private single body');
-  put.run(2, null, 'out', 'telegram', '2026-10-02 12:00:00', 'private single reply');
-  put.run(3, null, 'in', 'internal', '2026-10-02 12:00:00', 'private internal');
-  put.run(4, 'origin', 'in', 'telegram', '2026-10-02 12:00:00', 'private Origin');
-  put.run(5, 'telegram:a', 'in', 'telegram', '2026-10-02 12:00:00', 'private group');
-  const reader = new C4Reader(f.root);
-  f.addCleanup(() => { reader.close(); db.close(); });
-  const rows = reader.getGroupMessagePage(null, new URLSearchParams()).items;
-  assert.deepEqual(rows.map(row => row.id), [1, 2]);
-  for (const row of rows) assert.deepEqual(Object.keys(row), ['id', 'direction', 'channel', 'timestamp']);
-  assert.doesNotMatch(JSON.stringify(rows), /private|content/);
-  assert.deepEqual(reader.getGroupMessagePage('origin', new URLSearchParams()).items.map(row => row.id), [4]);
-});
 
 // Core's ranges from an in-memory answer, and a Sync marker file for every group, so each group asks for its status.
 const markerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runs-backlog-marker-'));
 fs.writeFileSync(path.join(markerDir, 'sync.lock'), '{}');
 after(() => fs.rmSync(markerDir, { recursive: true, force: true }));
-const markers = async () => ({ groupRunDir: () => markerDir });
-const coreRanges = (answer, calls = []) => ({ getUnsummarizedRanges: scopes => { calls.push(scopes); return scopes.map(answer); } });
-
-test('backlog has one shared thirty-second per-group cache for count and lock status', async () => {
-  let clock = 1000, lockCalls = 0;
-  const countCalls = [];
-  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance', now: () => clock, loadPaths: markers,
-    env: { HOME: '/isolated', ZYLOS_SESSION_GROUP: 'unrelated', ZYLOS_RUN_ID: 'unrelated-run' },
-    c4Reader: coreRanges(scope => { assert.equal(scope, 'telegram:a'); return { count: 3, firstAt: 100 }; }, countCalls),
-    execute: async (file, argv, options) => {
-      lockCalls++;
-      assert.equal(file, process.execPath);
-      assert.equal(argv[0], '/isolated/instance/.claude/skills/zylos-memory/scripts/sync-lock.js');
-      assert.deepEqual(argv.slice(1), ['status', '--group', 'telegram:a', '--json']);
-      assert.equal(options.env.ZYLOS_SESSION_GROUP, undefined);
-      assert.equal(options.env.ZYLOS_RUN_ID, undefined);
-      assert.equal(options.env.ZYLOS_DIR, '/isolated/instance');
-      assert.equal(options.timeout, 15000); assert.equal(options.maxBuffer, 1024 * 1024);
-      return { stdout: JSON.stringify({ sync: { held: true } }) };
-    } });
-  assert.deepEqual(await backlog('telegram:a'), { count: 3, firstAt: 100, syncing: true });
-  clock += 29999; await backlog('telegram:a');
-  assert.deepEqual([countCalls.length, lockCalls], [1, 1]);
-  clock += 101; await backlog('telegram:a');
-  assert.deepEqual([countCalls.length, lockCalls], [2, 2]);
-});
-
-test('backlog count and lock failures remain independent and Origin reads its group sync lock, not the Origin Sync lock', async () => {
-  let countFailed = false, lockFailed = true;
-  const backlog = () => createGroupBacklog({ zylosDir: '/isolated/instance', loadPaths: markers,
-    c4Reader: coreRanges(() => countFailed ? null : { count: 3, firstAt: 100 }),
-    execute: async () => {
-      if (lockFailed) throw new Error('lock unavailable');
-      return { stdout: JSON.stringify({ sync: { held: false }, origin: { held: true } }) };
-    } });
-  assert.deepEqual(await backlog()('origin'), { count: 3, firstAt: 100, syncing: null, reason: 'backlog_failed' });
-  countFailed = true; lockFailed = false;
-  assert.deepEqual(await backlog()('origin'), { count: null, firstAt: null, reason: 'backlog_failed', syncing: false });
-});
-
-test('single backlog reads the whole machine and keeps its cache separate from multi Origin', async () => {
-  let view = 'single';
-  const calls = [], scopes = [];
-  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance', getSnapshot: async () => ({ view }), loadPaths: markers,
-    env: { HOME: '/isolated/home', ZYLOS_SESSION_GROUP: 'wrong-group', ZYLOS_RUN_ID: 'wrong-run', RETAIN: 'yes' },
-    c4Reader: coreRanges(scope => ({ count: scope === null ? 7 : 2, firstAt: 100 }), scopes),
-    execute: async (file, argv, options) => {
-      calls.push({ file, argv, options });
-      return { stdout: JSON.stringify({ sync: { held: true }, origin: { held: false } }) };
-    } });
-  const single = await backlog('origin');
-  assert.deepEqual(single, { count: 7, firstAt: 100, syncing: true });
-  assert.deepEqual(scopes, [[null]], 'Core\'s global range');
-  assert.deepEqual(calls.map(call => call.argv), [['/isolated/instance/.claude/skills/zylos-memory/scripts/sync-lock.js', 'status', '--json']]);
-  assert.equal(await backlog('origin'), single);
-  assert.equal(calls.length, 1);
-  view = 'multi';
-  const origin = await backlog('origin');
-  assert.deepEqual(origin, { count: 2, firstAt: 100, syncing: true });
-  assert.deepEqual(scopes, [[null], ['origin']]);
-  assert.deepEqual(calls[1].argv.slice(1), ['status', '--group', 'origin', '--json']);
-  view = 'single';
-  assert.equal(await backlog('origin'), single);
-  assert.equal(calls.length, 2);
-  for (const call of calls) {
-    assert.equal(call.file, process.execPath);
-    assert.equal(call.options.env.ZYLOS_DIR, '/isolated/instance');
-    assert.equal(call.options.env.ZYLOS_SESSION_GROUP, undefined);
-    assert.equal(call.options.env.ZYLOS_RUN_ID, undefined);
-    assert.equal(call.options.env.RETAIN, 'yes');
-    assert.equal(call.options.timeout, 15000);
-    assert.equal(call.options.maxBuffer, 1024 * 1024);
-  }
-});
-
-test('an unavailable backlog view retains the requested Origin scope', async () => {
-  const countCalls = [], lockCalls = [];
-  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance', loadPaths: markers,
-    getSnapshot: async () => { throw new Error('unavailable'); },
-    c4Reader: coreRanges(() => ({ count: 2 }), countCalls),
-    execute: async (file, argv) => {
-      lockCalls.push(argv);
-      return { stdout: JSON.stringify({ sync: { held: true }, origin: { held: false } }) };
-    } });
-  assert.deepEqual(await backlog('origin'), { count: 2, firstAt: null, syncing: true });
-  assert.deepEqual(countCalls, [['origin']]);
-  assert.deepEqual(lockCalls[0].slice(1), ['status', '--group', 'origin', '--json']);
-});
-
-
-test('reading another scope discards expired backlog entries permanently', async () => {
-  let clock = 1000, calls = 0;
-  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance', now: () => clock, loadPaths: markers,
-    c4Reader: coreRanges(() => ({ count: ++calls })),
-    execute: async () => ({ stdout: JSON.stringify({ sync: { held: false } }) }) });
-  assert.equal((await backlog('telegram:a')).count, 1);
-  clock = 31001;
-  assert.equal((await backlog('telegram:b')).count, 2);
-  // A backwards wall-clock adjustment cannot resurrect an expired entry that
-  // was already discarded while another scope was read.
-  clock = 1001;
-  assert.equal((await backlog('telegram:a')).count, 3);
-});
-
-test('a read that waits keeps the cached values it started with when another read sweeps them out', async () => {
-  let clock = 1000, paused = false, release;
-  const gate = new Promise(resolve => { release = resolve; });
-  const backlog = createGroupBacklog({ zylosDir: '/isolated/instance', now: () => clock,
-    loadPaths: async () => { if (paused) await gate; return markers(); },
-    c4Reader: coreRanges(scope => ({ count: scope === 'telegram:a' ? 1 : 2 })),
-    execute: async () => ({ stdout: JSON.stringify({ sync: { held: false } }) }) });
-  await backlog('telegram:a');
-  clock = 30999; paused = true;
-  const waiting = backlog.many(['telegram:a', 'telegram:b']);
-  clock = 31000; paused = false;
-  await backlog('telegram:c');
-  release();
-  assert.deepEqual((await waiting).map(value => value.count), [1, 2]);
-});

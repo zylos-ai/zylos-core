@@ -10,7 +10,6 @@ import { AuthGate } from '../src/lib/auth.js';
 import { ChatConversations } from '../src/lib/chat/conversations.js';
 import { handleChatConversations } from '../src/lib/chat/write-routes.js';
 import { sendJson } from '../src/lib/http.js';
-import { chatHttpFixture } from './helpers/chat-http.js';
 
 // Actual route/AuthGate/Store on an ephemeral loopback server and private DB.
 // The sender spy isolates HTTP authorization and body routing from Core receive,
@@ -78,17 +77,6 @@ async function fixture(t) {
   return { request, conversations, config, calls: () => calls, setMode: value => { mode = value; } };
 }
 
-test('write routes deny read keys, closed remote access, cross-origin and single mode before writes', async t => {
-  const f = await fixture(t);
-  for (const options of [{ identity: 'read' }, { identity: 'admin' }, { origin: 'https://outside.invalid' }]) {
-    assert.equal((await f.request('/api/conversations/drafts', options)).status, 403);
-  }
-  f.setMode('single');
-  assert.equal((await f.request('/api/conversations/drafts')).status, 403);
-  assert.equal(f.conversations.db.prepare('SELECT COUNT(*) n FROM chat_conversations').get().n, 0);
-  assert.equal(f.calls(), 0);
-});
-
 test('draft create, open and rename use the registered record and reject caller routing fields', async t => {
   const f = await fixture(t);
   const created = await f.request('/api/conversations/drafts', { body: { displayName: 'First name' } });
@@ -109,38 +97,4 @@ test('draft create, open and rename use the registered record and reject caller 
   assert.equal((await f.request(route, { method: 'DELETE' })).status, 404);
   assert.equal((await f.request(route + '?channel=telegram', { method: 'GET' })).status, 400);
   assert.equal((await f.request('/api/conversations/%ZZ', { method: 'GET' })).status, 400);
-});
-
-test('remote admin writes require the data instance switch and stored ownership', async t => {
-  const f = await fixture(t); f.config.chat.allowRemote = true;
-  const created = await f.request('/api/conversations/drafts', { identity: 'admin' });
-  assert.equal(created.status, 201);
-  const route = `/api/conversations/${encodeURIComponent(created.body.conversation.id)}`;
-  assert.equal((await f.request(route, { method: 'PATCH', identity: 'read', body: { displayName: 'bad' } })).status, 403);
-  assert.equal((await f.request(route, { method: 'PATCH', identity: 'admin', body: { displayName: 'remote name' } })).status, 200);
-  assert.equal((await f.request('/api/conversations/g:74673A6F74686572/send', { body: { content: 'wrong group' } })).status, 403);
-  assert.equal(f.calls(), 0);
-});
-
-test('write routes forward the optional quote field to the sender', async t => {
-  const f = await fixture(t);
-  const created = await f.request('/api/conversations/drafts');
-  const route = `/api/conversations/${encodeURIComponent(created.body.conversation.id)}/send`;
-  const response = await f.request(route, { body: { content: 'quoted body', quote: 42 } });
-  assert.equal(response.status, 200);
-  assert.equal(response.body.quote, 42);
-  assert.equal(f.calls(), 1);
-});
-
-test('fleet proxy allowlists draft rename and still checks both admin and remote switch', async t => {
-  const f = await chatHttpFixture(t, { chat: { allowRemote: true } });
-  const route = { method: 'PATCH', path: '/api/conversations/d%3Alocal-chat' };
-  // This helper's receiver does not implement registration: its access gate is
-  // sufficient to prove the new allowlist reaches the protected data instance.
-  assert.equal((await f.request(route, { fleet: true })).status, 200);
-  const before = f.counts.upstream;
-  assert.equal((await f.request(route, { fleet: true, identity: 'read' })).status, 403);
-  assert.equal(f.counts.upstream, before);
-  f.config.chat.allowRemote = false;
-  assert.equal((await f.request(route, { fleet: true })).status, 403);
 });

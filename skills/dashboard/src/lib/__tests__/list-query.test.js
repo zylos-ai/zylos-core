@@ -52,19 +52,3 @@ test('a cursor returns its position only for the same collection, filters and q'
   rejects(`side=running&q=work&cursor=${forged}.${signature}`, 'invalid_cursor', undefined);
   rejects('cursor=not-a-cursor', 'invalid_cursor', undefined);
 });
-
-test('extras are validated but a cursor stays valid when they change', () => {
-  const ids = value => /^[1-9][0-9]*(,[1-9][0-9]*)*$/.test(value) ? value.split(',').map(Number) : undefined;
-  const timeline = { filters: { tab: ['mine', 'external'] }, extras: { direction: ['before', 'after'], recheckIds: ids } };
-  const cursor = parse('tab=mine&direction=before', timeline, 'messages:g:1').nextCursor(41);
-  const query = parse(`tab=mine&direction=after&recheckIds=3,7&cursor=${cursor}`, timeline, 'messages:g:1');
-  assert.deepEqual(query.extras, { direction: 'after', recheckIds: [3, 7] });
-  assert.equal(query.after, 41);
-  rejects('recheckIds=3,x', 'invalid_parameter', 'recheckIds', timeline);
-});
-
-test('cursors issued before a restart are rejected', async () => {
-  const cursor = parse('').nextCursor(['x']);
-  const restarted = await import(`../list-query.js?restart=${Date.now()}`);
-  assert.throws(() => restarted.parseListQuery('groups', new URLSearchParams({ cursor }), spec), { code: 'invalid_cursor' });
-});

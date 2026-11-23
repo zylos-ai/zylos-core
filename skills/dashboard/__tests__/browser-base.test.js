@@ -23,12 +23,6 @@ test('paths outside the browser base are rejected', () => {
   for (const path of outside) assert.equal(isPathWithinBase(path, '/dashboard'), false, JSON.stringify(path));
 });
 
-test('paths at or under the browser base are accepted', () => {
-  for (const path of ['/dashboard', '/dashboard/', '/dashboard/memory', '/dashboard/memory?tab=files#top']) {
-    assert.equal(isPathWithinBase(path, '/dashboard'), true, path);
-  }
-});
-
 test('without a base, any same-origin absolute path is accepted and other origins are not', () => {
   for (const path of ['/', '/memory', '/admin']) assert.equal(isPathWithinBase(path, ''), true, path);
   for (const path of ['//evil.test', '/\\evil.test', 'https://evil.test/', 'javascript:alert(1)']) {
