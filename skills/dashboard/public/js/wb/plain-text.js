@@ -7,6 +7,42 @@ export function element(document, tag, text, className) {
   if (className) node.className = className;
   return node;
 }
+export async function copyText(text, view = window) {
+  try {
+    const clipboard = view.navigator.clipboard;
+    if (clipboard?.writeText) {
+      await clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Some browsers expose the Clipboard API but deny writes.
+  }
+
+  const { document } = view;
+  const focused = document.activeElement;
+  const start = focused?.selectionStart;
+  const end = focused?.selectionEnd;
+  const direction = focused?.selectionDirection;
+  const field = document.createElement('textarea');
+  field.value = text;
+  field.readOnly = true;
+  field.tabIndex = -1;
+  field.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px;pointer-events:none';
+  try {
+    document.body.append(field);
+    field.focus({ preventScroll: true });
+    field.select();
+    return document.execCommand('copy') === true;
+  } catch {
+    return false;
+  } finally {
+    field.remove();
+    if (focused?.isConnected) {
+      focused.focus({ preventScroll: true });
+      if (typeof start === 'number') focused.setSelectionRange(start, end, direction);
+    }
+  }
+}
 /** Line icon from css/wb-icons.css; decorative, so hidden from assistive technology. */
 export function icon(document, name, size) {
   const node = element(document, 'i', undefined, `wb-ico wb-ico-${name}${size ? ' wb-ico-' + size : ''}`);

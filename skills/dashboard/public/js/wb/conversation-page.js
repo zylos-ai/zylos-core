@@ -3,7 +3,7 @@ import { countLabel } from '../count-label.js';
 import { workingParts, workingText } from './working-display.js';
 import { createUploadTray } from './chat-upload-tray.js';
 import { createChatAttachment } from './chat-attachments.js';
-import { element, icon } from './plain-text.js';
+import { copyText, element, icon } from './plain-text.js';
 import { asDate } from './conversation-time.js';
 import { formatZoned } from './instance-zone.js';
 import { channelIcon, channelIcons } from './board.js';
@@ -1109,14 +1109,7 @@ export function mountConversationPage({
     text(record.copyBubbleFeedback, copyFromMenu ? feedback : '');
   }
   async function copyMessage(record, fromMenu = false) {
-    let result;
-    try {
-      if (!view.navigator.clipboard?.writeText) throw new Error('clipboard_unavailable');
-      await view.navigator.clipboard.writeText(readableText(record.row));
-      result = 'copied';
-    } catch {
-      result = 'failed';
-    }
+    const result = await copyText(readableText(record.row), view) ? 'copied' : 'failed';
     if (!record.node.isConnected) return;
     view.clearTimeout(record.copyTimer);
     record.copyResult = result;
