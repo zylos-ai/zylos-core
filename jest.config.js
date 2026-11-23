@@ -81,8 +81,6 @@ export default {
     '<rootDir>/test/observer-history-pagination.test.js',
     '<rootDir>/test/chat-quote.integration.test.js',
     '<rootDir>/test/origin-conversation.integration.test.js',
-    '<rootDir>/test/web-console-process.integration.test.js',
-    '<rootDir>/test/web-console-caddy.integration.test.js',
     '<rootDir>/test/exit-control.integration.test.js',
     '<rootDir>/test/upgrade-npm-prefix.integration.test.js',
     '<rootDir>/test/upgrade-db-maintenance.integration.test.js',

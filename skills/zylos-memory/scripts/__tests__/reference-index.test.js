@@ -291,6 +291,24 @@ test('reference operations reject symlinks escaping their permitted destinations
   assert.equal(fs.readdirSync(outside).length, 0);
 });
 
+test('archive rejects absolute paths, traversal, escaping symlinks and archived paths', t => {
+  const f = fixture(t);
+  const outside = path.join(f.root, 'outside');
+  fs.mkdirSync(outside);
+  const foreign = path.join(outside, 'topic.md');
+  const content = page('projects', 'Fixture page', 'active', '2026-11-11');
+  fs.writeFileSync(foreign, content);
+  f.write('reference/projects/topic.md', content);
+  fs.symlinkSync(foreign, f.target('reference/projects/link.md'));
+  for (const requested of [foreign, '../topic.md', 'reference/projects/../topic.md',
+    'reference/projects/link.md', 'reference/projects/archive/topic.md']) {
+    assert.throws(() => movePage(f.root, requested), code('PATH_NOT_ALLOWED'), requested);
+  }
+  assert.equal(fs.readFileSync(foreign, 'utf8'), content);
+  assert.equal(f.read('reference/projects/topic.md'), content);
+  assert.equal(fs.readdirSync(outside).length, 1);
+});
+
 // Integration boundary: CLI parsing, byte stdin and real filesystem publication.
 // Run for reference CLI changes; skip for unrelated memory prompt changes.
 // The official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR before import;
