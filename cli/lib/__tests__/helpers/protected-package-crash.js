@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
+import { createServer as createHttpServer } from 'node:http';
+import { createServer as createSocketServer } from 'node:net';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
@@ -46,7 +50,10 @@ const fs=require('node:fs'),a=process.argv.slice(2),file=${JSON.stringify(pm2Sta
 fs.appendFileSync(${JSON.stringify(calls)},'pm2 '+a.join(' ')+'\\n');
 const state=JSON.parse(fs.readFileSync(file));
 const only=a.includes('--only')?a[a.indexOf('--only')+1]:null;
-if(a[0]==='jlist')console.log(JSON.stringify(Object.entries(state).map(([name,status],i)=>({name,pid:status==='online'?100000+i:0,pm2_env:{status,pm_exec_path:${JSON.stringify(skills)}+'/'+name+'/scripts/'+name+'.js',ZYLOS_PACKAGE_ROOT:${JSON.stringify(core)}}}))));
+if(a[0]==='jlist')console.log(JSON.stringify(Object.entries(state).map(([name,status],i)=>{
+  const dashboard=name==='zylos-dashboard',cwd=${JSON.stringify(skills)}+'/'+(dashboard?'dashboard':name);
+  return {name,pid:status==='online'?(dashboard?${process.pid}:100000+i):0,pm2_env:{status,pm_cwd:cwd,pm_exec_path:cwd+(dashboard?'/src/index.js':'/scripts/'+name+'.js'),ZYLOS_PACKAGE_ROOT:${JSON.stringify(core)}}};
+})));
 else if(a[0]==='stop')state[a[1]]='stopped';
 else if(a[0]==='restart')state[a[1]]='online';
 else if(['start','startOrRestart'].includes(a[0])){if(only)state[only]='online';}
@@ -144,11 +151,68 @@ for(const [rel,owner]of [['comm-bridge/c4.db','comm-bridge/scripts/c4-schema.js'
     fs.cpSync(target, tempDir, { recursive: true, verbatimSymlinks: true });
     return { schemaVersion: 1, fromVersion: '0.9.3', tempDir, installedRoot: core, zylosDir: zylos };
   }
-  function entry(input) {
+  async function entry(input, signal) {
     const args = [path.join(input.tempDir, 'cli/lib/upgrade-entry.js')];
-    const result = run(process.execPath, args, { input: JSON.stringify(input), allowFailure: true, timeout: 900000 });
-    assert.ok(result.stdout.trim(), result.stderr);
-    return { status: result.status, result: JSON.parse(result.stdout.trim().split('\n').at(-1)) };
+    const bootId = randomUUID();
+    const dashboard = createHttpServer((request, response) => {
+      if (request.method !== 'GET' || request.url !== '/api/health') {
+        response.writeHead(404).end();
+        return;
+      }
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ ok: true, service: 'zylos-dashboard', bootId }));
+    });
+    const sockets = new Set();
+    const monitor = createSocketServer(socket => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+      socket.on('error', () => socket.destroy());
+      socket.setEncoding('utf8');
+      let buffer = '';
+      socket.on('data', chunk => {
+        buffer += chunk;
+        if (buffer.length > 4096) return socket.destroy();
+        const end = buffer.indexOf('\n');
+        if (end === -1) return;
+        socket.removeAllListeners('data');
+        let request;
+        try { request = JSON.parse(buffer.slice(0, end)); }
+        catch { request = null; }
+        if (request?.version !== 1 || request.type !== 'restart_all'
+          || typeof request.requestId !== 'string' || !request.requestId || request.reason !== 'upgrade') {
+          socket.end('{"ok":false,"code":"invalid_request"}\n');
+          return;
+        }
+        socket.end(`${JSON.stringify({ version: 1, type: 'restart_all', requestId: request.requestId,
+          ok: true, result: 'done_empty', runCount: 0 })}\n`);
+      });
+    });
+    try {
+      await once(dashboard.listen(0, '127.0.0.1'), 'listening');
+      write(path.join(zylos, 'components/dashboard/config.json'), JSON.stringify({ port: dashboard.address().port }));
+      write(path.join(zylos, 'components/dashboard/health-process.json'), JSON.stringify({ pid: process.pid, bootId }), 0o600);
+      const socketPath = path.join(zylos, 'activity-monitor/am.sock');
+      fs.mkdirSync(path.dirname(socketPath), { recursive: true });
+      await once(monitor.listen(socketPath), 'listening');
+      let child;
+      const output = new Promise(resolve => {
+        child = execFile(process.execPath, args, { env, signal, timeout: 900000,
+          killSignal: 'SIGKILL', maxBuffer: 64 << 20 }, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
+      });
+      const closed = new Promise(resolve => child.once('close', resolve));
+      child.stdin.on('error', () => {});
+      child.stdin.end(JSON.stringify(input));
+      const [result, status] = await Promise.all([output, closed]);
+      assert.ok(result.stdout.trim(), result.stderr);
+      if (result.error && status === null) throw result.error;
+      return { status, result: JSON.parse(result.stdout.trim().split('\n').at(-1)) };
+    } finally {
+      const closed = [dashboard, monitor].filter(server => server.listening)
+        .map(server => new Promise(resolve => server.close(resolve)));
+      dashboard.closeAllConnections();
+      for (const socket of sockets) socket.destroy();
+      await Promise.all(closed);
+    }
   }
   async function kill(input, stage) {
     const child = spawn(process.execPath, [path.join(input.tempDir, 'cli/lib/upgrade-entry.js')], { env, stdio: ['pipe', 'pipe', 'pipe'] });
