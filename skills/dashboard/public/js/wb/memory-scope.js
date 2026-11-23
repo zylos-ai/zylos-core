@@ -341,15 +341,17 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     else if (list.error) pickerList.append(element(document, 'p', t('memory.error_generic'), 'wb-memory-diagnostic'));
     else if (!list.items.some(item => item.type === 'group')) pickerList.append(element(document, 'p', t('wb.noMatch'), 'wb-memory-source'));
   }
+  // A search match (`prefix` is its folder) shows the file name whole on its first line and the folder, which may
+  // be cut, on a second line; a phone has no hover title to show the cut part.
   function fileButton(parent, node, prefix, sizeClass = '') {
     const item = button(parent, undefined, () => onFile(node.path),
-      'memory-file' + (selectedPath() === node.path ? ' active' : ''));
+      'memory-file' + (prefix ? ' memory-file-match' : '') + (selectedPath() === node.path ? ' active' : ''));
     item.dataset.path = node.path;
     item.disabled = !node.renderable;
     item.title = fileTitle(node);
     const name = element(document, 'span', undefined, 'memory-file-name');
-    if (prefix) name.append(element(document, 'span', prefix, 'memory-file-dir'));
     name.append(element(document, 'span', node.name));
+    if (prefix) name.append(element(document, 'span', prefix, 'memory-file-dir'));
     item.append(icon(document, 'book', 'xs'), name,
       element(document, 'span', isNumber(node.size_bytes) ? sizeText(node.size_bytes) : '', 'memory-file-meta' + sizeClass));
     return item;

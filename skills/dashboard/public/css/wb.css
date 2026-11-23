@@ -963,6 +963,10 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .memory-file.active > .wb-ico { color: var(--accent); }
 .memory-file-name { font-size: 13px; font-weight: 450; }
 .memory-file-dir { color: var(--text-muted); }
+/* A search match: the file name whole on the first line, its folder on a second line that may be cut. */
+.memory-file-match .memory-file-name { display: flex; flex-direction: column; gap: 1px; white-space: normal; }
+.memory-file-match .memory-file-name > :first-child { overflow-wrap: anywhere; }
+.memory-file-match .memory-file-dir { overflow: hidden; font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
 .memory-file-meta { font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .memory-file-meta.wb-txt-warn { color: var(--wb-wait); font-weight: 600; }
 .wb-memory-group .memory-file { padding-left: 32px; }
