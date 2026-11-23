@@ -6,13 +6,13 @@ const DEFAULT_CLAUDE_MODEL_PRICES = {
   // from `input` per TTL (see CACHE_WRITE_INPUT_MULTIPLIER in
   // collector.js), so changing an input price below
   // moves both TTL rates with it. Cache-read rates are model-specific.
+  // Rows with fastModeMultiplier specify model-specific Fast mode rates.
   'claude-fable-5-2': { input: 8, output: 40, cacheRead: 0.20, cacheCreation: 16, fastModeMultiplier: 2 },
   'claude-fable-5-1': { input: 10, output: 50, cacheRead: 0.25, cacheCreation: 20 },
   'claude-fable-5': { input: 10, output: 50, cacheRead: 1.00, cacheCreation: 20 },
   'claude-mythos-5-2': { input: 8, output: 40, cacheRead: 0.20, cacheCreation: 16, fastModeMultiplier: 2 },
   'claude-mythos-5-1': { input: 10, output: 50, cacheRead: 0.25, cacheCreation: 20 },
   'claude-mythos-5': { input: 10, output: 50, cacheRead: 1, cacheCreation: 20 },
-  // Current Fast mode rates apply only to these models (pricing checked 2026-09-28).
   // Opus 5.5 needs its own key: longest-prefix matching would otherwise bill it as
   // claude-opus-5. Its cache reads are 0.05x input rather than the usual 0.1x.
   'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.20, cacheCreation: 8, fastModeMultiplier: 2 },
