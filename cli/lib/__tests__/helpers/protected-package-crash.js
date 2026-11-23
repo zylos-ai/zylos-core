@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -10,9 +11,9 @@ const maintenance = createRequire(import.meta.url)('../../upgrade-maintenance.cj
 const nodeBin = path.dirname(process.execPath);
 const restoreCrashPreload = path.join(import.meta.dirname, 'original-package-restore-crash.js');
 
-// Real npm and SQLite; all package, deployment, cache and process state belongs
-// to this fixture. The historical source is v0.9.2 relabelled 0.9.3, not a
-// claim that the unreleased historical 0.9.3 package has been exercised.
+// Real npm and SQLite; package, deployment and process state are private to the
+// fixture, but the npm cache is shared. The historical source is v0.9.2 relabelled
+// 0.9.3, not a claim that the unreleased historical 0.9.3 package has been exercised.
 export function createProtectedPackageCrashFixture(root, {
   managedDashboard = false,
   targetBinChanged = false,
@@ -22,8 +23,11 @@ export function createProtectedPackageCrashFixture(root, {
   const core = path.join(prefix, 'lib/node_modules/zylos');
   const skills = path.join(zylos, '.claude/skills');
   const calls = path.join(root, 'commands.log'), pm2State = path.join(root, 'pm2.json');
-  const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(home, '.pm2'),
-    npm_config_prefix: prefix, npm_config_cache: path.join(root, 'npm-cache'),
+  const { npm_config_cache, NPM_CONFIG_CACHE, ...callerEnv } = process.env;
+  const npmCache = npm_config_cache || NPM_CONFIG_CACHE
+    || path.join(os.userInfo().homedir, '.npm');
+  const env = { ...callerEnv, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(home, '.pm2'),
+    npm_config_prefix: prefix, npm_config_cache: npmCache,
     npm_config_audit: 'false', npm_config_fund: 'false',
     PATH: [bin, path.join(prefix, 'bin'), nodeBin, '/usr/bin', '/bin'].join(path.delimiter) };
   for (const name of ['ZYLOS_SKIP_POSTINSTALL', 'ZYLOS_PROTECTED_INSTALL', 'ZYLOS_UPGRADE_FROM_VERSION', 'CI', 'TMUX']) delete env[name];
