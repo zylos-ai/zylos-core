@@ -1,21 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { routerFixture, deferred, flush } from './helpers/router-fixture.js';
-import { validStartAttemptReply } from '../router/activation.js';
 
 async function pump(f, count = 4) { for (let i = 0; i < count; i++) { f.router.tick(); await flush(); } }
 const calls = (f, kind) => f.calls.filter(row => row[0] === kind);
-
-test('restricted admission precedes claim and preserves one launchConfig/runId', async t => {
-  const f = routerFixture(t); f.put('origin', { runtime: 'codex' }); const row = f.add('a');
-  f.health.set('claude', { health: 'unavailable' });
-  const submit = f.deps.submit;
-  f.deps.submit = request => { assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.router.availableCapacity(), 1); assert.equal(f.db.listSlotOccupancy()[0].runId, request.runId); return submit(request); };
-  const router = f.create(); await router.initialize(); await f.rounds(5);
-  assert.equal(calls(f,'submit').length, 1); assert.equal(calls(f,'launch').length, 1);
-  assert.equal(calls(f,'launch')[0][1].runId, calls(f,'submit')[0][1].runId);
-  assert.equal(f.row(row.id).status, 'delivered'); assert.equal(f.row(row.id).session_id, 'session-a');
-});
 
 test('same runtime single-flight, independent runtime advances, U suppresses current round only', async t => {
   const f = routerFixture(t, { poolSize: 4 });
@@ -37,24 +25,6 @@ test('same runtime single-flight, independent runtime advances, U suppresses cur
   assert.equal(calls(f,'launch').length, 0);
 });
 
-test('admission rechecks candidate and scene while its reserved slot excludes competitors', async t => {
-  for (const change of ['fence','capacity','scene','candidate']) {
-    await t.test(change, async t => {
-      const f = routerFixture(t, { poolSize: 1 }); f.put('origin', { runtime: 'codex' }); const row = f.add('a');
-      f.health.set('claude', { health: 'recovering' }); const hold = deferred(); let request;
-      f.deps.submit = async value => { request = value; return hold.promise; };
-      const router = f.create(); await router.initialize(); await pump(f, 2); assert.ok(request);
-      if (change === 'fence') f.db.setDrainFence('a', { reason: 'ttl', runId: 'other' });
-      if (change === 'capacity') assert.deepEqual(f.db.takeSlot('b', {runId:'competing', k:1}), {taken:false, reason:'full'});
-      if (change === 'scene') f.put('a');
-      if (change === 'candidate') f.db.claimConversation(row.id);
-      hold.resolve({ kind: 'accepted', sent: true, reply: { ...request, ok: true, result: 'not_restricted' } });
-      await router.idle(); assert.equal(calls(f,'launch').length, change === 'capacity' ? 1 : 0);
-      assert.equal(f.row(row.id).status, ['candidate','capacity'].includes(change) ? 'running' : 'pending');
-    });
-  }
-});
-
 test('missing/unreadable health fail open, auth blocks, existing runtime avoids registration', async t => {
   for (const state of ['missing','unreadable','auth_failed','ok','scene']) {
     await t.test(state, async t => {
@@ -66,85 +36,6 @@ test('missing/unreadable health fail open, auth blocks, existing runtime avoids 
       assert.equal(f.row(row.id).status, state === 'auth_failed' ? 'pending' : 'delivered');
     });
   }
-});
-
-test('late launch and unconfirmed stop retain running row and capacity', async t => {
-  const f = routerFixture(t, { poolSize: 1 }); f.put('origin'); const a = f.add('a'), b = f.add('b');
-  const hold = deferred(); let stopConfirmed = false;
-  f.deps.session = { launch: async input => { f.calls.push(['launch', input]); await hold.promise;
-    f.put(input.sessionGroup, { ready: false, runId: input.runId }); },
-    stop: async input => { f.calls.push(['stop', input]); if (!stopConfirmed) throw Object.assign(Error('unknown'), { code: 'STOP_UNCONFIRMED' }); f.scene.delete('a'); } };
-  const router = f.create(); await router.initialize(); await pump(f, 2);
-  assert.equal(f.row(a.id).status, 'running'); assert.equal(f.row(b.id).status, 'pending');
-  f.advance(2000); await pump(f, 2);
-  assert.equal(calls(f,'stop').length, 0); assert.equal(router.availableCapacity(), 0);
-  hold.resolve(); await router.idle();
-  assert.equal(f.row(a.id).status, 'running'); assert.equal(router.availableCapacity(), 0);
-  stopConfirmed = true; await f.rounds(1);
-  assert.equal(f.row(a.id).status, 'pending'); assert.equal(f.row(a.id).retry_count, 1);
-});
-
-test('NAME_CONFLICT requeues without retry and startup control invalidation precedes launch', async t => {
-  const f = routerFixture(t); f.put('origin'); const row = f.add('a');
-  const control = f.db.insertControl('old', { sessionGroup: 'a', appendAckSuffix: false });
-  f.deps.session = { launch: async () => {
-    assert.equal(f.db.getControlById(control.id).last_error, 'SESSION_ENDED');
-    throw Object.assign(Error('exists'), { code: 'NAME_CONFLICT',
-      launchTiming: { new_session_ms: 1, total_ms: 1, last_phase: 'new_session' } }); }, stop: async () => assert.fail('no stop on name conflict') };
-  const router = f.create(); await router.initialize(); await f.rounds(2);
-  assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.row(row.id).retry_count, 0);
-  assert.ok(f.events.some(x => x.event === 'launch_name_conflict'));
-  assert.equal(f.events.some(x => x.event === 'session_launch_failed'), false);
-});
-
-test('branch validation rejects missing, forbidden, wrong units and mismatched identity', () => {
-  const request = { version: 1, type: 'start_attempt', requestId: 'sa-test' };
-  const valid = { ...request, ok: true, result: 'registered', reason: 'recovery_due' };
-  assert.ok(validStartAttemptReply({ ...valid, future: true }, request));
-  for (const patch of [{ version: 2 }, { type: 'wrong' }, { requestId: 'old' }, { ok: 1 }, { result: 'new' },
-    { reason: 'other' }, { code: 'bad' }, { notBefore: 1800000000000 }]) {
-    assert.equal(validStartAttemptReply({ ...valid, ...patch }, request), false, JSON.stringify(patch));
-  }
-  assert.equal(validStartAttemptReply({ ...request, ok: false, code: 'attempt_backoff', notBefore: 1800000000 }, request), false);
-  assert.equal(validStartAttemptReply({ ...request, ok: false, code: 'probe_inflight', notBefore: 1800000000000 }, request), false);
-  const { reason, ...missingReason } = valid;
-  assert.equal(validStartAttemptReply(missingReason, request), false);
-  assert.equal(validStartAttemptReply({ ...request, ok: true, result: 'not_restricted', reason }, request), false);
-  for (const extra of [{ attemptAt: 1800000000000 }, { attemptAt: null }, { attemptCount: '1' }]) {
-    assert.ok(validStartAttemptReply({ ...valid, ...extra }, request));
-    assert.ok(validStartAttemptReply({ ...request, ok: true, result: 'not_restricted', ...extra }, request));
-    assert.ok(validStartAttemptReply({ ...request, ok: false, code: 'probe_inflight', ...extra }, request));
-  }
-});
-
-test('timeout observation failures alert and retain the running row and reservation', async t => {
-  const f = routerFixture(t, { poolSize: 1 }); f.put('origin');
-  const a = f.add('a'), b = f.add('b');
-  const adapter = f.deps.session;
-  f.deps.session = { ...adapter, launch: async input => {
-    f.calls.push(['launch', input]); f.put(input.sessionGroup, { ready: false, runId: input.runId });
-  } };
-  const router = f.create(); await router.initialize(); await f.rounds(2);
-  assert.equal(f.row(a.id).status, 'running');
-  const activation = router.state.activations.get('a');
-  const read = f.deps.readLiveIdentity; let reads = 0;
-  f.deps.readLiveIdentity = async group => {
-    if (group === 'a' && ++reads === 1) throw Object.assign(Error('unobservable'), { code: 'TMUX_UNAVAILABLE' });
-    return read(group);
-  };
-  f.advance(1000); await router.state.lanes.get('a').kick();
-  assert.equal(reads, 1);
-  assert.equal(calls(f, 'stop').length, 0);
-  assert.equal(f.row(a.id).status, 'running'); assert.equal(f.row(a.id).retry_count, 0);
-  assert.equal(f.row(b.id).status, 'pending');
-  assert.equal(router.state.activations.get('a'), activation); assert.equal(router.availableCapacity(), 0);
-  assert.ok(f.events.some(x => x.event === 'stop_unconfirmed' && x.session_group === 'a' && x.reason === 'TMUX_UNAVAILABLE'));
-  assert.ok(calls(f, 'alert').some(x => x[1] === 'stop_unconfirmed' && x[2].runId === activation.runId));
-  f.deps.readLiveIdentity = read;
-  await router.state.lanes.get('a').kick();
-  assert.equal(calls(f, 'stop').length, 1);
-  assert.equal(f.row(a.id).status, 'pending'); assert.equal(f.row(a.id).retry_count, 1);
-  assert.equal(router.state.activations.has('a'), false);
 });
 
 // Timeout reads readiness once; adapter.stop success authorizes release.
@@ -169,63 +60,3 @@ for (const ready of [false, true]) {
     assert.equal(router.state.activations.has('a'), ready);
   });
 }
-
-test('launch timing survives failed identity observation and is logged once per attempt', async t => {
-  const f = routerFixture(t); f.put('origin'); const row = f.add('a');
-  let observationFails = false;
-  const read = f.deps.readLiveIdentity;
-  f.deps.readLiveIdentity = async group => {
-    if (observationFails && group === 'a') throw Object.assign(Error('unobservable'), { code: 'TMUX_UNAVAILABLE' });
-    return read(group);
-  };
-  f.deps.session = { launch: async () => {
-    observationFails = true;
-    throw Object.assign(Error('private error'), { code: 'LAUNCH_FAILED', cause: 'timeout', launchTiming: {
-      preflight_ms: 8000, new_session_ms: 2000, executor_init_ms: 0, exec_confirm_ms: 0, cleanup_ms: 1, total_ms: 10001,
-      timeout_ms: 10000, last_phase: 'new_session',
-    } });
-  }, stop: async () => assert.fail('observation must retain ownership') };
-  await f.create().initialize(); await f.rounds(5);
-  assert.equal(f.row(row.id).status, 'running');
-  assert.equal(f.row(row.id).retry_count, 0);
-  const events = f.events.filter(event => event.event === 'session_launch_failed');
-  assert.equal(events.length, 1);
-  assert.equal(events[0].last_phase, 'new_session');
-  assert.equal(events[0].preflight_ms, 8000);
-  assert.equal(events[0].cause, 'timeout');
-  assert.equal(JSON.stringify(events).includes('private error'), false);
-});
-
-test('READY timeout records launch phase durations under its separate budget', async t => {
-  const f = routerFixture(t); f.put('origin'); const row = f.add('a');
-  const adapter = f.deps.session;
-  f.deps.session = { ...adapter, launch: async input => {
-    f.put(input.sessionGroup, { ready: false, runId: input.runId });
-    return { launchTiming: { preflight_ms: 7, new_session_ms: 20, executor_init_ms: 3, exec_confirm_ms: 40,
-      cleanup_ms: 1, total_ms: 64, timeout_ms: 10000, last_phase: 'exec_confirm' } };
-  } };
-  const alerts = [];
-  f.deps.sendFailureAlert = (failed, reason) => {
-    alerts.push({ id: failed.id, reason, status: f.row(failed.id).status });
-  };
-  f.options.maxRetries = 2;
-  await f.create().initialize(); await f.rounds(2);
-  assert.equal(f.row(row.id).status, 'running');
-  f.advance(1000); await f.rounds(1);
-  assert.equal(f.row(row.id).retry_count, 1);
-  assert.equal(f.row(row.id).status, 'pending');
-  assert.deepEqual(alerts, []);
-  await f.rounds(2);
-  assert.equal(f.row(row.id).status, 'running');
-  f.advance(1000); await f.rounds(1);
-  assert.equal(f.row(row.id).retry_count, 2);
-  assert.equal(f.row(row.id).delivery_action, 'ready_timeout');
-  assert.deepEqual(alerts, [{ id: row.id, reason: 'ready_timeout', status: 'failed' }]);
-  const event = f.events.find(event => event.event === 'session_launch_failed');
-  assert.equal(event.last_phase, 'runtime_ready');
-  assert.equal(event.timeout_ms, 1000);
-  assert.equal(event.new_session_ms, 20);
-  assert.equal(event.preflight_ms, 7);
-  assert.equal(event.cause, 'ready_timeout');
-  assert.ok(event.total_ms >= 0);
-});

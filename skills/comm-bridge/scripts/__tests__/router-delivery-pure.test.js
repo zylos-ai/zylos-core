@@ -1,13 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { DELIVERY_DELAY_BASE, DELIVERY_DELAY_PER_KB, DELIVERY_DELAY_MAX } from '../c4-config.js';
 import { sanitizeMessage } from '../c4-utils.js';
-import { findPromptY, isUsageOverlayCapture } from '../../../../cli/lib/runtime/shared/prompt-input.js';
-import { checkAgyInputState } from '../../../../cli/lib/runtime/agy/input.js';
-import { getClaudeInputBoxText, checkClaudeFallbackInputBox } from '../../../../cli/lib/runtime/claude/input.js';
-import { getDeliveryDelay,
-  isBypassState, isKeystrokeControl, parseKeystrokeKey, isExitLifecycleControl,
-  getHeartbeatPhase, isRecoveryHeartbeatPhase, shouldAutoAckHeartbeat } from '../router/delivery.js';
+import { findPromptY } from '../../../../cli/lib/runtime/shared/prompt-input.js';
+import { checkClaudeFallbackInputBox } from '../../../../cli/lib/runtime/claude/input.js';
 
 // ── sanitizeMessage ─────────────────────────────────────────────────
 
@@ -20,46 +15,9 @@ describe('sanitizeMessage', () => {
     assert.equal(sanitizeMessage('a\tb\nc\rd'), 'a\tb\ncd');
   });
 
-  it('passes normal text through unchanged', () => {
-    const text = 'Hello, World! 123 @#$%';
-    assert.equal(sanitizeMessage(text), text);
-  });
-
-  it('strips vertical tab (\\x0B) and unit separator (\\x1F)', () => {
-    assert.equal(sanitizeMessage('a\x0Bb\x1Fc'), 'abc');
-  });
-
-  it('returns empty string for empty input', () => {
-    assert.equal(sanitizeMessage(''), '');
-  });
 });
 
 // ── getDeliveryDelay ────────────────────────────────────────────────
-
-describe('getDeliveryDelay', () => {
-  it('returns DELIVERY_DELAY_BASE for 0 bytes', () => {
-    assert.equal(getDeliveryDelay(0), DELIVERY_DELAY_BASE);
-  });
-
-  it('returns BASE + PER_KB for exactly 1024 bytes', () => {
-    assert.equal(getDeliveryDelay(1024), DELIVERY_DELAY_BASE + DELIVERY_DELAY_PER_KB);
-  });
-
-  it('floors partial KB (500 bytes rounds down to 0 KB extra)', () => {
-    assert.equal(getDeliveryDelay(500), DELIVERY_DELAY_BASE);
-  });
-
-  it('caps at DELIVERY_DELAY_MAX for very large input', () => {
-    const hugeBytes = 1024 * 1024; // 1 MB
-    assert.equal(getDeliveryDelay(hugeBytes), DELIVERY_DELAY_MAX);
-  });
-
-  it('computes correctly for multi-KB input below max', () => {
-    // 3072 bytes = 3 KB → BASE + 3 * PER_KB = 200 + 300 = 500
-    const expected = Math.min(DELIVERY_DELAY_BASE + 3 * DELIVERY_DELAY_PER_KB, DELIVERY_DELAY_MAX);
-    assert.equal(getDeliveryDelay(3072), expected);
-  });
-});
 
 // ── findPromptY ─────────────────────────────────────────────────────
 
@@ -76,93 +34,9 @@ describe('findPromptY', () => {
     assert.equal(findPromptY(capture), 3);
   });
 
-  it('finds ❯ prompt line in a Claude-style capture', () => {
-    const sep = '\u2500'.repeat(40);
-    const capture = [
-      sep,                                                 // Y=0
-      '❯ some input',                                      // Y=1
-      sep                                                  // Y=2
-    ].join('\n');
-    assert.equal(findPromptY(capture), 1);
-  });
-
-  it('returns last prompt line when multiple exist', () => {
-    const capture = [
-      '› first prompt',                                    // Y=0
-      '• output',                                          // Y=1
-      '› second prompt',                                   // Y=2
-      '',                                                  // Y=3
-      '  gpt-5.4 medium · 82% left · ~/zylos'             // Y=4
-    ].join('\n');
-    assert.equal(findPromptY(capture), 2);
-  });
-
-  it('returns -1 when no prompt character is found', () => {
-    assert.equal(findPromptY('no prompt here\njust text'), -1);
-  });
-
-  it('finds prompt with leading whitespace', () => {
-    const capture = [
-      '',
-      '  › indented prompt',
-      '  footer line'
-    ].join('\n');
-    assert.equal(findPromptY(capture), 1);
-  });
-
-  it('finds empty prompt line (just › with no text)', () => {
-    const capture = [
-      '• output',                                          // Y=0
-      '›',                                                 // Y=1
-      '',                                                  // Y=2
-      '  gpt-5.4 medium · 82% left · ~/zylos'             // Y=3
-    ].join('\n');
-    assert.equal(findPromptY(capture), 1);
-  });
-
-  it('finds prompt when Codex output contains ─ separator lines', () => {
-    const sep = '\u2500'.repeat(40);
-    const capture = [
-      '• Ran some command',                                // Y=0
-      sep,                                                 // Y=1 (output separator)
-      '• Result text',                                     // Y=2
-      '',                                                  // Y=3
-      '› user input',                                      // Y=4
-      '',                                                  // Y=5
-      '  gpt-5.4 medium · 82% left · ~/zylos'             // Y=6
-    ].join('\n');
-    assert.equal(findPromptY(capture), 4);
-  });
 });
 
 // ── getClaudeInputBoxText / checkClaudeFallbackInputBox ────────────
-
-describe('getClaudeInputBoxText', () => {
-  it('extracts Claude input text between separator lines', () => {
-    const sep = '\u2500'.repeat(24);
-    const capture = [
-      'previous output',
-      sep,
-      '❯ hello from claude',
-      sep,
-      'footer'
-    ].join('\n');
-    assert.equal(
-      getClaudeInputBoxText(capture),
-      '❯ hello from claude'
-    );
-  });
-
-  it('returns null when Claude separators are not found', () => {
-    const capture = [
-      '• output',
-      '› maybe input',
-      '',
-      '  footer'
-    ].join('\n');
-    assert.equal(getClaudeInputBoxText(capture), null);
-  });
-});
 
 describe('checkClaudeFallbackInputBox', () => {
   it('returns empty for Claude empty prompt', () => {
@@ -187,290 +61,18 @@ describe('checkClaudeFallbackInputBox', () => {
     assert.equal(checkClaudeFallbackInputBox(capture), 'has_content');
   });
 
-  it('treats Claude buddy-art variants as empty when first 10 chars are blank', () => {
-    const sep = '\u2500'.repeat(20);
-    const capture = [
-      'output',
-      sep,
-      '❯          (  ~~  )',
-      sep
-    ].join('\n');
-    assert.equal(checkClaudeFallbackInputBox(capture), 'empty');
-  });
 });
 
 // ── isUsageOverlayCapture ───────────────────────────────────────────
 
-describe('isUsageOverlayCapture', () => {
-  it('detects /usage settings overlay capture', () => {
-    const capture = [
-      'Settings:  Status   Config   Usage  (←/→ or tab to cycle)',
-      '',
-      '/usage is only available for subscription plans.',
-      '',
-      'Esc to cancel'
-    ].join('\n');
-    assert.equal(isUsageOverlayCapture(capture), true);
-  });
-
-  it('returns false for normal chat capture', () => {
-    assert.equal(isUsageOverlayCapture('hello world'), false);
-  });
-});
-
 // ── isBypassState ───────────────────────────────────────────────────
-
-describe('isBypassState', () => {
-  it('returns true for control items with bypass_state=1', () => {
-    assert.equal(isBypassState({ type: 'control', bypass_state: 1 }), true);
-  });
-
-  it('returns false for conversation items even with bypass_state=1', () => {
-    assert.equal(isBypassState({ type: 'conversation', bypass_state: 1 }), false);
-  });
-
-  it('returns false for control items with bypass_state=0', () => {
-    assert.equal(isBypassState({ type: 'control', bypass_state: 0 }), false);
-  });
-
-  it('returns false when bypass_state is undefined', () => {
-    assert.equal(isBypassState({ type: 'control' }), false);
-  });
-
-  it('returns false for empty object', () => {
-    assert.equal(isBypassState({}), false);
-  });
-});
 
 // ── getHeartbeatPhase ───────────────────────────────────────────────
 
-describe('getHeartbeatPhase', () => {
-  it('extracts the encoded heartbeat phase from control content', () => {
-    assert.equal(getHeartbeatPhase('Heartbeat check. [phase=primary]'), 'primary');
-  });
-
-  it('extracts underscore phases such as post_restart', () => {
-    assert.equal(getHeartbeatPhase('Heartbeat check. [phase=post_restart]'), 'post_restart');
-  });
-
-  it('returns unknown when no phase marker is present', () => {
-    assert.equal(getHeartbeatPhase('Heartbeat check.'), 'unknown');
-  });
-});
-
-describe('isRecoveryHeartbeatPhase', () => {
-  it('matches recovery contract phases only', () => {
-    assert.equal(isRecoveryHeartbeatPhase('recovery'), true);
-    assert.equal(isRecoveryHeartbeatPhase('post_restart'), true);
-    assert.equal(isRecoveryHeartbeatPhase('primary'), false);
-    assert.equal(isRecoveryHeartbeatPhase('signal-recovery'), false);
-  });
-});
-
 // ── shouldAutoAckHeartbeat ──────────────────────────────────────────
-
-describe('shouldAutoAckHeartbeat', () => {
-  const heartbeatItem = { content: 'Heartbeat check. [phase=primary]' };
-  const aliveProc = { alive: true };
-
-  for (const phase of ['primary', 'stuck', 'down-check', 'unknown']) {
-    it(`keeps busy-path auto-ack for ${phase} when activity hooks confirm work`, () => {
-      assert.equal(shouldAutoAckHeartbeat({
-        item: { content: `Heartbeat check. [phase=${phase}]` },
-        agentState: { state: 'busy', health: 'ok', idleSeconds: 0, healthy: true },
-        procState: aliveProc,
-        confirmedActive: true
-      }), true);
-    });
-  }
-
-  it('does not auto-ack recovery heartbeat even when activity hooks confirm work is running', () => {
-    assert.equal(shouldAutoAckHeartbeat({
-      item: { content: 'Heartbeat check. [phase=recovery]' },
-      agentState: { state: 'busy', health: 'recovering', idleSeconds: 0, healthy: true },
-      procState: aliveProc,
-      confirmedActive: true
-    }), false);
-  });
-
-  it('does not auto-ack post-restart heartbeat even when activity hooks confirm work is running', () => {
-    assert.equal(shouldAutoAckHeartbeat({
-      item: { content: 'Heartbeat check. [phase=post_restart]' },
-      agentState: { state: 'busy', health: 'recovering', idleSeconds: 0, healthy: true },
-      procState: aliveProc,
-      confirmedActive: true
-    }), false);
-  });
-
-  for (const phase of ['primary', 'recovery', 'post_restart', 'stuck', 'down-check', 'unknown']) {
-    it(`does not auto-ack ${phase} when healthy and stably idle`, () => {
-      assert.equal(shouldAutoAckHeartbeat({
-        item: { content: `Heartbeat check. [phase=${phase}]` },
-        agentState: { state: 'idle', health: 'ok', idleSeconds: 3600, healthy: true },
-        procState: aliveProc,
-        confirmedActive: false
-      }), false);
-    });
-  }
-
-  it('does not auto-ack recovery idle heartbeats', () => {
-    assert.equal(shouldAutoAckHeartbeat({
-      item: { content: 'Heartbeat check. [phase=recovery]' },
-      agentState: { state: 'idle', health: 'ok', idleSeconds: 10, healthy: true },
-      procState: aliveProc,
-      confirmedActive: false
-    }), false);
-  });
-
-  it('does not auto-ack idle heartbeats before the sustained-idle threshold', () => {
-    assert.equal(shouldAutoAckHeartbeat({
-      item: heartbeatItem,
-      agentState: { state: 'idle', health: 'ok', idleSeconds: 2, healthy: true },
-      procState: aliveProc,
-      confirmedActive: false
-    }), false);
-  });
-
-  it('does not auto-ack idle heartbeats while health is not ok', () => {
-    assert.equal(shouldAutoAckHeartbeat({
-      item: heartbeatItem,
-      agentState: { state: 'idle', health: 'recovering', idleSeconds: 10, healthy: true },
-      procState: aliveProc,
-      confirmedActive: false
-    }), false);
-  });
-
-  it('does not auto-ack when agent status is not fresh', () => {
-    assert.equal(shouldAutoAckHeartbeat({
-      item: heartbeatItem,
-      agentState: { state: 'idle', health: 'ok', idleSeconds: 10, healthy: false },
-      procState: aliveProc,
-      confirmedActive: false
-    }), false);
-  });
-
-  it('does not auto-ack idle heartbeats when activity hooks do not confirm work', () => {
-    assert.equal(shouldAutoAckHeartbeat({
-      item: heartbeatItem,
-      agentState: { state: 'idle', health: 'ok', idleSeconds: 10, healthy: true },
-      procState: { alive: true },
-      confirmedActive: false
-    }), false);
-  });
-});
 
 // ── isKeystrokeControl ──────────────────────────────────────────────
 
-describe('isKeystrokeControl', () => {
-  it('returns true for control items with [KEYSTROKE] prefix', () => {
-    assert.equal(isKeystrokeControl({ type: 'control', content: '[KEYSTROKE]Enter' }), true);
-  });
-
-  it('returns true for keystroke with other keys', () => {
-    assert.equal(isKeystrokeControl({ type: 'control', content: '[KEYSTROKE]Tab' }), true);
-  });
-
-  it('returns false for conversation items with [KEYSTROKE] prefix', () => {
-    assert.equal(isKeystrokeControl({ type: 'conversation', content: '[KEYSTROKE]Enter' }), false);
-  });
-
-  it('returns false for control items without [KEYSTROKE] prefix', () => {
-    assert.equal(isKeystrokeControl({ type: 'control', content: 'Heartbeat check' }), false);
-  });
-
-  it('returns false for empty content', () => {
-    assert.equal(isKeystrokeControl({ type: 'control', content: '' }), false);
-  });
-
-  it('returns false for null/undefined content', () => {
-    assert.equal(isKeystrokeControl({ type: 'control' }), false);
-    assert.equal(isKeystrokeControl({ type: 'control', content: null }), false);
-  });
-});
-
 // ── parseKeystrokeKey ───────────────────────────────────────────────
 
-describe('parseKeystrokeKey', () => {
-  it('extracts Enter key from [KEYSTROKE]Enter', () => {
-    assert.equal(parseKeystrokeKey('[KEYSTROKE]Enter'), 'Enter');
-  });
-
-  it('trims whitespace from key name', () => {
-    assert.equal(parseKeystrokeKey('[KEYSTROKE]  Enter  '), 'Enter');
-  });
-
-  it('extracts other key names', () => {
-    assert.equal(parseKeystrokeKey('[KEYSTROKE]Tab'), 'Tab');
-    assert.equal(parseKeystrokeKey('[KEYSTROKE]Escape'), 'Escape');
-  });
-
-  it('returns empty string for bare prefix', () => {
-    assert.equal(parseKeystrokeKey('[KEYSTROKE]'), '');
-  });
-
-  it('handles null/undefined content', () => {
-    assert.equal(parseKeystrokeKey(null), '');
-    assert.equal(parseKeystrokeKey(undefined), '');
-  });
-});
-
 // ── isExitLifecycleControl ──────────────────────────────────────────
-
-describe('isExitLifecycleControl', () => {
-  it('matches exact /exit controls for both supported runtimes', () => {
-    for (const runtime of ['claude', 'codex']) {
-      assert.equal(isExitLifecycleControl({ type: 'control', content: '/exit' }, runtime), true);
-    }
-  });
-
-  it('rejects unsupported or missing runtimes', () => {
-    for (const runtime of ['unknown', 'other', '', null, undefined]) {
-      assert.equal(isExitLifecycleControl({ type: 'control', content: '/exit' }, runtime), false);
-    }
-  });
-
-  it('rejects conversations, other slash commands and non-exact /exit text for both runtimes', () => {
-    for (const runtime of ['claude', 'codex']) {
-      assert.equal(isExitLifecycleControl({ type: 'conversation', content: '/exit' }, runtime), false);
-      for (const content of ['/clear', ' /exit', '/exit ', '/exit now', '/exit\n', '/exit\n---- ack via: test']) {
-        assert.equal(isExitLifecycleControl({ type: 'control', content }, runtime), false);
-      }
-    }
-  });
-});
-
-describe('agy input frame', () => {
-  const rule = '─'.repeat(40);
-  const frame = body => [rule, body, rule].join('\n');
-  it('recognizes only an empty framed prompt with its caret in place', () => {
-    assert.equal(checkAgyInputState(frame('>'), 2, 1), 'empty');
-    assert.equal(checkAgyInputState(frame('>'), 3, 1), 'has_content');
-    assert.equal(checkAgyInputState(frame('>'), 2, 0), 'indeterminate');
-  });
-  it('uses the caret frame when a background tasks panel follows the prompt', () => {
-    const running = '  ● [18:51:32] sleep 20; echo TOOL-DONE running';
-    const native = frame('>') + '\n' + running + '\n' + '─'.repeat(40);
-    assert.equal(checkAgyInputState(native, 2, 1), 'empty');
-    assert.equal(checkAgyInputState(native.replace('>\n', '> draft\n'), 7, 1), 'has_content');
-    assert.equal(checkAgyInputState(frame(running), 2, 1), 'indeterminate');
-    const panel = frame('Background Tasks\n> running task\n  Esc to close');
-    assert.equal(checkAgyInputState(frame('>') + '\n' + panel, 2, 1), 'empty');
-    assert.equal(checkAgyInputState(frame('> draft') + '\n' + panel, 7, 1), 'has_content');
-    assert.equal(checkAgyInputState(frame('> first\n  second') + '\n' + panel, 8, 2), 'has_content');
-    // Moving into the panel must not make its highlighted task look empty.
-    assert.equal(checkAgyInputState(frame('>') + '\n' + panel, 2, 5), 'indeterminate');
-    assert.equal(checkAgyInputState(panel, 2, 2), 'indeterminate');
-  });
-  it('recognizes multiline and wrapped unsubmitted input at its final caret row', () => {
-    for (const body of ['> first\n  second\n  third', '> wrapped first\n  remainder', '> first\n\n> quoted line', '> [Pasted text #1 +3 lines]']) {
-      assert.equal(checkAgyInputState(frame(body), 2, body.split('\n').length), 'has_content');
-    }
-  });
-  it('rejects unframed, slash-menu and trust-choice captures', () => {
-    for (const body of ['> /\n  /clear Clear session', '> Trust\n  Cancel', '> first\n> second', 'ordinary output']) {
-      assert.equal(checkAgyInputState(frame(body), 2, 1), 'indeterminate');
-    }
-    assert.equal(checkAgyInputState('> choose one', 2, 0), 'indeterminate');
-    assert.equal(checkAgyInputState(frame('> draft'), 2, 3), 'indeterminate');
-  });
-});

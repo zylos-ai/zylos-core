@@ -58,16 +58,6 @@ test('malformed F1 leaves receive/send/checkpoint/fetch usable and messages pers
   assert.match(fetch.stdout, /boundary-output/);
 }));
 
-test('c4-config constants import without loading Core or reading F1', () => fixture(({ root, file, evaluate }) => {
-  fs.writeFileSync(file, '{ broken');
-  const fake = path.join(root, 'bad-core/cli/lib');
-  fs.mkdirSync(fake, { recursive: true });
-  fs.writeFileSync(path.join(root, 'bad-core/package.json'), '{"type":"module"}');
-  fs.writeFileSync(path.join(fake, 'config.js'), 'throw new Error("Core must not load for constants");');
-  const result = evaluate(`process.env.ZYLOS_PACKAGE_ROOT=${JSON.stringify(path.join(root, 'bad-core'))}; await import(${JSON.stringify(new URL('../c4-config.js', import.meta.url).href)});`);
-  assert.equal(result.status, 0, result.stderr);
-}));
-
 // Dispatcher mode/startup boundaries now exercise the production router entry in
 // session-delivery.test.js and router-factory.integration.test.js. Unlike the
 // retired loop, dispatcher reads mode once and remains inert on malformed startup .

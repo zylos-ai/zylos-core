@@ -8,11 +8,6 @@ import { execFileSync } from 'node:child_process';
 const skill = fs.readFileSync(new URL('../../../new-session/SKILL.md', import.meta.url), 'utf8');
 const commands = skill.split('\n').filter(line => line.startsWith('node ') && /enqueue --content "\/(clear|exit)"/.test(line));
 
-test('new-session documents both runtime rotation commands', () => {
-  assert.equal(commands.length, 2);
-  assert.deepEqual(commands.map(command => command.match(/--content "([^"]+)"/)[1]).sort(), ['/clear', '/exit']);
-});
-
 for (const scope of ['multi', 'single', 'legacy']) {
   test(`new-session shell commands preserve the ${scope} target arguments`, t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rotation-'));

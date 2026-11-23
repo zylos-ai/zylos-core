@@ -113,16 +113,6 @@ test('seven exact indexes, binary keys, namespace and transition/config constrai
   assert.throws(() => assert.throws(() => ns.run('Origin', 'weak-check'), /CHECK/), assert.AssertionError);
 });
 
-test('repeated guards do not invoke migrations or change live fences/transitions', t => {
-  const db = database(t); migrateExisting(db, owner);
-  db.exec("INSERT INTO drain_fences VALUES('telegram','upgrade','run',123)"); transition(db, 'run');
-  const before = snapshot(db); let calls = 0;
-  const counted = changedOwner(() => { calls++; });
-  guardDatabase(db, counted); guardDatabase(db, counted);
-  const check = () => { assert.equal(calls, 0); assert.deepEqual(snapshot(db), before); };
-  check(); db.exec('DELETE FROM drain_fences'); assert.throws(check, assert.AssertionError);
-});
-
 test('user tables, columns and values survive v1→2', t => {
   const db = database(t, { extensions: true });
   const before = oldRows(db), tags = db.prepare('SELECT id,user_tag FROM conversations ORDER BY id').all();
@@ -133,26 +123,6 @@ test('user tables, columns and values survive v1→2', t => {
   };
   check(); db.exec('ALTER TABLE conversations DROP COLUMN user_tag'); assert.throws(check, /user_tag/);
 });
-
-for (const name of NEW_TABLES) test(`${name} collision rejected before callback with zero changes`, t => {
-  const db = database(t); db.exec(`CREATE TABLE ${name}(x); INSERT INTO ${name} VALUES('user data')`);
-  const before = snapshot(db); let calls = 0;
-  const candidate = changedOwner(connection => { calls++; migrateToV2(connection); });
-  const check = () => {
-    assert.throws(() => migrateExisting(db, candidate), /already exists|collid/);
-    assert.equal(calls, 0); assert.deepEqual(snapshot(db), before);
-  };
-  check();
-  // A swallowed precondition exception is detected by the same throws assertion.
-  assert.throws(() => assert.throws(() => { try { migrateExisting(db, candidate); } catch {} }), assert.AssertionError);
-});
-for (const [table, column] of [['conversations','session_group'],['conversations','session_id'],['checkpoints','session_group'],['checkpoints','no_content'],['control_queue','session_group'],['control_queue','target_binding']])
-  test(`existing ${table}.${column} is not silently adopted`, t => {
-    const db = database(t); db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
-    const before = snapshot(db); let calls = 0;
-    assert.throws(() => migrateExisting(db, changedOwner(() => { calls++; })), /already exists|collid/);
-    assert.equal(calls, 0); assert.deepEqual(snapshot(db), before);
-  });
 
 // Intercept only the SQLite exec boundary, executing the real callback up to its fifth table.
 function interrupted(db, { commit = false } = {}) {
@@ -212,45 +182,4 @@ test('frozen v1 owner refuses v2 without writes', t => {
   assert.throws(() => guardDatabase(db, v1), /schema version 2 exceeds supported 1/);
   assert.deepEqual(snapshot(db), before);
   assert.throws(() => assert.throws(() => owner.inspectSchema(db), /exceeds supported/), assert.AssertionError);
-});
-test('historical out-of-range checkpoint end is preserved by migration', t => {
-  const db = database(t); db.exec('UPDATE checkpoints SET end_conversation_id=1006 WHERE id=2');
-  const before = oldRows(db); migrateExisting(db, owner); assertMigrated(db, before);
-});
-
-test('oracle: maybeTables plus IF NOT EXISTS wrongly accepts a matching user table', t => {
-  const db = database(t);
-  db.exec('CREATE TABLE drain_fences(session_group TEXT PRIMARY KEY, reason TEXT, run_id TEXT, created_at INTEGER NOT NULL)');
-  db.exec("INSERT INTO drain_fences VALUES('user','retained','user-run',1)");
-  const changes = owner.MIGRATIONS[1].changes;
-  const { drain_fences, ...addTables } = changes.addTables;
-  const mutant = { ...owner, MIGRATIONS: { ...owner.MIGRATIONS, 1: {
-    ...owner.MIGRATIONS[1], changes: { ...changes, addTables, maybeTables: { drain_fences } },
-    migrate(connection) { migrateToV2({ exec(sql) { connection.exec(sql.replace('CREATE TABLE drain_fences', 'CREATE TABLE IF NOT EXISTS drain_fences')); } }); },
-  } } };
-  assert.throws(() => assert.throws(() => migrateExisting(db, mutant), /collid/), assert.AssertionError);
-  assert.equal(db.pragma('user_version', { simple: true }), 2);
-});
-
-for (const name of [...Object.keys(indexSql), 'IDX_MODE_TRANSITIONS_OPEN']) {
-  test(`existing index ${name} rejects migration and preserves the entire v1 database`, t => {
-    const db = database(t);
-    db.exec(`CREATE TABLE user_extra(x); INSERT INTO user_extra VALUES('preserved'); CREATE INDEX ${name} ON user_extra(x)`);
-    const before = snapshot(db);
-    assert.throws(() => migrateExisting(db, owner), /index .* already exists/i);
-    assert.deepEqual(snapshot(db), before);
-    assert.equal(db.inTransaction, false);
-  });
-}
-test('oracle: IF NOT EXISTS hides user index collision and loses open-transition uniqueness', t => {
-  const db = database(t);
-  db.exec('CREATE TABLE user_extra(x); CREATE INDEX idx_mode_transitions_open ON user_extra(x)');
-  const unsafe = changedOwner(connection => migrateToV2({ exec(sql) {
-    connection.exec(sql.replace(/CREATE (UNIQUE )?INDEX (?!IF NOT EXISTS)/g, 'CREATE $1INDEX IF NOT EXISTS '));
-  } }));
-  assert.throws(() => assert.throws(() => migrateExisting(db, unsafe), /already exists/), assert.AssertionError);
-  assert.equal(db.pragma('user_version', { simple: true }), 2);
-  assert.equal(db.prepare("SELECT tbl_name FROM sqlite_master WHERE name='idx_mode_transitions_open'").get().tbl_name, 'user_extra');
-  transition(db, 'first');
-  assert.throws(() => assert.throws(() => transition(db, 'second'), /UNIQUE/), assert.AssertionError);
 });

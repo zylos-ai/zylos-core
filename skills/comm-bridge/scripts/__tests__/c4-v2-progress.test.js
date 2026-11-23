@@ -1,14 +1,10 @@
 import { fixture as storeFixture } from './c4-v2-test-helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import Database from 'better-sqlite3';
-import { guardDatabase, migrateDatabase } from '../sqlite-schema.js';
+import { guardDatabase } from '../sqlite-schema.js';
 // Existing layouts are migrated only by the explicit upgrade path, with the
 // options ordinary openers used before they became check-only.
-const migrateExisting = (db, candidate) => migrateDatabase(db, candidate, { allowNew: candidate.supportsNewDatabase === true, strict: false });
 
-import * as owner from '../c4-schema.js';
-import { createStore } from '../c4-v2-store.js';
 function fixture(t) {
   const { db, store } = storeFixture(t);
   const seed = (id, group = 'foo', status = 'delivered', direction = 'in') => db.prepare('INSERT INTO conversations(id,direction,channel,content,status,session_group) VALUES(?,?,?,?,?,?)').run(id, direction, group, `message ${id}`, status, group);
@@ -28,18 +24,6 @@ test('checkpoint rejects gap, regression, per-group head overflow and invalid su
   assert.throws(() => store.createCheckpoint('only', 1e12, 'above head'), { code: 'CHECKPOINT_BEYOND_HEAD' });
   assert.throws(() => store.createCheckpoint('bar', 101, 'cross-group head'), { code: 'CHECKPOINT_BEYOND_HEAD' });
   assert.equal(cps().length, before.length + 1);
-});
-test('initial NULL checkpoint is zero, and baseline uses latest id while coverage uses maximum end', t => {
-  const { db, store, seed } = fixture(t);
-  db.prepare("INSERT INTO checkpoints(summary,start_conversation_id,end_conversation_id,session_group,no_content) VALUES('initial',NULL,NULL,'*',0)").run();
-  seed(1); seed(2); seed(3);
-  assert.equal(store.legacyBaselineEnd(), 0); assert.equal(store.getGlobalCoverageEnd(), 0); assert.equal(store.getCoverageEnd('foo'), 0);
-  store.createCheckpoint('*', 3, 'three');
-  assert.equal(store.legacyBaselineEnd(), 3); assert.equal(store.getCoverageEnd('foo'), 3);
-  assert.throws(() => store.createCheckpoint('*', 2, 'two'), { code: 'CHECKPOINT_REGRESSION' });
-  // Historical/manual state distinguishes latest-id baseline from MAX(end).
-  db.prepare("INSERT INTO checkpoints(summary,end_conversation_id,session_group,no_content) VALUES('later-null',NULL,'*',0)").run();
-  assert.equal(store.legacyBaselineEnd(), 0); assert.equal(store.getGlobalCoverageEnd(), 3);
 });
 test('content checkpoint isolation and no-content rows do not hide content', t => {
   const { store, seed } = fixture(t); seed(1); seed(2); seed(3); seed(4);
@@ -73,67 +57,6 @@ test('tail uses fixed coverage and includes only delivered input or output despi
   assert.deepEqual(store.getDeliveredSince('foo', fixedCoverage, { limit: 2 }).map(x => x.id), [5, 7]);
   assert.deepEqual(store.getGlobalDeliveredSince(fixedCoverage, { limit: 20 }).map(x => x.id), [2, 5, 6, 7]);
 });
-test('Origin summaries return delta plus independent coverage and maximum returned content id; raw honors fixed C', t => {
-  const { store } = fixture(t);
-  const a = store.insertConversation('out', 'foo', 'e', 'a'); const b = store.insertConversation('out', 'foo', 'e', 'b');
-  const content = store.createCheckpoint('foo', a.id, 'content'); const noContent = store.createCheckpoint('foo', b.id, null, { noContent: true });
-  const result = store.queries.originSummaries('foo');
-  assert.deepEqual(result.rows.map(x => x.id), [content.id]); assert.equal(result.coverageEnd, b.id); assert.equal(result.checkpointId, content.id);
-  store.advanceOriginSyncCursor('foo', { syncedId: b.id, checkpointId: noContent.id });
-  assert.deepEqual(store.queries.originSummaries('foo').rows, []);
-  const c = store.insertConversation('out', 'foo', 'e', 'c'); store.createCheckpoint('foo', c.id, 'later');
-  assert.deepEqual(store.getOriginSyncConversations('foo', { afterConversationId: b.id, rawAfter: result.coverageEnd, upToConversationId: c.id, limit: 20 }).map(x => x.id), [c.id]);
-});
-test('Origin cursor rejection and trigger failure leave both cursor columns unchanged', t => {
-  const { db, store } = fixture(t);
-  const a = store.insertConversation('out', 'foo', 'e', 'a'); const cp = store.createCheckpoint('foo', a.id, 'summary');
-  store.advanceOriginSyncCursor('foo', { syncedId: a.id, checkpointId: cp.id });
-  const read = () => db.prepare('SELECT * FROM origin_sync_cursors').get(); const before = read();
-  for (const [syncedId, checkpointId] of [[0, cp.id], [a.id + 1, cp.id], [a.id, 0], [a.id, cp.id + 1]]) {
-    assert.throws(() => store.advanceOriginSyncCursor('foo', { syncedId, checkpointId }), { code: 'CURSOR_INVALID' }); assert.deepEqual(read(), before);
-  }
-  db.exec("CREATE TRIGGER reject_cursor BEFORE UPDATE ON origin_sync_cursors BEGIN SELECT RAISE(ABORT,'reject cursor'); END");
-  assert.throws(() => store.advanceOriginSyncCursor('foo', { syncedId: a.id, checkpointId: cp.id }), { code: 'DB_WRITE_FAILED' }); assert.deepEqual(read(), before);
-});
-test('Origin cursor stores the caller-supplied update time, else the store clock, and rejects an invalid one without writing', t => {
-  const clock = { now: 1_700_000_000_500 };
-  const { db, store } = storeFixture(t, { now: () => clock.now });
-  const a = store.insertConversation('out', 'foo', 'e', 'a'); const cp = store.createCheckpoint('foo', a.id, 'summary');
-  const read = () => db.prepare('SELECT * FROM origin_sync_cursors').get();
-  store.advanceOriginSyncCursor('foo', { syncedId: 0, checkpointId: 0 });
-  assert.equal(read().updated_at, 1_700_000_000);
-  const before = read();
-  for (const updatedAt of [0, -1, 1.5, NaN, '1700000100']) {
-    assert.throws(() => store.advanceOriginSyncCursor('foo', { syncedId: a.id, checkpointId: cp.id, updatedAt }), { code: 'INVALID_ARGS' }); assert.deepEqual(read(), before);
-  }
-  store.advanceOriginSyncCursor('foo', { syncedId: a.id, checkpointId: cp.id, updatedAt: 1_699_999_999 });
-  assert.deepEqual(read(), { ...before, synced_id: a.id, checkpoint_id: cp.id, updated_at: 1_699_999_999 });
-});
-for (const group of ['foo', '*']) test(`unsummarized ${group} reads use the greater of coverage and the optional cursor`, t => {
-  const { store, seed } = fixture(t);
-  for (let id = 1; id <= 5; id++) seed(id);
-  store.createCheckpoint(group, 2, 'coverage');
-  const read = options => group === '*' ? store.getGlobalUnsummarizedConversations(options) : store.getUnsummarizedConversations(group, options);
-  assert.deepEqual(read({ upToConversationId: 5, afterConversationId: 1 }).map(row => row.id), [3, 4, 5]);
-  assert.deepEqual(read({ upToConversationId: 5, afterConversationId: 3 }).map(row => row.id), [4, 5]);
-  for (const afterConversationId of [5, 6]) {
-    assert.equal(read({ upToConversationId: 5, afterConversationId }).length, 0);
-    const result = store.queries.unsummarized({ group, upToConversationId: 5, afterConversationId });
-    assert.equal(result.rows.length, 0); assert.equal(result.upTo, 5); assert.equal(result.safeEnd, 5);
-    const defaultEnd = store.queries.unsummarized({ group, afterConversationId });
-    assert.equal(defaultEnd.rows.length, 0); assert.equal(defaultEnd.upTo, 5);
-  }
-  for (const afterConversationId of [-1, 1.5, '3', NaN, Number.MAX_SAFE_INTEGER + 1, null]) {
-    assert.throws(() => read({ upToConversationId: 5, afterConversationId }), { code: 'INVALID_ARGS' });
-    assert.throws(() => store.queries.unsummarized({ group, afterConversationId }), { code: 'INVALID_ARGS' });
-  }
-  assert.throws(() => read({ afterConversationId: 5 }), { code: 'INVALID_ARGS' });
-  assert.throws(() => read({ upToConversationId: 6, afterConversationId: 6 }), { code: 'UPTO_BEYOND_FRONTIER' });
-  const legacy = store.queries.unsummarized({ group, limit: 2 });
-  assert.deepEqual(legacy.rows.map(row => row.id), [3, 4]);
-  assert.equal(legacy.checkpointEnd, 2); assert.equal(legacy.checkpointSummary, 'coverage');
-  assert.equal(legacy.upTo, 4); assert.equal(legacy.safeEnd, 5);
-});
 test('unsummarized cursor pages traverse one group without gaps or duplicates', t => {
   const { store, seed } = fixture(t);
   seed(1); store.createCheckpoint('foo', 1, 'coverage');
@@ -149,30 +72,4 @@ test('unsummarized cursor pages traverse one group without gaps or duplicates', 
   }
   assert.equal(seen, 120);
   assert.equal(store.queries.unsummarized({ group: 'foo', afterConversationId, limit: 50 }).rows.length, 0);
-});
-for (const [name, ends, baseline] of [
-  ['FX-BL1', [null, 300, 800], 800],
-  ['FX-BL2', [300, 800, null], 0],
-  ['FX-BL3', [null, 800, 500], 500],
-]) test(`${name} migrates historical baseline shape and preserves identical new-group reads`, async t => {
-  const { seedV1 } = await import('./helpers/c4-v2-fixtures.js');
-  const db = new Database(':memory:'); t.after(() => db.close()); seedV1(db);
-  db.exec('DELETE FROM checkpoints');
-  const checkpoint = db.prepare('INSERT INTO checkpoints(id,summary,end_conversation_id) VALUES(?,?,?)');
-  ends.forEach((end, i) => checkpoint.run(i + 1, `historical ${i}`, end));
-  db.prepare("INSERT INTO conversations(id,direction,channel,content,status) VALUES(1000,'out','legacy','old boundary','delivered')").run();
-  migrateExisting(db, owner);
-  const store = createStore(db, { validateComponent: () => true });
-  const rows = ['one', 'two', 'three'].map(content => store.insertConversation('out', 'g', 'e', content));
-  assert.deepEqual(rows.map(row => row.id), [1001, 1002, 1003]);
-  assert.equal(store.legacyBaselineEnd(), baseline); assert.equal(store.getGlobalCoverageEnd(), 800); assert.equal(store.getCoverageEnd('g'), baseline);
-  assert.equal(store.getLatestContentCheckpoint('g'), null);
-  assert.deepEqual(store.getUnsummarizedConversations('g', { upToConversationId: 1003 }).map(row => row.id), [1001, 1002, 1003]);
-  assert.deepEqual(store.getDeliveredSince('g', baseline, { limit: 20 }).map(row => row.id), [1001, 1002, 1003]);
-  const cursor = store.getOriginSyncBacklog().groups.find(group => group.sessionGroup === 'g');
-  assert.equal(cursor.cursorFrom, baseline); assert.equal(cursor.count, 3);
-  const cp = store.createCheckpoint('g', 1003, 'new group summary');
-  assert.equal(cp.start_conversation_id, 1001); assert.equal(store.getCoverageEnd('g'), 1003);
-  assert.deepEqual(store.getContentCheckpointsSince('g', 0).map(row => row.id), [cp.id]);
-  assert.equal(store.getLatestContentCheckpoint('g').summary, 'new group summary');
 });

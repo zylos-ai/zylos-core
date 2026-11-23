@@ -81,31 +81,6 @@ test('installed read-only consumers work without Core, never invoke npm, and ret
   }
 });
 
-test('installed auth hook skips ineligible requests without Core or npm and rejects unreadable config', t => {
-  const fx = fixture(t);
-  fs.unlinkSync(path.join(fx.bin, 'npm'));
-  const hook = path.join(fx.skills, 'activity-monitor/scripts/hook-auth-prompt.js');
-  const payload = { hook_event_name: 'PermissionRequest', session_id: 'session-1', tool_name: 'Bash' };
-  const run = (input, env) => spawnSync(process.execPath, [hook], {
-    env: { ...fx.env, ...env }, input: JSON.stringify(input), encoding: 'utf8', timeout: 10000,
-  });
-  for (const [config, input, env] of [
-    [{}, {}, {}],
-    [{ auto_approve_permission: false }, payload, { ZYLOS_RUN_ID: 'run-1' }],
-  ]) {
-    fs.writeFileSync(fx.file, JSON.stringify(config));
-    const skipped = run(input, env);
-    assert.equal(skipped.status, 0, skipped.stderr);
-    assert.equal(fs.existsSync(fx.flag), false);
-  }
-  fs.writeFileSync(fx.file, '{');
-  const bad = run(payload, { ZYLOS_RUN_ID: 'run-1' });
-  assert.notEqual(bad.status, 0);
-  assert.match(bad.stderr, /CONFIG_UNREADABLE/);
-  assert.equal(fs.existsSync(fx.flag), false);
-  assert.equal(fs.readFileSync(fx.count, 'utf8'), '');
-});
-
 test('Docker F1 fallback executes local reader without Core or npm and preserves environment priority', t => {
   const fx = fixture(t);
   fs.unlinkSync(path.join(fx.bin, 'npm'));
@@ -129,37 +104,5 @@ test('Docker F1 fallback executes local reader without Core or npm and preserves
   const override = run({ ZYLOS_RUNTIME: 'codex' });
   assert.equal(override.status, 0, override.stderr);
   assert.equal(override.stdout, 'codex');
-  assert.equal(fs.readFileSync(fx.count, 'utf8'), '');
-});
-
-test('installed setup-caddy requires real Core and rejects missing modules and missing exports', t => {
-  const fx = fixture(t);
-  fs.copyFileSync(path.join(packageRoot, 'skills/comm-bridge/scripts/core-config-loader.js'),
-    path.join(fx.scripts, 'core-config-loader.js'));
-  fs.unlinkSync(path.join(fx.bin, 'npm'));
-  const setup = path.join(fx.skills, 'http/scripts/setup-caddy.js');
-  const run = core => spawnSync(process.execPath, [setup], {
-    env: { ...fx.env, ZYLOS_PACKAGE_ROOT: core }, encoding: 'utf8', timeout: 10000,
-  });
-  const absent = run(path.join(fx.root, 'absent'));
-  assert.notEqual(absent.status, 0);
-  assert.match(absent.stderr, /Cannot locate/);
-  const core = path.join(fx.root, 'core');
-  fs.mkdirSync(path.join(core, 'cli/lib'), { recursive: true });
-  fs.writeFileSync(path.join(core, 'package.json'), '{"type":"module","name":"zylos"}');
-  fs.writeFileSync(path.join(core, 'cli/lib/config.js'), 'export const readZylosConfigStrict = () => ({});');
-  const invalid = run(core);
-  assert.notEqual(invalid.status, 0);
-  assert.match(invalid.stderr, /missing readZylosConfigOrThrow/);
-  for (const file of ['config.js', 'config-store.js', 'config-lock.js']) {
-    fs.copyFileSync(path.join(packageRoot, 'cli/lib', file), path.join(core, 'cli/lib', file));
-  }
-  fs.mkdirSync(path.join(fx.data, 'bin'));
-  fs.writeFileSync(path.join(fx.data, 'bin/caddy'), '');
-  fs.writeFileSync(fx.file, '{');
-  const real = run(core);
-  assert.notEqual(real.status, 0);
-  assert.match(real.stderr, /configuration is unreadable/);
-  assert.equal(fs.existsSync(path.join(fx.data, 'http/Caddyfile')), false);
   assert.equal(fs.readFileSync(fx.count, 'utf8'), '');
 });

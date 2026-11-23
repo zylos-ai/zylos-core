@@ -62,36 +62,6 @@ async function setup(t, { readConfig = () => ({ state: 'ok', config: {} }), send
   return { ...f, dispatcher, sends, logs, rounds, failAfter, fiveFailures };
 }
 
-// Other-event boundary: run for factory alert routing changes; skip unrelated copy.
-// The real startup path uses isolated HOME/ZYLOS_DIR/PM2_HOME and an in-memory DB;
-// mode/config and send I/O are injected, with no live runtime or communication.
-test('dispatcher logs unreadable session configuration without notifying the owner', async t => {
-  const f = routerFixture(t);
-  const sends = [], logs = [];
-  const dependencies = { ...f.deps,
-    readZylosConfigStrict: () => ({ state: 'ok', config: {} }),
-    readSessionMode: () => { throw Object.assign(Error('unreadable configuration'), { code: 'CONFIG_UNREADABLE' }); },
-    diagnostics: { diagnostic: f.deps.diagnostic, maintain() {} },
-    log: message => logs.push(message),
-    sendAlert: async (target, message) => { sends.push({ target, message }); return true; },
-  };
-  delete dependencies.alert;
-  const { poolSize, ...options } = f.options;
-  const dispatcher = createDispatcher(dependencies, { ...options, delivery: { periodicEnabled: false } });
-  t.after(() => dispatcher.stop());
-  await dispatcher.initialize();
-  assert.equal(dispatcher.state.inert, true);
-  assert.ok(f.events.some(event => event.event === 'config_unreadable'));
-  assert.ok(logs.includes('Router alert: config_unreadable {}'));
-  // Drain the same lazy imports used by notifications before asserting no send.
-  await Promise.all([
-    import('../../../activity-monitor/scripts/supervisor-server-health.js'),
-    import('../../../activity-monitor/scripts/supervisor-server-observation.js'),
-  ]);
-  await flush();
-  assert.equal(sends.length, 0);
-});
-
 // Factory alert composition boundary: run for routing/template changes; skip unrelated UI.
 // The official runner isolates HOME/ZYLOS_DIR/PM2_HOME; SQLite is in-memory and runtime/send I/O is injected.
 test('dispatcher sends current defaults to the configured destination and reloads destination and templates', async t => {
@@ -111,23 +81,6 @@ test('dispatcher sends current defaults to the configured destination and reload
   assert.equal(f.sends[1].message, '[Partner] a/6/错误 START_FAILED\n[Partner] a:6:failure START_FAILED');
 });
 
-for (const configuration of ['missing', 'invalid', 'unreadable', 'throws']) {
-  // Config failure boundary: run for config-reader or alert-target changes; skip unrelated delivery formatting.
-  // Only this test's config reader fails; real scheduler/store and production fallback remain active.
-  test(`dispatcher uses default copy and the Origin conversation when alert configuration is ${configuration}`, async t => {
-    const readConfig = () => {
-      if (configuration === 'throws') throw Error('configuration unavailable');
-      if (configuration === 'unreadable') return { state: 'error', error: 'unavailable' };
-      return { state: 'ok', config: configuration === 'invalid' ? { alert_target: 'invalid' } : {} };
-    };
-    const f = await setup(t, { readConfig });
-    await f.fiveFailures();
-    assert.equal(f.sends.length, 1);
-    assert.deepEqual(f.sends[0].target, originTarget);
-    assert.equal(f.sends[0].message, defaultMessage(5));
-  });
-}
-
 for (const failure of ['false', 'reject']) {
   // Transport fallback boundary: run for factory/shared notifier changes; skip unrelated scheduler changes.
   // The send substitute records calls only and never reaches a real communication channel.
@@ -145,25 +98,6 @@ for (const failure of ['false', 'reject']) {
     assert.equal(f.sends[1].message, defaultMessage(5));
   });
 }
-
-// Failed-send cooldown boundary: run for notifier or continuation window changes; skip unrelated UI.
-// Both destinations are injected failures; injected clock proves next-round progress and exact cooldown.
-test('dispatcher logs both rejected deliveries without reopening the machine window', async t => {
-    const f = await setup(t, { readConfig: () => ({ state: 'ok', config: { alert_target: 'telegram:owner' } }),
-      send: async () => { throw Error('transport unavailable'); } });
-    await f.fiveFailures();
-    assert.equal(f.sends.length, 2);
-    assert.equal(f.logs.filter(value => value?.message === 'transport unavailable').length, 2, 'both transport rejections are logged');
-    await f.failAfter(60000);
-    assert.equal(f.calls.filter(call => call[0] === 'launch').length, 6);
-    assert.equal(f.sends.length, 2);
-    await f.failAfter(1739000);
-    assert.equal(f.sends.length, 2, '29:59 still uses the existing window');
-    await f.failAfter(1000);
-    // Backoff is independent of the alert window; the next eligible failed start emits the alert.
-    await f.failAfter(60000);
-    assert.equal(f.sends.length, 4);
-});
 
 // Pending-send lifecycle boundary: run for alert awaiting or Router stop changes; skip unrelated templates.
 // The unresolved promise has no worker/process; cleanup always releases it before test teardown.

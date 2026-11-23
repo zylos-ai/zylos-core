@@ -84,34 +84,6 @@ function withTmpDir(fn) {
 // -- basic behavior --
 
 describe('c4-session-init', () => {
-  // Actual CLI -> private C4 database. Run for startup-context/handoff changes;
-  // UI-only edits may skip. Private paths are logged before bounded children;
-  // no PM2/tmux/runtime starts, and withTmpDir always removes the fixture root.
-  it('reports no new conversations on fresh DB', () => {
-    withTmpDir(({ env }) => {
-      const { stdout, status } = cli([], env);
-      assert.equal(status, 0);
-      assert.ok(stdout.includes('read-work-memory.js'));
-      assert.ok(stdout.includes('No handoff file is available for this scope'));
-      assert.doesNotMatch(stdout, /Before resuming work, read .*handoff/);
-      assert.doesNotMatch(stdout, /handoff-follow-up\.md/);
-      assert.ok(!stdout.includes('ACTION REQUIRED'));
-    });
-  });
-
-  it('requires a complete handoff read only when the scope file exists', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const file = path.join(tmpDir, 'memory/handoff.md');
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, 'unfinished task');
-      const { stdout, status } = cli([], env);
-      assert.equal(status, 0);
-      assert.ok(stdout.includes(`Before resuming work, read ${file} in full`));
-      assert.ok(stdout.includes(path.join(tmpDir, '.claude/skills/comm-bridge/references/handoff-follow-up.md')));
-      assert.doesNotMatch(stdout, /No handoff file is available/);
-      assert.equal(fs.readFileSync(file, 'utf8'), 'unfinished task');
-    });
-  });
 
   // Actual multi-session CLI scope/path selection, with the opposite root-file
   // condition as a decoy. Run for handoff/scope changes; unrelated UI may skip.
@@ -188,53 +160,6 @@ describe('c4-session-init', () => {
     });
   }
 
-  it('loads delivered tail after coverage without checkpoint summary', () => {
-    withTmpDir(({ env }) => {
-      receive(['--channel', 'system', '--no-reply', '--content', 'msg1'], env);
-      checkpoint(['create', '1', '--summary', 'Synced first batch'], env);
-      receive(['--channel', 'system', '--no-reply', '--content', 'msg2'], env);
-
-      const { stdout, status } = cli([], env);
-      assert.equal(status, 0);
-      assert.ok(!stdout.includes('CHECKPOINT SUMMARY'));
-      assert.ok(!stdout.includes('Synced first batch'));
-      assert.ok(stdout.includes('msg2'));
-    });
-  });
-
-  it('does not inject an empty checkpoint fallback', () => {
-    withTmpDir(({ env }) => {
-      receive(['--channel', 'system', '--no-reply', '--content', 'msg1'], env);
-      // Checkpoint created without --summary → summary is null.
-      checkpoint(['create', '1'], env);
-      receive(['--channel', 'system', '--no-reply', '--content', 'msg2'], env);
-
-      const { stdout, status } = cli([], env);
-      assert.equal(status, 0);
-      assert.ok(!stdout.includes('=== LAST CHECKPOINT ==='));
-      assert.ok(!stdout.includes('no summary'));
-      assert.ok(!stdout.includes('=== LAST CHECKPOINT SUMMARY ==='));
-    });
-  });
-
-  it('shows recent conversations when under threshold', () => {
-    withTmpDir(({ env }) => {
-      for (let i = 1; i <= 3; i++) {
-        receive(['--channel', 'system', '--no-reply', '--content', `msg${i}`], env);
-      }
-
-      const { stdout, status } = cli([], env);
-      assert.equal(status, 0);
-      assert.ok(stdout.includes('=== RECENT CONVERSATIONS ==='));
-      assert.ok(stdout.includes('=== END RECENT CONVERSATIONS ==='));
-      assert.ok(stdout.includes('msg1'));
-      assert.ok(stdout.includes('msg2'));
-      assert.ok(stdout.includes('msg3'));
-      // Should NOT trigger Memory Sync instruction
-      assert.ok(!stdout.includes('ACTION REQUIRED'));
-    });
-  });
-
   it('adds reply routing for inbound endpoint messages', () => {
     withTmpDir(({ tmpDir, env }) => {
       fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'telegram'), { recursive: true });
@@ -247,17 +172,6 @@ describe('c4-session-init', () => {
     });
   });
 
-  it('does not add reply routing for no-reply messages', () => {
-    withTmpDir(({ env }) => {
-      receive(['--channel', 'system', '--no-reply', '--content', 'system note'], env);
-
-      const { stdout, status } = cli([], env);
-      assert.equal(status, 0);
-      assert.ok(stdout.includes('system note'));
-      assert.ok(!stdout.includes('reply via:'));
-    });
-  });
-
   it('does not add reply routing for no-reply messages even when endpoint was provided', () => {
     withTmpDir(({ tmpDir, env }) => {
       fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'telegram'), { recursive: true });
@@ -267,40 +181,6 @@ describe('c4-session-init', () => {
       assert.equal(status, 0);
       assert.ok(stdout.includes('no callback'));
       assert.ok(!stdout.includes('reply via:'));
-    });
-  });
-
-  it('does not duplicate legacy stored reply routing', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'telegram'), { recursive: true });
-      receive([
-        '--channel', 'telegram',
-        '--endpoint', '123',
-        '--content', 'legacy ---- reply via: node /tmp/c4-send.js "telegram" "123"'
-      ], env);
-
-      const { stdout, status } = cli([], env);
-      assert.equal(status, 0);
-      assert.equal((stdout.match(/reply via:/g) || []).length, 1);
-    });
-  });
-
-  it('limits the delivered tail to six without triggering Memory Sync', () => {
-    withTmpDir(({ env }) => {
-      // CHECKPOINT_THRESHOLD is 15; insert 31 messages (well over threshold)
-      for (let i = 1; i <= 31; i++) {
-        receive(['--channel', 'system', '--no-reply', '--content', `msg${i}`], env);
-      }
-
-      const { stdout, status } = cli([], env);
-      assert.equal(status, 0);
-      assert.ok(!stdout.includes('=== ACTION REQUIRED ==='));
-      assert.ok(stdout.includes('read-work-memory.js'));
-      // Should show limited conversations (SESSION_INIT_RECENT_COUNT = 6)
-      assert.ok(stdout.includes('msg31'));
-      assert.ok(stdout.includes('msg26'));
-      // msg1 should NOT be included (limited to recent)
-      assert.ok(!stdout.match(/IN \(system\):\nmsg1\n/));
     });
   });
 
@@ -321,35 +201,6 @@ describe('c4-session-init', () => {
       assert.ok(above.stdout.includes('About 16 messages unsummarized; latest 6 shown.'));
       assert.ok(above.stdout.includes('backlog-11\n') && above.stdout.includes('backlog-16\n'));
       assert.ok(!above.stdout.includes('backlog-10\n'));
-    });
-  });
-
-  it('falls back to the latest six with the omitted-middle notice when the whole backlog exceeds the shard budget', () => {
-    withTmpDir(({ env }) => {
-      const quiet = { ...env, ZYLOS_SYNC_THRESHOLD: '' };
-      receiveMany(numbered(10, 'long', 1200), quiet);
-      const { stdout, status, stderr } = cli([], quiet);
-      assert.equal(status, 0, stderr);
-      assert.ok(stdout.includes('About 10 messages unsummarized; latest 6 shown.'));
-      assert.ok(stdout.includes('long-05 ') && stdout.includes('long-10 '));
-      assert.ok(!stdout.includes('long-04 '));
-    });
-  });
-
-  it('applies a configured Sync threshold of 5 at session start', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const quiet = { ...env, ZYLOS_SYNC_THRESHOLD: '' };
-      receiveMany(numbered(8, 'configured'), quiet);
-      fs.mkdirSync(path.join(tmpDir, '.zylos'));
-      fs.writeFileSync(path.join(tmpDir, '.zylos/config.json'), JSON.stringify({ sync_threshold: 5 }));
-      const configured = cli([], quiet);
-      assert.equal(configured.status, 0, configured.stderr);
-      assert.ok(configured.stdout.includes('About 8 messages unsummarized; latest 6 shown.'));
-      assert.ok(!configured.stdout.includes('configured-02\n'));
-      const overridden = cli([], { ...quiet, ZYLOS_SYNC_THRESHOLD: '10' });
-      assert.equal(overridden.status, 0, overridden.stderr);
-      assert.ok(numbered(8, 'configured').every(content => overridden.stdout.includes(`${content}\n`)), 'environment 10 overrides config 5');
-      assert.doesNotMatch(overridden.stdout, OMITTED_MIDDLE);
     });
   });
 

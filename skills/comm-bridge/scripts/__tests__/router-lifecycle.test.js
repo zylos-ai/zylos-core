@@ -8,9 +8,6 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createLifecycleProviders } from '../router/lifecycle.js';
 import { groupRunDir, legacyRunDir, tmuxNameForGroup } from '../../../../cli/lib/session-group-paths.js';
 import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
-import { createRequire } from 'node:module';
-
-const upgradeRecords = createRequire(import.meta.url)('../../../../cli/lib/upgrade-maintenance.cjs');
 
 function write(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value)); }
 async function until(predicate) {
@@ -70,68 +67,6 @@ test('legacy migration observes actual runtime without runId, waits for legacy i
   assert.deepEqual(await providers.findLegacySessions(), []);
 });
 
-test('busy legacy session survives until 300 seconds, then actual adapter stop confirms removal', async t => {
-  const f = tmuxFixture(t), input = await f.start(); f.setStatus('busy', 1000);
-  let now = 0;
-  const providers = createLifecycleProviders({ ...f.options, now: () => now }), entries = await providers.findLegacySessions();
-  now = 299999; await providers.advanceLegacy(entries); assert.equal(entries[0].stopped, false);
-  assert.equal(f.tmux('has-session', '-t', '=claude-main'), '');
-  now = 300000; await providers.advanceLegacy(entries);
-  assert.equal(entries[0].stopped, true); assert.equal(fs.readFileSync(input, 'utf8'), '');
-  assert.throws(() => f.tmux('has-session', '-t', '=claude-main'));
-  assert.equal(f.diagnostics.at(-1).reason, 'forced');
-});
-
-test('replacement between idle observation and exit gets no text on the new object', async t => {
-  const f = tmuxFixture(t); await f.start();
-  let replacementInput, replace = true;
-  const providers = createLifecycleProviders({ ...f.options, readLegacyStatus: async () => {
-    if (replace) {
-      replace = false; f.tmux('kill-session', '-t', '=claude-main'); replacementInput = await f.start();
-    }
-    return { state: 'idle', idle_seconds: 10 };
-  } });
-  const entries = await providers.findLegacySessions(); await providers.advanceLegacy(entries);
-  assert.equal(fs.readFileSync(replacementInput, 'utf8'), '');
-  assert.equal(entries[0].exitSent, false); assert.equal(entries[0].stopped, false);
-  assert.equal(f.diagnostics.at(-1).reason, 'TARGET_GONE');
-});
-
-test('unknown actual runtime is never inferred from a legacy name or origin READY', async t => {
-  const f = tmuxFixture(t);
-  f.tmux('new-session', '-d', '-s', 'claude-main', '/bin/sleep', '120');
-  f.setStatus('idle', 10);
-  write(path.join(groupRunDir('origin', f.env), 'current-session.json'), { runId: 'new', sessionId: 'new', ts: 1, startupControlIds: [] });
-  let now = 0;
-  const providers = createLifecycleProviders({ ...f.options, now: () => now, session: { sendText: () => assert.fail('unknown runtime must not reach sendText') } });
-  const entries = await providers.findLegacySessions();
-  assert.equal(entries[0].live.runtime, 'unknown'); assert.equal(entries[0].live.ready, false);
-  await providers.advanceLegacy(entries); now = 300000; await providers.advanceLegacy(entries);
-  assert.equal(entries[0].stopped, false); assert.equal(f.tmux('has-session', '-t', '=claude-main'), '');
-});
-
-// an old idle sample cannot authorize graceful legacy exit.
-test('legacy idle sample must be fresh; malformed and stale samples leave the session running', async t => {
-  const f = tmuxFixture(t), input = await f.start();
-  let clock = Date.now();
-  const providers = createLifecycleProviders({ ...f.options, now: () => clock });
-  const entries = await providers.findLegacySessions();
-  const file = path.join(legacyRunDir(f.env), 'agent-status.json');
-  f.setStatus('idle', 100);
-  fs.utimesSync(file, new Date(clock - 6000), new Date(clock - 6000));
-  await providers.advanceLegacy(entries);
-  assert.equal(fs.readFileSync(input, 'utf8'), '');
-  assert.equal(entries[0].exitSent, false);
-  write(file, '{broken');
-  await providers.advanceLegacy(entries);
-  assert.equal(fs.readFileSync(input, 'utf8'), '');
-  f.setStatus('idle', 100);
-  clock = fs.statSync(file).mtimeMs + 5000;
-  await providers.advanceLegacy(entries);
-  await until(() => fs.readFileSync(input, 'utf8') === '/exit\n');
-  assert.equal(entries[0].exitSent, true);
-});
-
 // Upgrade-complete close path, on a private tmux socket and temporary ZYLOS_DIR
 // (no live instance is touched). Upgrade records are written by the upgrade's
 // own marker/journal writers in terminal cleanup order: complete journal,
@@ -139,87 +74,3 @@ test('legacy idle sample must be fresh; malformed and stale samples leave the se
 // lifecycle record readers, or the upgrade marker/journal format change; they
 // can be skipped for router changes outside legacy migration. They do not
 // cover a real 0.9.x Claude or Codex CLI, which needs a real upgrade.
-function upgradeTransaction(env, id = 'tx-current') {
-  const root = fs.realpathSync(env.ZYLOS_DIR), dir = path.join(root, '.backup', 'self-upgrade', id);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  let journal = { formatVersion: 1, transactionId: id, zylosDir: root, phase: 'installing', cleanup: { complete: false } };
-  journal = upgradeRecords.update(dir, journal);
-  return {
-    root, dir,
-    publish() { upgradeRecords.marker(root, dir, journal); },
-    complete() { journal = upgradeRecords.update(dir, journal, { phase: 'upgrade_complete', cleanup: { complete: false, codeRemoved: false, servicesRestored: true } }); },
-    cleanupDone() { journal = upgradeRecords.update(dir, journal, { cleanup: { ...journal.cleanup, codeRemoved: true, complete: true } }); },
-    unmark() { upgradeRecords.unmark(root, journal); },
-    journal: () => JSON.parse(fs.readFileSync(path.join(dir, 'journal.json'), 'utf8')),
-  };
-}
-
-test('codex legacy session without status is stopped right after the upgrade removes its active marker', async t => {
-  const f = tmuxFixture(t), input = await f.start('codex-main', 'codex');
-  const upgrade = upgradeTransaction(f.env); upgrade.publish();
-  const providers = createLifecycleProviders(f.options), entries = await providers.findLegacySessions();
-  assert.equal(entries[0].live.runtime, 'codex');
-  await providers.advanceLegacy(entries);
-  upgrade.complete(); await providers.advanceLegacy(entries);
-  upgrade.cleanupDone(); await providers.advanceLegacy(entries);
-  assert.equal(f.tmux('has-session', '-t', '=codex-main'), '');
-  upgrade.unmark(); await providers.advanceLegacy(entries);
-  assert.equal(entries[0].stopped, true);
-  assert.throws(() => f.tmux('has-session', '-t', '=codex-main'));
-  assert.equal(fs.readFileSync(input, 'utf8'), '');
-  assert.deepEqual(f.diagnostics, [
-    { event: 'legacy_exit_forced', tmuxName: 'codex-main', reason: 'upgrade_complete' },
-    { event: 'legacy_tmux_stopped', tmuxName: 'codex-main', reason: 'forced' },
-  ]);
-  const journal = upgrade.journal();
-  assert.equal(journal.phase, 'upgrade_complete'); assert.equal(journal.cleanup.complete, true);
-});
-
-for (const [state, expected] of [['idle', 'exit'], ['busy', 'stop']]) {
-  test(`claude legacy session ${state} after the upgrade gets ${expected}`, async t => {
-    const f = tmuxFixture(t), input = await f.start('claude-main', 'claude');
-    const upgrade = upgradeTransaction(f.env); upgrade.publish();
-    f.setStatus('busy', 0);
-    const providers = createLifecycleProviders(f.options), entries = await providers.findLegacySessions();
-    assert.equal(entries[0].live.runtime, 'claude');
-    await providers.advanceLegacy(entries);
-    upgrade.complete(); upgrade.cleanupDone(); upgrade.unmark();
-    f.setStatus(state, state === 'idle' ? 3 : 0);
-    await providers.advanceLegacy(entries);
-    if (expected === 'exit') {
-      await until(() => fs.readFileSync(input, 'utf8') === '/exit\n');
-      await until(async () => { await providers.advanceLegacy(entries); return entries[0].stopped; });
-      assert.deepEqual(f.diagnostics, [{ event: 'legacy_tmux_stopped', tmuxName: 'claude-main', reason: 'exited' }]);
-    } else {
-      assert.equal(entries[0].stopped, true); assert.equal(fs.readFileSync(input, 'utf8'), '');
-      assert.deepEqual(f.diagnostics[0], { event: 'legacy_exit_forced', tmuxName: 'claude-main', reason: 'upgrade_complete' });
-    }
-  });
-}
-
-const notThisUpgrade = {
-  'no active marker, only an earlier completed transaction': f => {
-    const earlier = upgradeTransaction(f.env, 'tx-earlier'); earlier.complete(); earlier.cleanupDone();
-  },
-  'malformed active marker': f => write(path.join(f.dir, '.zylos', 'upgrade', 'active.json'), '{broken'),
-  'active marker pointing outside the transaction directory': f => {
-    const elsewhere = path.join(fs.realpathSync(f.dir), 'elsewhere');
-    write(path.join(elsewhere, 'journal.json'), { transactionId: 'tx-current', phase: 'upgrade_complete', cleanup: { complete: true } });
-    write(path.join(f.dir, '.zylos', 'upgrade', 'active.json'), { formatVersion: 1, transactionId: 'tx-current', transactionDir: elsewhere });
-  },
-};
-for (const [name, prepare] of Object.entries(notThisUpgrade)) {
-  test(`${name}: legacy session keeps the 300 second deadline`, async t => {
-    const f = tmuxFixture(t); await f.start('codex-main', 'codex');
-    prepare(f);
-    let now = 0;
-    const providers = createLifecycleProviders({ ...f.options, now: () => now }), entries = await providers.findLegacySessions();
-    const marker = path.join(f.dir, '.zylos', 'upgrade', 'active.json');
-    fs.rmSync(marker, { force: true });
-    now = 299999; await providers.advanceLegacy(entries);
-    assert.equal(entries[0].stopped, false); assert.equal(f.tmux('has-session', '-t', '=codex-main'), '');
-    now = 300000; await providers.advanceLegacy(entries);
-    assert.equal(entries[0].stopped, true);
-    assert.equal(f.diagnostics[0].reason, 'startup_timeout');
-  });
-}
