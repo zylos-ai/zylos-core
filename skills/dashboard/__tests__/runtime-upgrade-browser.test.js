@@ -10,11 +10,12 @@ import { workbenchAnswer } from './fixtures/workbench-browser-api.js';
 
 const runtimes = [
   ['claude', 'Claude', '2.1.80', ['en', 'zh']],
-  ['codex', 'Codex', '0.137.0', ['en']],
+  ['codex', 'Codex', '0.169.1', ['en', 'zh'], '0.171.0'],
   ['agy', 'Antigravity', '1.5.11', ['en', 'zh']],
 ];
 
-// Isolated browser and loopback fixture only. Run when upgrade/version copy or outcomes change.
+// Real settings UI and styles, with upgrade replies from an isolated loopback fixture.
+// Run for upgrade/version copy, layout or outcomes. Skip for changes outside those paths.
 test('runtime upgrades use the viewed runtime name and distinguish unknown and confirmed outcomes', {
   skip: !chatEnabled(), timeout: 120000,
 }, async t => {
@@ -25,7 +26,7 @@ test('runtime upgrades use the viewed runtime name and distinguish unknown and c
     const browser = await chromium.launch({ executablePath: process.env.ZYLOS_CHAT_BROWSER_BIN, headless: true,
       env: sandbox.env, args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
     sandbox.addCleanup(() => browser.close());
-    for (const [runtime, name, version, languages] of runtimes) {
+    for (const [runtime, name, version, languages, update] of runtimes) {
       for (const width of [1280, 390]) for (const language of languages) for (const theme of ['light', 'dark']) {
         const context = await browser.newContext({
           viewport: { width, height: width === 390 ? 844 : 900 }, timezoneId: 'Asia/Singapore', reducedMotion: 'reduce',
@@ -45,7 +46,8 @@ test('runtime upgrades use the viewed runtime name and distinguish unknown and c
             if (url.pathname === '/api/instance' && req.method() === 'GET') {
               const value = workbenchAnswer(url, Date.now());
               value.default_runtime = runtime;
-              value.versions[runtime] = { installed: version, ...(runtime === 'agy' ? { update_check: 'unsupported' } : {}) };
+              value.versions[runtime] = { installed: version, latest: update ?? null, update: update ?? null,
+                ...(runtime === 'agy' ? { update_check: 'unsupported' } : {}) };
               return route.fulfill({ json: value });
             }
             if (url.pathname === '/api/instance/actions/upgrade-runtime') {
@@ -87,17 +89,33 @@ test('runtime upgrades use the viewed runtime name and distinguish unknown and c
           await page.locator('[data-settings-section="defaults"]').click();
           const button = page.locator('[data-action="upgrade-cc"]');
           await button.waitFor({ state: 'visible' });
-          assert.equal(await button.locator('#action-cli-label').textContent(), zh ? `升级 ${name}` : `Upgrade ${name}`);
+          assert.equal((await button.textContent()).trim(), (zh ? `升级 ${name}` : `Upgrade ${name}`) + (update ? ` v${update}` : ''));
           const updateNote = zh ? '不支持检查更新' : 'update check not supported';
           const versionText = `${name} · v${version}${runtime === 'agy' ? ' · ' + updateNote : ''}`;
-          assert.equal(await page.locator('#settings-engine-version p').textContent(), versionText);
+          const row = page.locator('#settings-engine-version');
+          const versionLine = row.locator('p');
+          assert.equal(await versionLine.textContent(), versionText);
+          assert.equal(await row.locator('.action-ver-dot').count(), 0);
+          await page.evaluate(() => document.fonts.ready);
+          const versionBox = await versionLine.boundingBox();
+          const rowBox = await row.boundingBox();
+          const selectorRow = await page.locator('#settings-engine').locator('xpath=ancestor::div[contains(@class, "wb-set-inline")][1]').boundingBox();
           assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
           const geometry = await button.boundingBox();
-          assert.ok(geometry.x >= 0 && geometry.x + geometry.width <= width);
-          console.log('Upgrade button geometry:', JSON.stringify({ runtime, viewportWidth: width, language, theme, ...geometry }));
+          assert.ok(geometry.x >= rowBox.x && Math.abs(geometry.x + geometry.width - rowBox.x - rowBox.width) <= 1);
+          assert.equal(geometry.height, width === 390 ? 36 : 30);
+          const gap = rowBox.y - selectorRow.y - selectorRow.height;
+          assert.ok(Math.abs(gap - 12) <= 1, `version row starts 12 px after the selector row, got ${gap}`);
+          const wraps = geometry.y >= versionBox.y + versionBox.height;
+          if (runtime === 'codex' || width === 1280) {
+            assert.equal(wraps, false);
+            assert.ok(Math.abs(geometry.y + geometry.height / 2 - versionBox.y - versionBox.height / 2) <= 1);
+          }
+          if (runtime === 'agy' && width === 390 && !zh) assert.equal(wraps, true);
+          console.log('Upgrade button geometry:', JSON.stringify({ runtime, viewportWidth: width, language, theme, gap, wraps, ...geometry }));
           await page.mouse.move(0, 0);
           await button.blur();
-          await screenshot('settings', button);
+          await screenshot('settings', row);
           const dialog = page.getByRole('alertdialog');
           const status = page.locator('#action-status');
           const submit = async () => {

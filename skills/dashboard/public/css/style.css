@@ -892,25 +892,6 @@ main { padding: var(--space-md) var(--space-lg) var(--space-xl); }
 .action-btn:hover { background: var(--bg-elevated); border-color: var(--border-focus); }
 .action-btn:active { transform: scale(0.98); }
 
-.action-ver {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-left: 4px;
-}
-.action-ver-dot {
-  position: relative;
-}
-.action-ver-dot::after {
-  content: '';
-  position: absolute;
-  top: -2px;
-  right: -6px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #f59e0b;
-}
-
 .action-field {
   display: flex;
   align-items: center;

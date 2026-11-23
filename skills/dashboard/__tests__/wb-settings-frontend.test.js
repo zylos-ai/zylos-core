@@ -767,18 +767,43 @@ test('settings relabel updates navigation without replacing controls or changing
   assert.equal(page.sections.general.hidden, true);
 });
 
-test('the engine version shows the chosen engine CLI and reuses the upgrade control, with the read-only reason', async () => {
-  const document = documentFixture(), root = document.createElement('div'), upgrade = node(document, 'button'); upgrade.append(node(document, 'span', 'action-cli-label'), node(document, 'span', 'action-cc-ver')); let called = 0; upgrade.addEventListener('click', () => called++);
-  renderEngineVersion(root, { codex: { installed: '1', update: '2' }, claude: { installed: '9' } }, { document, upgrade, t, runtime: 'codex', readOnly: true });
-  assert.match(root.textContent, /Codex · v1 ↑2/); assert.doesNotMatch(root.textContent, /v9/, 'only the chosen engine');
-  assert.equal(root.querySelector('button'), upgrade); assert.equal(upgrade.querySelector('#action-cli-label').textContent, 'actions.upgrade_runtime:{"runtime":"Codex"}');
-  assert.equal(upgrade.querySelector('#action-cc-ver').classList.contains('action-ver-dot'), true, 'a newer CLI marks the button');
-  assert.equal(upgrade.disabled, true); assert.equal(upgrade.title, 'remote.actions_read_only_tooltip');
-  renderEngineVersion(root, { codex: { installed: '1' }, claude: { installed: '9' } }, { document, upgrade, t, runtime: 'claude', readOnly: false });
-  assert.match(root.textContent, /Claude · v9/); assert.equal(upgrade.querySelector('#action-cli-label').textContent, 'actions.upgrade_runtime:{"runtime":"Claude"}');
-  assert.equal(upgrade.querySelector('#action-cc-ver').classList.contains('action-ver-dot'), false);
-  await upgrade.dispatch('click'); assert.equal(called, 1); assert.equal(upgrade.disabled, false);
-  renderEngineVersion(root, {}, { document, t, runtime: 'codex' }); assert.match(root.textContent, /Codex · wb\.unknown/); assert.equal(root.querySelector('button'), null);
+test('the engine version shows the installed version and puts the target on the existing upgrade control', async () => {
+  const document = documentFixture(), root = node(document, 'div'), upgrade = node(document, 'button');
+  const label = node(document, 'span', 'action-cli-label');
+  upgrade.append(label);
+  let called = 0;
+  upgrade.addEventListener('click', () => called++);
+  const info = {
+    codex: { installed: '0.169.1', latest: '0.171.0', update: '0.171.0' },
+    claude: { installed: '2.1.330', latest: null, update: null },
+  };
+  renderEngineVersion(root, info, { document, upgrade, t, runtime: 'codex', readOnly: true });
+  assert.equal(root.querySelector('p').textContent, 'Codex · v0.169.1');
+  assert.equal(root.querySelector('button'), upgrade);
+  assert.equal(label.textContent, t('actions.upgrade_runtime', { runtime: 'Codex' }) + ' v0.171.0');
+  assert.equal(upgrade.disabled, true);
+  assert.equal(upgrade.title, 'remote.actions_read_only_tooltip');
+
+  renderEngineVersion(root, info, { document, upgrade, t, runtime: 'claude' });
+  assert.equal(root.querySelector('p').textContent, 'Claude · v2.1.330');
+  assert.equal(root.querySelector('button'), upgrade);
+  assert.equal(label.textContent, t('actions.upgrade_runtime', { runtime: 'Claude' }));
+  assert.equal(upgrade.disabled, false);
+  assert.equal(upgrade.title, '');
+  await upgrade.dispatch('click');
+  assert.equal(called, 1);
+
+  renderEngineVersion(root, {}, { document, t, runtime: 'codex' });
+  assert.equal(root.textContent, 'Codex · wb.unknown');
+  assert.equal(root.querySelector('button'), null);
+});
+
+test('the engine version hides an existing upgrade control when the latest version is installed', () => {
+  const document = documentFixture(), root = node(document, 'div'), upgrade = node(document, 'button');
+  root.append(upgrade);
+  renderEngineVersion(root, { claude: { installed: '2.1.330', latest: '2.1.330', update: null } }, { document, upgrade, t, runtime: 'claude' });
+  assert.equal(root.textContent, 'Claude · v2.1.330');
+  assert.equal(root.querySelector('button'), null);
 });
 
 test('theme and language are segmented choices that forward the pressed value', async () => {
@@ -1186,11 +1211,11 @@ test('default model without effort options hides the whole field and restores it
   panel.destroy();
 });
 
-test('Antigravity version panel and upgrade button never inherit Claude names', () => {
+test('Antigravity keeps a plain upgrade button and explains unsupported update checks', () => {
   const document = documentFixture(), root = node(document, 'div'), upgrade = node(document, 'button');
   const label = node(document, 'span', 'action-cli-label'); upgrade.append(label);
-  renderEngineVersion(root, { agy: { installed: '1.5.11' }, claude: { installed: 'wrong' } }, { document, upgrade, t, runtime: 'agy' });
-  assert.match(root.textContent, /Antigravity · v1.5.11/);
-  assert.doesNotMatch(root.textContent, /CC|Claude|wrong/);
+  renderEngineVersion(root, { agy: { installed: '1.5.11', latest: null, update: null, update_check: 'unsupported' } }, { document, upgrade, t, runtime: 'agy' });
+  assert.equal(root.querySelector('p').textContent, 'Antigravity · v1.5.11 · wb.settings.updateCheckUnsupported');
+  assert.equal(root.querySelector('button'), upgrade);
   assert.equal(label.textContent, t('actions.upgrade_runtime', { runtime: 'Antigravity' }));
 });

@@ -3004,7 +3004,7 @@ function createActionsModal() {
     <p id="action-mode-status" class="wb-note"></p>
     <p id="action-instance-status" class="wb-note"></p>
     <p id="action-restart-status" class="wb-note"></p>
-    <button class="wb-btn" data-action="upgrade-cc" type="button"><i class="wb-ico wb-ico-up wb-ico-xs" aria-hidden="true"></i><span id="action-cli-label">${esc(t('actions.upgrade_runtime', { runtime: '' }).trim())}</span><span class="action-ver" id="action-cc-ver"></span></button>
+    <button class="wb-btn" data-action="upgrade-cc" type="button"><i class="wb-ico wb-ico-up wb-ico-xs" aria-hidden="true"></i><span id="action-cli-label">${esc(t('actions.upgrade_runtime', { runtime: '' }).trim())}</span></button>
   <div class="wb-note" id="action-status" role="status" hidden></div>`;
   document.body.appendChild(overlay);
   actionsModal = overlay;

@@ -1243,6 +1243,8 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-host-option { padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .wb-host-option:hover, .wb-host-option:focus-visible { background: var(--wb-hover); }
 .wb-version-line { margin: 0 0 4px; }
+.wb-engine-version { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.wb-engine-version .wb-version-line { margin: 0; overflow-wrap: anywhere; }
 .wb-card-lead { margin: 0 0 10px; }
 .wb-mode-note b { color: var(--text); font-weight: 600; }
 #action-mode-status:empty { display: none; }
@@ -1284,6 +1286,8 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-timezone-pending ul { margin: 8px 0; padding-left: 20px; color: var(--text-dim); font-size: 13px; line-height: 1.8; }
 /* Settings controls share one height: text fields, selects and buttons line up on a row. */
 .wb-set-body :is(.wb-input, .wb-select, .wb-btn) { height: var(--wb-h); }
+.wb-engine-version .wb-btn { margin-inline-start: auto; max-width: 100%; height: auto; min-height: var(--wb-h); white-space: normal; }
+.wb-engine-version .wb-btn span { overflow-wrap: anywhere; }
 .wb-seg2 { display: inline-flex; height: var(--wb-h); }
 .wb-seg2 button { padding: 0 12px; font-size: 12.5px; white-space: nowrap; cursor: pointer; }
 .wb-hdot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--wb-work); }

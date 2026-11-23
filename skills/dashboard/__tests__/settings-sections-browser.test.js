@@ -65,7 +65,8 @@ test('the settings page keeps its sections in order, offers the right upgrades a
         if (url.pathname === '/api/instance/core-update') return route.fulfill({ json: coreUpdate });
         if (url.pathname === '/api/instance' && method === 'GET') {
           const value = workbenchAnswer(url, Date.now());
-          value.versions = { ...value.versions, claude: { installed: '2.1.0' }, codex: { installed: '0.50.0', update: '0.51.0' } };
+          value.versions = { ...value.versions, claude: { installed: '2.1.330', latest: '2.1.330', update: null },
+            codex: { installed: '0.169.1', latest: '0.171.0', update: '0.171.0' } };
           return route.fulfill({ json: value });
         }
         if (url.pathname === '/api/instance/actions/upgrade-runtime') return route.fulfill({ json: { ok: true } });
@@ -187,15 +188,18 @@ test('the settings page keeps its sections in order, offers the right upgrades a
       await context.close();
     });
 
-    await t.test('the default engine card upgrades the engine chosen in it', async () => {
-      const { context, page, errors, writes, pick } = await open(1280, { coreUpdate: null });
+    // Real settings selection and action dispatch against fixture replies. Run for engine selection or upgrade wiring.
+    await t.test('the default engine card shows and upgrades the engine chosen in it', async () => {
+      const { context, page, errors, writes, pick, shot } = await open(1280, { coreUpdate: null });
       await pick('defaults');
-      const upgrade = page.locator('#settings-engine-version [data-action="upgrade-cc"]');
-      await upgrade.waitFor();
-      assert.match(await page.locator('#settings-engine-version').textContent(), /Claude · v2\.1\.0/);
+      const version = page.locator('#settings-engine-version');
+      const upgrade = version.locator('[data-action="upgrade-cc"]');
+      await version.getByText('Claude · v2.1.330', { exact: true }).waitFor();
+      assert.equal(await upgrade.count(), 0);
+      await shot('engine-current');
       await page.locator('#settings-engine').selectOption('codex');
-      await page.locator('#settings-engine-version').getByText(/Codex · v0\.50\.0 ↑0\.51\.0/).waitFor();
-      assert.match(await upgrade.textContent(), /Codex/);
+      await version.getByText('Codex · v0.169.1', { exact: true }).waitFor();
+      assert.equal((await upgrade.textContent()).trim(), '升级 Codex v0.171.0');
       await upgrade.click();
       await dialog(page).locator('.wb-modal-acts button').last().click();
       await dialog(page).waitFor({ state: 'detached' });
