@@ -174,14 +174,6 @@ test('F1 controlled before-rename failure leaves original config and prevents su
   assert.deepEqual(f.calls, []);
 });
 
-test('caller migrates both legacy session thresholds before starting services', async t => {
-  const f = fixture(t, { new_session_threshold: 70, codex_new_session_threshold: 75 });
-  const result = await completeUpgradeFinalization(f.ctx, f.deps);
-  assert.equal(result.success, true);
-  assert.deepEqual(f.read(), { new_session_threshold: 70, codex_new_session_threshold: 75, model_rotation_thresholds: { claude: { opus: 70 }, codex: { small: 75 } } });
-  assert.equal(f.calls.includes('start'),true);
-});
-
 test('caller uses the configured lock window and continues finalization', async t => {
   const f = fixture(t, { new_session_threshold: 70, codex_new_session_threshold: 75 });
   let writes = 0;

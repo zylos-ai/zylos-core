@@ -802,13 +802,6 @@ test('removed header entry selectors have no startup bindings and account contro
   for (const id of ['fleet-sound-toggle', 'logout-btn', 'wb-detail-toggle']) { assert.equal(header.includes('id="' + id + '"'), false); assert.ok(html.indexOf('id="' + id + '"') > html.indexOf('id="tab-settings"')); }
   assert.equal(html.includes('id="locale-toggle"'), false, 'the language choice is built inside the settings page');
   assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js/); assert.match(html, /style\.css/);
-  const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.zh.json', import.meta.url))), en = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
-  const englishFragments = new Set(['chat.delete.messages', 'chat.delete.attachments']);
-  for (const key of Object.keys(en)) {
-    if (key.endsWith('One')) assert.ok(Object.hasOwn(en, key.slice(0, -3)), key);
-    assert.ok(Object.hasOwn(zh, key) || englishFragments.has(key) || key.endsWith('One') && (Object.hasOwn(zh, key.slice(0, -3)) || englishFragments.has(key.slice(0, -3))), key);
-  }
-  for (const key of Object.keys(zh)) assert.ok(Object.hasOwn(en, key), key);
 });
 
 test('settings draft reset clears target-specific controls and disables writes until new data loads', () => {

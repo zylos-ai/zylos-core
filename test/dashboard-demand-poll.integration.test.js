@@ -12,7 +12,7 @@ import { fixture } from '../skills/comm-bridge/scripts/__tests__/c4-v2-test-help
 // HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/socket/DB before any service starts; the child
 // and its descendants are lifecycle-bound. No live instance is contacted.
 test('Dashboard observation follows browser demand with real isolated tmux', {
-  skip: !chatEnabled(), timeout: 115000,
+  skip: !chatEnabled(), timeout: 30000,
 }, async t => {
   const s = createChatSandbox(t);
   await s.runCase(async () => {
@@ -30,19 +30,24 @@ test('Dashboard observation follows browser demand with real isolated tmux', {
     fs.mkdirSync(path.join(s.paths.zylos, 'activity-monitor'), { recursive: true });
     fs.writeFileSync(path.join(s.paths.zylos, 'activity-monitor/restart-requests.json'), '[]');
     const c4 = fixture(t, {}, s.paths.c4Db); s.addCleanup(() => { if(c4.db.open) c4.db.close(); });
+    let now;
     const writeStatus = (group, state) => {
       const dir = path.join(s.paths.zylos, 'activity-monitor/session-groups', group);
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'current-session.json'), JSON.stringify({ runId: `run-${group}`, sessionId: `sid-${group}`, ts: Date.now(), startupControlIds: [] }));
-      fs.writeFileSync(path.join(dir, 'agent-status.json'), JSON.stringify({ runId: `run-${group}`, sessionId: `sid-${group}`, state, updated_at: Date.now() }));
+      fs.writeFileSync(path.join(dir, 'current-session.json'), JSON.stringify({ runId: `run-${group}`, sessionId: `sid-${group}`, ts: now, startupControlIds: [] }));
+      const status = path.join(dir, 'agent-status.json');
+      fs.writeFileSync(status, JSON.stringify({ runId: `run-${group}`, sessionId: `sid-${group}`, state, updated_at: now }));
+      // The production reader checks freshness against mtime.
+      fs.utimesSync(status, now / 1000, now / 1000);
     };
-    for (const group of ['origin', 'worker-a', 'worker-b']) {
+    const groups = ['origin', 'worker-a', 'worker-b'];
+    for (const group of groups) {
       tmux('new-session', '-d', '-s', `zylos-group-${group}`, '-e', `ZYLOS_RUN_ID=run-${group}`, '-e', `ZYLOS_SESSION_GROUP=${group}`, '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', 'sleep', '180');
-      writeStatus(group, 'idle');
     }
     let originState = 'idle';
-    const statusWriter = setInterval(() => { for (const group of ['origin','worker-a','worker-b']) writeStatus(group, group === 'origin' ? originState : 'idle'); }, 1000);
-    s.addCleanup(() => clearInterval(statusWriter));
+    const writeStatuses = () => {
+      for (const group of groups) writeStatus(group, group === 'origin' ? originState : 'idle');
+    };
     const bin = path.join(s.root, 'bin'); fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, 'zylos'), `#!/bin/sh\nexec '${process.execPath}' '${path.join(repo,'cli/zylos.js')}' \"$@\"\n`, { mode: 0o700 });
     const trace = path.join(s.root, 'tmux.jsonl'); fs.writeFileSync(trace, '');
@@ -51,27 +56,49 @@ test('Dashboard observation follows browser demand with real isolated tmux', {
     const config = path.join(s.paths.zylos, 'components/dashboard/config.json');
     fs.writeFileSync(config, JSON.stringify({ port: 0, host: '127.0.0.1', auth: { enabled: true, password: 'fixture-password' }, observer: { enabled: false } }));
     const child = s.startChild(process.execPath, [path.join(repo, 'test/helpers/dashboard-demand-worker.js'), repo], {
-      env: { ...s.env, ZYLOS_PACKAGE_ROOT: repo, PATH: `${bin}:${s.env.PATH}`, TMUX: `${s.paths.socket},0,0`, DASH_TRACE: trace }, timeoutMs: 110000,
+      env: { ...s.env, ZYLOS_PACKAGE_ROOT: repo, PATH: `${bin}:${s.env.PATH}`, TMUX: `${s.paths.socket},0,0`, DASH_TRACE: trace }, timeoutMs: 25000,
     });
     let output = ''; child.stderr.on('data', chunk => { output = (output + chunk).slice(-8192); }); child.stdout.on('data', chunk => { output = (output + chunk).slice(-8192); });
-    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-    const wait = async predicate => { const end = Date.now() + 15000; while (!predicate()) { assert(Date.now() < end, `Dashboard startup timeout: ${output}`); await delay(50); } };
-    await wait(() => /ACCEPTANCE_PORT=(\d+)/.test(output));
-    const base = `http://127.0.0.1:${output.match(/ACCEPTANCE_PORT=(\d+)/)[1]}`;
+    const wait = async pattern => {
+      const deadline = Date.now() + 5000;
+      while (true) {
+        const match = output.match(pattern);
+        if (match) return match;
+        assert(child.exitCode === null && child.signalCode === null && Date.now() < deadline, `Dashboard did not report ${pattern}: ${output}`);
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    };
+    const [, port, startTime] = await wait(/^ACCEPTANCE_LISTEN=(\d+) (\d+)$/m);
+    now = Number(startTime);
+    writeStatuses();
+    let step = 0;
+    const advance = async milliseconds => {
+      const target = now + milliseconds;
+      const current = ++step;
+      child.stdin.write(`${current} ${milliseconds}\n`);
+      const [, tickTime] = await wait(new RegExp(`^ACCEPTANCE_TICK=${current} (\\d+)$`, 'm'));
+      now = Number(tickTime);
+      assert.equal(now, target, 'Dashboard clock advanced by the requested interval');
+      writeStatuses();
+    };
+    const base = `http://127.0.0.1:${port}`;
     const login = await fetch(base + '/login', { method: 'POST', redirect: 'manual', body: new URLSearchParams({ password: 'fixture-password' }) });
     assert.equal(login.status, 302); const cookie = login.headers.get('set-cookie');
     const read = async route => { const response = await fetch(base + route, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(5000) }); assert.equal(response.status, 200, route); return response.json(); };
     const commands = () => fs.readFileSync(trace, 'utf8').split('\n').filter(Boolean);
-    await delay(17000); // Includes production deferred startup and first system collection.
+    await advance(15000); // Production deferred startup.
+    await wait(/^ACCEPTANCE_WARMUP_STARTED$/m);
+    await advance(200);
+    await wait(/^ACCEPTANCE_WARMUP_FINISHED$/m);
     fs.writeFileSync(trace, '');
-    await delay(35000); // Exceeds the former 30-second background interval.
+    await advance(35000); // Exceeds the former 30-second background interval.
     assert.equal(commands().length, 0, `Unwatched tmux calls: ${JSON.stringify(commands())}`);
-    t.diagnostic('Three online groups, no browser for 35 seconds: zero Dashboard tmux clients');
+    t.diagnostic('Three online groups, no browser for 35 simulated seconds: zero Dashboard tmux clients');
     const instance = await read('/api/instance'); assert(instance.session_mode);
     const fleet = await read('/api/fleet'); assert.equal(fleet.items.find(agent => agent.self).state, 'IDLE');
-    originState = 'busy'; writeStatus('origin', 'busy'); await delay(2100);
+    originState = 'busy'; writeStatuses(); await advance(2100);
     assert.equal((await read('/api/fleet')).items.find(agent => agent.self).state, 'BUSY', 'Fleet stays fresh without browser subscription');
-    originState = 'idle'; writeStatus('origin', 'idle'); await delay(2100);
+    originState = 'idle'; writeStatuses(); await advance(2100);
     assert.equal((await read('/api/fleet')).items.find(agent => agent.self).state, 'IDLE');
     const health = await read('/api/health'); assert.equal(JSON.stringify(health.source ?? {}).includes('statusline'), false);
     let controller;
@@ -93,17 +120,20 @@ test('Dashboard observation follows browser demand with real isolated tmux', {
       assert.fail(`Missing state ${expected}`);
     };
     await untilState('IDLE'); fs.writeFileSync(trace, '');
-    await delay(10000);
+    for (let round = 0; round < 4; round++) await advance(2500);
     const watched = commands();
     assert(watched.length >= 6 && watched.length <= 10, `Expected 3–5 shared two-command batches in 10 seconds, got ${watched.length} commands`);
     assert(watched.every(line => /list-panes/.test(line)), 'Only batched pane observations are allowed');
-    const started = performance.now(); originState = 'busy'; writeStatus('origin', 'busy'); await untilState('BUSY');
-    const latencyMs = performance.now() - started; assert(latencyMs < 2900);
-    controller.abort(); await stream.cancel().catch(() => {}); await delay(600);
-    fs.writeFileSync(trace, ''); await delay(3500); assert.equal(commands().length, 0, 'Last subscriber closes polling');
-    originState = 'idle'; writeStatus('origin', 'idle'); buffered = ''; stream = await open(); await untilState('IDLE');
+    originState = 'busy'; writeStatuses();
+    const stateUpdateBudgetMs = 2899;
+    await advance(stateUpdateBudgetMs);
+    await untilState('BUSY');
+    controller.abort(); await stream.cancel().catch(() => {});
+    await wait(/^ACCEPTANCE_STREAM_CLOSED$/m);
+    fs.writeFileSync(trace, ''); await advance(3500); assert.equal(commands().length, 0, 'Last subscriber closes polling');
+    originState = 'idle'; writeStatuses(); buffered = ''; stream = await open(); await untilState('IDLE');
     controller.abort(); await stream.cancel().catch(() => {});
     const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
-    if (evidence) { fs.mkdirSync(evidence, { recursive: true }); fs.writeFileSync(path.join(evidence, 'demand-acceptance.json'), JSON.stringify({ isolation: proof, instance, fleet, health, watchedCommands: watched, latencyMs }, null, 2)); }
-  }, { timeoutMs: 110000 });
+    if (evidence) { fs.mkdirSync(evidence, { recursive: true }); fs.writeFileSync(path.join(evidence, 'demand-acceptance.json'), JSON.stringify({ isolation: proof, instance, fleet, health, watchedCommands: watched, stateUpdateBudgetMs }, null, 2)); }
+  }, { timeoutMs: 25000 });
 });

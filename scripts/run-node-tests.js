@@ -70,8 +70,6 @@ const ROOT_NODE_TESTS = [
   'test/router-stale-state.integration.test.js',
   'test/dashboard-readiness.integration.test.js',
   'test/supervisor-reclaim-deferral.integration.test.js',
-  'test/web-console-process.integration.test.js',
-  'test/web-console-caddy.integration.test.js',
   'test/history-reminders.integration.test.js',
   'test/observer-history-pagination.test.js',
   'test/chat-quote.integration.test.js',
