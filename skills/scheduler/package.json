@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node scripts/daemon.js",
     "cli": "node scripts/cli.js",
-    "test": "node --test scripts/__tests__/*.test.js"
+    "test": "cd ../.. && files=$(node scripts/run-node-tests.js --list | grep '^skills/scheduler/') && node scripts/run-node-tests.js $files"
   },
   "dependencies": {
     "chrono-node": "^2.7.7",

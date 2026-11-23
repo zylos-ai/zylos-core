@@ -21,7 +21,7 @@ export function testRootPrefix(tmpdir = os.tmpdir(), platform = process.platform
     ? path.join('/tmp', 'zylos-tests-') : prefix;
 }
 
-// Called by the runners before loading tests or spawning test workers. Override
+// Called by the runner before loading tests or spawning test workers. Override
 // inherited live-instance paths; individual tests may set their own paths later.
 export function createTestEnvironment() {
   const realHome = fs.realpathSync(os.userInfo().homedir);

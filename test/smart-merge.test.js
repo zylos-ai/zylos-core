@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, test, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -41,8 +42,8 @@ describe('smartSync', () => {
     writeFile(src, 'newfile.js', 'new content');
 
     const result = smartSync(src, dest);
-    expect(result.added).toContain('newfile.js');
-    expect(readFile(dest, 'newfile.js')).toBe('new content');
+    assert.ok(result.added.includes('newfile.js'));
+    assert.equal(readFile(dest, 'newfile.js'), 'new content');
   });
 
   test('no manifest: overwrite all files', () => {
@@ -53,8 +54,8 @@ describe('smartSync', () => {
     writeFile(src, 'a.js', 'new');
 
     const result = smartSync(src, dest);
-    expect(result.overwritten).toContain('a.js');
-    expect(readFile(dest, 'a.js')).toBe('new');
+    assert.ok(result.overwritten.includes('a.js'));
+    assert.equal(readFile(dest, 'a.js'), 'new');
   });
 
   test('local unmodified + new changed: overwrite', () => {
@@ -70,8 +71,8 @@ describe('smartSync', () => {
     writeFile(src, 'a.js', 'updated');
 
     const result = smartSync(src, dest);
-    expect(result.overwritten).toContain('a.js');
-    expect(readFile(dest, 'a.js')).toBe('updated');
+    assert.ok(result.overwritten.includes('a.js'));
+    assert.equal(readFile(dest, 'a.js'), 'updated');
   });
 
   test('local modified + new unchanged: keep local', () => {
@@ -90,8 +91,8 @@ describe('smartSync', () => {
     writeFile(src, 'a.js', 'original');
 
     const result = smartSync(src, dest);
-    expect(result.kept).toContain('a.js');
-    expect(readFile(dest, 'a.js')).toBe('user modified');
+    assert.ok(result.kept.includes('a.js'));
+    assert.equal(readFile(dest, 'a.js'), 'user modified');
   });
 
   test('both changed different sections: clean merge via diff3', () => {
@@ -112,11 +113,11 @@ describe('smartSync', () => {
     writeFile(src, 'a.js', 'line1\nline2\nline3\nline4\nupstream-modified\n');
 
     const result = smartSync(src, dest);
-    expect(result.merged).toContain('a.js');
+    assert.ok(result.merged.includes('a.js'));
 
     const merged = readFile(dest, 'a.js');
-    expect(merged).toContain('user-modified');
-    expect(merged).toContain('upstream-modified');
+    assert.ok(merged.includes('user-modified'));
+    assert.ok(merged.includes('upstream-modified'));
   });
 
   test('both changed same line: conflict — overwrite + backup', () => {
@@ -137,14 +138,14 @@ describe('smartSync', () => {
     writeFile(src, 'a.js', 'line1\nupstream-version\nline3\n');
 
     const result = smartSync(src, dest, { backupDir });
-    expect(result.conflicts.length).toBe(1);
-    expect(result.conflicts[0].file).toBe('a.js');
+    assert.equal(result.conflicts.length, 1);
+    assert.equal(result.conflicts[0].file, 'a.js');
 
     // New version should win
-    expect(readFile(dest, 'a.js')).toBe('line1\nupstream-version\nline3\n');
+    assert.equal(readFile(dest, 'a.js'), 'line1\nupstream-version\nline3\n');
 
     // Backup should have user's version
-    expect(readFile(backupDir, 'a.js')).toBe('line1\nuser-version\nline3\n');
+    assert.equal(readFile(backupDir, 'a.js'), 'line1\nuser-version\nline3\n');
   });
 
   test('neither changed: no action', () => {
@@ -158,11 +159,11 @@ describe('smartSync', () => {
     writeFile(src, 'a.js', 'same');
 
     const result = smartSync(src, dest);
-    expect(result.overwritten.length).toBe(0);
-    expect(result.kept.length).toBe(0);
-    expect(result.merged.length).toBe(0);
-    expect(result.conflicts.length).toBe(0);
-    expect(result.added.length).toBe(0);
+    assert.equal(result.overwritten.length, 0);
+    assert.equal(result.kept.length, 0);
+    assert.equal(result.merged.length, 0);
+    assert.equal(result.conflicts.length, 0);
+    assert.equal(result.added.length, 0);
   });
 
   test('creates subdirectories for new files', () => {
@@ -172,8 +173,8 @@ describe('smartSync', () => {
     writeFile(src, 'sub/dir/file.js', 'content');
 
     const result = smartSync(src, dest);
-    expect(result.added).toContain('sub/dir/file.js');
-    expect(readFile(dest, 'sub/dir/file.js')).toBe('content');
+    assert.ok(result.added.includes('sub/dir/file.js'));
+    assert.equal(readFile(dest, 'sub/dir/file.js'), 'content');
   });
 
   test('deletes files removed in new version', () => {
@@ -190,9 +191,9 @@ describe('smartSync', () => {
     writeFile(src, 'a.js', 'keep');
 
     const result = smartSync(src, dest);
-    expect(result.deleted).toContain('removed.js');
-    expect(fileExists(dest, 'removed.js')).toBe(false);
-    expect(fileExists(dest, 'a.js')).toBe(true);
+    assert.ok(result.deleted.includes('removed.js'));
+    assert.equal(fileExists(dest, 'removed.js'), false);
+    assert.equal(fileExists(dest, 'a.js'), true);
   });
 
   test('deletes files in subdirectories and cleans up empty dirs', () => {
@@ -209,10 +210,10 @@ describe('smartSync', () => {
     writeFile(src, 'a.js', 'keep');
 
     const result = smartSync(src, dest);
-    expect(result.deleted).toContain('sub/removed.js');
-    expect(fileExists(dest, 'sub/removed.js')).toBe(false);
+    assert.ok(result.deleted.includes('sub/removed.js'));
+    assert.equal(fileExists(dest, 'sub/removed.js'), false);
     // Empty parent directory should be cleaned up
-    expect(fs.existsSync(path.join(dest, 'sub'))).toBe(false);
+    assert.equal(fs.existsSync(path.join(dest, 'sub')), false);
   });
 
   test('preserves user-added files not in old manifest', () => {
@@ -232,8 +233,8 @@ describe('smartSync', () => {
 
     const result = smartSync(src, dest);
     // User-added file should be preserved (not deleted)
-    expect(result.deleted).not.toContain('custom.js');
-    expect(fileExists(dest, 'custom.js')).toBe(true);
+    assert.ok(!result.deleted.includes('custom.js'));
+    assert.equal(fileExists(dest, 'custom.js'), true);
   });
 
   test('user-added file collision: conflict + backup', () => {
@@ -254,14 +255,14 @@ describe('smartSync', () => {
     writeFile(src, 'b.js', 'upstream version');
 
     const result = smartSync(src, dest, { backupDir });
-    expect(result.conflicts.length).toBe(1);
-    expect(result.conflicts[0].file).toBe('b.js');
+    assert.equal(result.conflicts.length, 1);
+    assert.equal(result.conflicts[0].file, 'b.js');
 
     // New version should win
-    expect(readFile(dest, 'b.js')).toBe('upstream version');
+    assert.equal(readFile(dest, 'b.js'), 'upstream version');
 
     // User's version should be backed up
-    expect(readFile(backupDir, 'b.js')).toBe('user version');
+    assert.equal(readFile(backupDir, 'b.js'), 'user version');
   });
 
   test('untracked manifest collision with identical content is unchanged, not a conflict', () => {
@@ -280,10 +281,10 @@ describe('smartSync', () => {
     const before = fs.statSync(path.join(dest, 'same.js')).mtimeMs;
     const result = smartSync(src, dest, { backupDir });
 
-    expect(result.conflicts).toEqual([]);
-    expect(fs.readdirSync(backupDir)).toEqual([]);
-    expect(readFile(dest, 'same.js')).toBe('byte-identical');
-    expect(fs.statSync(path.join(dest, 'same.js')).mtimeMs).toBe(before);
+    assert.deepEqual(result.conflicts, []);
+    assert.deepEqual(fs.readdirSync(backupDir), []);
+    assert.equal(readFile(dest, 'same.js'), 'byte-identical');
+    assert.equal(fs.statSync(path.join(dest, 'same.js')).mtimeMs, before);
   });
 
   test('returns the next manifest without committing it', () => {
@@ -296,8 +297,8 @@ describe('smartSync', () => {
 
     // The transaction owner commits this candidate after later steps succeed.
     const manifestPath = path.join(dest, '.zylos', 'manifest.json');
-    expect(fs.existsSync(manifestPath)).toBe(false);
-    expect(result.nextManifest.files['a.js']).toBeTruthy();
+    assert.equal(fs.existsSync(manifestPath), false);
+    assert.ok(result.nextManifest.files['a.js']);
   });
 
   test('outer baseline commit saves originals after sync', () => {
@@ -311,12 +312,12 @@ describe('smartSync', () => {
 
     // Originals should be saved
     const originalsPath = path.join(dest, '.zylos', 'originals', 'a.js');
-    expect(fs.existsSync(originalsPath)).toBe(true);
-    expect(fs.readFileSync(originalsPath, 'utf8')).toBe('source content');
+    assert.equal(fs.existsSync(originalsPath), true);
+    assert.equal(fs.readFileSync(originalsPath, 'utf8'), 'source content');
   });
 });
 
-describe('smartSync manifest authority (#715)', () => {
+describe('smartSync manifest authority', () => {
   test('user-added file survives two sync rounds and never enters the manifest', () => {
     const src = mkTmp();
     const dest = mkTmp();
@@ -334,15 +335,15 @@ describe('smartSync manifest authority (#715)', () => {
     // Round 1: user file untouched and NOT absorbed into the manifest
     const first = smartSync(src, dest);
     saveMergeBaseline(dest, src, first.nextManifest);
-    expect(fileExists(dest, 'custom.js')).toBe(true);
-    expect(loadManifest(dest).files['custom.js']).toBeUndefined();
+    assert.equal(fileExists(dest, 'custom.js'), true);
+    assert.equal(loadManifest(dest).files['custom.js'], undefined);
 
     // Round 2: a dest-scan manifest would now list custom.js as "upstream-removed"
     const result = smartSync(src, dest);
-    expect(result.deleted).not.toContain('custom.js');
-    expect(fileExists(dest, 'custom.js')).toBe(true);
-    expect(readFile(dest, 'custom.js')).toBe('user data');
-    expect(loadManifest(dest).files['custom.js']).toBeUndefined();
+    assert.ok(!result.deleted.includes('custom.js'));
+    assert.equal(fileExists(dest, 'custom.js'), true);
+    assert.equal(readFile(dest, 'custom.js'), 'user data');
+    assert.equal(loadManifest(dest).files['custom.js'], undefined);
   });
 
   test('kept local modification is not rolled back by a later sync; manifest records source hash', () => {
@@ -359,16 +360,16 @@ describe('smartSync manifest authority (#715)', () => {
 
     // Sync 2: local kept, manifest must record the SOURCE hash, not the local hash
     const result2 = smartSync(src, dest);
-    expect(result2.kept).toContain('a.js');
-    expect(result2.nextManifest.files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+    assert.ok(result2.kept.includes('a.js'));
+    assert.equal(result2.nextManifest.files['a.js'], hashFile(path.join(src, 'a.js')));
     saveMergeBaseline(dest, src, result2.nextManifest);
 
     // Sync 3: with a dest-scan manifest the local mod would look unmodified and
     // the (unchanged) upstream would look new — silently rolling the user back
     const result3 = smartSync(src, dest);
-    expect(result3.kept).toContain('a.js');
-    expect(result3.overwritten).not.toContain('a.js');
-    expect(readFile(dest, 'a.js')).toBe('user modified');
+    assert.ok(result3.kept.includes('a.js'));
+    assert.ok(!result3.overwritten.includes('a.js'));
+    assert.equal(readFile(dest, 'a.js'), 'user modified');
   });
 
   test('clean-merged local modification survives the next sync; manifest records source hash', () => {
@@ -385,17 +386,17 @@ describe('smartSync manifest authority (#715)', () => {
     writeFile(src, 'a.js', 'line1\nline2\nline3\nline4\nupstream-modified\n');
 
     const result = smartSync(src, dest);
-    expect(result.merged).toContain('a.js');
+    assert.ok(result.merged.includes('a.js'));
     // Manifest records the package hash, so the merged delta stays "local"
-    expect(result.nextManifest.files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+    assert.equal(result.nextManifest.files['a.js'], hashFile(path.join(src, 'a.js')));
     saveMergeBaseline(dest, src, result.nextManifest);
 
     // Next sync with unchanged upstream must keep the merged content
     const result2 = smartSync(src, dest);
-    expect(result2.kept).toContain('a.js');
-    expect(result2.overwritten).not.toContain('a.js');
-    expect(readFile(dest, 'a.js')).toContain('user-modified');
-    expect(readFile(dest, 'a.js')).toContain('upstream-modified');
+    assert.ok(result2.kept.includes('a.js'));
+    assert.ok(!result2.overwritten.includes('a.js'));
+    assert.ok(readFile(dest, 'a.js').includes('user-modified'));
+    assert.ok(readFile(dest, 'a.js').includes('upstream-modified'));
   });
 
   test('upstream-deleted + locally-modified file is preserved and backed up; unmodified one still deleted', () => {
@@ -418,19 +419,19 @@ describe('smartSync manifest authority (#715)', () => {
     const result = smartSync(src, dest, { backupDir });
 
     // Locally-modified file: preserved in place + backed up, not deleted
-    expect(result.preserved).toContain('modified-then-removed.js');
-    expect(result.deleted).not.toContain('modified-then-removed.js');
-    expect(readFile(dest, 'modified-then-removed.js')).toBe('user changes');
-    expect(readFile(backupDir, 'modified-then-removed.js')).toBe('user changes');
+    assert.ok(result.preserved.includes('modified-then-removed.js'));
+    assert.ok(!result.deleted.includes('modified-then-removed.js'));
+    assert.equal(readFile(dest, 'modified-then-removed.js'), 'user changes');
+    assert.equal(readFile(backupDir, 'modified-then-removed.js'), 'user changes');
 
     // Unmodified file: still deleted as before
-    expect(result.deleted).toContain('clean-then-removed.js');
-    expect(fileExists(dest, 'clean-then-removed.js')).toBe(false);
+    assert.ok(result.deleted.includes('clean-then-removed.js'));
+    assert.equal(fileExists(dest, 'clean-then-removed.js'), false);
 
     // Neither appears in the new manifest
     const manifest = result.nextManifest;
-    expect(manifest.files['modified-then-removed.js']).toBeUndefined();
-    expect(manifest.files['clean-then-removed.js']).toBeUndefined();
+    assert.equal(manifest.files['modified-then-removed.js'], undefined);
+    assert.equal(manifest.files['clean-then-removed.js'], undefined);
   });
 
   test('read-only manifest file does not block the atomic baseline commit', () => {
@@ -450,10 +451,10 @@ describe('smartSync manifest authority (#715)', () => {
     fs.chmodSync(path.join(dest, '.zylos', 'manifest.json'), 0o444);
 
     const result = smartSync(src, dest);
-    expect(result.errors).toEqual([]);
+    assert.deepEqual(result.errors, []);
     saveMergeBaseline(dest, src, result.nextManifest);
-    expect(loadManifest(dest).files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
-    expect(readFile(dest, '.zylos/originals/a.js')).toBe('updated');
+    assert.equal(loadManifest(dest).files['a.js'], hashFile(path.join(src, 'a.js')));
+    assert.equal(readFile(dest, '.zylos/originals/a.js'), 'updated');
   });
 
   test('staging failure leaves the previous baseline pair untouched', () => {
@@ -481,10 +482,10 @@ describe('smartSync manifest authority (#715)', () => {
     }
     fs.chmodSync(path.join(dest, '.zylos'), 0o755);
 
-    expect(result.errors).toEqual([]);
-    expect(commitError).toBeDefined();
-    expect(fs.readFileSync(path.join(dest, '.zylos', 'manifest.json'), 'utf8')).toBe(manifestBefore);
-    expect(readFile(dest, '.zylos/originals/a.js')).toBe('original');
+    assert.deepEqual(result.errors, []);
+    assert.notEqual(commitError, undefined);
+    assert.equal(fs.readFileSync(path.join(dest, '.zylos', 'manifest.json'), 'utf8'), manifestBefore);
+    assert.equal(readFile(dest, '.zylos/originals/a.js'), 'original');
   });
 
   test('crash after legacy originals staging: next sync recovers before merging', () => {
@@ -509,11 +510,11 @@ describe('smartSync manifest authority (#715)', () => {
     writeFile(src, 'a.js', 'line1\nline2\nline3\nline4\nupstream-modified\n');
 
     const result = smartSync(src, dest);
-    expect(result.merged).toContain('a.js');
-    expect(result.conflicts).toEqual([]);
-    expect(readFile(dest, 'a.js')).toContain('user-modified');
-    expect(readFile(dest, 'a.js')).toContain('upstream-modified');
-    expect(fs.existsSync(path.join(dest, '.zylos', 'originals.bak'))).toBe(false);
+    assert.ok(result.merged.includes('a.js'));
+    assert.deepEqual(result.conflicts, []);
+    assert.ok(readFile(dest, 'a.js').includes('user-modified'));
+    assert.ok(readFile(dest, 'a.js').includes('upstream-modified'));
+    assert.equal(fs.existsSync(path.join(dest, '.zylos', 'originals.bak')), false);
   });
 
   test('uncommitted staged transaction is rolled back, not absorbed', () => {
@@ -533,14 +534,14 @@ describe('smartSync manifest authority (#715)', () => {
     writeFile(src, 'a.js', 'original');
     const result = smartSync(src, dest);
 
-    expect(result.errors).toEqual([]);
+    assert.deepEqual(result.errors, []);
     // The bogus staged manifest never became live; recovery produced a clean candidate.
-    expect(loadManifest(dest).files['bogus.js']).toBeUndefined();
-    expect(result.nextManifest.files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+    assert.equal(loadManifest(dest).files['bogus.js'], undefined);
+    assert.equal(result.nextManifest.files['a.js'], hashFile(path.join(src, 'a.js')));
     // No stale transaction artifacts survive
-    expect(fs.existsSync(path.join(dest, '.zylos', 'manifest.json.tmp'))).toBe(false);
-    expect(fs.existsSync(path.join(dest, '.zylos', 'originals.new'))).toBe(false);
-    expect(readFile(dest, '.zylos/originals/a.js')).toBe('original');
+    assert.equal(fs.existsSync(path.join(dest, '.zylos', 'manifest.json.tmp')), false);
+    assert.equal(fs.existsSync(path.join(dest, '.zylos', 'originals.new')), false);
+    assert.equal(readFile(dest, '.zylos/originals/a.js'), 'original');
   });
 
   test('sync with errors keeps the previous manifest and originals', () => {
@@ -557,11 +558,11 @@ describe('smartSync manifest authority (#715)', () => {
     writeFile(src, 'a.js', 'updated');
 
     const result = smartSync(src, dest);
-    expect(result.errors.length).toBeGreaterThan(0);
+    assert.ok(result.errors.length > 0);
 
     // Baseline untouched: manifest identical, no originals recorded
-    expect(JSON.stringify(loadManifest(dest))).toBe(manifestBefore);
-    expect(fs.existsSync(path.join(dest, '.zylos', 'originals'))).toBe(false);
+    assert.equal(JSON.stringify(loadManifest(dest)), manifestBefore);
+    assert.equal(fs.existsSync(path.join(dest, '.zylos', 'originals')), false);
   });
 });
 
@@ -582,9 +583,9 @@ describe('smartSync mode: overwrite', () => {
     writeFile(src, 'a.js', 'upstream version');
 
     const result = smartSync(src, dest, { mode: 'overwrite' });
-    expect(result.overwritten).toContain('a.js');
-    expect(result.kept.length).toBe(0);
-    expect(readFile(dest, 'a.js')).toBe('upstream version');
+    assert.ok(result.overwritten.includes('a.js'));
+    assert.equal(result.kept.length, 0);
+    assert.equal(readFile(dest, 'a.js'), 'upstream version');
   });
 
   test('overwrite mode: still adds new files', () => {
@@ -594,8 +595,8 @@ describe('smartSync mode: overwrite', () => {
     writeFile(src, 'new.js', 'new content');
 
     const result = smartSync(src, dest, { mode: 'overwrite' });
-    expect(result.added).toContain('new.js');
-    expect(readFile(dest, 'new.js')).toBe('new content');
+    assert.ok(result.added.includes('new.js'));
+    assert.equal(readFile(dest, 'new.js'), 'new content');
   });
 
   test('overwrite mode: still deletes removed files', () => {
@@ -610,8 +611,8 @@ describe('smartSync mode: overwrite', () => {
     writeFile(src, 'a.js', 'keep');
 
     const result = smartSync(src, dest, { mode: 'overwrite' });
-    expect(result.deleted).toContain('removed.js');
-    expect(fileExists(dest, 'removed.js')).toBe(false);
+    assert.ok(result.deleted.includes('removed.js'));
+    assert.equal(fileExists(dest, 'removed.js'), false);
   });
 
   test('overwrite mode: deletes upstream-removed file even with local modifications', () => {
@@ -631,9 +632,9 @@ describe('smartSync mode: overwrite', () => {
 
     const result = smartSync(src, dest, { mode: 'overwrite' });
     // Overwrite-all contract: no merge-mode preservation
-    expect(result.deleted).toContain('removed.js');
-    expect(result.preserved.length).toBe(0);
-    expect(fileExists(dest, 'removed.js')).toBe(false);
+    assert.ok(result.deleted.includes('removed.js'));
+    assert.equal(result.preserved.length, 0);
+    assert.equal(fileExists(dest, 'removed.js'), false);
   });
 
   test('overwrite mode: no conflicts or merges', () => {
@@ -650,11 +651,11 @@ describe('smartSync mode: overwrite', () => {
     writeFile(src, 'a.js', 'upstream version');
 
     const result = smartSync(src, dest, { mode: 'overwrite' });
-    expect(result.overwritten).toContain('a.js');
-    expect(result.conflicts.length).toBe(0);
-    expect(result.merged.length).toBe(0);
-    expect(result.kept.length).toBe(0);
-    expect(readFile(dest, 'a.js')).toBe('upstream version');
+    assert.ok(result.overwritten.includes('a.js'));
+    assert.equal(result.conflicts.length, 0);
+    assert.equal(result.merged.length, 0);
+    assert.equal(result.kept.length, 0);
+    assert.equal(readFile(dest, 'a.js'), 'upstream version');
   });
 });
 
@@ -670,13 +671,13 @@ describe('formatMergeResult', () => {
       errors: ['something failed'],
     };
     const formatted = formatMergeResult(result);
-    expect(formatted).toContain('1 overwritten');
-    expect(formatted).toContain('2 kept');
-    expect(formatted).toContain('1 merged');
-    expect(formatted).toContain('1 conflicts');
-    expect(formatted).toContain('1 added');
-    expect(formatted).toContain('1 deleted');
-    expect(formatted).toContain('1 errors');
+    assert.ok(formatted.includes('1 overwritten'));
+    assert.ok(formatted.includes('2 kept'));
+    assert.ok(formatted.includes('1 merged'));
+    assert.ok(formatted.includes('1 conflicts'));
+    assert.ok(formatted.includes('1 added'));
+    assert.ok(formatted.includes('1 deleted'));
+    assert.ok(formatted.includes('1 errors'));
   });
 
   test('returns "no changes" for empty result', () => {
@@ -689,6 +690,6 @@ describe('formatMergeResult', () => {
       deleted: [],
       errors: [],
     };
-    expect(formatMergeResult(result)).toBe('no changes');
+    assert.equal(formatMergeResult(result), 'no changes');
   });
 });

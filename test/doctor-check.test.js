@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { test, afterEach } from '@jest/globals';
+import { test, afterEach } from 'node:test';
 
 const child = fileURLToPath(new URL('./helpers/doctor-check-child.js', import.meta.url));
 const fakeCommand = fileURLToPath(new URL('./helpers/doctor-check-command.js', import.meta.url));

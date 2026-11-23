@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, test, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -32,7 +33,7 @@ afterEach(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-describe('smartSync baseline commit boundary (#715)', () => {
+describe('smartSync baseline commit boundary', () => {
   test('successful sync returns the source-authoritative candidate without advancing metadata', () => {
     const dest = mkTmp();
     const sourceV1 = mkTmp();
@@ -46,11 +47,11 @@ describe('smartSync baseline commit boundary (#715)', () => {
     const before = fs.readFileSync(path.join(dest, '.zylos', 'manifest.json'), 'utf8');
     const result = smartSync(sourceV2, dest);
 
-    expect(result.errors).toEqual([]);
-    expect(result.nextManifest.files['a.js']).toBe(hashFile(path.join(sourceV2, 'a.js')));
-    expect(fs.readFileSync(path.join(dest, '.zylos', 'manifest.json'), 'utf8')).toBe(before);
-    expect(fs.readFileSync(path.join(dest, '.zylos', 'originals', 'a.js'), 'utf8')).toBe('v1');
-    expect(fs.readFileSync(path.join(dest, 'a.js'), 'utf8')).toBe('v2');
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.nextManifest.files['a.js'], hashFile(path.join(sourceV2, 'a.js')));
+    assert.equal(fs.readFileSync(path.join(dest, '.zylos', 'manifest.json'), 'utf8'), before);
+    assert.equal(fs.readFileSync(path.join(dest, '.zylos', 'originals', 'a.js'), 'utf8'), 'v1');
+    assert.equal(fs.readFileSync(path.join(dest, 'a.js'), 'utf8'), 'v2');
   });
 
   test('outer commit advances manifest and originals together', () => {
@@ -61,8 +62,8 @@ describe('smartSync baseline commit boundary (#715)', () => {
     const result = smartSync(source, dest);
     saveMergeBaseline(dest, source, result.nextManifest);
 
-    expect(loadManifest(dest).files['a.js']).toBe(hashFile(path.join(source, 'a.js')));
-    expect(fs.readFileSync(path.join(dest, '.zylos', 'originals', 'a.js'), 'utf8')).toBe('v2');
+    assert.equal(loadManifest(dest).files['a.js'], hashFile(path.join(source, 'a.js')));
+    assert.equal(fs.readFileSync(path.join(dest, '.zylos', 'originals', 'a.js'), 'utf8'), 'v2');
   });
 
   test('sync error produces no candidate and cannot advance the old baseline', () => {
@@ -79,9 +80,9 @@ describe('smartSync baseline commit boundary (#715)', () => {
     const result = smartSync(sourceV2, dest);
     fs.chmodSync(path.join(dest, 'a.js'), 0o644);
 
-    expect(result.errors.length).toBeGreaterThan(0);
-    expect(result.nextManifest).toBeNull();
-    expect(fs.readFileSync(path.join(dest, '.zylos', 'manifest.json'), 'utf8')).toBe(before);
+    assert.ok(result.errors.length > 0);
+    assert.equal(result.nextManifest, null);
+    assert.equal(fs.readFileSync(path.join(dest, '.zylos', 'manifest.json'), 'utf8'), before);
   });
 
   test('candidate membership comes only from source, not installed output', () => {
@@ -92,7 +93,7 @@ describe('smartSync baseline commit boundary (#715)', () => {
 
     const result = smartSync(source, dest);
 
-    expect(result.nextManifest.files['managed.js']).toBeDefined();
-    expect(result.nextManifest.files['custom.js']).toBeUndefined();
+    assert.notEqual(result.nextManifest.files['managed.js'], undefined);
+    assert.equal(result.nextManifest.files['custom.js'], undefined);
   });
 });

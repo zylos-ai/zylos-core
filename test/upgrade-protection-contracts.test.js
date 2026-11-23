@@ -2,7 +2,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { beforeEach, afterEach, test, expect } from '@jest/globals';
+import { beforeEach, afterEach, test } from 'node:test';
+import assert from 'node:assert/strict';
+// Run for durable upgrade journals, marker validation or controller identity
+// changes. Skip for unrelated changes. All copied modules and journal data live
+// in a per-test temporary tree, with no service or database startup.
 let root, m;
 beforeEach(() => {
   root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-contracts-')));
@@ -21,59 +25,59 @@ function terminal(id) {return transaction(id,'restored_complete',{cleanup:{compl
 test('100 verified terminal directories do not hide one active transaction',()=>{
  for(let i=0;i<100;i++)terminal('done-'+i);
  transaction('active','restoring');
- const result=m.discover(root);expect(result.diagnostics).toEqual([]);expect(result.candidates.map(c=>c.journal.transactionId)).toEqual(['active']);expect(result.blocked).toBe(true);
+ const result=m.discover(root);assert.deepEqual(result.diagnostics, []);assert.deepEqual(result.candidates.map(c=>c.journal.transactionId), ['active']);assert.equal(result.blocked, true);
 });
 test('restored data ready allows normal DB access while recovery remains discoverable',()=>{
  for(const phase of ['restored_data_ready','restored_verifying']) {
   const {dir,journal}=transaction('ready',phase);m.marker(root,dir,journal);
-  expect(m.discover(root).blocked).toBe(false);expect(()=>m.assertCoreDatabaseAvailable(root)).not.toThrow();
+  assert.equal(m.discover(root).blocked, false);assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(root));
  }
 });
 test('removed new-generation READY phases keep normal DB access isolated',()=>{
  for(const phase of ['new_data_ready','new_verifying']) {
   const {dir,journal}=transaction('obsolete-ready',phase);m.marker(root,dir,journal);
-  expect(m.discover(root).blocked).toBe(true);expect(()=>m.assertCoreDatabaseAvailable(root)).toThrow();
+  assert.equal(m.discover(root).blocked, true);assert.throws(()=>m.assertCoreDatabaseAvailable(root));
  }
 });
 test('unmarked preparation stays visible to explicit discovery without gating ordinary writes',()=>{
- transaction('interrupted','preparing',{installationIntent:false});expect(m.discover(root).blocked).toBe(true);expect(()=>m.assertCoreDatabaseAvailable(root)).not.toThrow();
+ transaction('interrupted','preparing',{installationIntent:false});assert.equal(m.discover(root).blocked, true);assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(root));
 });
 test('malformed journal and malformed marker remain isolated',()=>{
  const {dir}=transaction('broken','restoring');fs.writeFileSync(path.join(dir,'journal.json'),'{',{mode:0o600});
- expect(m.discover(root).diagnostics.length).toBeGreaterThan(0);expect(m.discover(root).blocked).toBe(true);
+ assert.ok(m.discover(root).diagnostics.length > 0);assert.equal(m.discover(root).blocked, true);
  fs.rmSync(dir,{recursive:true});m.durable(path.join(root,'.zylos/upgrade/active.json'),{formatVersion:1,transactionId:'missing',transactionDir:path.join(root,'.backup/self-upgrade/missing')});
- expect(m.discover(root).blocked).toBe(true);expect(m.discover(root).diagnostics.join(' ')).toMatch(/marker has no valid transaction/);
+ assert.equal(m.discover(root).blocked, true);assert.match(m.discover(root).diagnostics.join(' '), /marker has no valid transaction/);
 });
 test('verified terminal marker permits DB access and clears while retaining its journal',()=>{
  const {dir,journal}=terminal('done');m.marker(root,dir,journal);
- expect(m.discover(root).blocked).toBe(false);expect(m.discover(root).candidates).toHaveLength(1);
- expect(()=>m.assertCoreDatabaseAvailable(root)).not.toThrow();
- expect(m.finishTerminal(dir,journal).complete).toBe(true);
- expect(fs.existsSync(path.join(dir,'journal.json'))).toBe(true);
- expect(fs.existsSync(path.join(root,'.zylos/upgrade/active.json'))).toBe(false);
- expect(m.discover(root).candidates).toEqual([]);
+ assert.equal(m.discover(root).blocked, false);assert.equal(m.discover(root).candidates.length, 1);
+ assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(root));
+ assert.equal(m.finishTerminal(dir,journal).complete, true);
+ assert.equal(fs.existsSync(path.join(dir,'journal.json')), true);
+ assert.equal(fs.existsSync(path.join(root,'.zylos/upgrade/active.json')), false);
+ assert.deepEqual(m.discover(root).candidates, []);
 });
 test('terminal marker remains isolated until durable child exit confirmation',()=>{
  const {dir,journal}=terminal('child');m.update(dir,journal,{finalizerStarted:true,finalizerExitConfirmed:false});m.marker(root,dir,journal);
- expect(m.discover(root).blocked).toBe(true);expect(m.finishTerminal(dir,journal).complete).toBe(false);
- expect(fs.existsSync(path.join(root,'.zylos/upgrade/active.json'))).toBe(true);
+ assert.equal(m.discover(root).blocked, true);assert.equal(m.finishTerminal(dir,journal).complete, false);
+ assert.equal(fs.existsSync(path.join(root,'.zylos/upgrade/active.json')), true);
  // A caller's in-memory confirmation cannot substitute for durable evidence.
- journal.finalizerExitConfirmed=true;expect(m.finishTerminal(dir,journal).complete).toBe(false);
- m.update(dir,journal);expect(m.finishTerminal(dir,journal).complete).toBe(true);
- expect(fs.existsSync(path.join(dir,'journal.json'))).toBe(true);
+ journal.finalizerExitConfirmed=true;assert.equal(m.finishTerminal(dir,journal).complete, false);
+ m.update(dir,journal);assert.equal(m.finishTerminal(dir,journal).complete, true);
+ assert.equal(fs.existsSync(path.join(dir,'journal.json')), true);
 });
 test('terminal marker with a missing transaction stays isolated',()=>{
  const {dir,journal}=terminal('missing');m.marker(root,dir,journal);
  fs.renameSync(dir,path.join(root,'.backup','moved-terminal'));
- expect(m.discover(root).blocked).toBe(true);expect(m.discover(root).diagnostics.join(' ')).toMatch(/marker has no valid transaction/);
+ assert.equal(m.discover(root).blocked, true);assert.match(m.discover(root).diagnostics.join(' '), /marker has no valid transaction/);
 });
 (process.platform === 'linux' ? test : test.skip)('live controller rejects duplicate; PID reuse identity allows stale takeover',()=>{
  const {dir}=transaction('lock','offline');const first=m.acquire(dir);
- expect(()=>m.acquire(dir)).toThrow(/still alive/);first();
- const stale={...m.identity(),start:'not-the-current-start'};expect(m.alive(stale)).toBe(false);m.durable(path.join(dir,'controller.json'),stale);
- const release=m.acquire(dir);expect(m.alive(m.read(path.join(dir,'controller.json')))).toBe(true);release();expect(fs.existsSync(path.join(dir,'controller.json'))).toBe(false);
+ assert.throws(()=>m.acquire(dir), /still alive/);first();
+ const stale={...m.identity(),start:'not-the-current-start'};assert.equal(m.alive(stale), false);m.durable(path.join(dir,'controller.json'),stale);
+ const release=m.acquire(dir);assert.equal(m.alive(m.read(path.join(dir,'controller.json'))), true);release();assert.equal(fs.existsSync(path.join(dir,'controller.json')), false);
 });
 test('verified aborted terminal allows original services to open before cleanup completes',()=>{
  transaction('abort','aborted_before_install',{installationIntent:false,terminalEvidence:{verified:true,kind:'original_deployment_and_readonly_data'}});
- const result=m.discover(root);expect(result.candidates).toHaveLength(1);expect(result.blocked).toBe(false);expect(()=>m.assertCoreDatabaseAvailable(root)).not.toThrow();
+ const result=m.discover(root);assert.equal(result.candidates.length, 1);assert.equal(result.blocked, false);assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(root));
 });

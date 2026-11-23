@@ -30,7 +30,7 @@ test('test files use module or root test directories', () => {
 
 test('test exclusions use only standard test directories and patterns', () => {
   const allowed = new Set([
-    '/test', '/jest.config.js', '**/__tests__', '**/*.test.js',
+    '/test', '**/__tests__', '**/*.test.js',
     '/skills/zylos-memory/scripts/__tests__',
   ]);
   for (const file of ['.npmignore', '.gitattributes']) {
@@ -43,7 +43,7 @@ test('test exclusions use only standard test directories and patterns', () => {
         inTestSection = false;
       }
       if (!line || line.startsWith('#')) continue;
-      if (!inTestSection && !/(?:test|jest)/.test(line)) continue;
+      if (!inTestSection && !line.includes('test')) continue;
       const rule = line.split(/\s+/)[0].replace(/\/$/, '');
       if (!allowed.has(rule) && invalid.length < 20) invalid.push(line);
     }
@@ -52,26 +52,20 @@ test('test exclusions use only standard test directories and patterns', () => {
   }
 });
 
-test('each test belongs to exactly one runner or the slow category', () => {
-  const run = (args, slow) => execFileSync(process.execPath, args, {
+test('the runner collects every test and gates slow tests', () => {
+  const list = slow => new Set(execFileSync(process.execPath, ['scripts/run-node-tests.js', '--list'], {
     cwd: root, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024,
     env: { ...process.env, ZYLOS_SLOW_TESTS: slow ? '1' : '0' },
-  });
-  const nodeFiles = slow => new Set(run(['scripts/run-node-tests.js', '--list'], slow).trim().split('\n').filter(Boolean));
-  const jestFiles = slow => new Set(JSON.parse(run([
-    'node_modules/jest/bin/jest.js', '--listTests', '--json', '--runInBand',
-  ], slow)).map(file => path.relative(root, file).split(path.sep).join('/')));
-  const node = nodeFiles(false), jest = jestFiles(false);
-  const allNode = nodeFiles(true), allJest = jestFiles(true);
+  }).trim().split('\n').filter(Boolean));
+  const defaults = list(false);
+  const all = list(true);
   const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', '*.test.js'], {
     cwd: root, encoding: 'utf8', timeout: 10000,
   }).split('\0').filter(file => file && fs.existsSync(path.join(root, file)));
   for (const file of new Set(files)) {
     const slow = file.endsWith('.slow.test.js');
-    assert.equal(Number(node.has(file)) + Number(jest.has(file)) + Number(slow), 1,
-      `Expected one default owner (Node, Jest, slow): ${file}`);
-    assert.equal(Number(allNode.has(file)) + Number(allJest.has(file)), 1,
-      `Expected one opted-in runner: ${file}`);
+    assert.equal(defaults.has(file), !slow, `Incorrect default selection: ${file}`);
+    assert.ok(all.has(file), `Missing from the opted-in test list: ${file}`);
     if (slow) {
       const header = fs.readFileSync(path.join(root, file), 'utf8').split('\n', 1)[0];
       const sources = header.match(/^\/\/ covers:\s*(\S.*)$/)?.[1].trim().split(/\s+/);
