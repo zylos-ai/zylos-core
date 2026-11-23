@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { createTestEnvironment } from './test-environment.js';
+import { createTestEnvironment, TEST_FILE_HOME_ROOT } from './test-environment.js';
 
 const ROOT = process.cwd();
 const TEST_ROOTS = [
@@ -94,7 +94,8 @@ let failed = true;
 try {
   fs.mkdirSync(tmpdir, { mode: 0o700 });
   fs.chmodSync(tmpdir, 0o700);
-  const env = { ...process.env, TMPDIR: tmpdir, TMUX_TMPDIR: tmpdir };
+  // Each test file then takes its own HOME and ZYLOS_DIR under the root.
+  const env = { ...process.env, TMPDIR: tmpdir, TMUX_TMPDIR: tmpdir, [TEST_FILE_HOME_ROOT]: environment.root };
   delete env.TMUX;
   // Runtime identity belongs to each fixture, never the agent running tests.
   for (const key of ['CLAUDE_SESSION_ID','CODEX_SESSION_ID','ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP','ZYLOS_MODEL_CONFIG']) delete env[key];
