@@ -90,8 +90,8 @@ test('Fleet list persists, pages and links the same machines as cards across des
             await cards.first().waitFor();
             assert.equal(await cardMode.getAttribute('aria-pressed'), 'true');
             assert.deepEqual(await names(cards), firstPage);
-            assert.match(await cards.locator('[data-agent="Node 03"] .wb-f-problem').first().innerText(), /Group one\s+Start failed/);
-            const offlineCard = cards.locator('[data-agent="Node 05"]');
+            assert.match(await page.locator('.wb-f-card[data-agent="Node 03"] .wb-f-problem').first().innerText(), /Group one\s+Start failed/);
+            const offlineCard = page.locator('.wb-f-card[data-agent="Node 05"]');
             assert.equal(await offlineCard.getByRole('link').count(), 0);
             const refresh = offlineCard.getByRole('button', { name: 'Refresh status' });
             assert.equal(await refresh.count(), 1);
@@ -108,12 +108,12 @@ test('Fleet list persists, pages and links the same machines as cards across des
             await rows.first().waitFor();
             assert.equal(await listMode.getAttribute('aria-pressed'), 'true');
             assert.deepEqual(await names(rows), firstPage);
-            const group = rows.locator('[data-agent="Node 03"]');
+            const group = page.locator('.wb-f-list-row[data-agent="Node 03"]');
             const condition = group.locator(mobile ? '.wb-f-list-mobile' : '.wb-f-list-condition');
             assert.match(await condition.innerText(), mobile ? /2 problems/ : /Group one · Start failed \+1/);
             assert.match(await condition.getAttribute('title'), /Group two · Authentication failed/);
             assert.equal(await group.getByRole('link', { name: 'Node 03', exact: true }).count(), 1);
-            const down = rows.locator('[data-agent="Node 05"]');
+            const down = page.locator('.wb-f-list-row[data-agent="Node 05"]');
             assert.equal(await down.getByRole('link').count(), 0);
             assert.match(await down.innerText(), /Cannot connect · last reachable/);
             assert.equal(await down.locator('.wb-ico-chev').count(), 0);
