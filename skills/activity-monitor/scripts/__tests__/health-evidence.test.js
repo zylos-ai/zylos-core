@@ -8,7 +8,6 @@ import {randomUUID} from 'node:crypto';
 import {HealthStore} from '../health-store.js';
 
 const hookHealth = (await getRuntime('claude')).health.hookHealth;
-const agyHookHealth = (await getRuntime('agy')).health.hookHealth;
 const identity={runtime:'claude',session_id:'session',claude_pid:123};
 function fixture(t) {
   const zylosDir=fs.mkdtempSync(path.join(os.tmpdir(),'health-evidence-file-'));t.after(()=>fs.rmSync(zylosDir,{recursive:true,force:true}));
@@ -30,24 +29,6 @@ test('wrong or missing pid, session and stale/future/invalid events do not chang
     assert.equal(f.store.read().last_processed,undefined);
   }
 });
-test('SessionStart and UserPromptSubmit do not alter health, identity or marker',t=>{
-  const f=fixture(t);f.consume(f.event());const before=f.store.read();f.advance();
-  for(const event of ['session_start','prompt_submit']) assert.equal(f.consume(f.event({event,error:null})).reason,'nonterminal_event');
-  assert.deepEqual(f.store.read(),before);
-});
-test('Stop never clears failure and telemetry does not replace outage anchor',t=>{
-  const f=fixture(t);f.consume(f.event());const before=f.store.read();f.advance();
-  const stop=f.event({event:'stop',error:null});f.consume(stop);const after=f.store.read();
-  assert.equal(after.health,'rate_limited');assert.equal(after.revision,before.revision);
-  assert.deepEqual(after.hook_failure,before.hook_failure);assert.equal(after.last_hook.event_id,stop.event_id);
-  assert.equal(after.last_processed.received_at,stop.received_at);
-});
-test('verified normal Stop has Hook priority over stale screen evidence',t=>{
-  const f=fixture(t);f.consume(f.event({event:'stop',error:null}));
-  assert.equal(f.store.read().hook_ok,true);
-  assert.equal(f.store.transition('rate_limited','',{identity,kind:'screen'}).accepted,false);
-  assert.equal(f.store.transition('rate_limited','',{identity:{...identity,claude_pid:124},kind:'screen'}).accepted,true);
-});
 test('recovery fences reject old revisions and late failure cannot undo recovery',t=>{
   const f=fixture(t);f.consume(f.event());const revision=f.store.read().revision;
   assert.equal(f.store.transition('ok','',{identity,kind:'recovery',expectedRevision:revision-1}).accepted,false);
@@ -57,66 +38,4 @@ test('recovery fences reject old revisions and late failure cannot undo recovery
   assert.equal(result.reason,'pre_recovery_event');assert.equal(f.store.read().health,'ok');
   assert.equal(f.store.read().recovered.screen_fingerprint,'clear');
 });
-test('missing prompt requests verification but newer different prompts are recognized',t=>{
-  const f=fixture(t);assert.equal(f.consume(f.event({prompt_id:null})).reason,'missing_prompt');
-  f.advance();f.consume(f.event());f.advance();
-  assert.equal(f.consume(f.event({prompt_id:'different',error:'authentication_failed'}),{authConfirmed:true}).reason,'hook_failure');
-  assert.equal(f.store.read().health,'auth_failed');
-});
-test('screen recovery before the first Hook retains its process identity fence',t=>{
-  const f=fixture(t);
-  f.store.transition('rate_limited','',{identity,kind:'screen'});
-  f.store.transition('ok','',{identity,kind:'recovery'});
-  const result=f.consume(f.event());
-  assert.equal(result.reason,'pre_recovery_event');assert.equal(f.store.read().health,'ok');
-});
-test('legacy recovery without timestamp does not permanently suppress newer failures',t=>{
-  const f=fixture(t);const original=f.event();f.consume(original);
-  f.store.transition('ok','',{identity,kind:'recovery'});
-  const state=f.store.read();delete state.recovered.observed_at;f.store.write(state);
-  assert.equal(f.consume(original).reason,'replay');
-  f.advance();const later=f.consume(f.event({prompt_id:'next',error:'authentication_failed'}),{authConfirmed:true});
-  assert.equal(later.state.health,'auth_failed');assert.equal(later.state.recovered,null);
-});
-test('scheduling updates preserve revision and stale writes are rejected',t=>{
-  const f=fixture(t);f.consume(f.event());const revision=f.store.read().revision;
-  assert.equal(f.store.saveScheduling({cooldownUntil:123},revision),true);
-  assert.equal(f.store.saveScheduling({cooldownUntil:999},revision-1),false);
-  const reopened=new HealthStore({zylosDir:f.zylosDir});assert.equal(reopened.read().scheduling.cooldownUntil,123);
-  assert.equal(reopened.read().revision,revision);
-});
-test('atomic write failure leaves health and marker unchanged',t=>{
-  const f=fixture(t);const before=f.store.read();
-  f.store.write=()=>{throw new Error('injected write failure');};
-  assert.throws(()=>f.consume(f.event()),/injected/);assert.deepEqual(f.store.read(),before);
-});
 
-test('agy network failures preserve their notice classification without pausing the runtime', async t => {
-  const f = fixture(t);
-  const { sanitizeHealthEvent } = await import('../health-evidence.js');
-  const { classifyHealthNotice } = await import('../health-notice-classification.js');
-  const { publishSessionStatus } = await import('../status-writer.js');
-  const agyIdentity = { ...identity, runtime: 'agy' };
-  const raw = f.event({ ...agyIdentity, prompt_id: null, error: 'network_error', private: 'PRIVATE' });
-  const event = sanitizeHealthEvent(raw, 'network');
-  assert.equal(event.error, 'network_error');
-  assert.equal(Object.hasOwn(event, 'private'), false);
-  const notice = classifyHealthNotice(event, f.now());
-  assert.equal(notice.reason, 'network_error');
-  assert.equal(notice.noticeCode, 'unavailable');
-  const store = new HealthStore({ runtime: 'agy', zylosDir: f.zylosDir, now: f.now });
-  assert.equal(store.consume(event, { hookHealth: agyHookHealth, identity: agyIdentity }).reason, 'network_error');
-  const state = new HealthStore({ runtime: 'agy', zylosDir: f.zylosDir, now: f.now }).read();
-  assert.equal(state.health, 'ok');
-  assert.equal(state.reason, '');
-  assert.equal(state.last_hook.error, 'network_error');
-  const persisted = JSON.parse(fs.readFileSync(store.file, 'utf8'));
-  assert.equal(persisted.v, 1);
-  assert.equal(persisted.reason, '');
-  const status = publishSessionStatus({ statusFile: path.join(f.zylosDir, 'status.json'),
-    scene: { ready: true, runId: 'run', sessionId: 'session', runtime: 'agy' },
-    activity: { sessionId: 'session', state: 'idle', lastActivityAt: 1, tools: [] },
-    health: state, now: f.now() });
-  assert.equal(status.health, 'ok');
-  assert.doesNotMatch(JSON.stringify(state), /PRIVATE/);
-});

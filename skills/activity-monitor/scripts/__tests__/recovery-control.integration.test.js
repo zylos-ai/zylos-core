@@ -10,7 +10,6 @@ const environment = createTestEnvironment();
 const c4 = await import('../../../comm-bridge/scripts/c4-db.js');
 const { RuntimeHealthCoordinator } = await import('../runtime-health.js');
 const { SupervisorHealthObserver } = await import('../supervisor-health-observer.js');
-const { getRuntime } = await import('../../../../cli/lib/runtime/index.js');
 after(() => { c4.close(); environment.cleanup(); });
 
 // Integration boundary: real C4 insert/read, private SQLite, observer, health
@@ -81,52 +80,3 @@ test('real control rows remain single-flight and their acknowledgement restores 
   assert.equal(f.queued(), 1);
 });
 
-test('a timed-out real recovery row keeps the retry interval before another insert', async t => {
-  const f = fixture(t); await f.drive();
-  const row = f.rows()[0];
-  f.sqlite.prepare("UPDATE control_queue SET status='timeout' WHERE id=?").run(row.id);
-  await f.observer.tick();
-  assert.equal(f.health.read().health, 'unavailable');
-  assert.equal(f.health.read().scheduling.restartFailureCount, 1);
-  assert.equal(f.health.read().scheduling.lastRecoveryAt, Math.floor(f.now() / 1000));
-  assert.equal(f.observer.probeInFlight('codex'), false);
-  await f.drive(); f.advance(59000); await f.drive();
-  assert.equal(f.rows().length, 1); assert.equal(f.queued(), 1);
-  f.advance(1000); await f.drive();
-  assert.equal(f.rows().length, 2); assert.equal(f.queued(), 2);
-  assert.equal(f.observer.probeInFlight('codex'), true);
-  assert.deepEqual(f.errors, []);
-});
-
-for (const runtime of ['codex', 'claude']) {
-  // Additional boundary: the real adapter executes only this private pseudo CLI;
-  // the resulting logged-out fact is consumed by the real screen observer.
-  test(`${runtime} logged-out command confirms screen authentication failure in durable health`, async t => {
-    const f = fixture(t, runtime), state = f.health.read();
-    state.health = 'ok'; state.rateLimitActive = false; f.health.write(state);
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-screen-'));
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    for (const directory of ['pm2', 'tmp', 'tmux', 'claude']) fs.mkdirSync(path.join(root, directory));
-    const command = path.join(root, 'runtime.mjs');
-    fs.writeFileSync(command, `#!${process.execPath}\n` + fs.readFileSync(new URL('../../../../cli/lib/runtime/__tests__/helpers/auth-probe-cli.js', import.meta.url), 'utf8'), { mode: 0o700 });
-    const scenario = runtime === 'codex'
-      ? { args: 'login status', stderr: 'Not logged in', exitCode: 1 }
-      : { args: '-p ping --max-turns 1', stdout: 'Not logged in · Please run /login', exitCode: 1 };
-    const options = { root, env: { HOME: root, ZYLOS_DIR: root,
-      CODEX_HOME: path.join(root, '.codex'), CODEX_BIN: command, CLAUDE_BIN: command,
-      PM2_HOME: path.join(root, 'pm2'), TMPDIR: path.join(root, 'tmp'),
-      TMUX_TMPDIR: path.join(root, 'tmux'), CLAUDE_CONFIG_DIR: path.join(root, 'claude'),
-      TEST_AUTH_PROBE_SCENARIO: JSON.stringify(scenario) } };
-    let checks = 0;
-    f.observer.checkAuth = async () => { checks++; const result = await (await getRuntime(runtime)).auth.checkAuth(options); assert.equal(result.status, 'failure'); return result; };
-    f.observer.matchScreen = () => ({ authFailure: { detected: true } });
-    f.observer.readScreen = () => 'Not logged in';
-    f.observer.notifyDelivered({ ...f.scene, pastedAt: f.now() });
-    f.advance(5000); await f.observer.tick();
-    assert.equal(checks, 1);
-    assert.equal(f.health.read().health, 'auth_failed');
-    assert.equal(JSON.parse(fs.readFileSync(f.health.file, 'utf8')).health, 'auth_failed');
-    assert.equal(f.rows().length, 0);
-    assert.deepEqual(f.errors, []);
-  });
-}

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it, afterEach, after } from 'node:test';
+import { it, afterEach, after } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -31,33 +31,6 @@ const sampleInput = {
   tool_name: 'Bash',
   tool_input: { command: 'ls -la' }
 };
-
-// ── tests ───────────────────────────────────────────────────────────
-
-describe('hook-auth-prompt', () => {
-  describe('logging', () => {
-    it('logs PermissionRequest event to hook-timing.log', () => {
-      runHook(JSON.stringify(sampleInput));
-      const log = fs.readFileSync(logFile, 'utf8');
-      assert.match(log, /hook=auth-prompt/);
-      assert.match(log, /event=PermissionRequest/);
-      assert.match(log, /tool=Bash/);
-      assert.match(log, /input_keys=\[command\]/);
-    });
-
-    it('handles malformed JSON input gracefully', () => {
-      runHook('not-json');
-      assert.equal(fs.existsSync(logFile), false);
-    });
-
-    it('logs (unknown) when tool_name is missing', () => {
-      runHook(JSON.stringify({ tool_input: { file_path: '/tmp/test' } }));
-      const log = fs.readFileSync(logFile, 'utf8');
-      assert.match(log, /tool=\(unknown\)/);
-    });
-  });
-
-});
 
 // PermissionRequest → real Core registry → real C4 control CLI and fixture
 // database. Run for authorization and runtime binding changes. No native

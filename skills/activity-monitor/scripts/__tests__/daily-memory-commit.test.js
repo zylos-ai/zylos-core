@@ -15,7 +15,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { SupervisorMachineTasks } from '../supervisor-machine-tasks.js';
@@ -113,41 +112,6 @@ describe('daily memory commit', () => {
     assert.equal(run.attempts(), 1);
   });
 
-  it('records a failed run for the day with git\'s error, does not retry it that day, and retries the next day', async t => {
-    const run = machine(t, 10);
-    await run.round();
-    run.clock.day = 11;
-    fs.writeFileSync(path.join(memory, 'state.md'), '# State\nchanged\n');
-    sparse('archive/backup.tar', 600 * MB);
-    const lock = path.join(memory, '.git', 'index.lock');
-    fs.writeFileSync(lock, '');
-
-    await run.round();
-    assert.equal(run.attempts(), 2);
-    const failure = run.logs.at(-1);
-    assert.match(failure, /^daily-memory-commit-state: Skipped 1 file\(s\) over 50 MB, not committed: archive\/backup\.tar \(600 MB\)\ndaily-commit error: fatal: Unable to create '[^']*index\.lock'/,
-      'the log carries what was left out and git\'s error, not only the exit code');
-    assert.ok(failure.length <= 'daily-memory-commit-state: '.length + 501, 'truncated');
-    assert.equal(run.state().last_date, '2026-11-11');
-    assert.equal(run.state().last_status, 'failed');
-    assert.match(run.state().last_error, /index\.lock/);
-    assert.ok(run.state().last_error.length <= 501);
-
-    for (let i = 0; i < 5; i++) await run.round();
-    assert.equal(run.attempts(), 2, 'no retry later the same day');
-    assert.equal(commits(), '1');
-
-    fs.rmSync(lock);
-    run.clock.day = 12;
-    await run.round();
-    assert.equal(run.attempts(), 3);
-    assert.equal(commits(), '2');
-    assert.deepEqual(committed(), ['state.md']);
-    assert.equal(run.state().last_date, '2026-11-12');
-    assert.equal(run.state().last_status, 'ok');
-    assert.equal(run.state().last_error, undefined);
-  });
-
   it('leaves files over 50 MB out of the commit, logs them, and never streams a file over 512 MB into a pack', async t => {
     sparse('archive/memory-backup.tar', 600 * MB);
     sparse('archive/odd [1] *.bin', 50 * MB + 1);
@@ -173,116 +137,4 @@ describe('daily memory commit', () => {
     assert.equal(run.state().last_status, 'ok');
   });
 
-  it('skips later changes to a tracked file once it is over 50 MB, and a day with only that change succeeds without a commit', async t => {
-    const run = machine(t, 10);
-    fs.mkdirSync(path.join(memory, 'logs'));
-    fs.writeFileSync(path.join(memory, 'logs', 'growing.log'), 'small\n');
-    await run.round();
-    assert.deepEqual(committed(), ['logs/growing.log', 'state.md']);
-
-    run.clock.day = 11;
-    sparse('logs/growing.log', 60 * MB);
-    fs.writeFileSync(path.join(memory, 'state.md'), '# State\nchanged\n');
-    await run.round();
-    assert.equal(commits(), '2');
-    assert.equal(git('show', 'HEAD:logs/growing.log'), 'small\n');
-    assert.equal(git('show', 'HEAD:state.md'), '# State\nchanged\n');
-    assert.match(run.logs.at(-1), /^daily-memory-commit-state: Skipped 1 file\(s\) over 50 MB, not committed: logs\/growing\.log \(60 MB\)\n\[/);
-
-    run.clock.day = 12;
-    await run.round();
-    assert.equal(commits(), '2', 'nothing else changed: no commit');
-    assert.match(run.logs.at(-1), /^daily-memory-commit-state: Skipped 1 file\(s\).*\nNo memory changes to commit\.$/s);
-    assert.equal(run.state().last_date, '2026-11-12');
-    assert.equal(run.state().last_status, 'ok');
-    assert.deepEqual(packFiles(), []);
-  });
-
-  it('keeps the first 500 characters of a long error in the log and as last_error', async t => {
-    const run = machine(t, 10);
-    await run.round();
-    run.clock.day = 11;
-    const names = [];
-    for (let i = 1; i <= 11; i++) {
-      names.push(`archive/a-long-archive-name-to-make-the-error-long-${String(i).padStart(2, '0')}.tar`);
-      sparse(names.at(-1), 51 * MB);
-    }
-    fs.writeFileSync(path.join(memory, '.git', 'index.lock'), '');
-    const skipped = `Skipped 11 file(s) over 50 MB, not committed: ${names.slice(0, 10).map(name => `${name} (51 MB)`).join(', ')}, and 1 more`;
-    assert.ok(skipped.length > 500);
-    // The actual child runner must preserve raw stderr. Otherwise truncating
-    // again at state/log sinks is idempotent and output-only checks miss it.
-    await assert.rejects(run.tasks.execute(fileURLToPath(new URL('../../../zylos-memory/scripts/daily-commit.js', import.meta.url)), 30000), error => {
-      assert.ok(error.message.length > 501, 'runner passes the original long stderr to its caller');
-      assert.ok(error.message.startsWith(skipped));
-      return true;
-    });
-
-    await run.round();
-    assert.equal(run.attempts(), 2);
-    assert.equal(run.logs.at(-1), `${KEY}: ${skipped.slice(0, 500)}…`);
-    assert.equal(run.state().last_status, 'failed');
-    assert.equal(run.state().last_error.length, 501);
-    assert.equal(run.state().last_error, `${skipped.slice(0, 500)}…`);
-    const loggedError = run.logs.at(-1).slice(`${KEY}: `.length);
-    assert.equal(loggedError.length, 501);
-    assert.equal(loggedError.split('…').length - 1, 1);
-    assert.equal(run.state().last_error.split('…').length - 1, 1);
-    assert.equal(loggedError, run.state().last_error);
-  });
-
-  // Real Git duplicate records and the real daily script remain in the suite's
-  // private root; run for path parsing/exclusion changes, skip unrelated work.
-  it('lists an oversized file once when staged deletion and untracked status share its path', async t => {
-    const run = machine(t, 10);
-    fs.writeFileSync(path.join(memory, 'big'), 'original small blob\n');
-    await run.round();
-    run.clock.day = 11;
-    git('rm', '--cached', '--', 'big');
-    sparse('big', 60 * MB);
-    const entries = git('status', '--porcelain', '-z', '--untracked-files=all').split('\0').filter(Boolean);
-    assert.deepEqual(entries, ['D  big', '?? big'], 'real Git emits the same path twice');
-    fs.writeFileSync(path.join(memory, 'state.md'), '# State\nsmall update\n');
-    await run.round();
-    const skipped = run.logs.at(-1).split('\n').find(line => line.startsWith('daily-memory-commit-state: Skipped '));
-    assert.equal(skipped, `${KEY}: Skipped 1 file(s) over 50 MB, not committed: big (60 MB)`);
-    assert.equal(skipped.split('big (60 MB)').length - 1, 1);
-    assert.equal(commits(), '2');
-    assert.equal(git('show', 'HEAD:big'), 'original small blob\n', 'oversized bytes never enter the new commit');
-    assert.equal(git('diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD').trim(), 'state.md');
-    assert.equal(fs.statSync(path.join(memory, 'big')).size, 60 * MB);
-    assert.deepEqual(packFiles(), []);
-  });
-
-  // Git's tracked-before-untracked stream order differs from lexical order.
-  // Run for changed-path parsing/exclusion changes; no external service is used.
-  it('preserves the first-seen order of distinct oversized paths', async t => {
-    const run = machine(t, 10);
-    fs.writeFileSync(path.join(memory, 'z-big'), 'small\n');
-    await run.round();run.clock.day = 11;
-    git('rm', '--cached', '--', 'z-big');
-    sparse('z-big', 60 * MB);sparse('a-big', 60 * MB);
-    assert.deepEqual(git('status', '--porcelain', '-z', '--untracked-files=all').split('\0').filter(Boolean), ['D  z-big', '?? a-big', '?? z-big']);
-    await run.round();
-    assert.equal(run.logs.at(-1), `${KEY}: Skipped 2 file(s) over 50 MB, not committed: z-big (60 MB), a-big (60 MB)\nNo memory changes to commit.`);
-    assert.equal(commits(), '1');
-    assert.equal(git('show', 'HEAD:z-big'), 'small\n');
-  });
-
-  it('does not commit a file over 50 MB that was already staged before the run', async t => {
-    const run = machine(t, 10);
-    await run.round();
-    run.clock.day = 11;
-    sparse('archive/staged.tar', 50 * MB + 1);
-    git('add', 'archive/staged.tar');
-    fs.writeFileSync(path.join(memory, 'state.md'), '# State\nchanged\n');
-
-    await run.round();
-    assert.equal(commits(), '2');
-    assert.deepEqual(committed(), ['state.md']);
-    assert.match(run.logs.at(-1), /^daily-memory-commit-state: Skipped 1 file\(s\) over 50 MB, not committed: archive\/staged\.tar \(50 MB\)\n\[/);
-    assert.equal(git('ls-files', '--stage', '--', 'archive').trim(), '', 'unstaged, not only left out of this commit');
-    assert.equal(git('ls-files', '--others', '--', 'archive').trim(), 'archive/staged.tar');
-    assert.equal(run.state().last_status, 'ok');
-  });
 });

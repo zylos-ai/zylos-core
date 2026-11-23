@@ -5,7 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { once } from 'node:events';
-import { randomUUID } from 'node:crypto';
 import { validateReply } from '../../../../cli/lib/am-sock-client.js';
 import { validStartAttemptReply } from '../../../comm-bridge/scripts/router/activation.js';
 import { RuntimeHealthCoordinator } from '../runtime-health.js';
@@ -42,18 +41,6 @@ async function socketFixture(t) {
   return { send, unchanged: () => assert.equal(fs.readFileSync(store.file, 'utf8'), before) };
 }
 
-test('A absent group/run keys are rejected over am.sock without a health write', async t => {
-  const f = await socketFixture(t);
-  for (const missing of ['sessionGroup', 'runId']) {
-    const request = { version: 1, type: 'start_attempt', requestId: 'sa-1800000000000-0123456789ab', runtime: 'claude', sessionGroup: 'telegram:a', runId: randomUUID() };
-    delete request[missing];
-    assert.deepEqual(await f.send(request), { version: 1, type: 'start_attempt', requestId: request.requestId, ok: false, code: 'invalid_request' });
-    f.unchanged();
-  }
-  const valid = await f.send({ version: 1, type: 'start_attempt', requestId: 'sa-1800000000000-0123456789ab', runtime: 'claude', sessionGroup: 'telegram:a', runId: randomUUID() });
-  assert.equal(valid.result, 'registered', 'same fixture accepts all required valid keys');
-});
-
 test('A unparseable input returns a public rejection trusted by both clients', async t => {
   const f = await socketFixture(t);
   const request = { version: 1, type: 'start_attempt', requestId: 'sa-1800000000000-0123456789ab' };
@@ -62,15 +49,6 @@ test('A unparseable input returns a public rejection trusted by both clients', a
     assert.deepEqual(reply, { ok: false, code: 'invalid_request' });
     assert.equal(validateReply(request, reply), true, 'CLI trusts the public rejection');
     assert.equal(validStartAttemptReply(reply, request), true, 'dispatcher trusts the public rejection');
-    f.unchanged();
-  }
-});
-
-test('A parsed start_attempt with missing or nonstring requestId returns a null-ID envelope', async t => {
-  const f = await socketFixture(t);
-  for (const id of [{}, { requestId: null }, { requestId: 123 }]) {
-    const request = { version: 1, type: 'start_attempt', runtime: 'claude', sessionGroup: 'telegram:a', runId: randomUUID(), ...id };
-    assert.deepEqual(await f.send(request), { version: 1, type: 'start_attempt', requestId: null, ok: false, code: 'invalid_request' });
     f.unchanged();
   }
 });

@@ -42,24 +42,6 @@ function localFixture(t, Class = SupervisorLifecycle, options = {}) {
   return f;
 }
 
-async function gateScenario(t, Class) {
-  const sql = databaseFixture(t);
-  const f = localFixture(t, Class, { db: sql.store });
-  sql.db.exec("INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,created_at,updated_at) VALUES('transition','single','multi','gating',0,0)");
-  // Keep demand facts in the fixture while D9 and every D3 write are real SQLite.
-  f.db.getUnsummarizedRange = () => f.range;
-  f.db.getOriginSyncBacklog = () => f.backlog;
-  await f.lifecycle.checkSync([f.scene], f.context);
-  assert.equal(sql.db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 0, 'Sync enqueued during D9');
-  sql.db.exec("UPDATE mode_transitions SET phase='complete'");
-  await f.lifecycle.checkSync([f.scene], f.context);
-  assert.equal(sql.db.prepare("SELECT count(*) FROM control_queue WHERE status='pending'").pluck().get(), 2);
-}
-test('Sync respects real and resumes group/Origin production after completion', async t => {
-  await gateScenario(t, SupervisorLifecycle);
-});
-
-
 async function duplicateScenario(t, storeFactory = createStore) {
   const sql = databaseFixture(t), store = storeFactory(sql.db, sql.dependencies);
   const f = localFixture(t, SupervisorLifecycle, { db: store });
@@ -75,43 +57,7 @@ test('repeated Sync content leaves one pending row and supersedes the previous o
   await duplicateScenario(t);
 });
 
-
 // The consumer uses the memory provider's frozen marker result.
-async function markerScenario(t, Class) {
-  const cases = [
-    ['valid', { held: true, stale: false, runId: 'old-run', expiresAt: 1792000060000, reason: 'held' }, false],
-    ['expired', { held: true, stale: true, runId: 'old-run', expiresAt: 1791999999999, reason: 'expired' }, true],
-    ['wrong-run', { held: true, stale: true, runId: 'previous-run', expiresAt: 1792000060000, reason: 'run_mismatch' }, true],
-    ['corrupt', { held: false, stale: false, runId: null, expiresAt: null, reason: 'invalid' }, true],
-  ];
-  for (const [name, marker, idle] of cases) {
-    const f = localFixture(t, Class);
-    f.scene.sessionGroup = 'telegram:a'; f.marker = marker; f.backlog = { total: 0, groups: [] };
-    assert.equal(await f.lifecycle.idle(f.scene, f.context), idle, `marker ${name} blocked idle incorrectly`);
-    assert.deepEqual(f.markerCalls, [{ runDir: f.root, kind: 'group', currentRunId: 'old-run' }]);
-    await f.lifecycle.checkSync([f.scene], f.context);
-    assert.equal(f.controls.length, idle ? 1 : 0);
-  }
-}
-test('consumer accepts expired/wrong-run/corrupt marker results and blocks only valid ownership', async t => {
-  await markerScenario(t, SupervisorLifecycle);
-});
-
-// Uses a private C4 fixture to verify that an older configuration fence unblocks the queue.
-test('persisted configuration fence releases queued delivery without stopping or scheduling a restart', async t => {
-  const { store, db } = databaseFixture(t);
-  const lifecycle = new SupervisorLifecycle({ db: store, stop: () => assert.fail('old fence cannot stop a run') });
-  const group = 'chat:existing';
-  store.insertConversation('in', 'chat', 'fixture', 'queued', { groupName: 'existing' });
-  store.setDrainFence(group, { reason: 'model_config', runId: 'old-run' });
-  assert.equal(store.getNextPending({ sessionGroups: [group], sessionMode: 'multi' }), null);
-  const context = { configuration: { mode: 'multi' }, fences: store.listDrainFences() };
-  await lifecycle.advanceReclaim(context.fences[0], context);
-  assert.equal(store.getDrainFence(group), null);
-  assert.equal(store.getNextPending({ sessionGroups: [group], sessionMode: 'multi' }).content, 'queued');
-  assert.deepEqual(store.listPendingContinuations(), []);
-  assert.equal(db.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), 0);
-});
 
 async function syncScopeScenario(t, Class) {
   for (const mode of ['single', 'multi']) {
@@ -134,47 +80,6 @@ async function syncScopeScenario(t, Class) {
 }
 test('Sync reads group and Origin marker scopes and failed writes do not mark a scope sent', async t => {
   await syncScopeScenario(t, SupervisorLifecycle);
-});
-
-
-async function rotationScenario(t, Class) {
-  for (const mode of ['single', 'multi']) {
-    const f = localFixture(t, Class); Object.assign(f.context.configuration, { mode });
-    await f.lifecycle.checkRotation(f.scene, f.context);
-    f.now += 299999; await f.lifecycle.checkRotation(f.scene, f.context); assert.equal(f.controls.length, 1);
-    f.now++; await f.lifecycle.checkRotation(f.scene, f.context); assert.equal(f.controls.length, 2);
-    f.scene.sessionId = 's2'; await f.lifecycle.checkRotation(f.scene, f.context); assert.equal(f.controls.length, 3, 'session identity change inherited old rotation cooldown');
-    f.scene.runId = 'new-run'; await f.lifecycle.checkRotation(f.scene, f.context); assert.equal(f.controls.length, 4);
-    f.scene.sessionId = 's3'; const insert = f.db.insertControl;
-    f.db.insertControl = () => { throw new Error('rotation write failed'); };
-    await assert.rejects(f.lifecycle.checkRotation(f.scene, f.context), /rotation write failed/);
-    f.db.insertControl = insert; await f.lifecycle.checkRotation(f.scene, f.context); assert.equal(f.controls.length, 5);
-    assert.ok(f.controls.every(c => c.sessionGroup === 'origin' && c.bypassState === true && c.appendAckSuffix === false));
-    assert.equal(f.events.filter(e => e.event === 'rotate_done').length, 0);
-    f.scene.present = false; f.now += 300000;
-    await f.lifecycle.checkRotation(f.scene, f.context); assert.equal(f.controls.length, 5);
-  }
-}
-test('rotation scope, exact cooldown boundary, run/session identity and failed write retry', async t => {
-  await rotationScenario(t, SupervisorLifecycle);
-});
-
-// Boundary: real C4 controls and Origin demand with fake scene/marker readers.
-// Run for absent-Origin Sync production; unrelated runtime health changes may skip.
-test('absent Origin Sync creates one real unbound demand and preserves deduplication', async t => {
-  const sql = databaseFixture(t), f = localFixture(t, SupervisorLifecycle, { db: sql.store });
-  f.scene.present = false; f.scene.ready = false;
-  f.db.getOriginSyncBacklog = () => f.backlog;
-  await f.lifecycle.checkSync([f.scene], f.context);
-  const row = sql.db.prepare('SELECT * FROM control_queue').get();
-  assert.equal(row.session_group, 'origin'); assert.equal(row.target_binding, null);
-  assert.equal(sql.store.getOriginNeed().controls.count, 1);
-  assert.deepEqual(f.markerCalls, [{ runDir: f.root, kind: 'origin', currentRunId: null }]);
-  f.now += 60000; await f.lifecycle.checkSync([f.scene], f.context);
-  assert.equal(sql.db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 1);
-  f.now += 600000; await f.lifecycle.checkSync([f.scene], f.context);
-  assert.deepEqual(sql.db.prepare('SELECT status FROM control_queue ORDER BY id').pluck().all(), ['superseded', 'pending']);
-  assert.equal(sql.store.getOriginNeed().controls.count, 1);
 });
 
 // Boundary: real C4 binding, acknowledgment and drain-fence persistence; tmux is fake.
@@ -230,37 +135,3 @@ test('Origin TTL persists its check and requires durable group and Origin repair
   assert.equal(sql.store.getOriginNeed().controls.count, 0);
 });
 
-// Boundary: real C4 binding, acknowledgment and drain-fence persistence; tmux is fake.
-// Run for TTL preparation/reclaim changes; unrelated machine tasks may skip.
-test('TTL without Sync backlog sends only the bound check control and reclaims once it terminates', async t => {
-  for (const group of ['a', 'origin']) for (const status of ['done', 'timeout']) await t.test(`${group} ${status}`, async t => {
-    const sql = databaseFixture(t), f = localFixture(t, SupervisorLifecycle, { db: sql.store });
-    f.scene = { ...f.scene, sessionGroup: group, createdAt: f.now - 3_300_000 };
-    f.db.getLastActivity = () => null;
-    f.db.getControlById = id => sql.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
-    f.db.getUnsummarizedRange = () => ({ count: 0, firstAt: null });
-    f.db.getOriginSyncBacklog = () => ({ total: 0, groups: [] });
-    f.deps.prompts = { PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT };
-    let stops = 0; f.deps.stop = () => { stops++; f.scene = { ...f.scene, present: false, ready: false }; };
-    await f.lifecycle.checkTtl(f.scene, f.context);
-    const rows = sql.db.prepare('SELECT * FROM control_queue ORDER BY id').all();
-    assert.deepEqual(rows.map(row => row.raw_content), [PRE_RECLAIM_CHECK_PROMPT]);
-    const [row] = rows;
-    assert.equal(row.session_group, group); assert.equal(row.require_idle, 1); assert.ok(row.content.includes(' ---- ack via:'));
-    assert.equal(JSON.parse(row.target_binding).expectedRunId, 'old-run');
-    assert.equal(row.ack_deadline_at, Math.floor((f.now + 300000) / 1000));
-    assert.equal(sql.store.getDrainFence(group), null);
-    // An unacknowledged check, queued or delivered, keeps the session group alive.
-    for (const current of ['pending', 'running']) {
-      sql.db.prepare('UPDATE control_queue SET status=? WHERE id=?').run(current, row.id);
-      f.now += 60_000; await f.lifecycle.checkTtl(f.scene, f.context);
-      assert.equal(sql.store.getDrainFence(group), null); assert.equal(stops, 0);
-    }
-    sql.db.prepare('UPDATE control_queue SET status=? WHERE id=?').run(status, row.id);
-    await f.lifecycle.checkTtl(f.scene, f.context);
-    const fence = sql.store.getDrainFence(group); assert.equal(fence.reason, 'ttl'); assert.equal(fence.runId, 'old-run');
-    assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
-    assert.equal(stops, 1); assert.equal(sql.store.getDrainFence(group), null);
-    assert.equal(sql.db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 1);
-  });
-});

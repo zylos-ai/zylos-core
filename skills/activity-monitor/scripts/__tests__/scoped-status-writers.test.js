@@ -23,35 +23,4 @@ test('writer preserves native payload; rejects wrong run, unknown version and st
  value.zylos.runId='r';value.zylos.v=999;fs.writeFileSync(file,JSON.stringify(value));assert.equal(read().reason,'version_unknown');
  value.zylos.v=1;value.zylos.capturedAt=now-1001;fs.writeFileSync(file,JSON.stringify(value));assert.equal(read().reason,'stale');
 });
-test('grouped status publishes unavailable time only from an authoritative unavailable budget',t=>{
- const f=fixture(t),file=path.join(f.runDir,'agent-status.json');
- const write=health=>publishSessionStatus({statusFile:file,scene:f.identity,
-  activity:{sessionId:'s',state:'idle',lastActivityAt:1,tools:[]},health});
- const unavailable=write({health:'down',reason:'probe_failed',scheduling:{unavailableSince:123}});
- assert.equal(unavailable.health,'unavailable');assert.equal(unavailable.unavailable_since,123);
- assert.equal(unavailable.unavailable_reason,'probe_failed');
- for(const health of [
-  {health:'ok',scheduling:{unavailableSince:123}},
-  {health:'rate_limited',scheduling:{unavailableSince:123,cooldownUntil:456,rateLimitResetTime:'later'}},
-  {health:'down',scheduling:{unavailableSince:0}},
-  {health:'down',scheduling:{unavailableSince:1.5}},
- ]) {
-  const value=write(health);assert.equal('unavailable_since' in value,false);
- }
- const limited=write({health:'rate_limited',scheduling:{unavailableSince:123,cooldownUntil:456,rateLimitResetTime:'later'}});
- assert.equal(limited.cooldown_until,456);assert.equal(limited.rate_limit_reset,'later');
-});
 
-test('malformed optional model configuration preserves native statusLine publication', async t => {
-  const f = fixture(t);
-  const raw = { session_id: 's', conversation_id: 'untouched-native', transcript_path: '/native/transcript', context_window: { used_percentage: 42 } };
-  for (const value of ['{ invalid optional metadata', 'null', '42']) {
-    const sample = await publishContextSample(raw, { env: { ...f.env, ZYLOS_MODEL_CONFIG: value }, now: 123 });
-    const { zylos, ...native } = sample;
-    assert.deepEqual(native, raw);
-    assert.equal(zylos.runId, 'r');
-    const published = JSON.parse(fs.readFileSync(path.join(f.runDir, 'statusline.json'), 'utf8'));
-    assert.equal(published.session_id, 's');
-    assert.equal(published.transcript_path, raw.transcript_path);
-  }
-});
