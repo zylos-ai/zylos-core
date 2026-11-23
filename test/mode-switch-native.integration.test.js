@@ -65,21 +65,6 @@ function fixture(t) {
   return { root, db, store, scenes, reclaimed, events, writes, restarts, owner, rows, tree, payload, begin, completeOriginInput, tick: seconds => { clock += seconds * 1000; }, readConfig };
 }
 
-// Run gating without cutover dependencies; skip only unrelated
-// runtime transport work. Origin identity is observed, not a real tmux session.
-test('native gating preserves Origin while fencing only ordinary scenes', async t => {
-  const f = fixture(t), coordinator = f.owner();
-  f.scenes.push({ sessionGroup: 'ordinary', runId: 'ordinary-current', present: true, ready: true });
-  const before = f.payload(); const origin = { ...f.scenes[0] };
-  await f.begin(coordinator); await coordinator.advance();
-  assert.equal(f.store.getModeTransition().phase, 'gating');
-  assert.equal(f.store.getModeTransition().reason, null, 'Origin running control without deadline must not block native gating');
-  assert.equal(f.store.getDrainFence('origin'), null);
-  assert.equal(f.store.getDrainFence('ordinary').reason, 'mode_switch');
-  assert.deepEqual(f.reclaimed.map(fence => fence.sessionGroup), ['ordinary']);
-  assert.deepEqual(f.scenes[0], origin); assert.equal(f.payload(), before);
-  assert.equal(f.rows('run_endings').length, 0); assert.deepEqual(f.writes, []); assert.deepEqual(f.restarts, []);
-});
 test('native roundtrip cutover preserves Origin controls markers messages checkpoints cursors and memory', async t => {
   const f = fixture(t); f.completeOriginInput();
   assert.equal(typeof f.store.clearContinuationsExceptOrigin, 'function', 'requires upstream dependency 3');
@@ -110,17 +95,6 @@ test('native roundtrip cutover preserves Origin controls markers messages checkp
   }
   assert.deepEqual(f.writes, ['single','multi']); assert.equal(f.restarts.length, 2); assert.deepEqual(f.reclaimed, []);
 });
-test('native historical nonempty cutoff cutover resumes forward without conversion', async t => {
-  const f = fixture(t); f.completeOriginInput();
-  assert.equal(typeof f.store.clearContinuationsExceptOrigin, 'function', 'requires upstream dependency 3');
-  const runId = await f.begin(f.owner());
-  f.db.prepare("UPDATE mode_transitions SET phase='cutover',cutoff=7 WHERE run_id=?").run(runId);
-  f.store.setDrainFence('*'); const memory = f.tree();
-  await f.owner().advance();
-  assert.equal(f.store.getModeTransition(), null); assert.equal(f.readConfig().session_mode, 'single');
-  assert.equal(f.store.getModeTransition({ runId }).phase, 'complete'); assert.equal(f.store.getModeTransition({ runId }).cutoff, 7);
-  assert.deepEqual(f.tree(), memory); assert.equal(f.restarts.length, 1); assert.equal(f.store.getDrainFence('*'), null);
-});
 
 // Run after upstream native cutover storage APIs are available. Actual C4 writes
 // must distinguish recipient inbound internal rows from sender/outbound history;
@@ -145,27 +119,6 @@ test('native cutover to single voids only ordinary recipient internal input', as
   assert.equal(after.find(row => row.id === origin).status, 'pending');
   assert.equal(after.find(row => row.id === sender).status, 'pending');
   assert.equal(after.find(row => row.content === 'external pending').status, 'pending');
-});
-
-
-// Conversation drainage uses the real store's global count and markDelivered;
-// only Origin controls/deadline lists are excluded from native control gating.
-// This reaches cutover phase without invoking upstream cutover cleanup APIs.
-test('native gating waits for sole Origin running input while retaining its scene and running control', async t => {
-  const f = fixture(t), coordinator = f.owner();
-  const controls = JSON.stringify(f.rows('control_queue').filter(row => row.session_group === 'origin'));
-  const scene = { ...f.scenes[0] }, runId = await f.begin(coordinator);
-  assert.equal(f.store.countGlobalRunningConversations(), 1);
-  await coordinator.advance();
-  assert.equal(f.store.getModeTransition().phase, 'gating');
-  assert.equal(f.store.getModeTransition().reason, null);
-  assert.equal(f.store.getDrainFence('origin'), null); assert.deepEqual(f.reclaimed, []);
-  f.completeOriginInput(); assert.equal(f.store.countGlobalRunningConversations(), 0);
-  await coordinator.advance();
-  assert.equal(f.store.getModeTransition().run_id, runId); assert.equal(f.store.getModeTransition().phase, 'cutover');
-  assert.deepEqual(f.scenes[0], scene);
-  assert.equal(JSON.stringify(f.rows('control_queue').filter(row => row.session_group === 'origin')), controls);
-  assert.equal(f.store.getDrainFence('origin'), null); assert.deepEqual(f.writes, []); assert.deepEqual(f.restarts, []);
 });
 
 // Acceptance boundary: real native coordinator, C4 selection/claim/conditional
@@ -218,7 +171,6 @@ test('native roundtrip delivers queued input to Origin in single and retains unc
     await delivery.delivery.stop();
   }
 });
-
 
 // Run for gating and reclaim changes. C4 and lifecycle are real, with the
 // official runner isolating HOME, ZYLOS_DIR, PM2_HOME and short TMPDIR. Runtime

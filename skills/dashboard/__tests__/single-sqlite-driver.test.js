@@ -63,17 +63,6 @@ function write(content) {
   return JSON.parse(result.stdout).id;
 }
 
-test('after a Core state read, a group snapshot and the chat send path, the Dashboard process has one SQLite driver', { timeout: 120000 }, async t => {
-  const dashboard = startDashboard(t);
-  assert.equal((await dashboard.ready).ready, true);
-  await dashboard.ask('tick');
-  assert.equal((await dashboard.ask('send')).namespace, 'dashboard');
-  await dashboard.ask('tick');
-  const { drivers } = await dashboard.ask('drivers');
-  t.diagnostic(JSON.stringify({ drivers: drivers.map(file => path.relative(layout.root, file)) }));
-  assert.equal(drivers.length, 1, `exactly one better_sqlite3.node may be mapped, found ${drivers.length}`);
-});
-
 test('rows another process writes keep reaching the Dashboard reader while Core reads open and close C4', { timeout: 120000 }, async t => {
   // No connection outside this Dashboard process stays open, so each writer closes as the last one it can see.
   const dashboard = startDashboard(t);

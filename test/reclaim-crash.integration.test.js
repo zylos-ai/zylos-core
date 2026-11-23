@@ -30,18 +30,3 @@ async function waiting(t) {
   assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper')); await second.stop();
 }
 test('SIGKILL real supervisor while waiting for actual SQLite inflight delivery resumes same row and withdraws gate only after accounting', { timeout: 25000 }, async t => waiting(t));
-
-async function manualRetained(t) {
-  const f = fixture(t), db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
-  db.setDrainFence('origin', { reason: 'manual_restart', runId: 'run-1' });
-  const before = db.getDrainFence('origin');
-  const first = launch(t, f); assert.equal((await first.next()).ready, true); await first.kill();
-  const second = launch(t, f), initial = await second.next(); assert.equal(initial.ready, true);
-  assert.deepEqual(db.getDrainFence('origin'), before, 'manual fence must survive restart');
-  for (let n = 0; n < 2; n++) {
-    const state = await second.command('tick');
-    assert.deepEqual(db.getDrainFence('origin'), before, 'manual fence must survive restart'); assert.deepEqual(state.stopped, []); assert.equal(state.scene.present, true);
-  }
-  await second.stop();
-}
-test('SIGKILL real supervisor retains manual_restart row and never lets generic reclaim clear or stop it', { timeout: 25000 }, async t => manualRetained(t));

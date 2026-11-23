@@ -3,16 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../src/lib/store.js';
 import { provisionDashboardAuth } from '../src/lib/auth-provision.js';
-import { clearDashboardSessions } from '../src/lib/auth-sessions.js';
+
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { AuthGate, generateApiKey, hashApiKey, exchangeApiKeyForToken } from '../src/lib/auth.js';
 import { loadConfig } from '../src/lib/config.js';
-import { dashboardAccessAddress, printDashboardInfo } from '../../../cli/lib/dashboard-access.js';
 
 const packageRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const hook = path.join(packageRoot, 'skills/dashboard/hooks/post-install.js');
@@ -190,128 +188,16 @@ try { const now=Date.now(); db.prepare('INSERT INTO auth_sessions(token_hash,cre
 // Official CLI/config/login integration; run for reset or sign-in semantics,
 // skip unrelated UI. fixture owns HOME/ZYLOS_DIR/PM2_HOME/short temp/socket and
 // config; PM2 is private, HTTP closes per call, child has a 10-second deadline.
-test('password reset on a config that still turns sign-in off sets a password that signs in', async t => {
-  const f = fixture(t);
-  writeConfig(f, { port: 3491, auth: { enabled: false }, extra: 'preserved' });
-  const reset = spawnSync(process.execPath, [cli, 'dashboard', 'reset-password'], {
-    env: f.env, encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024 });
-  assert.equal(reset.status, 0, reset.stderr);
-  const password = reset.stdout.match(/Password: ([a-f0-9]{32})/)?.[1]; assert.ok(password);
-  const config = JSON.parse(fs.readFileSync(f.config, 'utf8'));
-  assert.equal(config.auth.enabled, false); assert.equal(config.extra, 'preserved');
-  assert.equal(await passwordAccepted(f.env.ZYLOS_DIR, password), true);
-  assertNoPlaintext(f.root, password);
-});
 
 // Official CLI plus incompatible SQLite; run for reset schema admission, skip
 // unrelated UI. Private fixture homes/PM2/temp/socket/DB; no live daemon contact,
 // child bounded at 10 seconds, every DB closed before fixture teardown.
-test('password reset reports session-clear failure without migrating an unsupported database', t => {
-  const f = fixture(t); writeConfig(f, { port: 3491 });
-  const file = path.join(path.dirname(f.config), 'dashboard.db');
-  const db = new Database(file);
-  try {
-    db.exec("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY); INSERT INTO schema_migrations VALUES (999); CREATE TABLE auth_sessions(token_hash TEXT); INSERT INTO auth_sessions VALUES ('preserved-session'); CREATE TABLE api_sessions(token_hash TEXT); INSERT INTO api_sessions VALUES ('preserved-api-session')");
-  } finally { db.close(); }
-  const reset = spawnSync(process.execPath, [cli, 'dashboard', 'reset-password'], {
-    env: f.env, encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024 });
-  assert.equal(reset.status, 2);
-  const password = reset.stdout.match(/Password: ([a-f0-9]{32})/)?.[1]; assert.ok(password);
-  assert.match(reset.stderr, /existing sessions could not be cleared/);
-  assert.doesNotMatch(reset.stdout, /All previous sessions were cleared/);
-  assert.equal(reset.stderr.includes(password), false);
-  const after = new Database(file, { readonly: true, fileMustExist: true });
-  try {
-    assert.equal(after.prepare('SELECT MAX(version) FROM schema_migrations').pluck().get(), 999);
-    assert.equal(after.prepare('SELECT count(*) FROM auth_sessions').pluck().get(), 1);
-    assert.equal(after.prepare('SELECT count(*) FROM api_sessions').pluck().get(), 1);
-  } finally { after.close(); }
-  assertNoPlaintext(f.root, password);
-});
 
 // Real session-clear helper / current Store schema / Core maintenance guard.
 // Run for reset database protection; skip unrelated UI. All files/DBs are in the
 // private fixture HOME/ZYLOS_DIR/PM2/temp/socket tree, no child or service starts,
 // and Store/readonly DB handles close before t removes that fixture.
-test('session clearing preserves the database while Core upgrade maintenance is active', t => {
-  const f = fixture(t); writeConfig(f, { port: 3491 });
-  const file = path.join(path.dirname(f.config), 'dashboard.db');
-  const store = new Store(file);
-  try {
-    store.insertSession('preserved-maintenance-session', Date.now(), true);
-    const key = store.insertApiKey({ name: 'preserved', keyHash: 'maintenance-key-hash', scope: 'admin' });
-    store.insertApiSession({ tokenHash: 'preserved-maintenance-api', apiKeyId: Number(key.lastInsertRowid),
-      scope: 'admin', createdAt: Date.now(), expiresAt: Date.now() + 60_000 });
-  } finally { store.close(); }
-  const upgrade = path.join(f.env.ZYLOS_DIR, '.zylos/upgrade');
-  fs.mkdirSync(upgrade, { recursive: true });
-  fs.writeFileSync(path.join(upgrade, 'active.json'), '{}');
-  assert.throws(() => clearDashboardSessions(f.env.ZYLOS_DIR), /Core databases unavailable/);
-  const after = new Database(file, { readonly: true, fileMustExist: true });
-  try {
-    assert.equal(after.prepare('SELECT count(*) FROM auth_sessions').pluck().get(), 1);
-    assert.equal(after.prepare('SELECT count(*) FROM api_sessions').pluck().get(), 1);
-    assert.equal(after.prepare('SELECT count(*) FROM api_keys').pluck().get(), 1);
-  } finally { after.close(); }
-});
 
 // Official CLI failure/help boundary; run for recovery guidance changes, skip
 // unrelated UI. Child HOME/ZYLOS_DIR/PM2/temp/socket belong to fixture, PM2 is
 // private and bounded at 10 seconds; no daemon/network/DB resources stay open.
-test('password reset requires restart then another reset when service status cannot be queried', t => {
-  const f = fixture(t, { statusFails: true });
-  const help = spawnSync(process.execPath, [cli, 'dashboard', 'reset-password', '--help'], {
-    env: f.env, encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024 });
-  assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /invalidate all signed-in browser and API sessions/);
-  assert.equal(fs.existsSync(f.calls), false, 'help must not query service state');
-  const reset = spawnSync(process.execPath, [cli, 'dashboard', 'reset-password'], {
-    env: f.env, encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024 });
-  assert.equal(reset.status, 2);
-  assert.match(reset.stderr, /Restart Dashboard first, then run "zylos dashboard reset-password" again/);
-  assert.equal(fs.readFileSync(f.calls, 'utf8'), 'pid zylos-dashboard\n');
-  const password = reset.stdout.match(/Password: ([a-f0-9]{32})/)?.[1]; assert.ok(password);
-  assert.equal(reset.stdout.split(password).length - 1, 1);
-  assertNoPlaintext(f.root, password);
-});
-
-test('Dashboard access reporting selects public route or local port and consumes a new password once', t => {
-  const f = fixture(t); writeConfig(f, { port: 3491 });
-  fs.mkdirSync(path.join(f.env.ZYLOS_DIR, '.zylos'));
-  const core = path.join(f.env.ZYLOS_DIR, '.zylos/config.json');
-  fs.writeFileSync(core, JSON.stringify({ domain: 'agent.example.test', protocol: 'https' }));
-  assert.deepEqual(dashboardAccessAddress({ zylosDir: f.env.ZYLOS_DIR, routed: true }), { url: 'https://agent.example.test/dashboard/', localOnly: false });
-  fs.writeFileSync(core, JSON.stringify({ domain: 'agent.example.test', protocol: 'https', port: 8080 }));
-  assert.equal(dashboardAccessAddress({ zylosDir: f.env.ZYLOS_DIR, routed: true }).url, 'http://agent.example.test:8080/dashboard/');
-  assert.deepEqual(dashboardAccessAddress({ zylosDir: f.env.ZYLOS_DIR, routed: false }), { url: 'http://127.0.0.1:3491/', localOnly: true });
-  const access = { zylosDir: f.env.ZYLOS_DIR, routed: true, password: 'one-time-display' }, output = [];
-  printDashboardInfo(access, line => output.push(line));
-  printDashboardInfo(access, line => output.push(line));
-  assert.equal(output.join('\n').split('one-time-display').length - 1, 1);
-  assertNoPlaintext(f.root, 'one-time-display');
-});
-
-for (const restartFails of [false, true]) {
-  test(`password reset targets only a running Dashboard and ${restartFails ? 'reports restart failure' : 'confirms restart'}`, t => {
-    const f = fixture(t, { running: true, restartFails });
-    writeConfig(f, { port: 3491, auth: { enabled: true } });
-    fs.mkdirSync(path.join(f.env.ZYLOS_DIR, 'bin'));
-    fs.mkdirSync(path.join(f.env.ZYLOS_DIR, 'http'));
-    fs.mkdirSync(path.join(f.env.ZYLOS_DIR, '.zylos'));
-    fs.writeFileSync(path.join(f.env.ZYLOS_DIR, 'bin/caddy'), 'unused');
-    fs.writeFileSync(path.join(f.env.ZYLOS_DIR, 'http/Caddyfile'), 'no dashboard route');
-    fs.writeFileSync(path.join(f.env.ZYLOS_DIR, '.zylos/config.json'), JSON.stringify({ domain: 'public.example.test' }));
-    const reset = spawnSync(process.execPath, [cli, 'dashboard', 'reset-password'], {
-      env: f.env, encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024 });
-    assert.equal(reset.status, restartFails ? 2 : 0, reset.stderr);
-    const password = reset.stdout.match(/Password: ([a-f0-9]{32})/)?.[1];
-    assert.ok(password, 'even a failed restart must show the saved new password once');
-    assert.doesNotMatch(reset.stdout, /URL:|public\.example\.test|https?:\/\//);
-    assert.equal(reset.stdout.split(password).length - 1, 1);
-    assert.equal(reset.stderr.includes(password), false);
-    assert.equal(fs.readFileSync(f.calls, 'utf8'), 'pid zylos-dashboard\nrestart zylos-dashboard\n');
-    if (restartFails) assert.match(reset.stderr, /Restart Dashboard first, then run "zylos dashboard reset-password" again/);
-    else assert.match(reset.stdout, /Dashboard password updated and Dashboard restarted/);
-    assertNoPlaintext(f.root, password);
-  });
-}

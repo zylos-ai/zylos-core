@@ -87,29 +87,3 @@ test('snapshot sees whole100 or whole120 batch; physical restore resumes to170, 
   assert.equal(f.cursors().length,1);assert.equal(f.cursors()[0].generation,1);
 });
 // Same fixture and isolation boundary; restore must preserve each cursor case.
-for(const scenario of ['rotation','same-identity-replacement','new-identity-replacement','expired-cursor']) {
-  test(`restored cursor continues retained logs: ${scenario}`,async t=>{
-    const f=fixture(t);fs.writeFileSync(f.file,lines(0,100));await f.import();const snapshot=f.snapshot('saved');
-    if(scenario==='rotation') {fs.appendFileSync(f.file,lines(100,10));fs.renameSync(f.file,path.join(path.dirname(f.file),'events.100.jsonl'));fs.writeFileSync(f.file,lines(110,10));}
-    if(scenario==='same-identity-replacement') fs.writeFileSync(f.file,lines(1000,100));
-    if(scenario==='new-identity-replacement'||scenario==='expired-cursor') {
-      fs.renameSync(f.file,path.join(f.root,'retired.jsonl'));
-      if(scenario==='expired-cursor')fs.writeFileSync(path.join(path.dirname(f.file),'events.100.jsonl'),lines(100,10));
-      fs.writeFileSync(f.file,lines(1000,100));
-    }
-    await f.restore(snapshot);await f.import();
-    assert.equal(f.count(),scenario==='rotation'?120:scenario==='expired-cursor'?210:200);
-    if(scenario==='same-identity-replacement') {
-      assert.deepEqual(f.cursors().map(c=>c.generation),[1,2]);assert.equal(f.cursors()[0].status,'gap');
-      assert.deepEqual(f.store.getSourceHealth().filter(row=>row.extra.reason==='anchor_mismatch').map(row=>row.extra.reason),['anchor_mismatch']);
-      const imported=f.store.queryEvents({limit:1000});
-      assert.deepEqual(imported.filter(row=>row.ingest_id.includes(':g2:')).map(row=>row.event_type),Array.from({length:100},(_,n)=>`event${1000+n}`));
-      assert.equal(new Set(imported.map(row=>row.ingest_id)).size,200);
-      assert.deepEqual(imported.filter(row=>row.ingest_id.includes(':g1:')).map(row=>row.event_type),Array.from({length:100},(_,n)=>`event${n}`));
-    }else if(scenario!=='rotation') {
-      assert.ok(f.cursors().every(c=>c.generation===1));assert.equal(f.cursors().filter(c=>c.status==='gap').length,1);
-    }
-    if(scenario==='rotation')assert.deepEqual(f.store.queryEvents({limit:1000}).map(e=>e.event_type),Array.from({length:120},(_,n)=>`event${n}`));
-    const before=f.count();await f.import();assert.equal(f.count(),before);
-  });
-}

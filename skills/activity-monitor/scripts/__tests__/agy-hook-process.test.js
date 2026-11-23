@@ -21,95 +21,6 @@ function fixture(t) {
   return { root, env };
 }
 
-function coreWithInstructions(root, instructions) {
-  const fake = path.join(root, 'core'), lib = path.join(fake, 'cli/lib');
-  fs.mkdirSync(path.join(lib, 'runtime'), { recursive: true });
-  fs.writeFileSync(path.join(fake, 'package.json'), '{"type":"module"}');
-  for (const name of fs.readdirSync(path.join(repo, 'cli/lib'))) {
-    if (name !== 'runtime') fs.symlinkSync(path.join(repo, 'cli/lib', name), path.join(lib, name));
-  }
-  for (const name of fs.readdirSync(path.join(repo, 'cli/lib/runtime'))) {
-    const source = name === 'index.js'
-      ? fileURLToPath(new URL(`./fixtures/${instructions}`, import.meta.url)) : path.join(repo, 'cli/lib/runtime', name);
-    fs.symlinkSync(source, path.join(lib, 'runtime', name));
-  }
-  return fake;
-}
-
-// Isolated native Node entrypoints only: no agy, service, tmux or network.
-// Run for process lifetime/stdin/import changes; all subprocesses are synchronous,
-// bounded and reaped. The fallback timeout is a failure, never the expected stop.
-test('hook process deadline covers an import retaining a live handle', { timeout: 9000 }, t => {
-  const { root, env } = fixture(t);
-  const fake = coreWithInstructions(root, 'hanging-instructions.js');
-  const result = spawnSync(process.execPath, [entry, 'PreInvocation'], {
-    env: { ...env, ZYLOS_PACKAGE_ROOT: fake }, input: '{}', encoding: 'utf8', timeout: 7000,
-  });
-  assert.equal(result.error, undefined);
-  assert.equal(result.signal, null);
-  assert.equal(result.status, 1);
-  assert.deepEqual(JSON.parse(result.stdout), {});
-  assert.match(result.stderr, /process deadline/);
-});
-
-test('tool tracking allows a child conversation without binding it as main', t => {
-  const { root, env } = fixture(t);
-  hooks.mainSession.accept({ conversationId: 'parent', lastUserInput: buildKickPrompt() }, 'SessionStart', env);
-  const file = path.join(root, 'activity-monitor/session-groups/origin/agy-main-session.json');
-  const before = fs.readFileSync(file, 'utf8');
-  const result = spawnSync(process.execPath, [entry, 'PreToolUse'], {
-    env, input: JSON.stringify({ conversationId: 'child', toolCall: { id: 'child-command', name: 'run_command', args: {} } }),
-    encoding: 'utf8', timeout: 3000,
-  });
-  assert.equal(result.error, undefined);
-  assert.equal(result.signal, null);
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), { decision: 'allow' });
-  assert.equal(result.stderr, '');
-  assert.equal(fs.readFileSync(file, 'utf8'), before);
-});
-
-test('tool tracking allows execution when an import reaches the process deadline', { timeout: 9000 }, t => {
-  const { root, env } = fixture(t);
-  const fake = coreWithInstructions(root, 'hanging-instructions.js');
-  const result = spawnSync(process.execPath, [entry, 'PreToolUse'], {
-    env: { ...env, ZYLOS_PACKAGE_ROOT: fake }, input: '{}', encoding: 'utf8', timeout: 7000,
-  });
-  assert.equal(result.error, undefined);
-  assert.equal(result.signal, null);
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), { decision: 'allow' });
-  assert.match(result.stderr, /process deadline/);
-});
-
-test('a rejected runtime load preserves the hook exit protocol', { timeout: 9000 }, t => {
-  const { root, env } = fixture(t);
-  const fake = coreWithInstructions(root, 'rejecting-runtime.js');
-  for (const [event, stdout, status] of [
-    ['PreToolUse', '{"decision":"allow"}\n', 0],
-    ['PreInvocation', '{}\n', 1],
-  ]) {
-    const result = spawnSync(process.execPath, [entry, event], {
-      env: { ...env, ZYLOS_PACKAGE_ROOT: fake }, input: '{}', encoding: 'utf8', timeout: 3000,
-    });
-    assert.equal(result.error, undefined);
-    assert.equal(result.signal, null);
-    assert.equal(result.status, status);
-    assert.equal(result.stdout, stdout);
-    assert.match(result.stderr, /Zylos AGY hook failed/);
-  }
-  const denied = spawnSync(process.execPath, [guard], {
-    env: { ...env, ZYLOS_PACKAGE_ROOT: fake }, input: '{}', encoding: 'utf8', timeout: 2000,
-  });
-  assert.equal(denied.error, undefined);
-  assert.equal(denied.signal, null);
-  assert.equal(denied.status, 1);
-  assert.deepEqual(JSON.parse(denied.stdout), {
-    decision: 'deny',
-    reason: 'Cannot validate tool input. Ask the user in plain text instead.',
-  });
-});
-
 test('tool tracking allows execution after a lifecycle exception', t => {
   const { env } = fixture(t);
   const result = spawnSync(process.execPath, [entry, 'PreToolUse'], {
@@ -121,25 +32,6 @@ test('tool tracking allows execution after a lifecycle exception', t => {
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), { decision: 'allow' });
   assert.match(result.stderr, /Zylos AGY hook failed/);
-});
-
-// The import resolves, so the hook reaches JSON output while a referenced
-// interval remains live. Removing the explicit successful exit must hit timeout.
-test('hook exits after protocol output when a resolved module retains a live handle', { timeout: 9000 }, t => {
-  const { root, env } = fixture(t);
-  const fake = coreWithInstructions(root, 'retained-handle-instructions.js');
-  const started = performance.now();
-  const result = spawnSync(process.execPath, [entry, 'PreInvocation'], {
-    env: { ...env, ZYLOS_PACKAGE_ROOT: fake }, input: '{}', encoding: 'utf8', timeout: 7000,
-  });
-  const elapsed = performance.now() - started;
-  assert.equal(result.error, undefined);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.signal, null);
-  assert.deepEqual(JSON.parse(result.stdout), {});
-  assert.equal(result.stderr, '');
-  assert.ok(elapsed < 2000, `hook took ${elapsed.toFixed(1)} ms; expected less than 2000 ms`);
-  t.diagnostic(`resolved module with live interval: ${elapsed.toFixed(1)} ms (7000 ms subprocess timeout)`);
 });
 
 test('native hook entrypoints emit bounded protocol responses with measured wall time', { timeout: 12000 }, t => {

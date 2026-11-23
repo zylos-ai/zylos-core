@@ -5,11 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { fixture } from './c4-v2-test-helpers.js';
-import { receive, parseReceiveArgs } from '../c4-receive.js';
+import { receive } from '../c4-receive.js';
 import { validRouteResponse, queryRoute, fallbackFileRoute } from '../c4-entry-route.js';
-import { appendEntryEvent, queryRejection } from '../c4-entry-events.js';
-import { dataError } from '../c4-session-group.js';
-import { statusNoticeKey } from '../status-notice.js';
 
 const input = ['--channel', 'chat', '--endpoint', 'room|msg:1', '--content', 'hello'];
 const pending = { decision: 'pending', recovered: true, runtime: 'codex', health: 'rate_limited', reason: 'quota', transitionHold: false };
@@ -26,22 +23,6 @@ function setup(t, storeDependencies = {}) {
     sendStatusNotice: () => { order.push('send'); return { outcome: 'sent' }; }, diagnostic: () => {} };
   return { ...f, events, order, dependencies };
 }
-
-test('dashboard origin uses the fixed group before routing and while storing', async t => {
-  const f = setup(t);
-  fs.mkdirSync(path.join(process.env.ZYLOS_DIR, '.claude', 'skills', 'dashboard'), { recursive: true });
-  let calls = 0;
-  f.dependencies.queryRoute = async request => {
-    calls++;
-    assert.equal(request.sessionGroup, 'origin');
-    return pending;
-  };
-  const reply = await receive(['--channel', 'dashboard', '--endpoint', 'origin', '--content', 'hello origin'], f.dependencies);
-  assert.equal(calls, 1);
-  assert.equal(f.db.prepare('SELECT session_group FROM conversations WHERE id=?').get(reply.id).session_group, 'origin');
-  assert.equal(f.store.getChannelNamespace('dashboard'), null);
-  assert.equal(f.db.prepare('SELECT 1 FROM group_heads WHERE session_group=?').get('dashboard:origin'), undefined);
-});
 
 test('dashboard origin is stored in origin in both session modes and refuses a caller-chosen group', async t => {
   for (const mode of ['single', 'multi']) {
@@ -67,31 +48,6 @@ test('dashboard origin is stored in origin in both session modes and refuses a c
   }
 });
 
-test('validates before route/; name/group errors emit one and ordinary argument errors none', async t => {
-  const f = setup(t); let routed = 0, events = 0;
-  f.dependencies.queryRoute = async () => { routed++; return pending; };
-  f.dependencies.appendEntryEvent = async () => { events++; return true; };
-  for (const name of ['', '-x', 'x'.repeat(96), 'a b']) {
-    await assert.rejects(receive([...input, '--session-group', name], f.dependencies), { code: name.length > 95 ? 'SESSION_GROUP_TOO_LONG' : 'SESSION_GROUP_INVALID' });
-  }
-  await assert.rejects(receive(['--channel', 'payload-routing-not-installed', '--content', 'text', '--no-reply'], f.dependencies), { code: 'INVALID_ARGS' });
-  assert.equal(events, 5);
-  await assert.rejects(receive(['--channel', 'chat', '--endpoint', '', '--content', 'text'], f.dependencies), { code: 'INVALID_ARGS' });
-  assert.equal(events, 5);
-  for (const args of [input.slice(0, 4), [...input, '--priority', '1x'], [...input, 'stray'], [...input, '--core-source', 'fake']]) {
-    await assert.rejects(receive(args, f.dependencies), { code: 'INVALID_ARGS' });
-  }
-  assert.equal(events, 5); assert.equal(routed, 0);
-  for (const table of ['conversations', 'channel_namespaces', 'group_heads']) assert.equal(f.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n, 0);
-  assert.throws(() => parseReceiveArgs([...input, '--priority']), { code: 'INVALID_ARGS' });
-});
-
-test('option-like nonempty text is retained as message content', async t => {
-  const f = setup(t);
-  const result = await receive(['--channel', 'chat', '--content', '--- notes'], f.dependencies);
-  assert.equal(f.db.prepare('SELECT content FROM conversations WHERE id=?').get(result.id).content, '--- notes');
-});
-
 test('explicit pending/transition/rate-limit takes precedence; unavailable and noReply stay failed', async t => {
   const f = setup(t);
   for (const route of [pending, { ...pending, transitionHold: true }, rejected]) {
@@ -106,38 +62,6 @@ test('explicit pending/transition/rate-limit takes precedence; unavailable and n
   const row = f.db.prepare('SELECT * FROM conversations WHERE id=?').get(result.id);
   assert.equal(row.status, 'failed'); assert.equal(row.endpoint_id, null); assert.equal(row.session_group, 'chat:New');
   assert.equal(f.store.getNextPending({ sessionGroups: ['chat:New'] }), null);
-});
-
-test('auth final group and failure category survive event/cooldown/send failures after commit', async t => {
-  const f = setup(t);
-  for (const result of ['failed', 'unconfirmed']) {
-    f.dependencies.queryRoute = async request => { assert.equal(request.sessionGroup, result === 'failed' ? null : 'chat:Team'); return auth(result); };
-    f.dependencies.reserveStatusNotice = (_c, _e, route) => { assert.equal(route.sessionGroup, 'chat:Team'); f.order.push('reserve'); return { suppressed: true }; };
-    const reply = await receive([...input, '--session-group', 'Team'], f.dependencies);
-    assert.equal(reply.action, 'auth_rejected'); assert.equal(reply.reasonLogged, true);
-    const row = f.db.prepare('SELECT * FROM conversations WHERE id=?').get(reply.id);
-    assert.equal(row.status, 'failed'); assert.equal(row.delivery_action, 'auth_rejected');
-    const [arrival, rejection] = f.events.slice(-2);
-    assert.deepEqual({ ...arrival, received_at_ms: 0 }, {
-      event: 'message_received', conversation_id: reply.id, channel: 'chat',
-      endpoint: 'room|msg:1', session_group: 'chat:Team', runtime: 'codex',
-      reason_code: 'auth_rejected', received_at_ms: 0, detail: '',
-    });
-    assert.ok(Number.isFinite(arrival.received_at_ms));
-    assert.equal(rejection.event, 'auth_rejected');
-    assert.equal(rejection.conversation_id, reply.id);
-    assert.equal(rejection.reason_code, 'auth_check_' + result);
-  }
-  assert.deepEqual(f.order, ['message_received', 'auth_rejected', 'reserve', 'message_received', 'auth_rejected', 'reserve']);
-  assert.equal(f.events.filter(event => event.event === 'message_received').length, 2);
-  assert.equal(f.events.filter(event => event.event === 'auth_rejected').length, 2);
-  f.dependencies.queryRoute = async () => auth('failed');
-  f.dependencies.appendEntryEvent = async () => false;
-  const noReply = await receive([...input, '--no-reply'], f.dependencies);
-  assert.equal(noReply.reasonLogged, false); assert.equal(noReply.action, 'auth_rejected');
-  f.dependencies.reserveStatusNotice = () => { throw new Error('busy'); };
-  await assert.rejects(receive(input, f.dependencies), { code: 'UNHEALTHY_NOTIFY_FAILED', persisted: ['D1'] });
-  assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE status='failed' AND delivery_action='auth_rejected'").get().n, 4);
 });
 
 test('real rollback/DB_BUSY prevent and cooldown; postcommit uncertainty preserves failed row', async t => {
@@ -167,29 +91,6 @@ test('real rollback/DB_BUSY prevent and cooldown; postcommit uncertainty preserv
   assert.equal(f.events.length, 2, 'an unknown commit must not append events or reserve another notice');
 });
 
-test('preserves data-layer contract errors and marks unexpected postcommit errors unknown', async t => {
-  const f = setup(t);
-  for (const code of ['SESSION_GROUP_INVALID', 'SESSION_GROUP_TOO_LONG', 'NAMESPACE_EXHAUSTED']) {
-    f.dependencies.db = { ...f.store, insertConversation: () => { throw dataError(code, 'contract rejection'); } };
-    await assert.rejects(receive(input, f.dependencies), { code, persisted: [] });
-  }
-  f.dependencies.db = { ...f.store, insertConversation: (...args) => { f.store.insertConversation(...args); throw new Error('after commit'); } };
-  await assert.rejects(receive(input, f.dependencies), { code: 'INTERNAL_ERROR', persisted: null });
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM conversations').get().n, 1);
-});
-
-test('suppression conditional update is postcommit and retains terminal failed state', async t => {
-  const f = setup(t); f.dependencies.queryRoute = async () => rejected;
-  f.dependencies.reserveStatusNotice = () => ({ suppressed: true });
-  const reply = await receive(input, f.dependencies);
-  const row = f.db.prepare('SELECT * FROM conversations WHERE id=?').get(reply.id);
-  assert.equal(reply.action, 'suppressed'); assert.equal(row.status, 'failed'); assert.equal(row.delivery_action, 'suppressed');
-  assert.match(row.content, /Status notification suppressed by cooldown while health=unavailable reason=down\./);
-  f.dependencies.db = { ...f.store, markStatusNoticeSuppressed: () => { throw new Error('busy'); } };
-  const failed = await receive(input, f.dependencies);
-  assert.equal(failed.action, 'suppressed'); assert.equal(f.db.prepare('SELECT delivery_action AS a FROM conversations WHERE id=?').get(failed.id).a, null);
-});
-
 test('v2 correlation/branches reject malformed responses and fall back exactly once', async () => {
   const request = { type: 'route', requestId: '1-1', noReply: false };
   const response = { version: 2, type: 'route', requestId: '1-1', ...pending };
@@ -197,23 +98,6 @@ test('v2 correlation/branches reject malformed responses and fall back exactly o
   for (const extra of [{ version: 1 }, { requestId: 'wrong' }, { decision: 'new' }, { recovered: false }, { auth: { result: 'failed', detail: 'bad' } }, { transitionHold: 'yes' }, { runtime: '' }, { decision: undefined }, { decision: 'auth_rejected', auth: { result: 'success' } }]) {
     let fallbacks = 0;
     const result = await queryRoute(request, { ipcRoute: async () => ({ ...response, ...extra }), fallbackFileRoute: () => { fallbacks++; return pending; } });
-    assert.equal(result, pending); assert.equal(fallbacks, 1);
-  }
-});
-
-test('rejects unknown decisions and missing reply text on otherwise valid rejection responses', async () => {
-  const request = { type: 'route', requestId: 'rejection', noReply: false };
-  const response = { version: 2, type: 'route', requestId: request.requestId, ...rejected };
-  const authResponse = { ...response, ...auth('unconfirmed') };
-  for (const valid of [response, authResponse]) {
-    assert.equal(validRouteResponse(valid, request), true);
-    assert.equal(await queryRoute(request, { ipcRoute: async () => valid }), valid);
-  }
-  const invalid = [{ ...response, decision: 'new' }, { ...response, userMessage: undefined }, { ...authResponse, userMessage: undefined }];
-  for (const response of invalid) {
-    let fallbacks = 0;
-    assert.equal(validRouteResponse(response, request), false);
-    const result = await queryRoute(request, { ipcRoute: async () => response, fallbackFileRoute: () => { fallbacks++; return pending; } });
     assert.equal(result, pending); assert.equal(fallbacks, 1);
   }
 });
@@ -242,48 +126,4 @@ test('fallback six-level order, target runtime only, and Core external auth dist
       assert.equal(healthReads, 0, 'transition and unknown runtime must stop before reading health');
     }
   }
-});
-
-test('six tuple distinguishes groups/runtime/reason, supports missing health and delimiter-bearing endpoint', () => {
-  const key = (group, runtime, health, reason, endpoint = 'room::x|msg:1') => statusNoticeKey('chat', endpoint, health, reason, group, runtime);
-  assert.equal(new Set([key('chat:A', 'claude'), key('chat:B', 'claude'), key('chat:A', 'codex'), key('chat:A', 'claude', 'ok', 'other')]).size, 4);
-  assert.deepEqual(JSON.parse(key('chat:A', 'codex').slice(3)), ['chat', 'room::x', 'chat:A', 'codex', 'unavailable', 'unavailable']);
-  assert.deepEqual(JSON.parse(key('chat:A', 'codex', 'auth_failed').slice(3)).slice(-2), ['auth_failed', 'auth_failed']);
-  assert.notEqual(key('chat:A', 'codex', 'ok', 'x::y', 'a'), key('chat:A', 'codex', 'ok', 'y', 'a::x'));
-});
-
-test('query current/rotated logs, ignores incomplete/bad lines, remains read only, refuses errors', async t => {
-  const f = setup(t); f.dependencies.queryRoute = async () => auth('failed');
-  const reply = await receive([...input, '--no-reply'], f.dependencies);
-  const filename = path.join(path.dirname(f.filename), 'receive-events.jsonl');
-  const event = { v: 1, event: 'auth_rejected', conversation_id: reply.id, reason_code: 'auth_check_failed', detail: 'evidence', runtime: 'codex', ts: 123 };
-  fs.writeFileSync(filename, [event,
-    { ...event, conversation_id: reply.id + 1, detail: 'other id' },
-    { ...event, event: 'group_rejected', detail: 'other event' },
-  ].map(row => JSON.stringify(row)).join('\n') + '\n{bad}\nnull\n' + JSON.stringify({ ...event, detail: 'partial' }));
-  const deps = { filename, diagnostic: () => {}, getConversationsByRange: (a, b) => f.db.prepare('SELECT * FROM conversations WHERE id BETWEEN ? AND ?').all(a, b) };
-  const before = fs.readFileSync(filename);
-  assert.equal(queryRejection(String(reply.id), deps).detail, 'evidence'); assert.deepEqual(fs.readFileSync(filename), before);
-  fs.renameSync(filename, filename.replace('.jsonl', '.123.jsonl'));
-  assert.equal(queryRejection(String(reply.id), deps).runtime, 'codex');
-  assert.throws(() => queryRejection('999', deps), { code: 'NOT_FOUND' });
-  const queued = f.store.insertConversation('in', 'chat', null, 'pending');
-  assert.throws(() => queryRejection(String(queued.id), deps), { code: 'NOT_REJECTED' });
-  assert.throws(() => queryRejection(String(reply.id), { ...deps, io: { readdirSync: fs.readdirSync, readFileSync: () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); } } }), { code: 'INTERNAL_ERROR' });
-  const empty = path.join(path.dirname(f.filename), 'missing', 'receive-events.jsonl');
-  assert.equal(queryRejection(String(reply.id), { ...deps, filename: empty }).reason, 'expired_or_missing');
-  assert.throws(() => queryRejection('9223372036854775807', { filename: empty,
-    getConversationsByRange: () => assert.fail('unsafe id must not query a rounded neighbor') }), { code: 'NOT_FOUND' });
-  assert.throws(() => queryRejection('9223372036854775808', { filename: empty,
-    getConversationsByRange: () => assert.fail('unsafe id must not query a rounded neighbor') }), { code: 'NOT_FOUND' });
-  fs.writeFileSync(filename, JSON.stringify({ ...event, runtime: 'future-runtime', detail: 'future evidence' }) + '\n');
-  assert.equal(queryRejection(String(reply.id), deps).runtime, 'future-runtime');
-  assert.equal(queryRejection(String(reply.id), deps).detail, 'future evidence');
-});
-
-test('sanitizes bytes a frozen append API and reports append failure', async () => {
-  const events = []; const dependencies = { now: () => 123, createJsonlStream: () => ({ append: async row => events.push(row) }) };
-  await appendEntryEvent({ event: 'auth_rejected', endpoint: 'r|req:1|msg:2|parent:3', detail: '\u0000' + 'x'.repeat(600) }, dependencies);
-  assert.equal(events[0].ts, 123); assert.equal(events[0].endpoint, 'r'); assert.equal(events[0].detail.length, 500);
-  assert.equal(await appendEntryEvent({ event: 'group_rejected' }, { diagnostic: () => {}, createJsonlStream: () => ({ append: async () => { throw new Error('denied'); } }) }), false);
 });

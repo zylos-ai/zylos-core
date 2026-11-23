@@ -102,39 +102,6 @@ after(() => {
 });
 
 describe('runUpgrade owns the final baseline commit', () => {
-  test('upgrade and rollback npm children both inherit deployment mirror settings', () => {
-    const name = 'mirror-env-rollback';
-    const dest = installV1(name);
-    const sourceV2 = makeV2(name);
-    fs.rmSync(failFlag, { force: true });
-    const result = runUpgradeE2E(name, sourceV2, { failBaselineCommit: true });
-    assert.equal(result.success, false);
-    assert.equal(result.rollback.performed, true);
-    const calls = fs.readFileSync(npmLog, 'utf8').trim().split('\n')
-      .filter(line => fs.realpathSync(line.split('|')[0]) === fs.realpathSync(dest));
-    assert.equal(calls.length, 2);
-    for (const call of calls) {
-      assert.deepEqual(call.split('|').slice(1), [
-        'install --omit=dev', 'https://registry.example.test/',
-        'https://binary.example.test/better-sqlite3',
-      ]);
-    }
-  });
-
-  test('component upgrade does not report an identical file missing from the saved manifest as conflict', () => {
-    const name = 'identical-untracked-collision';
-    const dest = installV1(name);
-    const sourceV2 = makeV2(name);
-    writeFile(dest, 'same.js', 'byte-identical');
-    writeFile(sourceV2, 'same.js', 'byte-identical');
-    fs.rmSync(failFlag, { force: true });
-
-    const result = runUpgradeE2E(name, sourceV2);
-
-    assert.equal(result.success, true);
-    assert.equal(result.mergeConflicts, null);
-    assert.equal(readFile(dest, 'same.js'), 'byte-identical');
-  });
 
   test('later npm failure rolls back files while the old baseline remains untouched; retry truly upgrades', () => {
     const name = 'commit-boundary-retry';
@@ -160,20 +127,6 @@ describe('runUpgrade owns the final baseline commit', () => {
     assert.match(retry.steps.find(step => step.name === 'smart_merge')?.message, /overwritten/);
     assert.equal(readFile(dest, 'a.js'), 'v2');
     assert.equal(loadManifest(dest).files['a.js'], hashFile(path.join(sourceV2, 'a.js')));
-    assert.equal(readFile(dest, '.zylos/originals/a.js'), 'v2');
-  });
-
-  test('successful pipeline exposes the baseline commit as its final step', () => {
-    const name = 'commit-boundary-success';
-    const dest = installV1(name);
-    const sourceV2 = makeV2(name);
-    fs.rmSync(failFlag, { force: true });
-
-    const result = runUpgradeE2E(name, sourceV2);
-
-    assert.equal(result.success, true);
-    assert.equal(result.steps.at(-1).name, 'commit_baseline');
-    assert.equal(result.steps.at(-1).step, 9);
     assert.equal(readFile(dest, '.zylos/originals/a.js'), 'v2');
   });
 

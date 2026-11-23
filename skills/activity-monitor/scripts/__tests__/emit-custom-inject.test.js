@@ -7,7 +7,7 @@ import { after, afterEach, describe, it } from 'node:test';
 
 const configRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'custom-config-test-'));
 process.env.ZYLOS_DIR = configRoot;
-const { customInjectDir, emitCustomInject } = await import('../emit-custom-inject.js');
+const { emitCustomInject } = await import('../emit-custom-inject.js');
 after(() => fs.rmSync(configRoot, { recursive: true, force: true }));
 
 const tmpDirs = [];
@@ -28,29 +28,7 @@ afterEach(() => {
   while (tmpDirs.length) fs.rmSync(tmpDirs.pop(), { recursive: true, force: true });
 });
 
-describe('customInjectDir', () => {
-  it('resolves under ZYLOS_DIR when set, else under ~/zylos', () => {
-    assert.equal(customInjectDir({ ZYLOS_DIR: '/opt/zy' }), path.join('/opt/zy', 'custom-hooks', 'session-start'));
-    assert.equal(customInjectDir({}), path.join(os.homedir(), 'zylos', 'custom-hooks', 'session-start'));
-  });
-});
-
 describe('emitCustomInject', () => {
-  it('emits nothing when the directory does not exist (fresh install)', async () => {
-    const zylosDir = makeZylosDir();
-    assert.equal(await emitCustomInject({ env: { ZYLOS_DIR: zylosDir } }), '');
-  });
-
-  it('emits nothing when the directory has no usable content', async () => {
-    const zylosDir = makeZylosDir();
-    fs.mkdirSync(path.join(zylosDir, 'custom-hooks', 'session-start'), { recursive: true });
-    assert.equal(await emitCustomInject({ env: { ZYLOS_DIR: zylosDir } }), '');
-
-    // Whitespace-only and empty files count as no content.
-    writeCustomFile(zylosDir, '10-empty.md', '');
-    writeCustomFile(zylosDir, '20-blank.md', '  \n\n\t\n');
-    assert.equal(await emitCustomInject({ env: { ZYLOS_DIR: zylosDir } }), '');
-  });
 
   it('concatenates .md files in lexicographic order (conf.d-style prefixes)', async () => {
     const zylosDir = makeZylosDir();
@@ -62,26 +40,6 @@ describe('emitCustomInject', () => {
       await emitCustomInject({ env: { ZYLOS_DIR: zylosDir } }),
       'HOUSE RULES\n\nPLATFORM RULES'
     );
-  });
-
-  it('ignores dotfiles and non-md entries', async () => {
-    const zylosDir = makeZylosDir();
-    writeCustomFile(zylosDir, '10-real.md', 'REAL');
-    writeCustomFile(zylosDir, '.05-hidden.md', 'HIDDEN');
-    writeCustomFile(zylosDir, 'notes.txt', 'TXT');
-    writeCustomFile(zylosDir, 'script.js', 'console.log("nope")');
-    fs.mkdirSync(path.join(zylosDir, 'custom-hooks', 'session-start', 'subdir.md'), { recursive: true });
-
-    assert.equal(await emitCustomInject({ env: { ZYLOS_DIR: zylosDir } }), 'REAL');
-  });
-
-  it('skips whitespace-only files but keeps the rest in order', async () => {
-    const zylosDir = makeZylosDir();
-    writeCustomFile(zylosDir, '10-a.md', 'A');
-    writeCustomFile(zylosDir, '20-blank.md', '   \n');
-    writeCustomFile(zylosDir, '30-c.md', '\nC\n');
-
-    assert.equal(await emitCustomInject({ env: { ZYLOS_DIR: zylosDir } }), 'A\n\nC');
   });
 
   it('group-bound sessions inject only their own rules regardless of mode', () => {

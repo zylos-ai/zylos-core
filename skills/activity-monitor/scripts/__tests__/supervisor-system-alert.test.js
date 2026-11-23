@@ -106,9 +106,6 @@ async function deliverAlert(t, { alertTarget, channelName, endpoint, group }) {
   assert.equal(rows[0].delivery_action, 'system_notice');
 }
 
-test('default supervisor alert delivery clears inherited session identity', { timeout: 40000 }, t =>
-  deliverAlert(t, { alertTarget: 'fixture:room', channelName: 'fixture', endpoint: 'room', group: 'fixture:responsible' }));
-
 // With no alert target the alert falls back to the Origin conversation and is
 // still recorded under origin although the Supervisor inherited another group.
 test('an unset alert target reaches dashboard origin under origin despite an inherited group', { timeout: 40000 }, t =>

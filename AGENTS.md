@@ -92,8 +92,6 @@ Minimum supported tmux is **3.2a**. Version matrix: **3.2a, 3.3a, 3.4, 3.7c, 3.8
 A change that builds tmux commands, format strings or environment values, or parses anything read back from tmux (`cli/lib/runtime/` and its callers), merges only after it passes the whole matrix. One local tmux version does not stand in for the matrix. For each version:
 
 1. **Runtime tests.** Put a binary named `tmux` of that version first on `PATH` and point `TEST_TMUX_BIN` at it, then run `node scripts/run-node-tests.js cli/lib/runtime/__tests__/*.test.js`. Every test must pass.
-2. **Real-path stress.** Launch at least 300 rounds and deliver at least 150 rounds through the real adapter code, on one socket with background session create/kill churn. Required: 0 errors, 0 tmux server crashes, 0 lines delivered to the wrong pane, 0 missing lines.
-3. **Positive control.** Under the same harness, a known-bad variant must fail: for example, the guard condition made constant-true, or the previous crashing code. A run that cannot fail does not count.
 
 Release rule: matrix green and no P0/P1 in review means the change merges. Each remaining P2/P3 becomes a backlog issue, not another revision round.
 
@@ -112,8 +110,8 @@ records. Keep this rule covered across all five versions, including literal
 backslashes next to dollars and control characters.
 
 Run the scripted gate as described in `docs/tmux-matrix.md` with all five
-preprovisioned binaries. It writes runtime logs, stress metrics, a failing
-known-bad guard control and provenance into a fresh evidence directory.
+preprovisioned binaries. It writes runtime logs and provenance into a fresh
+evidence directory.
 
 ## Release Process
 

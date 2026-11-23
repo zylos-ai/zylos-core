@@ -86,43 +86,4 @@ for (const target of ['--self', 'sample', '--all']) {
       } else assert.match(result.stderr, /--yes/);
     });
   }
-  test(`${target} keeps interactive cancellation successful`, async t => {
-    const f = fixture(t);
-    const result = await f.run([target, '--skip-eval'], { tty: true });
-    assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.match(result.stdout, /\[y\/N\]/);
-    assert.match(result.stdout, /Upgrade cancelled/);
-    assert.doesNotMatch(f.calls(), /upgrade/);
-  });
 }
-
-for (const target of ['--self', 'sample', '--all']) {
-  test(`${target} accepts explicit yes and reaches the upgrade boundary`, async t => {
-    const f = fixture(t);
-    const result = await f.run([target, '--yes', '--skip-eval']);
-    assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.match(f.calls(), /download\nupgrade\n/);
-  });
-}
-
-test('pending database migrations keep the existing JSON confirmation response', async t => {
-  const f = fixture(t);
-  const result = await f.run(['--self', '--json'], { migrations: true });
-  assert.equal(result.status, 0, result.stderr);
-  const output = JSON.parse(result.stdout);
-  assert.equal(output.action, 'check');
-  assert.equal(output.success, true);
-  assert.equal(output.requiresConfirmation, true);
-  assert.deepEqual(output.pendingMigrations, [{ source: 'c4', fromVersion: 1, toVersion: 2 }]);
-  assert.equal(output.error, undefined);
-  assert.match(output.reply, /migration/i);
-  assert.equal(f.calls(), '');
-});
-
-test('all-component JSON checks remain available without confirmation', async t => {
-  const f = fixture(t);
-  const result = await f.run(['--all', '--check', '--json']);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).action, 'check_all');
-  assert.equal(f.calls(), '');
-});

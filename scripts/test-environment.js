@@ -11,6 +11,32 @@ function isWithin(parent, target) {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
+// The runner names its root here for the Node test-file processes it starts.
+export const TEST_FILE_HOME_ROOT = 'ZYLOS_TEST_FILE_HOME_ROOT';
+
+// Keep the normal ~/zylos layout for home-relative hook/config paths.
+function useIsolatedHome(home, realHome) {
+  const zylos = path.join(home, 'zylos');
+  fs.mkdirSync(zylos);
+  assert(!isWithin(realHome, fs.realpathSync(home)), 'Test HOME must be outside the real home');
+  assert(!isWithin(realHome, fs.realpathSync(zylos)), 'Test ZYLOS_DIR must be outside the real home');
+  process.env.HOME = home;
+  process.env.ZYLOS_DIR = zylos;
+  process.env.PM2_HOME = path.join(home, '.pm2');
+  assert.equal(os.homedir(), home, 'os.homedir() must use the isolated HOME');
+}
+
+// Called by the test-child preload. Only a test-file process (Node sets
+// NODE_TEST_CONTEXT for it) takes its own HOME beside the run's tmp, so test
+// files never share one. Removing the marker keeps every later descendant on
+// the HOME it inherits or is explicitly given. The run root's removal cleans it.
+export function useTestFileHome() {
+  const root = process.env[TEST_FILE_HOME_ROOT];
+  if (!root || process.env.NODE_TEST_CONTEXT === undefined) return;
+  delete process.env[TEST_FILE_HOME_ROOT];
+  useIsolatedHome(fs.mkdtempSync(path.join(root, 'home-')), fs.realpathSync(os.userInfo().homedir));
+}
+
 export function testRootPrefix(tmpdir = os.tmpdir(), platform = process.platform) {
   const prefix = path.join(tmpdir, 'zylos-tests-');
   // The Node runner sets TMPDIR to root/tmp; PM2 cleanup tests then allocate
@@ -77,16 +103,8 @@ export function createTestEnvironment() {
 
   try {
     const home = path.join(root, 'home');
-    // Keep the normal ~/zylos layout for home-relative hook/config paths.
-    const zylos = path.join(home, 'zylos');
     fs.mkdirSync(home);
-    fs.mkdirSync(zylos);
-    assert(!isWithin(realHome, fs.realpathSync(home)), 'Test HOME must be outside the real home');
-    assert(!isWithin(realHome, fs.realpathSync(zylos)), 'Test ZYLOS_DIR must be outside the real home');
-    process.env.HOME = home;
-    process.env.ZYLOS_DIR = zylos;
-    process.env.PM2_HOME = path.join(home, '.pm2');
-    assert.equal(os.homedir(), home, 'os.homedir() must use the isolated HOME');
+    useIsolatedHome(home, realHome);
     restoreChildGuard = installTestChildGuard();
     process.on('exit', onExit);
     return { root, cleanup };

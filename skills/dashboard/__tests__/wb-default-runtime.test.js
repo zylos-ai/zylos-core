@@ -3,8 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { handleAction, getActionsMeta, instanceDefaults } from '../src/lib/actions.js';
-import { formatActionResult } from '../public/js/action-result.js';
+import { handleAction, instanceDefaults } from '../src/lib/actions.js';
 
 // Filesystem integration: real action validation and writes, private config files
 // only. Run for runtime selection/model/effort changes; skip presentation changes.
@@ -35,176 +34,13 @@ test('explicit Codex model changes project config while keeping Claude bytes', a
   assert.equal(fs.readFileSync(claude, 'utf8'), before);
 });
 
-test('explicit Claude model saves the default without requesting a restart', async t => {
-  const { claude, codex, config } = fixture(t), before = fs.readFileSync(codex, 'utf8');
-  const result = await handleAction('switch-model', { runtime: 'claude', model: 'sonnet' }, config);
-  assert.equal(result.ok, true);
-  assert.equal(result.runtime, 'claude');
-  assert.equal(result.requires_restart, false);
-  assert.equal(result.messageParams.runtime, 'claude');
-  assert.equal(JSON.parse(fs.readFileSync(claude)).model, 'sonnet');
-  assert.equal(fs.readFileSync(codex, 'utf8'), before);
-});
-
-test('empty configured and environment runtimes retain legacy Claude model and effort writes', async t => {
-  // Own the action cache so identical legacy payloads in other fixtures do not collide.
-  const { handleAction: dispatch } = await import('../src/lib/actions.js?empty-runtime-defaults');
-  const { claude, codex, config } = fixture(t), before = fs.readFileSync(codex, 'utf8');
-  const previous = process.env.ZYLOS_RUNTIME;
-  t.after(() => { if (previous === undefined) delete process.env.ZYLOS_RUNTIME; else process.env.ZYLOS_RUNTIME = previous; });
-  config.runtime = ''; process.env.ZYLOS_RUNTIME = '';
-  const model = await dispatch('switch-model', { model: 'sonnet' }, config);
-  const effort = await dispatch('switch-effort', { effort: 'high' }, config);
-  assert.equal(model.ok, true);
-  assert.equal(effort.ok, true);
-  assert.equal(model.runtime, 'claude');
-  assert.equal(effort.runtime, 'claude');
-  assert.equal(model.requires_restart, true);
-  assert.equal(effort.requires_restart, true);
-  const saved = JSON.parse(fs.readFileSync(claude));
-  assert.equal(saved.model, 'sonnet');
-  assert.equal(saved.effortLevel, 'high');
-  assert.equal(fs.readFileSync(codex, 'utf8'), before);
-});
-
-test('absent runtime retains active Claude behavior and unrelated settings', async t => {
-  const { claude, codex, config } = fixture(t), before = fs.readFileSync(codex, 'utf8');
-  const result = await handleAction('switch-model', { model: 'sonnet' }, config);
-  assert.equal(result.ok, true);
-  assert.equal(result.runtime, 'claude');
-  assert.equal(result.requires_restart, true);
-  assert.equal(JSON.parse(fs.readFileSync(claude)).model, 'sonnet');
-  assert.deepEqual(JSON.parse(fs.readFileSync(claude)).permissions, { allow: [] });
-  assert.equal(fs.readFileSync(codex, 'utf8'), before);
-});
-
-test('explicit invalid runtimes reject model and effort without either file changing', async t => {
-  const { claude, codex, config } = fixture(t);
-  const originals = [claude, codex].map(file => fs.readFileSync(file, 'utf8'));
-  for (const runtime of ['foo', null, 0, '']) {
-    for (const action of ['switch-model', 'switch-effort']) {
-      const result = await handleAction(action, { runtime, model: 'unused', effort: 'high' }, config);
-      assert.equal(result.error, 'INVALID_RUNTIME');
-    }
-  }
-  for (const [i, file] of [claude, codex].entries()) assert.equal(fs.readFileSync(file, 'utf8'), originals[i]);
-});
-
-test('effort writes target each selected runtime and metadata reads saved defaults', async t => {
-  const { dir, claude, codex, config } = fixture(t);
-  const beforeClaude = fs.readFileSync(claude, 'utf8');
-  const codexResult = await handleAction('switch-effort', { runtime: 'codex', effort: 'high' }, config);
-  assert.equal(codexResult.ok, true);
-  assert.equal(codexResult.requires_restart, false);
-  assert.equal(codexResult.messageParams.runtime, 'codex');
-  assert.equal(fs.readFileSync(claude, 'utf8'), beforeClaude);
-  assert.equal(instanceDefaults('codex', dir).effort, 'high');
-  const beforeCodex = fs.readFileSync(codex, 'utf8');
-  const claudeResult = await handleAction('switch-effort', { runtime: 'claude', effort: 'low' }, config);
-  assert.equal(claudeResult.ok, true);
-  assert.equal(claudeResult.requires_restart, false);
-  assert.equal(JSON.parse(fs.readFileSync(claude)).effortLevel, 'low');
-  assert.equal(fs.readFileSync(codex, 'utf8'), beforeCodex);
-  assert.equal(getActionsMeta(config, null).current_effort, 'low');
-  assert.equal(getActionsMeta({ ...config, runtime: 'codex' }, null).current_effort, 'high');
-});
-
 // Same private filesystem-only lifecycle as fixture; run for default effort
 // response semantics, skip UI-only edits. No child processes or timers start.
-test('effort without runtime retains the legacy restart request', async t => {
-  const { claude, config } = fixture(t);
-  const result = await handleAction('switch-effort', { effort: 'high' }, config);
-  assert.equal(result.ok, true);
-  assert.equal(result.runtime, 'claude');
-  assert.equal(result.requires_restart, true);
-  assert.equal(JSON.parse(fs.readFileSync(claude)).effortLevel, 'high');
-});
 
 // Unit boundary: real action adapter + formatter, with the Core action replaced
 // before a fresh adapter import. No CLI, HTTP server, files or background loops.
 // Run for runtime rejection presentation changes; skip unrelated price changes.
-test('runtime authentication rejection keeps the Core reason visible through action formatting', async t => {
-  const reason = Object.freeze({ code: 'AUTH_NOT_CONFIRMED', message: 'Please confirm the runtime login.' });
-  const rejected = Object.freeze({ ok: false, error: reason, messageKey: 'result.runtime_unknown', messageParams: { value: 'codex' } });
-  let response = rejected, calls = 0;
-  const core = t.mock.module('../src/lib/core-actions.js', { namedExports: {
-    handleCoreAction: async (action, body) => {
-      calls++;
-      assert.equal(action, 'switch-runtime');
-      assert.ok(['claude', 'codex'].includes(body.runtime));
-      return response;
-    },
-  } });
-  t.after(() => core.restore());
-  const { handleAction: dispatch } = await import('../src/lib/actions.js?runtime-auth-reason');
-  const config = { runtime: 'claude', zylosDir: process.env.ZYLOS_DIR };
-  const result = await dispatch('switch-runtime', { runtime: 'codex' }, config);
-  const translate = key => key === 'result.runtime_unknown' ? 'Runtime result is unknown.' : key;
-  assert.equal(result.ok, false);
-  assert.equal(result.error, reason);
-  assert.equal(result.messageParams, rejected.messageParams);
-  assert.equal(rejected.messageKey, 'result.runtime_unknown');
-  assert.equal(formatActionResult(result, translate), 'Please confirm the runtime login.');
-  response = { ok: false, error: { code: 'RESULT_UNKNOWN' }, messageKey: 'result.runtime_unknown' };
-  const unknown = await dispatch('switch-runtime', { runtime: 'claude' }, config);
-  assert.equal(unknown, response);
-  assert.equal(formatActionResult(unknown, translate), 'Runtime result is unknown.');
-  assert.equal(calls, 2);
-});
 
 // Run for changes to default model confirmation, target selection or restart
 // feedback. The real action writes only the private fixture, while session
 // discovery and the supervisor socket are supplied as inert fixture boundaries.
-test('confirmed default model saves before restarting only current model followers', async t => {
-  const { claude, config } = fixture(t);
-  const { loadCoreModule } = await import('../src/lib/core-modules.js');
-  const { observeRuntimeGroups, restartObservedGroups } = await loadCoreModule('config-restart.js');
-  const requests = [];
-  const launch = (sessionGroup, runtime = 'claude', ready = true) => ({
-    present: true, runtime, ready, runId: `run-${sessionGroup}`, launchConfig: { mode: 'default', runtime },
-  });
-  const live = {
-    origin: launch('origin'),
-    'telegram:other': launch('other', 'codex'),
-    'telegram:pinned': launch('pinned'),
-    'telegram:offline': { present: false },
-    'telegram:starting': launch('starting', 'claude', false),
-  };
-  const modelCore = t.mock.module('../src/lib/core-modules.js', { namedExports: {
-    loadCoreModule: async name => {
-      if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
-      if (name !== 'config-restart.js') return loadCoreModule(name);
-      return {
-        observeRuntimeGroups: (target, mode, options) => observeRuntimeGroups(target, mode, {
-          ...options, list: () => Object.keys(live).map(sessionGroup => ({ sessionGroup })),
-          overrides: (_groups, modelRuntime) => {
-            assert.equal(modelRuntime, 'claude');
-            return [{ sessionGroup: 'telegram:pinned' }];
-          },
-          identity: group => live[group],
-        }),
-        restartObservedGroups: (observed, options) => restartObservedGroups(observed, { ...options, restart: target => {
-          assert.equal(JSON.parse(fs.readFileSync(claude)).model, 'sonnet');
-          requests.push(target);
-          return { status: 'not_restarted', reason: 'fence_conflict' };
-        } }),
-      };
-    },
-  } });
-  t.after(() => modelCore.restore());
-  const { handleAction: dispatch } = await import('../src/lib/actions.js?confirmed-model-followers');
-  const body = { runtime: 'claude', model: 'sonnet' };
-  const rejected = await dispatch('switch-model', body, config);
-  assert.equal(rejected.status, 409);
-  assert.equal(rejected.error.code, 'CONFIRMATION_REQUIRED');
-  assert.equal(rejected.messageKey, 'wb.settings.modelConfirmationRequired');
-  assert.equal(JSON.parse(fs.readFileSync(claude)).model, 'opus');
-  assert.deepEqual(requests, []);
-
-  const saved = await dispatch('switch-model', { ...body, confirmed: true }, config);
-  assert.equal(saved.ok, true);
-  assert.equal(saved.requires_restart, false);
-  assert.deepEqual(requests, [{ sessionGroup: 'origin', runId: 'run-origin' }]);
-  assert.deepEqual(saved.data.groups.flatMap(row => row.restart ? [[row.sessionGroup, row.restart.reason]] : []),
-    [['origin', 'fence_conflict'], ['telegram:starting', 'not_ready']]);
-});

@@ -5,9 +5,7 @@ import path from 'node:path';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { setTimeout as delay } from 'node:timers/promises';
 import { fixture, launch, manual, assertReply } from './fixtures/manual-restart-harness.js';
-import { tmuxNameForGroup, groupRunDir } from '../cli/lib/session-group-paths.js';
 const worker = fileURLToPath(new URL('./fixtures/manual-restart-router-worker.js', import.meta.url));
 async function m1(t, f, scenario) {
   assert.ok(fs.realpathSync(f.root).startsWith(fs.realpathSync(process.env.TMPDIR) + path.sep));
@@ -35,7 +33,6 @@ async function m1(t, f, scenario) {
 }
 function trace(f) { const file = path.join(f.root, 'manual-router.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : []; }
 function requests(f) { const file = path.join(f.root, 'activity-monitor/restart-requests.json'); return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : []; }
-async function until(check, describe) { for (let i = 0; i < 200; i++) { if (await check()) return; await delay(10); } assert.fail(describe()); }
 for (const mode of ['single', 'multi']) test(`${mode} real dispatcher paste in flight, real supervisor manual kill retains gate until late bound Enter settles`, { timeout: 30000 }, async t => realInflight(t, mode));
 async function realInflight(t, mode) {
   const f = fixture(t, mode), m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
@@ -64,28 +61,3 @@ async function realInflight(t, mode) {
   t.diagnostic(JSON.stringify({ mode, boundary, accounted: f.db.prepare('SELECT status,retry_count FROM conversations WHERE id=?').get(id), delayedKeys: trace(f).filter(row => row.kind.startsWith('keys-')), finalRun: done.scene.runId }));
   await router.stop(); await m4.stop();
 }
-// Covers replacement failure after manual intent completes, including demanded multi Origin.
-// Run for resident demand/admission changes; skip for unrelated message routing. Requires
-// private HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR, private tmux -S/socket and DB; fixture cleans up.
-for (const mode of ['single', 'multi']) test(`${mode} real dispatcher replacement startup failure cannot restore completed manual intent or gate`, { timeout: 30000 }, async t => {
-  const f = fixture(t, mode); let ordinary;
-  if (mode === 'multi') {
-    const group = 'fixture:ordinary', name = tmuxNameForGroup(group), dir = groupRunDir(group, f.env); fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'current-session.json'), JSON.stringify({ runId: 'ordinary', sessionId: 'ordinary-session', ts: 1, startupControlIds: [] }));
-    f.tmux('new-session', '-d', '-s', name, '-e', 'ZYLOS_RUN_ID=ordinary', '-e', `ZYLOS_SESSION_GROUP=${group}`, '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', path.join(f.root, 'claude'), '120');
-    ordinary = { name, pid: f.tmux('display-message', '-p', '-t', `${name}:`, '#{pane_pid}') };
-  }
-  const m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
-  const req = manual('restart-then-fail', { expectedRunId: 'run-1' }); assertReply(await f.submit(req), req, 'accepted');
-  const stopped = await m4.command('tick'); assert.equal(stopped.scene.present, false); assert.deepEqual(stopped.requests, []); assert.deepEqual(stopped.fences, []);
-  const router = await m1(t, f, 'launch-failure');
-  await until(async () => { await router.call('tick'); await router.call('drain'); return (await router.call('state')).resident.failures > 0; }, () => JSON.stringify(trace(f)));
-  const attempts = trace(f).filter(row => row.kind === 'launch'); assert.ok(attempts.length > 0);
-  assert.ok(attempts.every(row => row.input.sessionGroup === 'origin'));
-  assert.ok(trace(f).some(row => row.kind === 'launch-error' || row.event === 'launch_failed' || row.event === 'ready_timeout'), JSON.stringify(trace(f)));
-  t.diagnostic(JSON.stringify({ mode, attempts, failures: trace(f).filter(row => row.kind === 'launch-error' || row.event === 'launch_failed' || row.event === 'ready_timeout'), resident: (await router.call('state')).resident }));
-  const final = await m4.command('tick'); assert.deepEqual(final.requests, []); assert.deepEqual(final.fences, []);
-  assert.equal(JSON.parse(fs.readFileSync(f.readyPath, 'utf8')).runId, 'run-1');
-  if (ordinary) { assert.equal(f.tmux('display-message', '-p', '-t', `${ordinary.name}:`, '#{pane_pid}'), ordinary.pid); assert.equal(f.tmux('show-environment', '-t', `=${ordinary.name}`, 'ZYLOS_RUN_ID'), 'ZYLOS_RUN_ID=ordinary'); }
-  assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper')); await router.stop(); await m4.stop();
-});

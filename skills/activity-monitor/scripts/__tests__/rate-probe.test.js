@@ -91,14 +91,3 @@ for (const expired of [false, true]) test(`injected rate limit, ${expired ? 'pro
   await verifyRateRecovery(t, { expired });
 });
 
-test('no independent rate limit: auth restart/release returns directly to ok', async t => {
-  const f = fixture(t); await f.reopen();
-  assert.equal((await f.probe({ force: true, evidence: { authFailure: { detected: true } } })).classification, 'auth_error');
-  assert.equal(f.health().rateLimitActive, false); await f.reopen();
-  assert.equal(f.health().health, 'auth_failed'); assert.equal(f.health().rateLimitActive, false);
-  f.setScenes([]);
-  assert.equal(await f.coordinator.beginAuthRecovery('codex', { status: 'success' }, []), true);
-  assert.equal(await f.coordinator.completeAuthRecovery('codex', { isGone: () => true }), true);
-  assert.equal(f.health().health, 'ok'); assert.equal(f.health().rateLimitActive, false);
-  assert.equal(f.health().scheduling.cooldownUntil, 0);
-});

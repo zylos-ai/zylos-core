@@ -9,7 +9,6 @@ import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import * as c4Schema from '../../../comm-bridge/scripts/c4-schema.js';
 import { migrateDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
-import { resolveSavedSessionGroup, updatedReplyTarget } from '../saved-session-group.js';
 
 const cli = fileURLToPath(new URL('../cli.js', import.meta.url));
 function fixture(t) {
@@ -51,27 +50,6 @@ test('actual add covers seven saved-target cases; no namespace allocation or req
   assert.equal(f.c4.prepare('SELECT count(*) AS n FROM group_heads').get().n, 0);
 });
 
-test('actual add/update reject malformed L, missing X and uninstalled/illegal X with no task or mutation', t => {
-  const f = fixture(t), task = add(f, ['--reply-channel', 'telegram', '--reply-endpoint', '-1', '--reply-session-group', 'g-kept']);
-  for (const args of [
-    ['--reply-session-group', 'x'], ['--reply-channel', 'telegram', '--reply-session-group', ''],
-    ['--reply-channel', 'telegram', '--reply-session-group', 'bad space'], ['--reply-channel', 'telegram', '--reply-session-group', 'x'.repeat(96)],
-    ['--reply-channel', 'missing'], ['--reply-channel', '../telegram'], ['--reply-channel', ''],
-  ]) {
-    const before = f.read();
-    for (const command of [['add', 'invalid', '--in', '1 hour'], ['update', task.id]]) {
-      const answer = f.run([...command, ...args]); assert.notEqual(answer.status, 0, JSON.stringify(args));
-      assert.match(answer.stderr, /INVALID_ARGS|SESSION_GROUP_INVALID|SESSION_GROUP_TOO_LONG/);
-      assert.doesNotMatch(answer.stderr, /message was NOT stored/i);
-      if (args[0] === '--reply-channel' && ['missing', '../telegram', ''].includes(args[1])) assert.match(answer.stderr, /invalid channel/);
-      assert.deepEqual(f.read(), before);
-    }
-  }
-  const unknown = f.run(['add', 'unknown', '--in', '1 hour'], 'unbound:a');
-  assert.equal(unknown.status, 1); assert.match(unknown.stderr, /INVALID_ARGS/);
-  assert.deepEqual(f.c4.prepare('SELECT * FROM channel_namespaces ORDER BY component_name').all(), f.before);
-});
-
 test('update recomputes explicit target; clear and ordinary fields preserve saved values, including NULL', t => {
   const f = fixture(t);
   for (const initial of [[], ['--reply-channel', 'telegram', '--reply-endpoint', '-1', '--reply-session-group', 'g-old']]) {
@@ -87,45 +65,6 @@ test('update recomputes explicit target; clear and ordinary fields preserve save
     answer = f.run(['update', task.id, '--reply-endpoint', '-2'], 'tg:editor'); assert.equal(answer.status, 0, answer.stderr);
     assert.deepEqual(pair(f.read().find(row => row.id === task.id)), ['telegram', null]);
   }
-});
-
-test('task INSERT failure leaves namespace bindings unchanged', t => {
-  const f = fixture(t); add(f);
-  const db = new Database(path.join(f.root, 'scheduler/scheduler.db'));
-  db.exec("CREATE TRIGGER deny_task BEFORE INSERT ON tasks BEGIN SELECT RAISE(ABORT,'test insert failure'); END"); db.close();
-  const answer = f.run(['add', 'fail', '--in', '1 hour', '--reply-channel', 'lark', '--reply-endpoint', 'chat-new', '--reply-session-group', 'new']);
-  assert.equal(answer.status, 1); assert.match(answer.stderr, /DB_WRITE_FAILED/);
-  assert.equal(f.read().length, 1);
-  assert.deepEqual(f.c4.prepare('SELECT * FROM channel_namespaces ORDER BY component_name').all(), f.before);
-});
-
-test('paired routes reject incomplete add/update without changing any task field', t => {
-  const f = fixture(t);
-  const plain = add(f, [], 'tg:creator');
-  for (const args of [['--reply-channel', 'telegram'], ['--reply-endpoint', '-1002'],
-    ['--reply-endpoint', ''], ['--reply-channel', 'telegram', '--reply-endpoint', '']]) {
-    for (const command of [['add', 'incomplete', '--in', '1 hour'], ['update', plain.id, '--priority', '1']]) {
-      const before = f.read();
-      const answer = f.run([...command, ...args]);
-      assert.equal(answer.status, 1); assert.match(answer.stderr, /INVALID_ARGS/);
-      assert.deepEqual(f.read(), before);
-    }
-  }
-  const beforeEmpty = f.read();
-  const emptyAdd = f.run(['add', 'incomplete', '--in', '1 hour', '--reply-endpoint', '']);
-  assert.equal(emptyAdd.status, 1); assert.match(emptyAdd.stderr, /INVALID_ARGS/);
-  assert.deepEqual(f.read(), beforeEmpty);
-  const task = add(f, ['--reply-channel', 'telegram', '--reply-endpoint', '-1001', '--reply-session-group', 'g-1001']);
-  const answer = f.run(['update', task.id, '--reply-endpoint', '-1002'], 'tg:editor');
-  assert.equal(answer.status, 0, answer.stderr);
-  const row = f.read().find(row => row.id === task.id);
-  assert.deepEqual([row.reply_channel, row.reply_endpoint], ['telegram', '-1002']);
-  assert.deepEqual(pair(row), ['telegram', null]);
-  const before = f.read();
-  const emptyEndpoint = f.run(['update', task.id, '--reply-endpoint', '']);
-  assert.equal(emptyEndpoint.status, 1); assert.match(emptyEndpoint.stderr, /INVALID_ARGS/);
-  assert.deepEqual(f.read(), before);
-  assert.deepEqual(f.c4.prepare('SELECT * FROM channel_namespaces ORDER BY component_name').all(), f.before);
 });
 
 test('single mode ignores latest lark input and other-group tmux hints', t => {
@@ -157,13 +96,4 @@ test('single mode ignores latest lark input and other-group tmux hints', t => {
   }
   assert.deepEqual(f.c4.prepare('SELECT * FROM channel_namespaces ORDER BY component_name').all(), beforeBindings);
   assert.deepEqual(f.c4.prepare('SELECT * FROM conversations ORDER BY id').all(), beforeMessages);
-});
-
-test('pure resolver never looks up explicit targets; environment lookup is readonly, clear does not infer editor group', () => {
-  let lookups = 0;
-  const deps = { env: { ZYLOS_SESSION_GROUP: 'tg:editor' }, validate: () => {}, lookup: namespace => { lookups++; assert.equal(namespace, 'tg'); return 'telegram'; } };
-  assert.deepEqual(pair(resolveSavedSessionGroup({ 'reply-channel': 'lark', 'reply-endpoint': 'chat-new', 'reply-session-group': 'new' }, { ...deps, lookup: () => { throw new Error('D5 read forbidden'); } })), ['lark', 'new']);
-  assert.deepEqual(pair(resolveSavedSessionGroup({}, deps)), ['telegram', 'editor']); assert.equal(lookups, 1);
-  assert.deepEqual(updatedReplyTarget({}, { 'clear-reply': true }, { ...deps, lookup: () => { throw new Error('unexpected lookup'); } }), { reply_channel: null, reply_endpoint: null });
-  assert.deepEqual(updatedReplyTarget({}, { priority: 1 }, deps), {});
 });

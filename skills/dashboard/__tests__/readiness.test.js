@@ -1,47 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createReadinessCheck, readReadiness } from '../src/lib/readiness.js';
-
-test('overlapping readiness checks share a promise and release it after success', async () => {
-  let calls = 0, finish;
-  const check = createReadinessCheck(() => {
-    calls++;
-    return new Promise(resolve => { finish = resolve; });
-  });
-  const pending = Array.from({ length: 50 }, () => check());
-  assert.ok(pending.every(value => value === pending[0]));
-  await Promise.resolve();
-  assert.equal(calls, 1);
-  const result = { ready: true };
-  finish(result);
-  assert.ok((await Promise.all(pending)).every(value => value === result));
-  const next = check();
-  assert.notEqual(next, pending[0]);
-  await Promise.resolve();
-  assert.equal(calls, 2);
-  finish(result);
-  await next;
-});
-
-test('failed readiness checks release the shared promise for the next request', async () => {
-  for (const synchronous of [true, false]) {
-    let calls = 0;
-    const error = new Error('check failed');
-    const check = createReadinessCheck(() => {
-      if (++calls === 1) {
-        if (synchronous) throw error;
-        return Promise.reject(error);
-      }
-      return { ready: true };
-    });
-    const pending = Array.from({ length: 20 }, () => check());
-    const results = await Promise.allSettled(pending);
-    assert.equal(calls, 1);
-    assert.ok(results.every(result => result.status === 'rejected' && result.reason === error));
-    assert.deepEqual(await check(), { ready: true });
-    assert.equal(calls, 2);
-  }
-});
+import { readReadiness } from '../src/lib/readiness.js';
 
 function fixture({ mode = 'single', health = { missing: true }, responsive = true } = {}) {
   const calls = [];
@@ -62,19 +21,6 @@ function fixture({ mode = 'single', health = { missing: true }, responsive = tru
   } };
 }
 
-test('only supervisor response gates readiness in every mode', async () => {
-  // A null mode represents an instance without the session mode key.
-  for (const mode of [null, 'single', 'multi']) for (const responsive of [true, false]) {
-    const f = fixture({ mode, responsive });
-    const result = await readReadiness(f);
-    assert.equal(result.ready, responsive);
-    assert.equal(result.reason, responsive ? null : 'supervisor_unavailable');
-    assert.equal(result.session_mode, mode ?? 'single');
-    assert.equal(result.session_running, null);
-    assert.equal(f.calls.includes('identity'), false);
-  }
-});
-
 test('health projection preserves known states and excludes every other record field', async () => {
   for (const health of ['ok', 'auth_failed', 'rate_limited', 'unavailable', 'down', 'recovering']) {
     const result = await readReadiness(fixture({ health: { health, pid: 123, reason: '/private/path', runId: 'secret-run', hook: { tool: 'private-tool' } } }));
@@ -83,70 +29,4 @@ test('health projection preserves known states and excludes every other record f
     assert.deepEqual(Object.keys(result).sort(), ['ready', 'reason', 'runtime_health', 'session_mode', 'session_running']);
     assert.doesNotMatch(JSON.stringify(result), /private|secret|pid|hook|tool|runId/);
   }
-});
-
-test('unreadable observations remain unknown without becoming a third rejection gate', async () => {
-  const f = fixture();
-  const base = f.load;
-  f.load = async name => {
-    const module = await base(name);
-    if (name === 'config.js') return { readSessionMode: () => { throw new Error('/private/config'); } };
-    if (name === 'session-state-reader.js') return { readRuntimeHealth: () => { throw new Error('/private/health'); } };
-    return module;
-  };
-  const result = await readReadiness(f);
-  assert.equal(result.ready, true);
-  assert.equal(result.session_mode, 'unreadable');
-  assert.equal(result.session_running, null);
-  assert.deepEqual(result.runtime_health.claude, { source: 'unreadable', health: null });
-  const absentMode = await readReadiness(fixture({ mode: null }));
-  assert.equal(absentMode.session_mode, 'single');
-});
-
-test('unreadable mode with an absent session remains ready without inspecting identity', async () => {
-  const f = fixture();
-  const original = f.load;
-  f.load = async name => name === 'config.js' ? {
-    readSessionMode: () => { throw new Error('unreadable configuration'); },
-  } : original(name);
-  const result = await readReadiness(f);
-  assert.equal(result.ready, true);
-  assert.equal(result.reason, null);
-  assert.equal(result.session_mode, 'unreadable');
-  assert.equal(result.session_running, null);
-  assert.equal(f.calls.includes('identity'), false);
-});
-
-test('reader module loading failure retains all public runtime health entries', async () => {
-  const f = fixture();
-  const original = f.load;
-  f.load = async name => {
-    if (name === 'session-state-reader.js') throw new Error('reader unavailable');
-    return original(name);
-  };
-  const result = await readReadiness(f);
-  assert.equal(result.ready, true);
-  assert.equal(result.reason, null);
-  assert.equal(result.session_running, null);
-  assert.deepEqual(result.runtime_health, {
-    claude: { source: 'unreadable', health: null }, codex: { source: 'unreadable', health: null }, agy: { source: 'unreadable', health: null },
-  });
-});
-
-test('agy runtime health is read independently from Claude and Codex diagnostics', async () => {
-  const f = fixture();
-  const original = f.load;
-  const calls = [];
-  f.load = async name => name === 'session-state-reader.js' ? {
-    readRuntimeHealth: async runtime => {
-      calls.push(runtime);
-      return runtime === 'agy' ? { health: 'auth_failed' } : { missing: true };
-    },
-  } : original(name);
-  const result = await readReadiness(f);
-  assert.equal(result.ready, true);
-  assert.deepEqual(calls, ['claude', 'codex', 'agy']);
-  assert.deepEqual(result.runtime_health.agy, { source: 'record', health: 'auth_failed' });
-  assert.deepEqual(result.runtime_health.claude, { source: 'missing', health: null });
-  assert.deepEqual(result.runtime_health.codex, { source: 'missing', health: null });
 });

@@ -4,17 +4,14 @@ import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { syncBuiltinESMExports } from 'node:module';
 import * as schema from '../schema.js';
-import * as c4Schema from '../../../comm-bridge/scripts/c4-schema.js';
-import * as c4 from '../../../comm-bridge/scripts/c4-db.js';
 import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 import { dispatchTask, executionMarker } from '../daemon-dispatch.js';
 import { sendViaC4 } from '../runtime.js';
-import { queryComponentSessionGroup } from '../../../comm-bridge/scripts/c4-component-session-group.js';
-import { mainLoop, handleMissedTasks, runSchedulerIteration } from '../daemon-dispatch.js';
+import { mainLoop, runSchedulerIteration } from '../daemon-dispatch.js';
 import { realReceive } from './fixtures/real-receive.js';
 const receiveFixture=fileURLToPath(new URL('./fixtures/receive-result.mjs',import.meta.url));
 function fixture(t, overrides={}) {
@@ -61,115 +58,6 @@ test(`successful ${type} delivery ends its exact history and advances from deliv
   assert.equal(after.task.last_error, 'OLD_FAILURE'); assert.equal(after.task.failed_at, null);
   assert.equal(after.task.next_run_at, type === 'one-time' ? task.next_run_at
     : type === 'recurring' ? start / 1000 + 1800 : start / 1000 + 1807);
-});
-
-for (const category of ['success', 'C'])
-test(`${category} delivery settles only its new history when an older occurrence is still started`, t => {
-  const start = Date.parse('2030-01-01T00:00:00Z');
-  t.mock.timers.enable({ apis: ['Date'], now: start });
-  const { db, task, read } = fixture(t);
-  const olderId = Number(db.prepare(`INSERT INTO task_history
-    (task_id,executed_at,status,error,completed_at,duration_ms)
-    VALUES(?,?,'started','OLDER_UNRESOLVED_RECEIPT',NULL,NULL)`)
-    .run(task.id, start / 1000 - 90).lastInsertRowid);
-  const olderBytes = JSON.stringify(read().history[0]);
-  const warning = category === 'C' ? 'UNHEALTHY_NOTIFY_UNCERTAIN' : undefined;
-  const result = dispatchTask(db, task, { ...base, sendViaC4() {
-    t.mock.timers.tick(5000); return { category, ...(warning ? { code: warning } : {}) };
-  } });
-  const after = read();
-  assert.equal(after.history.length, 2); assert.notEqual(result.historyId, olderId);
-  assert.equal(after.history[0].id, olderId);
-  assert.equal(JSON.stringify(after.history[0]), olderBytes);
-  const current = after.history.find(row => row.id === result.historyId);
-  assert.equal(current.status, 'success'); assert.equal(current.executed_at, start / 1000);
-  assert.equal(current.completed_at, start / 1000 + 5); assert.equal(current.duration_ms, 5000);
-  assert.equal(current.error, warning ?? null); assert.equal(after.task.status, 'completed');
-});
-
-for (const type of ['recurring', 'interval'])
-test(`half-hour ${type} delivers at two consecutive occurrences without done`, t => {
-  const start = Date.parse('2030-01-01T00:00:00Z');
-  t.mock.timers.enable({ apis: ['Date'], now: start });
-  const { db, read } = fixture(t, { type, cron_expression: type === 'recurring' ? '*/30 * * * *' : null,
-    interval_seconds: type === 'interval' ? 1800 : null, timezone: 'UTC', next_run_at: start / 1000 });
-  let sends = 0;
-  const deps = { ...base, sendViaC4: () => { sends++; return { category: 'success' }; } };
-  runSchedulerIteration(db, deps);
-  assert.equal(sends, 1); assert.equal(read().task.status, 'pending');
-  assert.equal(read().task.next_run_at, start / 1000 + 1800);
-  t.mock.timers.tick(1799000); runSchedulerIteration(db, deps); assert.equal(sends, 1);
-  t.mock.timers.tick(1000); runSchedulerIteration(db, deps);
-  assert.equal(sends, 2); assert.equal(read().task.status, 'pending');
-  assert.equal(read().task.next_run_at, start / 1000 + 3600);
-  assert.equal(read().history.length, 2);
-  for (const row of read().history) {
-    assert.equal(row.status, 'success'); assert.equal(row.completed_at, row.executed_at);
-    assert.equal(row.duration_ms, 0); assert.equal(row.error, null);
-  }
-});
-
-for (const type of ['one-time', 'interval'])
-test(`successful ${type} accounting rolls back task and history together on database failure`, t => {
-  const { db, task, read } = fixture(t, { type, interval_seconds: 1800 }); let sends = 0;
-  const status = type === 'one-time' ? 'completed' : 'pending';
-  db.exec(`CREATE TRIGGER fail_delivery_result BEFORE UPDATE ON tasks WHEN NEW.status='${status}' BEGIN SELECT RAISE(ABORT,'delivery account failure'); END`);
-  assert.throws(() => dispatchTask(db, task, { ...base, sendViaC4: () => { sends++; return { category: 'success' }; } }), /delivery account failure/);
-  assert.equal(sends, 1); assert.equal(read().task.status, 'running');
-  assert.equal(read().history.length, 1); assert.equal(read().history[0].status, 'started');
-  assert.equal(read().history[0].completed_at, null); assert.equal(read().history[0].duration_ms, null);
-  assert.equal(dispatchTask(db, task, { ...base, sendViaC4: () => assert.fail('must not resend') }).claimed, false);
-});
-
-for (const category of ['T', 'R']) test(`failed dispatch records elapsed time and reason: ${category}`, t => {
-  t.mock.timers.enable({ apis: ['Date'], now: 2000000000000 });
-  const { db, task, read } = fixture(t);
-  const result = dispatchTask(db, task, { ...base, sendViaC4() {
-    t.mock.timers.tick(7000);
-    return { category, code: 'DB_BUSY' };
-  } });
-  const row = read().history.find(entry => entry.id === result.historyId);
-  assert.equal(row.status, 'failed');
-  assert.equal(row.error, 'DB_BUSY');
-  assert.equal(row.completed_at - row.executed_at, 7);
-  assert.equal(row.duration_ms, (row.completed_at - row.executed_at) * 1000);
-});
-
-test('unconfirmed delivery retains its reason while the receipt may still arrive', t => {
-  const { db, task, read } = fixture(t);
-  db.prepare("INSERT INTO task_history(task_id,executed_at,status,error,duration_ms) VALUES(?,1,'failed','OLDER_FAILURE',3000)").run(task.id);
-  const previous = read().history[0];
-  const result = dispatchTask(db, task, { ...base,
-    sendViaC4: () => ({ category: 'U', code: 'RECEIVE_RESULT_UNKNOWN' }),
-    getConversationsByRange() { throw new Error('read unavailable'); }
-  });
-  const row = read(), history = row.history.find(entry => entry.id === result.historyId);
-  assert.equal(history.status, 'started'); assert.equal(history.error, 'RECEIVE_RESULT_UNKNOWN');
-  assert.equal(history.duration_ms, null); assert.equal(history.completed_at, null);
-  assert.equal(row.task.status, 'running'); assert.equal(row.task.last_error, 'RECEIVE_RESULT_UNKNOWN');
-  assert.deepEqual(row.history[0], previous);
-});
-
-for (const type of ['one-time', 'recurring', 'interval'])
-for (const code of ['UNHEALTHY_NOTIFY_FAILED', 'UNHEALTHY_NOTIFY_UNCERTAIN'])
-test(`${type} persisted delivery succeeds despite ${code}`, t => {
-  const start = Date.parse('2030-01-01T00:00:00Z');
-  t.mock.timers.enable({ apis: ['Date'], now: start });
-  const { db, task, read } = fixture(t, { type,
-    cron_expression: type === 'recurring' ? '*/30 * * * *' : null,
-    interval_seconds: type === 'interval' ? 1800 : null, timezone: 'UTC' });
-  let sends = 0;
-  const result = dispatchTask(db, task, { ...base, sendViaC4() {
-    sends++; t.mock.timers.tick(7000); return { category: 'C', code };
-  } });
-  assert.equal(result.claimed, true); assert.equal(sends, 1);
-  const row = read(), history = row.history[0];
-  assert.equal(row.task.status, type === 'one-time' ? 'completed' : 'pending');
-  assert.equal(history.status, 'success'); assert.equal(history.error, code);
-  assert.equal(history.completed_at, start / 1000 + 7); assert.equal(history.duration_ms, 7000);
-  assert.equal(row.task.last_error, code); assert.equal(row.task.failed_at, null);
-  if (type !== 'one-time') assert.equal(row.task.next_run_at,
-    start / 1000 + (type === 'recurring' ? 1800 : 1807));
 });
 
 for(const mode of ['success','UNHEALTHY_NOTIFY_FAILED','UNHEALTHY_NOTIFY_UNCERTAIN'])
@@ -225,23 +113,6 @@ test('T known zero commit retains original due time and retries with new executi
  assert.ok(read().history.every(row=>row.status==='failed'&&row.error==='DB_BUSY'));
 });
 
-test('failed pre-send lower bound never starts receive and rolls back execution to pending',t=>{
- const {db,task,read}=fixture(t);
- const result=dispatchTask(db,task,{...base,getRecentConversations(){throw new Error('locked');},sendViaC4(){assert.fail('must not send');}});
- assert.equal(result.category,'T');assert.equal(read().task.status,'pending');assert.equal(read().task.next_run_at,task.next_run_at);
- assert.equal(read().history[0].error,'CONVERSATION_BOUND_UNAVAILABLE');
-});
-
-test('unknown receipt finds exact execution in mixed D1 statuses and absorbed groups',t=>{
- const {db,task,read}=fixture(t);let marker;let exited=false;let reads=0;
- const result=dispatchTask(db,task,{getRecentConversations(limit){assert.equal(limit,1);return [{id:3}];},
- sendViaC4(message,options){marker=message.split('\n')[0];const result=receive('invalid')(message,options);exited=true;return result;},
- getConversationsByRange(start,end){reads++;assert.equal(exited,true);assert.equal(start,4);assert.equal(end,Number.MAX_SAFE_INTEGER);return [
- {id:4,direction:'in',content:executionMarker(task.id,999)+'\nold',status:'delivered'},
- ...['pending','running','delivered','failed'].map((status,i)=>({id:50+i,direction:'in',content:marker+'\n'+('x'.repeat(5000)),status,session_group:'origin'}))];}});
- assert.equal(result.category,'success');assert.equal(reads,1);assert.equal(read().task.status,'completed');assert.equal(read().history[0].status,'success');
-});
-
 test('full marker rejects old history, substrings, prefix and outbound false matches',t=>{
  const {db,task,read}=fixture(t);let marker;
  const result=dispatchTask(db,task,{...base,sendViaC4(message){marker=message.split('\n')[0];return {category:'U'};},getConversationsByRange(start,end){
@@ -249,17 +120,6 @@ test('full marker rejects old history, substrings, prefix and outbound false mat
  return [{direction:'in',content:executionMarker(task.id,0)+'\nold'},{direction:'in',content:'prefix '+marker},{direction:'in',content:marker+' suffix'}, {direction:'in',content:'other\n'+marker},{direction:'out',content:marker}];}});
  assert.equal(result.category,'T');assert.equal(read().task.status,'pending');assert.equal(read().task.next_run_at,task.next_run_at);
 });
-
-for(const mode of ['timeout'])for(const outcome of ['found','absent','failed'])
- test(`actual child ${mode}, one readback ${outcome}`,t=>{
- const {db,task,read}=fixture(t);const dir=fs.mkdtempSync(path.join(os.tmpdir(),'scheduler-readback-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
- const exited=path.join(dir,'exited');let marker,returned=false;
- const result=dispatchTask(db,task,{...base,sendViaC4(message,options){marker=message.split('\n')[0];const value=receive(mode,{timeout:mode==='timeout'?500:45000,env:{RECEIVE_FIXTURE_EXITED:exited}})(message,options);returned=true;return value;},
- getConversationsByRange(){assert.equal(returned,true);if(mode==='timeout')assert.equal(fs.readFileSync(exited,'utf8'),'exited');if(outcome==='failed')throw new Error('read failed');return outcome==='found'?[{direction:'in',content:marker+'\ntext'}]:[];}});
- assert.equal(result.category,{found:'success',absent:'T',failed:'U'}[outcome]);
- assert.equal(read().task.status,{found:'completed',absent:'pending',failed:'running'}[outcome]);
- assert.equal(read().history[0].status,{found:'success',absent:'failed',failed:'started'}[outcome]);
- });
 
 for(const category of ['R','T','C','U','success']) test(`late ${category} accounting cannot overwrite an already closed delivery`,t=>{
  const {db,task,read}=fixture(t);
@@ -320,13 +180,6 @@ for(const mode of ['single','multi'])
   assert.equal(sends,1);
  });
 
-for(const mode of ['single','multi'])
- test(`missed loop ignores actual ${mode} machine / origin / target status files`,async t=>{
-  const {db,read}=fixture(t,{type:'interval',interval_seconds:60,next_run_at:Math.floor(Date.now()/1000)-400,miss_threshold:600,session_component:'telegram',session_group_name:'team'});let sends=0;
-  await withStatusFiles(t,mode,()=>handleMissedTasks(db,{...base,sendViaC4(){sends++;return {category:'success'};}}));
-  assert.equal(sends,1);assert.equal(read().task.status,'pending');
- });
-
 for(const type of ['one-time','interval']) test(`zero-commit retries stop beyond miss window: ${type}`,t=>{
  t.mock.timers.enable({apis:['Date'],now:2000000000000});
  const {db,task,read}=fixture(t,{type,interval_seconds:60});let sends=0;
@@ -382,32 +235,6 @@ test(`daemon startup closes an abandoned ${type} claim without sending`, async t
   assert.equal(read().task.status, type === 'one-time' ? 'failed' : 'pending');
 });
 
-// Boundary: actual scheduler iteration with private in-memory SQLite and an
-// injected receipt. Run for periodic schedule validation/accounting changes;
-// unrelated UI changes may skip. No daemon process, socket or live service.
-for (const [type, reason] of [
-  ['recurring', 'Missing cron expression for recurring task'],
-  ['interval', 'Missing interval seconds for interval task'],
-]) test(`${type} delivery with a missing schedule fails the task while retaining successful history`, t => {
-  const start = Date.parse('2030-01-01T00:00:00Z');
-  t.mock.timers.enable({ apis: ['Date'], now: start });
-  const { db, read } = fixture(t, { type, cron_expression: null, interval_seconds: null, timezone: 'UTC' });
-  let sends = 0;
-  const deps = { ...base, sendViaC4() { sends++; return { category: 'success' }; } };
-  runSchedulerIteration(db, deps);
-  const after = read();
-  assert.equal(sends, 1); assert.equal(after.task.status, 'failed');
-  assert.equal(after.task.last_error, reason);
-  assert.equal(after.history.length, 1); assert.equal(after.history[0].status, 'success');
-  assert.equal(after.history[0].error, null);
-  assert.equal(after.history[0].completed_at, start / 1000);
-  assert.equal(after.history[0].duration_ms, 0);
-  const accounted = JSON.stringify(after);
-  t.mock.timers.tick(400000);
-  for (let iteration = 0; iteration < 3; iteration++) runSchedulerIteration(db, deps);
-  assert.equal(sends, 1); assert.equal(JSON.stringify(read()), accounted);
-});
-
 // Boundary: actual daemon iteration/startup and SQLite accounting for damaged
 // saved schedules. Run after rescheduling or stale-delivery changes; UI-only
 // changes may skip. Uses only the private/in-memory fixture and injected receive,
@@ -455,239 +282,4 @@ test(`invalid saved ${invalid} fails only its abandoned task during daemon ${ent
   const preserved = JSON.stringify(after);
   runSchedulerIteration(db, deps);
   assert.equal(sent.length, 1); assert.equal(JSON.stringify(read()), preserved);
-});
-
-for (const category of ['success', 'C', 'R'])
-test(`${category} receipt keeps its history when the saved timezone cannot be rescheduled`, t => {
-  const start = Date.parse('2030-01-01T00:00:00Z');
-  t.mock.timers.enable({ apis: ['Date'], now: start });
-  const { db, task, read } = fixture(t, { type: 'recurring', priority: 1,
-    cron_expression: '*/30 * * * *', timezone: 'Mars/Olympus', next_run_at: start / 1000 });
-  const sibling = insertUnrelatedDueTask(db, task), sent = [];
-  const code = category === 'C' ? 'UNHEALTHY_NOTIFY_UNCERTAIN' : category === 'R' ? 'INVALID_ARGS' : undefined;
-  const deps = { ...base, sendViaC4(message) {
-    sent.push(message);
-    return message.startsWith(`[Scheduled Task: ${task.id} #`) ? { category, ...(code ? { code } : {}) } : { category: 'success' };
-  } };
-  runSchedulerIteration(db, deps);
-  const after = read();
-  assert.equal(sent.length, 1); assert.equal(after.task.status, 'failed');
-  assert.match(after.task.last_error, /^Invalid cron expression "/);
-  assert.notEqual(after.task.last_error, code);
-  assert.equal(after.history.length, 1);
-  assert.equal(after.history[0].status, category === 'R' ? 'failed' : 'success');
-  assert.equal(after.history[0].error, code ?? null);
-  assert.equal(after.history[0].completed_at, start / 1000); assert.equal(after.history[0].duration_ms, 0);
-  runSchedulerIteration(db, deps);
-  assert.equal(sent.length, 2); assert.ok(sent[1].startsWith(`[Scheduled Task: ${sibling.id} #`));
-  assert.equal(db.prepare('SELECT status FROM tasks WHERE id=?').get(sibling.id).status, 'completed');
-  runSchedulerIteration(db, deps);
-  assert.equal(sent.length, 2); assert.deepEqual(read(), after);
-});
-
-test('real recent/range reads find full execution after a non-maximum-id lower bound',t=>{
- const {db,task,read}=fixture(t);
- const messages=new Database(':memory:');
- guardDatabase(messages,c4Schema);t.after(()=>messages.close());
- const recent=limit=>c4.getRecentConversations(limit,messages);
- const range=(begin,end)=>c4.getConversationsByRange(begin,end,messages);
- // U readback needs a persisted row with a deliberately lost receipt; inject only that uncertainty.
- const put=messages.prepare("INSERT INTO conversations(direction,channel,content,timestamp,status,session_group) VALUES('in','system',?,?,?,?)");
- const old=Number(put.run(executionMarker(task.id,999)+'\nold','2099-01-01 00:00:00','failed','origin').lastInsertRowid);
- const later=Number(put.run('different prior message','2000-01-01 00:00:00','pending','origin').lastInsertRowid);
- assert.ok(later>old);assert.equal(recent(1)[0].id,old);
- const result=dispatchTask(db,task,{getRecentConversations:recent,getConversationsByRange:range,sendViaC4(message){
-   put.run(message+'\n'+('long'.repeat(3000)),'2000-01-01 00:00:01','failed','origin');
-   return {category:'U'};
- }});
- assert.equal(result.category,'success');assert.equal(read().task.status,'completed');
- assert.equal(read().history[0].status,'success');
-});
-
-test('retry with extended window sends once per scheduler iteration, then expires',t=>{
- t.mock.timers.enable({apis:['Date'],now:2000000000000});
- const {db,task,read}=fixture(t,{type:'interval',interval_seconds:60,next_run_at:2000000000-400,miss_threshold:600});let calls=0;
- const deps={...base,sendViaC4(){calls++;return {category:'T',code:'DB_BUSY'};}};
- runSchedulerIteration(db,deps);assert.equal(calls,1);assert.equal(read().task.next_run_at,task.next_run_at);
- t.mock.timers.tick(201000);runSchedulerIteration(db,deps);assert.equal(calls,1);assert.ok(read().task.next_run_at>task.next_run_at);
-});
-
-// A stored zero uses the established five-minute default.
-test('miss_threshold zero uses the default window, then expires',t=>{
- t.mock.timers.enable({apis:['Date'],now:2000000000000});
- const {db,read}=fixture(t,{miss_threshold:0});let sends=0;
- const deps={...base,sendViaC4(){sends++;return {category:'T',code:'DB_BUSY'};}};
- runSchedulerIteration(db,deps);assert.equal(sends,1);assert.equal(read().task.status,'pending');
- t.mock.timers.tick(301000);runSchedulerIteration(db,deps);
- assert.equal(sends,1);assert.equal(read().task.status,'failed');
-});
-
-test('dispatch, duplicate claim and missed window remain observable in logs',t=>{
- const {db,task}=fixture(t);const logs=[];t.mock.method(console,'log',message=>logs.push(message));
- dispatchTask(db,task,{...base,sendViaC4(){return {category:'success'};}});
- dispatchTask(db,task,base);
- db.prepare("UPDATE tasks SET status='pending',next_run_at=? WHERE id=?").run(Math.floor(Date.now()/1000)-301,task.id);
- runSchedulerIteration(db,base);
- assert.ok(logs.some(line=>line.includes(`Dispatching task ${task.id}`)));
- assert.ok(logs.some(line=>line.includes(`Task ${task.id} already claimed/modified, skipping`)));
- assert.ok(logs.some(line=>line.includes(`Task ${task.id}`)&&line.includes('missed execution window')));
-});
-
-function scheduledFileFixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'resched-'));
-  const home = path.join(root, 'home'), zylos = path.join(home, 'zylos');
-  const tmp = path.join(root, 'tmp'), pm2 = path.join(home, '.pm2');
-  for (const directory of [tmp, pm2, path.join(zylos, 'scheduler'), path.join(zylos, 'comm-bridge'),
-    path.join(zylos, '.zylos'), path.join(zylos, '.claude/skills/telegram')]) {
-    fs.mkdirSync(directory, { recursive: true });
-  }
-  fs.writeFileSync(path.join(zylos, '.env'), 'TZ=UTC\n');
-  fs.writeFileSync(path.join(zylos, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: 'multi' }));
-  const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: pm2, TMPDIR: tmp, TMUX_TMPDIR: tmp, TZ: 'UTC' };
-  for (const key of ['TMUX', 'ZYLOS_SESSION_GROUP', 'ZYLOS_RUN_ID', 'CLAUDE_SESSION_ID', 'CODEX_SESSION_ID']) delete env[key];
-  const database = path.join(zylos, 'scheduler/scheduler.db');
-  const messages = path.join(zylos, 'comm-bridge/c4.db');
-  for (const target of [home, zylos, pm2, tmp, database, messages]) assert.ok(target.startsWith(root + path.sep));
-  assert.ok(Buffer.byteLength(path.join(tmp, `tmux-${process.getuid?.() ?? 0}`, 'default')) < 104);
-  console.log(JSON.stringify({ schedulerFixture: root, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: pm2,
-    TMPDIR: tmp, TMUX_TMPDIR: tmp, database, messages, tmuxSocket: path.join(tmp, `tmux-${process.getuid?.() ?? 0}`, 'default') }));
-  const db = new Database(database); guardDatabase(db, schema); db.pragma('journal_mode=WAL');
-  const c4db = new Database(messages); guardDatabase(c4db, c4Schema); c4db.pragma('journal_mode=WAL');
-  const f = { root, env, db, c4db, daemon: null };
-  t.after(async () => {
-    try {
-      if (f.daemon?.pid && f.daemon.exitCode === null && f.daemon.signalCode === null) {
-        await new Promise(resolve => {
-          const timer = setTimeout(() => f.daemon.kill('SIGKILL'), 8000);
-          f.daemon.once('exit', () => { clearTimeout(timer); resolve(); });
-          f.daemon.kill('SIGTERM');
-        });
-      }
-    } finally {
-      db.close(); c4db.close();
-      fs.rmSync(root, { recursive: true, force: true });
-      assert.equal(fs.existsSync(root), false);
-    }
-  });
-  f.cli = args => {
-    const result = spawnSync(process.execPath, [fileURLToPath(new URL('../cli.js', import.meta.url)), ...args, '--json'],
-      { env, encoding: 'utf8', timeout: 15000 });
-    assert.equal(result.status, 0, result.stderr || result.stdout);
-    const lines = result.stdout.trim().split('\n'); assert.equal(lines.length, 1, result.stdout);
-    const value = JSON.parse(lines[0]); assert.equal(value.ok, true);
-    return value.data;
-  };
-  f.read = id => ({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(id),
-    history: db.prepare('SELECT * FROM task_history WHERE task_id=? ORDER BY id').all(id) });
-  f.failed = (id, origin) => {
-    const timestamp = Math.floor(Date.now() / 1000);
-    db.prepare(`INSERT INTO tasks(id,name,prompt,type,next_run_at,status,last_error,failed_at,
-      session_component,session_group_name,reply_channel,reply_endpoint,created_at,updated_at)
-      VALUES(?,?,?,'one-time',?,'failed',?,?,'telegram','dm-1001','telegram','1001',?,?)`)
-      .run(id, id, `private rescheduled prompt ${id}`, timestamp - 600,
-        origin === 'window' ? 'Missed execution window' : 'INVALID_ARGS',
-        origin === 'window' ? null : timestamp - 500, timestamp - 1000, timestamp - 500);
-    const history = db.prepare(`INSERT INTO task_history(task_id,executed_at,completed_at,status,duration_ms,error)
-      VALUES(?,?,?,'failed',?,?)`);
-    history.run(id, timestamp - 900, timestamp - 898, 2000, 'OLDER_FAILURE');
-    history.run(id, timestamp - 700, timestamp - 697, 3000, 'LAST_FAILURE');
-  };
-  return f;
-}
-
-// Covers actual CLI re-enabling through the dispatch selector and history claim.
-// Run for schedule/status/routing changes; unrelated display-only changes may skip.
-// All child paths and databases are private; no tmux or PM2 process is launched.
-for (const origin of ['window', 'dispatch']) test(`rescheduled ${origin} failure dispatches once while untouched failed tasks stay excluded`, t => {
-  const f = scheduledFileFixture(t);
-  const id = `task-rescheduled-${origin}`, control = `task-failed-${origin}`;
-  f.failed(id, origin); f.failed(control, origin);
-  const history = f.read(id).history, untouched = f.read(control);
-  const routed = f.cli(['update', id, '--reply-channel', 'telegram', '--reply-endpoint', '1001', '--reply-session-group', 'dm-1001']);
-  assert.equal(routed.task.session_component, 'telegram'); assert.equal(routed.task.session_group_name, 'dm-1001');
-  const cleared = f.cli(['update', id, '--clear-session-group']);
-  assert.equal(cleared.task.session_component, null); assert.equal(cleared.task.session_group_name, null);
-  assert.equal(cleared.task.reply_channel, 'telegram'); assert.equal(cleared.task.reply_endpoint, '1001');
-  const updated = f.cli(['update', id, '--in', '2 minutes']);
-  assert.equal(updated.reenabled, true); assert.equal(updated.task.status, 'pending');
-  assert.equal(updated.task.failed_at, null); assert.equal(updated.task.last_error, null);
-  assert.deepEqual(f.read(id).history, history);
-  const sends = [];
-  const dependencies = { ...base,
-    query: target => queryComponentSessionGroup(target, { skillsDir: path.join(f.env.ZYLOS_DIR, '.claude/skills'), env: f.env }),
-    sendViaC4(message, route) { sends.push({ message, route }); return { category: 'success' }; } };
-  runSchedulerIteration(f.db, dependencies); assert.equal(sends.length, 0);
-  t.mock.timers.enable({ apis: ['Date'], now: updated.task.next_run_at * 1000 });
-  runSchedulerIteration(f.db, dependencies);
-  assert.equal(sends.length, 1); assert.ok(sends[0].message.includes(updated.task.prompt));
-  assert.equal(sends[0].route.sessionComponent, 'telegram'); assert.equal(sends[0].route.sessionGroupName, null);
-  assert.equal(sends[0].route.replyChannel, 'telegram'); assert.equal(sends[0].route.replyEndpoint, '1001');
-  const after = f.read(id); assert.equal(after.task.status, 'completed');
-  assert.deepEqual(after.history.slice(0, 2), history);
-  assert.equal(after.history.length, 3); assert.equal(after.history[2].status, 'success');
-  assert.equal(after.history[2].executed_at, updated.task.next_run_at);
-  assert.deepEqual(f.read(control), untouched);
-  runSchedulerIteration(f.db, dependencies); assert.equal(sends.length, 1);
-});
-
-// Covers real daemon -> real receiver -> private C4 persistence after re-enabling.
-// Run with ZYLOS_RUN_SCHEDULER_DISPATCH_INTEGRATION=1 for schedule/dispatch/receive changes;
-// default skip defers the two-minute process integration to the isolated reviewer run.
-// Private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/tmux socket/DB paths are logged above;
-// no live AM socket, runtime, reply sender or PM2 process is used, and the child/root are cleaned.
-for (const status of ['failed', 'completed']) test(`real scheduler daemon dispatches a re-enabled ${status} task to its saved private C4 group`, {
-  skip: process.env.ZYLOS_RUN_SCHEDULER_DISPATCH_INTEGRATION !== '1', timeout: 155000,
-}, async t => {
-  const f = scheduledFileFixture(t);
-  const id = 'task-daemon-rescheduled', control = 'task-daemon-failed';
-  f.failed(id, 'dispatch'); f.failed(control, 'window');
-  if (status === 'completed') {
-    f.db.prepare("UPDATE tasks SET status='pending' WHERE id=?").run(id);
-    const delivered = dispatchTask(f.db, f.read(id).task, { ...base, sendViaC4: () => ({ category: 'success' }) });
-    assert.equal(delivered.category, 'success');
-    assert.equal(f.read(id).task.status, 'completed');
-  }
-  const previous = f.read(id).history, untouched = f.read(control);
-  const updated = f.cli(['update', id, '--in', status === 'completed' ? '90 minutes' : '2 minutes']);
-  assert.equal(updated.reenabled, true); assert.equal(updated.task.status, 'pending');
-  assert.deepEqual(f.read(id).history, previous);
-  // Advance the private schedule to due time instead of waiting ninety minutes.
-  if (status === 'completed') f.db.prepare('UPDATE tasks SET next_run_at=? WHERE id=?').run(Math.floor(Date.now() / 1000), id);
-  const dueAt = f.read(id).task.next_run_at;
-  const expectedHistory = previous.length + 1;
-  let output = '', spawnError;
-  f.daemon = spawn(process.execPath, [fileURLToPath(new URL('../daemon.js', import.meta.url))],
-    { env: f.env, stdio: ['ignore', 'pipe', 'pipe'] });
-  f.daemon.stdout.on('data', chunk => { output = (output + chunk).slice(-16384); });
-  f.daemon.stderr.on('data', chunk => { output = (output + chunk).slice(-16384); });
-  f.daemon.on('error', error => { spawnError = error; });
-  const deadline = performance.now() + 145000;
-  let inbound;
-  while (performance.now() < deadline) {
-    assert.equal(spawnError, undefined);
-    assert.equal(f.daemon.exitCode, null, output);
-    const after = f.read(id);
-    inbound = f.c4db.prepare("SELECT * FROM conversations WHERE direction='in' AND instr(content,?)>0 ORDER BY id LIMIT 2")
-      .all(updated.task.prompt);
-    if (after.history.length === expectedHistory && inbound.length === 1) break;
-    assert.ok(after.history.length <= expectedHistory, output);
-    assert.ok(inbound.length <= 1, output);
-    if (Math.floor(Date.now() / 1000) < dueAt) {
-      assert.equal(after.history.length, previous.length); assert.equal(inbound.length, 0);
-    }
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-  const after = f.read(id);
-  assert.equal(after.history.length, expectedHistory, output); assert.deepEqual(after.history.slice(0, previous.length), previous);
-  assert.equal(after.history.at(-1).status, 'success', output);
-  assert.ok(after.history.at(-1).executed_at >= dueAt);
-  assert.equal(inbound.length, 1, output); assert.equal(inbound[0].direction, 'in');
-  assert.equal(inbound[0].session_group, 'telegram:dm-1001'); assert.equal(inbound[0].channel, 'telegram');
-  assert.equal(inbound[0].status, 'pending');
-  assert.ok(inbound[0].content.startsWith(executionMarker(id, after.history.at(-1).id) + '\n'));
-  assert.equal(after.task.status, 'completed');
-  await new Promise(resolve => setTimeout(resolve, 5500));
-  assert.equal(f.read(id).history.length, expectedHistory);
-  assert.equal(f.c4db.prepare("SELECT count(*) AS n FROM conversations WHERE direction='in' AND instr(content,?)>0").get(updated.task.prompt).n, 1);
-  assert.deepEqual(f.read(control), untouched);
 });

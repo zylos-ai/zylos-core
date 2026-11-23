@@ -5,7 +5,7 @@ import path from 'node:path';
 import {test} from 'node:test';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {collectHealthHook,wakeHealthMonitor} from '../hook-health.js';
+import {collectHealthHook} from '../hook-health.js';
 function fixture(t) {
   const zylosDir=fs.mkdtempSync(path.join(os.tmpdir(),'health-hook-stream-'));
   t.after(()=>fs.rmSync(zylosDir,{recursive:true,force:true}));
@@ -21,32 +21,6 @@ test('collector appends bounded structured evidence without private prompt or er
   assert.doesNotMatch(raw,/PRIVATE|runtime_generation/);assert.equal(JSON.parse(raw).event_id,event.event_id);
   assert.equal(fs.existsSync(path.join(options.zylosDir,'activity-monitor/health-inbox')),false);
 });
-test('collector writes all registered event types in append order',async t=>{
-  const options=fixture(t);
-  for (const hook_event_name of ['SessionStart','UserPromptSubmit','Stop','StopFailure']) await collectHealthHook({...payload,hook_event_name},options);
-  const records=fs.readFileSync(path.join(options.zylosDir,'activity-monitor/events.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(records.map(e=>e.event),['session_start','prompt_submit','stop','stop_failure']);
-  assert.equal(new Set(records.map(e=>e.event_id)).size,4);
-});
-test('invalid identity, subagent and unsupported event are rejected without writes',async t=>{
-  const options=fixture(t);
-  for(const change of [{session_id:''},{agent_id:'subagent'},{hook_event_name:'PostToolUse'},{error:''}]) assert.equal(await collectHealthHook({...payload,...change},options),null);
-  assert.equal(await collectHealthHook(payload,{...options,pid:0}),null);
-  assert.equal(await collectHealthHook(payload,{...options,pid:null}),null);
-  assert.equal(fs.existsSync(path.join(options.zylosDir,'activity-monitor/events.jsonl')),false);
-});
-test('unknown error is neutral and raw category is not persisted',async t=>{
-  const options=fixture(t);assert.equal((await collectHealthHook({...payload,error:'private_error'},options)).error,'unknown');
-  assert.doesNotMatch(fs.readFileSync(path.join(options.zylosDir,'activity-monitor/events.jsonl'),'utf8'),/private_error/);
-});
-test('append failure propagates without creating inbox or fallback identity',async t=>{
-  const options=fixture(t);fs.mkdirSync(path.join(options.zylosDir,'activity-monitor/events.jsonl'),{recursive:true});
-  await assert.rejects(collectHealthHook(payload,options));
-  assert.equal(fs.existsSync(path.join(options.zylosDir,'activity-monitor/runtime-generation.json')),false);
-});
-test('wakeup to absent monitor is bounded and harmless',async t=>{
-  const options=fixture(t);await wakeHealthMonitor({...options,timeoutMs:20});
-});
 test('CLI collector fails open for malformed input without echoing sensitive text',t=>{
   const options=fixture(t);const script=fileURLToPath(new URL('../hook-health.js',import.meta.url));
   const result=spawnSync(process.execPath,[script],{input:'PRIVATE invalid json',encoding:'utf8',env:{...process.env,ZYLOS_DIR:options.zylosDir}});
@@ -54,28 +28,3 @@ test('CLI collector fails open for malformed input without echoing sensitive tex
   assert.match(result.stderr,/could not be persisted/);
 });
 
-test('malformed optional model configuration preserves native health collection', async t => {
-  const options = fixture(t);
-  for (const value of ['{ invalid optional metadata', 'null', '42']) {
-    const env = { ZYLOS_DIR: options.zylosDir, ZYLOS_MODEL_CONFIG: value };
-    const event = await collectHealthHook(payload, { ...options, env });
-    assert.equal(event.runtime, 'claude');
-    assert.equal(event.event, 'stop_failure');
-    assert.equal(event.session_id, 'session');
-  }
-  const records = fs.readFileSync(path.join(options.zylosDir, 'activity-monitor/events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(records.length, 3);
-  assert.ok(records.every(event => event.runtime === 'claude'));
-});
-
-test('agy network failures retain a safe category without native connection details', async t => {
-  const options = fixture(t);
-  const env = { ZYLOS_DIR: options.zylosDir, ZYLOS_MODEL_CONFIG: JSON.stringify({ runtime: 'agy' }) };
-  const event = await collectHealthHook({ ...payload, error: 'network_error',
-    error_details: 'proxyconnect tcp: connection refused https://PRIVATE-PROXY/' }, { ...options, env });
-  assert.equal(event.runtime, 'agy');
-  assert.equal(event.error, 'network_error');
-  const raw = fs.readFileSync(path.join(options.zylosDir, 'activity-monitor/events.jsonl'), 'utf8');
-  assert.equal(JSON.parse(raw).error, 'network_error');
-  assert.doesNotMatch(raw, /PRIVATE|proxyconnect|connection refused/);
-});

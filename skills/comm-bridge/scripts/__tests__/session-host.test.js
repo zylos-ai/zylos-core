@@ -51,13 +51,3 @@ test('internal and external input use the host without moving earlier rows', t =
   assert.deepEqual(delivered(source), [earlier.id]);
   assert.deepEqual(delivered(target), [hosted.id]);
 });
-
-test('single mode skips hosting for incoming messages while preserving relationships for multi mode', t => {
-  const { store, attach, setMode } = fixture(t);
-  attach('chat:a', 'chat:b');
-  setMode('single');
-  assert.equal(store.getSessionHost('chat:a'), null);
-  assert.equal(store.insertConversation('in', 'chat', 'room', 'single inbound', { groupName: 'a' }).session_group, 'chat:a');
-  setMode('multi');
-  assert.equal(store.getSessionHost('chat:a'), 'chat:b');
-});

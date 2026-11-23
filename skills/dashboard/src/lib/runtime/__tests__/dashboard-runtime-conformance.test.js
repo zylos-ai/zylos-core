@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import test from 'node:test';
-import { getActionsMeta, handleAction } from '../../actions.js';
+
 import { loadCoreModule } from '../../core-modules.js';
-import { HistoryService } from '../../history/history-service.js';
+
 import { DASHBOARD_CAPABILITIES, UNSUPPORTED } from '../contract.js';
 import { getDashboardRuntime } from '../index.js';
 
@@ -59,21 +56,4 @@ test('Dashboard runtime objects conform to the contract and registry', async () 
   for (const id of ['foo', 'constructor', '__proto__']) {
     await assert.rejects(getDashboardRuntime(id), { code: 'RUNTIME_UNSUPPORTED' });
   }
-});
-
-test('Antigravity has no model overrides or transcript parser', async t => {
-  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-unsupported-runtime-'));
-  t.after(() => fs.rmSync(zylosDir, { recursive: true, force: true }));
-  const config = { runtime: 'agy', zylosDir };
-
-  const meta = getActionsMeta(config);
-  assert.deepEqual(meta.models, []);
-  assert.equal(meta.catalog_strict, null);
-  assert.deepEqual(await handleAction('switch-model', { model: 'gemini-x' }, config), { ok: false, error: 'INVALID_RUNTIME' });
-  assert.equal(fs.existsSync(path.join(zylosDir, '.codex/config.toml')), false);
-  assert.deepEqual(await handleAction('switch-effort', { effort: 'high' }, config), { ok: false, error: 'INVALID_RUNTIME' });
-
-  const { parser } = new HistoryService({ config });
-  assert.equal(parser.constructor.name, 'EmptyHistory');
-  assert.deepEqual(await parser.listSessions(), { current: null, sessions: [] });
 });

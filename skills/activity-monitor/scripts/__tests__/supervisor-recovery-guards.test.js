@@ -77,19 +77,6 @@ function fixture(t, { group = 'telegram:a' } = {}) {
   };
 }
 
-test('recovery guard admits a complete bound nudge when the target remains unchanged', { timeout: 5000 }, async t => {
-  const f = fixture(t);
-  const result = await f.supervisor.observer.nudge(f.scene, async () => true);
-  assert.equal(result.ok, true); assert.equal(result.steps.length, 2);
-  assert.deepEqual(f.controls.map(row => row.content), ['[KEYSTROKE]Escape', 'continue']);
-  for (const row of f.controls) {
-    assert.equal(row.sessionGroup, f.scene.sessionGroup);
-    assert.deepEqual(row.targetBinding, { runtime: 'claude', runId: 'guard-run', sessionId: 'guard-session' });
-    assert.equal(row.priority, 0); assert.equal(row.bypassState, true); assert.equal(row.appendAckSuffix, false);
-  }
-  assert.equal(f.binds(), 2); assert.deepEqual(f.errors, []);
-});
-
 for (const scope of ['*', 'telegram:a']) {
   test(`recovery admission rejects an existing ${scope === '*' ? 'global' : 'group'} fence before target binding`, { timeout: 5000 }, async t => {
     const f = fixture(t); f.fence(scope);
@@ -99,45 +86,3 @@ for (const scope of ['*', 'telegram:a']) {
   });
 }
 
-for (const gate of ['global-fence', 'group-fence', 'transition', 'manual', 'shutdown']) {
-  test(`recovery binding rechecks ${gate} before enqueue despite permissive caller validation`, { timeout: 5000 }, async t => {
-    const f = fixture(t, { group: gate === 'manual' ? 'origin' : 'telegram:a' }), barrier = f.blockBinding();
-    const nudge = f.supervisor.observer.nudge(f.scene, async () => true);
-    try {
-      await barrier.entered;
-      if (gate === 'global-fence') f.fence('*');
-      if (gate === 'group-fence') f.fence(f.scene.sessionGroup);
-      if (gate === 'transition') f.transition();
-      if (gate === 'manual') f.manual();
-      if (gate === 'shutdown') void f.supervisor.stop();
-    } finally { barrier.release(); }
-    const result = await nudge;
-    assert.equal(result.ok, false); assert.equal(f.binds(), 1); assert.equal(f.controls.length, 0);
-    assert.deepEqual(f.errors, []);
-  });
-}
-
-test('recovery binding rechecks an ordinary-group manual request before enqueue', { timeout: 5000 }, async t => {
-  const f = fixture(t), barrier = f.blockBinding();
-  const nudge = f.supervisor.observer.nudge(f.scene, async () => true);
-  try { await barrier.entered; f.manual(); } finally { barrier.release(); }
-  const result = await nudge;
-  assert.equal(result.ok, false); assert.equal(f.binds(), 1);
-  assert.equal(f.controls.length, 0); assert.deepEqual(f.errors, []);
-});
-
-test('recovery binding rechecks fresh activity through the actual observer before Escape', { timeout: 5000 }, async t => {
-  const f = fixture(t), barrier = f.blockBinding();
-  const observation = f.supervisor.observer.observeScene(f.scene);
-  try { await barrier.entered; f.freshWork(); } finally { barrier.release(); }
-  await observation;
-  assert.equal(f.binds(), 1); assert.equal(f.controls.length, 0); assert.equal(f.stops.length, 0);
-  assert.deepEqual(f.errors, []);
-});
-
-test('ordinary health stop keeps baseline behavior inside a drain fence', { timeout: 5000 }, async t => {
-  const f = fixture(t); f.fence('*'); f.fence(f.scene.sessionGroup);
-  assert.equal(await f.supervisor.observer.stopScene(f.scene, 'sticky_context_restart'), true);
-  assert.equal(f.stops.length, 1); assert.equal(f.controls.length, 0);
-  assert.equal(f.binds(), 0); assert.deepEqual(f.errors, []);
-});

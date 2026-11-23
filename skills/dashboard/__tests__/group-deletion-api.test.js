@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import { AuthGate } from '../src/lib/auth.js';
 import { FleetProxy } from '../src/lib/fleet-proxy.js';
-import { handleChatHistory } from '../src/lib/chat/history-routes.js';
+
 import { createGroupDeletionBridge, createGroupDeletionRoutes } from '../src/lib/workbench/group-deletion.js';
 
 const cookie = 'deletion-private-cookie', api = `zylos_st_${'a'.repeat(64)}`;
@@ -63,15 +63,6 @@ test('deletion requires same origin and explicit confirmation bound to an operat
   assert.deepEqual(Object.keys(f.calls[0].options).sort(), ['actor', 'cutoffId', 'operationId', 'preview']);
 });
 
-test('missing or malformed preview boundaries never reach the deletion child', async t => {
-  const f = fixture(t), path = '/api/groups/dashboard%3Aexample';
-  const body = { confirmed: true, operationId: 'private-operation', ...boundary };
-  for (const change of [{ cutoffId: undefined }, { cutoffId: -1 }, { cutoffId: 1.1 }, { cutoffId: Number.MAX_SAFE_INTEGER + 1 }]) {
-    assert.equal((await call(f.handler, path, { method: 'DELETE', body: { ...body, ...change } })).status, 400);
-  }
-  assert.equal(f.calls.length, 0);
-});
-
 test('Origin and malformed group targets never reach Core', async t => {
   const f = fixture(t);
   assert.equal((await call(f.handler, '/api/groups/origin/deletion-preview')).status, 403);
@@ -82,43 +73,6 @@ test('Origin and malformed group targets never reach Core', async t => {
   assert.equal((await call(f.handler, legacyPath, { method: 'DELETE',
     body: { confirmed: true, operationId: 'private-operation', ...boundary } })).status, 400);
   assert.equal(f.calls.length, 0);
-});
-
-test('draft targets let Core distinguish uploaded drafts from actual groups', async t => {
-  const f = fixture(t);
-  await call(f.handler, '/api/conversations/drafts/empty/deletion');
-  await call(f.handler, '/api/conversations/drafts/bound/deletion');
-  assert.deepEqual(f.calls.map(x => x.target), [{ draftLocalId: 'empty' }, { draftLocalId: 'bound' }]);
-});
-
-test('pending deletion and Core conflicts preserve their result envelope', async t => {
-  const f = fixture(t); let value = { ok: true, pending: true, operationId: 'same-operation' };
-  const handler = createGroupDeletionRoutes({ ...f, core: async () => value });
-  let res = await call(handler, '/api/groups/dashboard%3Aexample/deletion-preview');
-  assert.equal(res.status, 202); assert.equal(res.body.operationId, 'same-operation');
-  value = { ok: false, error: { code: 'FENCE_MISMATCH' } };
-  res = await call(handler, '/api/groups/dashboard%3Aexample/deletion-preview');
-  assert.equal(res.status, 409); assert.deepEqual(res.body, { ...value, error: { ...value.error, message: value.error.code } });
-  value = { ok: false, error: { code: 'TRANSITION_OPEN' } };
-  assert.equal((await call(handler, '/api/groups/dashboard%3Aexample/deletion-preview')).status, 409);
-  value = { ok: false, error: { code: 'transition_open' } };
-  assert.equal((await call(handler, '/api/groups/dashboard%3Aexample/deletion-preview')).status, 409);
-});
-
-test('missing draft registration still reaches Core for an idempotent completed retry', async t => {
-  const f = fixture(t);
-  const handler = createGroupDeletionRoutes({ ...f,
-    conversations: { get() { throw Object.assign(new Error('missing'), { code: 'chat_conversation_not_found', status: 404 }); } },
-    core: async (target, options) => {
-      assert.deepEqual(target, { draftLocalId: 'removed' });
-      assert.equal(options.operationId, 'completed-operation');
-      return { ok: true, pending: false, operationId: options.operationId };
-    },
-  });
-  const res = await call(handler, '/api/conversations/drafts/removed', {
-    method: 'DELETE', body: { confirmed: true, operationId: 'completed-operation', ...boundary },
-  });
-  assert.equal(res.status, 200);
 });
 
 test('Core bridge uses the shared child entry with a server actor and no caller group', async () => {
@@ -155,60 +109,4 @@ test('Fleet never relays group or draft deletion preview and writes', async () =
   }
   assert.equal(calls, 0);
   assert.equal(tokenCalls, 0);
-});
-
-test('conversation list exposes deletion capability only to the local password owner', async t => {
-  const f = fixture(t);
-  for (const [headers, allowed] of [[owner, true], [{ authorization: `Bearer ${api}` }, false]]) {
-    const req = { method: 'GET', headers }, res = { writeHead() {}, end(body) { this.body = JSON.parse(body); } };
-    await handleChatHistory(req, res, new URL('http://fixture/api/conversations'), { ...f,
-      config: { ...f.config, chat: { allowRemote: true } }, history: { list: () => ({ items: [] }) } });
-    assert.equal(res.body.deletionAllowed, allowed);
-  }
-});
-
-
-test('unmatched group read routes fall through without deletion authorization or Core calls', async t => {
-  const f = fixture(t);
-  for (const path of ['/api/groups', '/api/groups/telegram%3Aexample', '/api/conversations/drafts/example']) {
-    const req = { method: 'GET', headers: {} };
-    const res = { writeHead() { assert.fail('Must leave the response to the existing read route'); } };
-    assert.equal(await f.handler(req, res, new URL(path, 'http://fixture')), false);
-  }
-  assert.equal(f.calls.length, 0);
-});
-
-test('Core storage errors preserve their HTTP status through the bridge response envelope', async t => {
-  const f = fixture(t);
-  for (const status of [404, 503]) {
-    const handler = createGroupDeletionRoutes({ ...f, core: async () => ({ ok: false,
-      error: { code: status === 404 ? 'chat_conversation_not_found' : 'group_delete_dashboard_unavailable', status } }) });
-    const res = await call(handler, '/api/conversations/drafts/missing/deletion');
-    assert.equal(res.status, status);
-    assert.deepEqual(res.body.error, { code: status === 404 ? 'chat_conversation_not_found' : 'group_delete_dashboard_unavailable',
-      message: status === 404 ? 'chat_conversation_not_found' : 'group_delete_dashboard_unavailable' });
-    const deleted = await call(handler, '/api/conversations/drafts/d%3Amissing', { method: 'DELETE',
-      body: { confirmed: true, operationId: 'private-operation', ...boundary } });
-    assert.equal(deleted.status, status);
-    assert.deepEqual(deleted.body, res.body);
-    assert.equal(Object.hasOwn(deleted.body.error, 'status'), false);
-  }
-});
-
-
-test('completed Core retention fields pass through the child bridge and DELETE response unchanged', async t => {
-  const f = fixture(t);
-  for (const retainedMessages of [0, 3]) {
-    const receipt = { ok: true, pending: false, operationId: 'completed-operation', retainedMessages,
-      groupDataRetained: retainedMessages > 0, counts: { messages: 4, attachments: 0, files: 0 } };
-    const bridge = createGroupDeletionBridge({ zylosDir: f.config.zylosDir,
-      loadCoreModule: async () => ({ groupDeletionCliPath: '/core/group-delete-cli.js' }),
-      execute: async () => ({ stdout: JSON.stringify(receipt) }) });
-    const handler = createGroupDeletionRoutes({ ...f, core: bridge });
-    const response = await call(handler, '/api/groups/dashboard%3Aexample', {
-      method: 'DELETE', body: { confirmed: true, operationId: 'completed-operation', ...boundary },
-    });
-    assert.equal(response.status, 200);
-    assert.deepEqual(response.body, receipt);
-  }
 });

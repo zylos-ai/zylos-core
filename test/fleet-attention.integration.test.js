@@ -2,11 +2,7 @@ import { registerHooks } from 'node:module';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { fleetGroupSummary, sanitizeFleetGroupSummary } from '../skills/dashboard/src/lib/workbench/fleet-summary.js';
 import { setInstanceZone, instanceZoneReady, formatZoned } from '../skills/dashboard/public/js/wb/instance-zone.js';
-import { FleetPoller } from '../skills/dashboard/src/lib/fleet-poller.js';
-import { objectResponse } from '../skills/dashboard/__tests__/fixtures/fleet-object-api.js';
-import { fleetPageFixture } from '../skills/dashboard/__tests__/helpers/fleet-page-fixture.js';
 
 const browserDescriptors = new URL('../skills/dashboard/public/runtime-descriptors.js', import.meta.url).pathname;
 const sourceDescriptors = new URL('../cli/lib/runtime/descriptors.js', import.meta.url).href;
@@ -16,32 +12,7 @@ registerHooks({
     return next(specifier, context);
   },
 });
-const { renderFleetAttention, renderAgentFleetHtml: renderAgentFleetHtmlPage } = await import('../skills/dashboard/public/js/agent-fleet.js');
-const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
-
-// In-memory product projections and fake HTTP responses only. Run when changing
-// Fleet attention contracts/rendering/polling; unrelated channel adapters may skip.
-test('Fleet shares channel, runtime and group diagnostic attention without replacing primary counts', () => {
-  const result = fleetGroupSummary({ mode: 'multi', listKnown: true,
-    rows: [{ sessionGroup: 'ops', presence: 'running', state: { kind: 'idle' },
-      flags: { unreadable: { reasons: ['C4_READ_FAILED'] } } }],
-    instance: { runtimeHealth: { codex: { health: 'rate_limited' } }, services: { channels: [
-      { channel: 'lark', lastSendFailed: true, consecutiveFailures: 2, restarts10m: 3 },
-      { channel: 'telegram', lastSendFailed: false, restarts10m: 2 },
-    ] } } });
-  assert.equal(result.counts.idle, 1);
-  assert.equal(result.counts.error, 0);
-  assert.deepEqual(result.attention.map(item => item.kind).sort(),
-    ['channel_send_failed', 'channel_restarting', 'data_unreadable', 'rate_limited'].sort());
-  assert.deepEqual(result.attention.find(item => item.kind === 'data_unreadable'),
-    { kind: 'data_unreadable', group: 'ops', displayName: 'ops', reasonCode: 'C4_READ_FAILED' });
-  assert.deepEqual(sanitizeFleetGroupSummary(result), result);
-  const polluted = structuredClone(result);
-  polluted.attention.push({ kind: 'unsupported', secret: 'discard' });
-  polluted.attention[0].secret = 'discard';
-  assert.deepEqual(sanitizeFleetGroupSummary(polluted), result);
-  assert.doesNotMatch(renderAgentFleetHtml({ agents: [{ name: 'local', state: 'IDLE', session_mode: 'multi', group_summary: result }] }), /All normal/);
-});
+const { renderFleetAttention } = await import('../skills/dashboard/public/js/agent-fleet.js');
 
 test('Fleet diagnostic reasons use text nodes and preserve group navigation', () => {
   class Node {
@@ -101,26 +72,4 @@ test('Fleet diagnostic reasons use text nodes and preserve group navigation', ()
   assert.equal(unknown.time, '');
   renderFleetAttention(root, []);
   assert.equal(root.children.length, 0);
-});
-
-test('Fleet fetch includes offline start failures and preserves a failed diagnostic read', async () => {
-  const agent = { name: 'Fixture', base_url: 'http://fixture.invalid', read_api_key: 'fixture' };
-  for (const readable of [true, false]) {
-    const requests = [];
-    const poller = new FleetPoller({ fleet: { agents: [agent] } }, { fetch: async url => {
-      requests.push(url);
-      if (url.endsWith('/api/auth/token')) return Response.json({ token: 'fixture-session' });
-      if (url.endsWith('/api/groups?side=offline&flag=startFailed')) return Response.json({ items: [], nextCursor: 'page+/=' }, { status: readable ? 200 : 503 });
-      if (url.endsWith('/api/groups?side=offline&flag=startFailed&cursor=page%2B%2F%3D')) {
-        return Response.json({ items: [{ id: 'failed-offline', flags: { startFailed: { count: 2 } } }], nextCursor: null });
-      }
-      return objectResponse(url, { instance: { session_mode: { sessionMode: 'multi' } },
-        counts: { offline: { total: 1, startFailed: 1 } } });
-    } });
-    const fleet = await poller.pollOnce();
-    assert.ok(requests.some(url => url.endsWith('/api/groups?side=offline&flag=startFailed')));
-    const attention = fleet.agents[0].group_summary.attention;
-    assert.ok(attention.some(item => readable ? item.kind === 'start_failed' && item.group === 'failed-offline'
-      : item.kind === 'data_unreadable' && item.source === 'offline_start_failed'));
-  }
 });

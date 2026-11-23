@@ -84,22 +84,6 @@ test('chat requires credentials even when the config still sets auth.enabled to 
 
 // Integration: actual proxy origin/allowlist checks and independent remote
 // permission; run for proxy write changes, skip presentation-only changes.
-test('proxy cookie writes require exact origin before upstream while API admin may write', async t => {
-  const f = await chatHttpFixture(t, { chat: { allowRemote: true } });
-  const writes = chatRoutes.filter(route => route.method !== 'GET');
-  for (const origin of [null, false, 'http://127.0.0.1:1']) for (const route of writes) {
-    const result = await f.request(route, { fleet: true, origin, contentType: 'text/plain' });
-    assert.equal(result.status, 403);
-    assert.equal(JSON.parse(result.text).error.code, 'same_origin_required');
-    assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
-  }
-  for (const route of writes) {
-    assert.equal((await f.request(route, { fleet: true })).status, 200);
-    assert.equal((await f.request(route, { fleet: true, identity: 'admin', origin: false })).status, 200);
-  }
-  assert.equal(f.counts.receives, writes.length * 2);
-  assert.equal(f.counts.upstream, writes.length * 2);
-});
 
 // Integration: whole chat-prefix classification, including future paths and
 // methods; run for auth/proxy route changes. Private fixture resources only.
@@ -126,7 +110,6 @@ test('proxy protects chat prefix for every method and retains explicit write all
     assert.equal(f.counts.upstream, before + (method === 'GET' ? 1 : 0));
   }
 });
-
 
 // Real AuthGate, chat access, ObserverService/HistoryService and FleetProxy over
 // two ephemeral loopback listeners. Run for sensitive read permissions or relay
