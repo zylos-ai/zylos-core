@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fork, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
+import { buildInstalledLayout } from './helpers/installed-layout.js';
 
+const packageRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const child = fileURLToPath(new URL('./helpers/single-driver-dashboard-child.js', import.meta.url));
 const writer = fileURLToPath(new URL('./helpers/c4-probe-writer.js', import.meta.url));
 
@@ -16,6 +19,18 @@ const writer = fileURLToPath(new URL('./helpers/c4-probe-writer.js', import.meta
 // PM2_HOME, TMPDIR and tmux directory; sudo, systemctl and apt-get resolve to logging stand-ins; no tmux server,
 // PM2, network or live configuration is used. Children are killed and the directory removed when the test ends.
 let layout;
+test.before(() => {
+  layout = buildInstalledLayout(packageRoot);
+  const init = spawnSync(process.execPath, [writer, path.join(layout.skills, 'comm-bridge', 'scripts'), 'init'],
+    { env: layout.env, cwd: layout.root, encoding: 'utf8', timeout: 20000 });
+  assert.equal(init.status, 0, init.stderr);
+});
+test.after(() => {
+  if (!layout) return;
+  const escalated = fs.existsSync(layout.shimLog) ? fs.readFileSync(layout.shimLog, 'utf8') : '';
+  fs.rmSync(layout.root, { recursive: true, force: true });
+  assert.equal(escalated, '', 'no privileged or system command may run');
+});
 
 function startDashboard(t) {
   const process_ = fork(child, [path.join(layout.skills, 'dashboard')], { env: layout.env, cwd: layout.root,
