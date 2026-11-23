@@ -93,7 +93,7 @@ function buildLinkChip(link, labels) {
 export function defaultAgentFleetLabels() {
   return {
     title: 'Agent Fleet',
-    subtitle: 'Every machine you can view; the ones with a problem come first.',
+    subtitle: 'Every machine you can view.',
     busy: 'Working',
     idle: 'Idle',
     unknown: 'Unknown',

@@ -225,6 +225,7 @@ function fleetFixture() {
     agents: [
       {
         name: 'zylos02',
+        self: true,
         color: agentColor('zylos02').color,
         hue: agentColor('zylos02').hue,
         state: 'IDLE',
@@ -313,13 +314,12 @@ function fleetFixture() {
   };
 }
 
-test('Machines page renders one card per machine with state, quota, cost and host, problems first', () => {
+test('Machines page renders one card per machine with state, quota, cost and host, this machine first', () => {
   const view = buildAgentFleetView(fleetFixture(), { basePath: '/dash' });
   const html = renderAgentFleetHtml(fleetFixture(), { basePath: '/dash' });
   assert.equal(view.tiles.length, 4);
   assert.deepEqual([view.counts.busy, view.counts.idle, view.counts.stuck, view.counts.offline], [1, 1, 1, 1]);
-  // Unreachable and stuck machines come before healthy machines.
-  assert.deepEqual(view.tiles.map(tile => tile.name), ['zz-lab', 'zylos0t', 'zylos01', 'zylos02']);
+  assert.deepEqual(view.tiles.map(tile => tile.name), ['zylos02', 'zylos01', 'zylos0t', 'zz-lab']);
   assert.match(html, /class="wb-f-card bad" data-agent="zz-lab"/);
   assert.match(html, /Cannot connect/);
   assert.match(html, /class="wb-tech agent-fleet-reason">Unreachable</);

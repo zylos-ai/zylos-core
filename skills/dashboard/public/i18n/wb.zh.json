@@ -907,7 +907,7 @@
   "chat.page.receipt.notStoredReadOnly": "未入库，输入已保留；single 模式下不能发送。",
   "wb.detail.observeHistory": "查看原文",
   "wb.fleet.title": "Agent 舰队",
-  "wb.fleet.subtitle": "你能查看的所有机器，有问题的排在前面。",
+  "wb.fleet.subtitle": "你能查看的所有机器。",
   "wb.fleet.layout": "机器视图",
   "wb.fleet.cards": "卡片",
   "wb.fleet.list": "列表",
