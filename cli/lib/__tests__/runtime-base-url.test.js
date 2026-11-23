@@ -1,3 +1,5 @@
+import { getRuntime, SUPPORTED_RUNTIMES } from '../runtime/index.js';
+import { runtimeAuthFixture } from './helpers/runtime-auth.js';
 import assert from 'node:assert/strict';
 import { after, describe, test } from 'node:test';
 import fs from 'node:fs';
@@ -23,7 +25,7 @@ describe('runtime base URL support', () => {
     const { parseRuntimeFlags, validateRuntimeFlags } = await import('../../commands/runtime.js');
     const privatePart = 'private-url-value';
     for (const address of [`https://user:${privatePart}@example.com`, `https://example.com/?key=${privatePart}`, `https://example.com/#${privatePart}`, 'https://example.com?', 'https://example.com#']) {
-      const result = validateRuntimeFlags('claude', parseRuntimeFlags(['--save-base-url', address]));
+      const result = validateRuntimeFlags(await runtimeAuthFixture('claude'), parseRuntimeFlags(['--save-base-url', address]));
       assert.ok(result?.error, 'credential-bearing URLs must be rejected');
       assert.ok(!JSON.stringify(result).includes(privatePart), 'validation must not reflect input');
     }
@@ -31,7 +33,7 @@ describe('runtime base URL support', () => {
   test('Codex readiness returns objects for missing instructions and valid real trust', async t => {
     const { runtimeHooksReady } = await import('../../commands/runtime.js');
     const { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, hookKeyFor,
-      isCodexTrustValid } = await import('../codex-hooks.js');
+      isCodexTrustValid } = await import('../runtime/codex/hooks.js');
     const { stringify } = await import('smol-toml');
     const root = process.env.ZYLOS_DIR;
     const instruction = path.join(root, 'AGENTS.md');
@@ -64,7 +66,7 @@ describe('runtime base URL support', () => {
     const installed = path.join(process.env.ZYLOS_DIR, '.claude', 'settings.json');
     assert.deepEqual(await runtimeHooksReady('claude'), { ready: false, pendingMigration: true });
     fs.writeFileSync(instruction, 'legacy instructions\n');
-    syncRuntimeHooks({ zylosDir: process.env.ZYLOS_DIR });
+    await syncRuntimeHooks({ zylosDir: process.env.ZYLOS_DIR });
     const good = fs.readFileSync(installed);
     const userSettings = path.join(tmpRoot, '.claude', 'settings.json');
     fs.mkdirSync(path.dirname(userSettings), { recursive: true });
@@ -72,7 +74,7 @@ describe('runtime base URL support', () => {
     assert.deepEqual(await runtimeHooksReady('claude'), { ready: true, pendingMigration: true });
     let writes = 0;
     const deps = { read: () => ({ state: 'ok', config: { runtime: 'codex', session_mode: 'multi' } }),
-      exists: () => true, adapter: () => ({ checkAuth: () => assert.fail('no-validate must skip auth') }),
+      runtimeFor: id => runtimeAuthFixture(id, { auth: { checkAuth: () => assert.fail('no-validate must skip auth') } }),
       write: () => { writes++; return { previous: { runtime: 'codex' }, config: { runtime: 'claude', session_mode: 'multi' }, changed: true }; },
       observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }) };
     assert.equal((await executeRuntimeSwitch('claude', ['--no-validate'], deps)).ok, true);
@@ -80,7 +82,7 @@ describe('runtime base URL support', () => {
       if (bad === null) fs.rmSync(installed); else fs.writeFileSync(installed, bad);
       const result = await executeRuntimeSwitch('claude', ['--no-validate'], deps);
       assert.deepEqual(await runtimeHooksReady('claude'), { ready: false, pendingMigration: true });
-      assert.equal(result.error.code, 'HOOKS_NOT_READY');
+      assert.equal(result.error.code, 'RUNTIME_SETUP_INCOMPLETE');
       assert.deepEqual(result.error.persisted, []);
     }
     assert.equal(writes, 1);
@@ -116,13 +118,18 @@ describe('runtime base URL support', () => {
     };
 
     try {
-      runtimeModule.showHelp();
+      await runtimeModule.showHelp();
     } finally {
       console.log = originalLog;
     }
 
     assert.match(output, /--save-base-url <url>/);
     assert.match(output, /--no-validate/);
+    for (const id of SUPPORTED_RUNTIMES) {
+      const { auth } = await getRuntime(id);
+      assert.ok(output.includes(`  ${(id + ':').padEnd(9)}${auth.cliHelp[0]}`));
+      assert.ok(output.includes(`       ${id}: ${auth.remedy}`));
+    }
   });
 
 
@@ -132,7 +139,7 @@ describe('runtime base URL support', () => {
   test('validateRuntimeFlags rejects invalid saved base URL values', async () => {
     const { validateRuntimeFlags } = await import('../../commands/runtime.js');
 
-    const error = validateRuntimeFlags('codex', {
+    const error = validateRuntimeFlags(await runtimeAuthFixture('codex'), {
       apiKey: null,
       setupToken: null,
       baseUrl: 'not-a-url',
@@ -144,8 +151,8 @@ describe('runtime base URL support', () => {
   test('applyBaseUrl writes Claude and Codex base URLs to the expected config', async () => {
     const runtimeModule = await import('../../commands/runtime.js');
 
-    assert.equal(runtimeModule.applyBaseUrl('claude', 'https://claude-proxy.example.com'), true);
-    assert.equal(runtimeModule.applyBaseUrl('codex', 'https://codex-proxy.example.com/v1'), true);
+    assert.equal(runtimeModule.applyBaseUrl(await runtimeAuthFixture('claude'), 'https://claude-proxy.example.com'), true);
+    assert.equal(runtimeModule.applyBaseUrl(await runtimeAuthFixture('codex'), 'https://codex-proxy.example.com/v1'), true);
 
     const envContent = fs.readFileSync(path.join(process.env.ZYLOS_DIR, '.env'), 'utf8');
     assert.match(envContent, /ANTHROPIC_BASE_URL=https:\/\/claude-proxy\.example\.com/);

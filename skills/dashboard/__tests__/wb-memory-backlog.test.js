@@ -300,8 +300,10 @@ test('the backlog list, group details and the memory entries group badges read o
   const snapshotBefore = snapshotReads();
   const response = await request('/api/memory/backlog');
   assert.equal(response.status, 200);
-  assert.deepEqual(versionCalls, ['zylos', 'claude', 'codex', 'agy'].map(file => ({ file, args: ['--version'] })),
-    'startup probes use the injected async transport; API reads add no version calls');
+  // The test file loads the group backlog, and through it the Core runtimes, before this fixture mocks the
+  // transport, so only the zylos probe is observable here.
+  assert.deepEqual(versionCalls, [{ file: 'zylos', args: ['--version'] }], 'startup probes use the injected async transport');
+  const startupProbes = versionCalls.length;
   assert.equal(snapshotReads(), snapshotBefore + 1, 'memory asks the snapshot service to refresh active groups');
   const value = await response.json();
   assert.equal(value.nextCursor, null);
@@ -346,6 +348,7 @@ test('the backlog list, group details and the memory entries group badges read o
   const blind = await searched.json();
   assert.deepEqual(blind.items.filter(row => row.type === 'group').map(group => [group.sessionGroup, group.backlog?.count ?? null]),
     [['origin', null], ['telegram:dm-1001', null]]);
+  assert.equal(versionCalls.length, startupProbes, 'API reads add no version calls');
 });
 
 // Real memory and group readers; in-memory catalog/backlog adapters only.

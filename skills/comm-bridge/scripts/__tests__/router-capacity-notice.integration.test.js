@@ -90,9 +90,9 @@ fs.appendFileSync(file,JSON.stringify({argv:process.argv.slice(2),body})+'\\n');
     readLiveIdentity: async group => scenes.get(group) ?? { present: false },
     readCurrentSession: async group => ({ ...scenes.get(group), startupControlIds: [] }),
     readRuntimeHealth: () => ({ health: 'ok' }),
-    getSessionAdapter: () => ({ launch: async input => {
+    session: { launch: async input => {
       launches.push(input.sessionGroup); scenes.set(input.sessionGroup, scene(input.sessionGroup, input.runId));
-    }, stop: async () => assert.fail('the fixture never stops a runtime') }),
+    }, stop: async () => assert.fail('the fixture never stops a runtime') },
     submit: async () => assert.fail('healthy capacity admission needs no supervisor socket'),
     sendStatusNotice: sender,
     deliverConversation: async (record, live) => { assert.equal(db.markDelivered(record.id, { sessionId: live.sessionId }), true); },

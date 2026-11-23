@@ -2,6 +2,8 @@ import fs from 'fs';
 import { loadCoreModule } from './core-modules.js';
 import { enqueueMachineControl } from './machine-control.js';
 import { durableJson } from './runtime-generation.js';
+
+const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
 // Optional usage must not load the native DB/reader graph until a sample is requested.
 const readAccountUsage = async (...args) => (await loadCoreModule('session-state-reader.js')).readAccountUsage(...args);
 
@@ -18,7 +20,7 @@ export class UsageMonitor {
 
   initializeLastCheckAt(nowEpoch) {
     const usageState = this.loadUsageState();
-    if (this.runtimeId === 'codex') return 0;
+    if (this.adapter.accountQuota.sampleOnStart) return 0;
     if (usageState?.lastCheckEpoch) return usageState.lastCheckEpoch;
     return nowEpoch;
   }
@@ -41,7 +43,7 @@ export class UsageMonitor {
   }
 
   canRunTask({ activeHoursOnly = false } = {}) {
-    if (this.runtimeId !== 'claude' && this.runtimeId !== 'codex') return false;
+    if (!runtimesWith('accountQuota').includes(this.runtimeId)) return false;
     if (!activeHoursOnly) return true;
     const hour = this.options.getLocalHour();
     return this.options.activeHoursStart <= hour && hour < this.options.activeHoursEnd;
@@ -175,7 +177,6 @@ export class UsageMonitor {
   }
 
   getUsageStateFile() {
-    if (this.runtimeId === 'codex') return this.options.usageCodexStateFile;
     return this.options.usageStateFile;
   }
 

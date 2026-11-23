@@ -1,4 +1,6 @@
-import { URL } from 'node:url';
+import { loadCoreModule } from './core-modules.js';
+
+const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
 
 function toPositiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ''), 10);
@@ -11,51 +13,9 @@ function toBool(value, fallback) {
   return fallback;
 }
 
-function summarizeWebFetch(toolInput = {}) {
-  const rawUrl = typeof toolInput.url === 'string' ? toolInput.url.trim() : '';
-  if (!rawUrl) {
-    return { type: 'input-keys', value: Object.keys(toolInput).sort() };
-  }
-  try {
-    const parsed = new URL(rawUrl);
-    return { type: 'url-host', value: parsed.host || parsed.hostname || rawUrl };
-  } catch {
-    return { type: 'url-preview', value: rawUrl.slice(0, 120) };
-  }
-}
+export function getToolRules({ runtimeId, watchdog, config = {} } = {}) {
+  if (!watchdog || watchdog === UNSUPPORTED) return [];
 
-function summarizeWebSearch(toolInput = {}) {
-  const query = typeof toolInput.query === 'string'
-    ? toolInput.query.trim()
-    : (typeof toolInput.prompt === 'string' ? toolInput.prompt.trim() : '');
-  if (!query) {
-    return { type: 'input-keys', value: Object.keys(toolInput).sort() };
-  }
-  return { type: 'query-preview', value: query.slice(0, 120) };
-}
-
-function summarizeBash(toolInput = {}) {
-  const command = typeof toolInput.command === 'string' ? toolInput.command.trim() : '';
-  if (!command) {
-    return { type: 'input-keys', value: Object.keys(toolInput).sort() };
-  }
-  return { type: 'command-head', value: command.split(/\s+/)[0] || command.slice(0, 80) };
-}
-
-export function summarizeToolInput(toolName, toolInput = {}) {
-  switch (toolName) {
-    case 'WebFetch':
-      return summarizeWebFetch(toolInput);
-    case 'WebSearch':
-      return summarizeWebSearch(toolInput);
-    case 'Bash':
-      return summarizeBash(toolInput);
-    default:
-      return { type: 'input-keys', value: Object.keys(toolInput || {}).sort() };
-  }
-}
-
-export function getToolRules({ runtimeId = 'claude', config = {} } = {}) {
   const watchdogEnabled = toBool(config.web_tool_watchdog_enabled, true);
   const timeoutSec = toPositiveInt(config.web_tool_timeout_sec, 3600);
   const interruptGraceSec = toPositiveInt(config.web_tool_interrupt_grace_sec, 15);
@@ -64,15 +24,15 @@ export function getToolRules({ runtimeId = 'claude', config = {} } = {}) {
   return [
     {
       id: 'web-tools-timeout',
-      runtime: 'claude',
-      tools: ['WebFetch', 'WebSearch'],
+      runtime: runtimeId,
+      tools: watchdog.tools,
       inputPredicate: () => true,
       observe: { summary: 'tool-specific' },
       policy: null,
       watchdog: {
-        enabled: runtimeId === 'claude' && watchdogEnabled,
+        enabled: watchdogEnabled,
         maxRuntimeSec: timeoutSec,
-        interruptKey: 'Escape',
+        interruptKey: watchdog.interruptKey,
         interruptGraceSec,
         escalation: 'restart',
         cooldownSec
@@ -81,10 +41,10 @@ export function getToolRules({ runtimeId = 'claude', config = {} } = {}) {
   ];
 }
 
-export function findMatchingToolRule({ runtimeId = 'claude', toolName, toolInput = {}, config = {} } = {}) {
+export function findMatchingToolRule({ runtimeId, watchdog, toolName, toolInput = {}, config = {} } = {}) {
   if (!toolName) return null;
 
-  for (const rule of getToolRules({ runtimeId, config })) {
+  for (const rule of getToolRules({ runtimeId, watchdog, config })) {
     if (rule.runtime !== runtimeId) continue;
     if (!rule.tools.includes(toolName)) continue;
     try {

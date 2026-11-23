@@ -47,7 +47,7 @@ router = createRouter({ db, now: () => now,
   listGroupTmuxSessions: async () => Object.entries(readScene()).map(([sessionGroup, live]) => ({ sessionGroup, tmuxName: live.tmuxName })),
   readCurrentSession: async group => readScene()[group]?.current,
   readRuntimeHealth: () => ({ health: 'ok' }),
-  getSessionAdapter: () => ({ launch: async input => {
+  session: { launch: async input => {
     const scene = readScene();
     if (scene.a) { record('duplicate-launch'); throw Object.assign(Error('duplicate scene'), { code: 'NAME_CONFLICT' }); }
     record('launch', { runId: input.runId });
@@ -56,7 +56,7 @@ router = createRouter({ db, now: () => now,
     fs.writeFileSync(file('scene.json'), JSON.stringify(scene));
     barrier('scene-created');
     publishReady(scene); barrier('ready-published');
-  }, stop: async () => { record('unexpected-stop'); throw Error('fixture scene must be adopted'); } }),
+  }, stop: async () => { record('unexpected-stop'); throw Error('fixture scene must be adopted'); } },
   submit: async () => { throw Error('healthy runtime must not register'); },
   deliverControl: async row => {
     record('control', { id: row.id, content: row.content });

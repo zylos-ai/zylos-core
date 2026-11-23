@@ -1,4 +1,5 @@
-import { element } from './plain-text.js';
+import { DEFAULT_RUNTIME } from '../../runtime-descriptors.js';
+import { element, runtimeName } from './plain-text.js';
 
 // The Core version an instance reports in versions (`zylos --version`). Dashboard ships inside Core and
 // has no version of its own. A missing answer, or the CLI's "unknown", is not a version.
@@ -37,15 +38,16 @@ export function coreUpgradePrompt(current, latest, t = key => key) {
   return t('wb.settings.version.prompt', { from: current ? 'v' + current : t('wb.unknown'), to: 'v' + latest });
 }
 
-const engineTitle = runtime => runtime === 'codex' ? 'Codex' : runtime === 'claude' ? 'Claude Code' : runtime === 'agy' ? 'Antigravity' : runtime || '';
 // The AI engine's CLI version and its upgrade button (the original generated action node), for the engine chosen in
 // the default engine card: each engine shows and upgrades its own CLI.
-export function renderEngineVersion(root, info, { upgrade, document = root.ownerDocument, t = key => key, readOnly = false, runtime = 'claude' } = {}) {
-  const version = info?.[runtime]?.installed, update = info?.[runtime]?.update, codex = runtime === 'codex';
-  root.replaceChildren(element(document, 'p', `${engineTitle(runtime)} · ${version ? 'v' + version : t('wb.unknown')}${update ? ' ↑' + update : ''}`, 'wb-version-line'));
+export function renderEngineVersion(root, info, { upgrade, document = root.ownerDocument, t = key => key, readOnly = false, runtime = DEFAULT_RUNTIME } = {}) {
+  const name = runtimeName(runtime);
+  const version = info?.[runtime]?.installed;
+  const update = info?.[runtime]?.update;
+  const updateNote = info?.[runtime]?.update_check === 'unsupported' ? ` · ${t('wb.settings.updateCheckUnsupported')}` : '';
+  root.replaceChildren(element(document, 'p', `${name} · ${version ? 'v' + version : t('wb.unknown')}${update ? ' ↑' + update : ''}${updateNote}`, 'wb-version-line'));
   if (upgrade) {
-    const label = upgrade.querySelector('#action-cli-label'); if (label) label.textContent = runtime === 'claude' || codex
-      ? t(codex ? 'actions.upgrade_codex' : 'actions.upgrade_cc') : t('actions.upgrade_runtime', { runtime: engineTitle(runtime) });
+    const label = upgrade.querySelector('#action-cli-label'); if (label) label.textContent = t('actions.upgrade_runtime', { runtime: name });
     const badge = upgrade.querySelector('#action-cc-ver'); if (badge) { badge.textContent = version ? ' v' + version : ''; badge.classList.toggle('action-ver-dot', !!update); }
     upgrade.disabled = readOnly; upgrade.title = readOnly ? t('remote.actions_read_only_tooltip') : ''; root.append(upgrade);
   }

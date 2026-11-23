@@ -1,3 +1,4 @@
+import { loadRuntimeContexts } from '../../../../cli/lib/model-rotation-thresholds.js';
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -10,6 +11,8 @@ import { fixture as c4Fixture } from '../../../comm-bridge/scripts/__tests__/c4-
 import { createDelivery } from '../../../comm-bridge/scripts/router/delivery.js';
 import { MANUAL_WAKE_PROMPT } from '../origin-prompts.js';
 import { groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
+
+const contexts = await loadRuntimeContexts();
 
 // Each fixture owns its persistent alert ledger and published state files.
 // No fixture can inherit another case's incident claims or touch a live tree.
@@ -33,7 +36,7 @@ function fixture(Class = SupervisorLifecycle) {
     conversations: 0, runningControls: 0, lastActivity: 0, unsummarized: 0,
     transition: null, pending: [], marker: { held: false, stale: false }, markerReads: [],
     backlog: { total: 0, groups: [] },
-    context: { configuration: { mode: 'multi', capacity: 1, hotTtlSeconds: 1800 } } };
+    context: { configuration: { contexts, mode: 'multi', capacity: 1, hotTtlSeconds: 1800 } } };
   const configuration = f.context.configuration;
   Object.defineProperty(f, 'context', { get: () => ({ configuration, transition: f.transition,
     scenes: f.scenes.map(s => ({ ...s })), fences: [...f.fences].map(([sessionGroup, value]) => ({ sessionGroup, ...value })), restartRequests: [...f.requests] }) });
@@ -461,7 +464,7 @@ test('require_idle control delivers from unchanged main idle state while a backg
     openTmuxConnection: async () => ({ close() {}, command: async args => args.at(-1) === '#{cursor_x}' ? '2' : '0' }),
     resolveSessionTarget: async () => target, revalidateSessionTarget: async () => {},
     readSessionState: async () => ({ identity: target, status: { valid: true, value: status } }), readRuntimeHealth: () => ({ health: 'ok' }),
-    getSessionAdapter: () => ({ sendText: async () => { sends++; }, sendKeys: async () => {}, captureScreen: async () => '❯ ' }),
+    session: { sendText: async () => { sends++; }, sendKeys: async () => {}, captureScreen: async () => '❯ ' },
   }, { periodicEnabled: false, captureEnabled: false });
   t.after(() => delivery.stop());
   const result = await delivery.deliverControl(c4.db.prepare('SELECT * FROM control_queue WHERE id=?').get(control.id));
@@ -1203,7 +1206,7 @@ test('persisted lifecycle prompts reject replacement runs and never count as Ori
       db: c4.store, getSessionMode: () => 'multi',
       openTmuxConnection: async () => ({ close() {} }),
       resolveSessionTarget: async () => ({ ...tmuxTarget, ready: true, runtime: 'claude', runId: 'replacement' }),
-      getSessionAdapter: () => ({ sendText: () => { sends++; } }),
+      session: { sendText: () => { sends++; } },
     }, { periodicEnabled: false });
     await delivery.deliverControl(row); await delivery.stop();
     assert.equal(sends, 0);
@@ -1369,14 +1372,14 @@ test('context usage past 80% of the actual model threshold does not request Sync
 
 test('rotation uses an alias threshold only for sessions launched through that alias', async () => {
   const f = fixture();
-  f.context.configuration.rotationPolicy = { model_rotation_thresholds: { claude: { 'opus[1m]': 30 } } };
+  f.context.configuration.rotationPolicy = { model_rotation_thresholds: { claude: { 'opus[1m]': 25 } } };
   f.context.configuration.defaultModels = { claude: 'opus[1m]' };
-  const alias = scene('alias', { model: 'claude-opus-5-5', contextWindow: 1000000, usagePercent: 35 });
-  const fixed = scene('fixed', { model: 'claude-opus-4-6', contextWindow: 1000000, usagePercent: 35,
+  const alias = scene('alias', { model: 'claude-opus-5-5', contextWindow: 1000000, usagePercent: 22 });
+  const fixed = scene('fixed', { model: 'claude-opus-4-6', contextWindow: 1000000, usagePercent: 22,
     launchConfig: { runtime: 'claude', mode: 'override', model: 'claude-opus-4-6[1m]' } });
   f.scenes = [alias, fixed];
   for (const item of f.scenes) await f.lifecycle.checkRotation(item, f.context);
-  assert.deepEqual(f.controls.map(row => row.sessionGroup), ['alias']);
+  assert.deepEqual(f.controls.map(row => row.sessionGroup), ['fixed']);
 });
 
 // Diagnostic-only capacity changes call the real lifecycle with bounded fake

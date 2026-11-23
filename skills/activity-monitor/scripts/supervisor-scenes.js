@@ -2,10 +2,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { loadCoreModule } from './core-modules.js';
 import { tmuxError as fail } from '../../comm-bridge/scripts/tmux-protocol.js';
+
+const { runtimesWith, findRuntime } = await loadCoreModule('runtime/index.js');
 const { groupRunDir, listGroupTmuxSessions, tmuxNameForGroup } = await loadCoreModule('session-group-paths.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
 const { observeSessionTarget, revalidateSessionTarget, readProcessTree: systemProcessTree } = await loadCoreModule('runtime/session-target.js');
-const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
+const { createSessionOps } = await loadCoreModule('runtime/session-ops.js');
 const { usageModelFacts } = await loadCoreModule('session-usage-reader.js');
 const { createSessionReader } = await loadCoreModule('session-state-reader-async.js');
 
@@ -28,10 +30,10 @@ const sameRun = (scene, target) => target.present && target.runId === scene.runI
 export class SupervisorScenes {
   constructor({ env = process.env, connectionOptions = {}, readMode, readActivity,
     readUsage, now = Date.now, open = openTmuxConnection, observeTarget = observeSessionTarget,
-    listSessions = listGroupTmuxSessions, readProcessTree = systemProcessTree, adapterFor = getSessionAdapter,
+    listSessions = listGroupTmuxSessions, readProcessTree = systemProcessTree, sessionOps = createSessionOps,
     reportError = () => {} } = {}) {
     Object.assign(this, { env, connectionOptions, readMode, readActivity, readUsage, now,
-      open, observeTarget, listSessions, readProcessTree, adapterFor, reportError });
+      open, observeTarget, listSessions, readProcessTree, sessionOps, reportError });
     this.readReady = async group => {
       try { return JSON.parse(await fs.readFile(path.join(groupRunDir(group ?? 'origin', env), 'current-session.json'), 'utf8')); }
       catch { return null; }
@@ -51,13 +53,16 @@ export class SupervisorScenes {
         try { return await this.observeGroup(group, { sample: { target }, scope: scopeFromTarget, deferUsage: true }); }
         catch (error) { return this.failedObservation(group, error); }
       } });
-    return [...samples].map(([scope, sample]) => {
+    return Promise.all([...samples].map(async ([scope, sample]) => {
       const group = scope === null ? 'origin' : scope;
       if (sample.observationError) return this.failedObservation(group, sample.observationError);
       const scene = sample.sampled;
-      if (scene?.ready && !this.readUsage) this.applyUsage(scene, sample);
+      if (scene?.ready && !this.readUsage) {
+        const context = (await findRuntime(scene.runtime))?.context;
+        this.applyUsage(scene, sample, context);
+      }
       return scene ?? absent(group, this.env);
-    });
+    }));
   }
 
   failedObservation(group, error) {
@@ -65,12 +70,13 @@ export class SupervisorScenes {
     return { ...absent(group, this.env), present: true, processRunning: undefined, observationError: error };
   }
 
-  applyUsage(scene, sampled) {
+  applyUsage(scene, sampled, context) {
     if (sampled.identity.runId !== scene.runId || sampled.identity.sessionId !== scene.sessionId || !sampled.usage.valid) return;
     const value = sampled.usage.value;
-    Object.assign(scene, usageModelFacts(value, scene.runtime, scene.launchConfig));
-    const percent = ['claude', 'agy'].includes(scene.runtime) ? value.context_window?.used_percentage :
-      value.contextUsage?.ceiling > 0 ? 100 * value.contextUsage.used / value.contextUsage.ceiling : null;
+    Object.assign(scene, usageModelFacts(value, scene.runtime, scene.launchConfig, context));
+    const { usedPercent, usedTokens, contextWindow } = context?.usageFacts(value) ?? {};
+    const percent = Number.isFinite(usedPercent) ? usedPercent
+      : contextWindow > 0 && Number.isFinite(usedTokens) ? 100 * usedTokens / contextWindow : null;
     scene.usagePercent = Number.isFinite(percent) ? percent : null;
   }
 
@@ -94,7 +100,7 @@ export class SupervisorScenes {
       scene.runtimePid = target.runtimePid;
       if (Number.isSafeInteger(scene.runtimePid) && scene.runtimePid > 0) {
         scene.proc = { pid: scene.runtimePid, alive: true, last_sample_at: this.now() };
-        if (scene.ready && ['claude', 'agy'].includes(scene.runtime)) scene.healthIdentity = { runtime: scene.runtime, session_id: scene.sessionId, claude_pid: scene.runtimePid };
+        if (scene.ready && runtimesWith('hookHealth').includes(scene.runtime)) scene.healthIdentity = { runtime: scene.runtime, session_id: scene.sessionId, claude_pid: scene.runtimePid };
       }
       if (scene.ready) {
         if (this.readActivity) {
@@ -106,13 +112,14 @@ export class SupervisorScenes {
             }
           }
         }
-        Object.assign(scene, usageModelFacts(null, scene.runtime, scene.launchConfig));
+        const context = (await findRuntime(scene.runtime))?.context;
+        Object.assign(scene, usageModelFacts(null, scene.runtime, scene.launchConfig, context));
         if (this.readUsage) {
           const usage = await this.readUsage(scene);
           scene.usagePercent = Number.isFinite(usage) ? usage : null;
         } else if (!batch?.deferUsage) {
           const sampled = batch?.sample ?? await this.reader.readSessionState(scope, { freshnessMs: 5000 });
-          this.applyUsage(scene, sampled);
+          this.applyUsage(scene, sampled, context);
         }
       }
       if (!batch) await revalidateSessionTarget({ connection, target });
@@ -177,16 +184,16 @@ export class SupervisorScenes {
       const target = await this.observeTarget({ sessionGroup: scene.sessionGroup, tmuxName: scene.tmuxName, connection,
         readReady: this.readReady, readProcessTree: async () => [] });
       if (!sameRun(scene, target)) throw fail('RUNID_MISMATCH', 'Pinned target changed');
-      return await operation({ connection, target, adapter: this.adapterFor(target.runtime) });
+      return await operation({ connection, target });
     } finally { connection?.close(); }
   }
 
   async readScreen(scene) {
-    return this.withTarget(scene, ({ connection, target, adapter }) => adapter.captureScreen({ connection, target }));
+    return this.withTarget(scene, ({ connection, target }) => this.sessionOps({}).captureScreen({ connection, target }));
   }
 
   async stop(scene) {
-    return this.adapterFor(scene.runtime, { tmux: this.connectionOptions, env: this.env })
+    return this.sessionOps({ tmux: this.connectionOptions, env: this.env })
       .stop({ tmuxName: scene.tmuxName, expectedRunId: scene.runId });
   }
 }

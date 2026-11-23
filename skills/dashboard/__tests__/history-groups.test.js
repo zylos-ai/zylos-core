@@ -7,9 +7,11 @@ import http from 'node:http';
 import { Store } from '../src/lib/store.js';
 import { HistoryService } from '../src/lib/history/history-service.js';
 import { createHistoryScope } from '../src/lib/history/history-scope.js';
-import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
+import { loadCoreModule as loadTranscriptCore } from '../src/lib/core-modules.js';
 import { createGroupsApi } from '../src/lib/workbench/groups-api.js';
 import { assertSessionGroup } from '../../../cli/lib/session-group-paths.js';
+const { getRuntime: getTranscriptRuntime } = await loadTranscriptCore('runtime/index.js');
+const { transcript: claudeTranscript } = (await getTranscriptRuntime('claude')).usage;
 
 // Real parsers, imported attribution, group read validation and HTTP handlers;
 // session-mode and catalog snapshot inputs are isolated fixtures. Run for history scope/runtime/read changes. Fixtures live
@@ -29,7 +31,7 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   let liveSingleSessionId = null;
   const load = async name => name === 'config.js' ? { readSessionMode: () => ({ mode }) } : { assertSessionGroup };
   const config = { zylosDir, runtime: 'claude' };
-  const project = path.join(os.homedir(), '.claude', 'projects', claudeProjectSlug(zylosDir));
+  const project = claudeTranscript.projectDir({ home: os.homedir(), zylosDir: zylosDir });
   await fs.mkdir(project, { recursive: true });
   t.after(() => fs.rm(project, { recursive: true, force: true }));
   const record = text => JSON.stringify({ type: 'assistant', timestamp: 1700000000000, message: { content: [{ type: 'text', text }] } }) + '\n';
@@ -109,12 +111,12 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   t.after(() => fs.rm(otherRollout, { force: true }));
   store.insertEvent({ id: 'other-codex', ingest_id: 'other-codex', session_id: 'other-codex', runtime: 'codex',
     session_group: 'dashboard:codex', event_type: 'session_start', category: 'lifecycle', timestamp: '2026-01-01T00:00:00Z' });
-  store.upsertCodexRolloutPath({ sessionId: 'other-codex', transcriptPath: otherRollout, lastEventAt: '2026-01-01T00:00:00Z' });
+  store.upsertCodexRolloutPath({ runtime: 'codex', sessionId: 'other-codex', transcriptPath: otherRollout, lastEventAt: '2026-01-01T00:00:00Z' });
   assert.equal((await get('sessions', { session_group: 'dashboard:codex' })).body.items[0].id, 'other-codex');
   const originalCodex = codex.body.items[0];
   await fs.appendFile(rollout, JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }) + '\n');
   await fs.utimes(rollout, new Date('2030-01-02'), new Date('2030-01-02'));
-  store.upsertCodexRolloutPath({ sessionId: 'codex-session', transcriptPath: rollout, lastEventAt: '2030-01-02T00:00:00Z' });
+  store.upsertCodexRolloutPath({ runtime: 'codex', sessionId: 'codex-session', transcriptPath: rollout, lastEventAt: '2030-01-02T00:00:00Z' });
   const updatedCodex = (await get('sessions', { session_group: 'dashboard:codex' })).body.items[0];
   assert.equal(updatedCodex.id, 'codex-session', 'last_event_at updates reorder a warm Codex list');
   assert.notEqual(updatedCodex.updatedAt, originalCodex.updatedAt);
@@ -194,7 +196,7 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   t.after(() => fs.rm(replacement, { force: true }));
   store.insertEvent({ id: 'team-replacement', ingest_id: 'team-replacement', session_id: 'team-codex',
     session_group: 'telegram:team', runtime: 'codex', event_type: 'session_start', category: 'lifecycle', timestamp: '2031-01-01T00:00:00Z' });
-  store.upsertCodexRolloutPath({ sessionId: 'team-codex', transcriptPath: replacement, lastEventAt: '2031-01-01T00:00:00Z' });
+  store.upsertCodexRolloutPath({ runtime: 'codex', sessionId: 'team-codex', transcriptPath: replacement, lastEventAt: '2031-01-01T00:00:00Z' });
   await fs.utimes(replacement, new Date('2029-01-01'), new Date('2029-01-01'));
   const switched = await get('sessions', { session_group: 'telegram:team' });
   assert.equal(switched.body.runtime, 'codex');
@@ -251,11 +253,11 @@ test('history revisions track path changes and local deletion without invalidati
   store.insertEvent({ id: 'backfill', ingest_id: 'backfill', session_id: 'older-session', runtime: 'claude',
     session_group: 'telegram:team', event_type: 'tool_end', category: 'tool', timestamp: '2019-01-01T00:00:00Z' });
   assert.equal(store.getHistoryAttribution()[0].runtime, 'codex', 'backfilled events retain latest-runtime ordering');
-  store.upsertCodexRolloutPath({ sessionId: 'session', transcriptPath: '/isolated/rollout.jsonl', lastEventAt: '2020-01-01T00:00:00Z' });
+  store.upsertCodexRolloutPath({ runtime: 'codex', sessionId: 'session', transcriptPath: '/isolated/rollout.jsonl', lastEventAt: '2020-01-01T00:00:00Z' });
   const revision = store.historyRevision;
-  store.upsertCodexRolloutPath({ sessionId: 'session', transcriptPath: '/isolated/rollout.jsonl', lastEventAt: '2020-01-02T00:00:00Z' });
+  store.upsertCodexRolloutPath({ runtime: 'codex', sessionId: 'session', transcriptPath: '/isolated/rollout.jsonl', lastEventAt: '2020-01-02T00:00:00Z' });
   assert.equal(store.historyRevision, revision, 'timestamp-only imports keep discovery warm');
-  store.upsertCodexRolloutPath({ sessionId: 'session', transcriptPath: '/isolated/rollout-moved.jsonl' });
+  store.upsertCodexRolloutPath({ runtime: 'codex', sessionId: 'session', transcriptPath: '/isolated/rollout-moved.jsonl' });
   assert.ok(store.historyRevision > revision, 'a moved transcript refreshes discovery');
   store.deleteEventsOlderThan(1, '2026-01-01T00:00:00Z');
   assert.equal(store.getHistoryAttribution().length, 0, 'local pruning clears stale attribution');

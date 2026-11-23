@@ -1,0 +1,10 @@
+{
+  "program": "claude",
+  "version": "2.1.327 (Claude Code)",
+  "recordedAt": "2026-11-19T23:24:44+08:00",
+  "how": "Isolated instance as OS user zylos-test (TZ=Asia/Singapore, private HOME in a throwaway /tmp run directory, env started from env -i), @anthropic-ai/claude-code@2.1.327 (same binary as the live install, sha256 identical) in a temporary npm prefix. Recorded by calling the runtime factory's claude auth.checkAuth({ root, env, execFile }) with execFile wrapping the real promisify(child_process.execFile): the command run was exactly `claude -p ping --max-turns 1` with the product's env and 30 s timeout, and the file holds the exit code, stdout and stderr that execFile returned. success.json: logged in through the relay (ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 in the isolated ZYLOS_DIR/.env, read by checkAuth's launch environment); checkAuth returned success/cli_probe. failure.json: HOME pointing to an empty directory, no ZYLOS_DIR/.env, no ANTHROPIC_* variables; checkAuth returned failure/cli_probe_not_logged_in.",
+  "files": {
+    "success.json": "Logged in: exit 0, model reply on stdout, stdin-wait warning on stderr",
+    "failure.json": "Logged out (empty HOME): exit 1, \"Not logged in · Please run /login\" on stdout"
+  }
+}

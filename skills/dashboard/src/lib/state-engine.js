@@ -1,5 +1,18 @@
+// This module awaits the Core and Dashboard runtime factories at module scope.
+// The corresponding runtime implementations must not statically import it.
+
 import path from 'node:path';
 import { loadCoreModule } from './core-modules.js';
+
+import { getDashboardRuntime } from './runtime/index.js';
+import { UNSUPPORTED } from './runtime/contract.js';
+
+const { DEFAULT_RUNTIME, getRuntime, SUPPORTED_RUNTIMES, runtimesWith } = await loadCoreModule('runtime/index.js');
+const usageRuntimes = await Promise.all(runtimesWith('usage').map(id => getDashboardRuntime(id)));
+const usageCollectors = new Map(usageRuntimes.map(runtime => [runtime.id, runtime.collector]));
+const sessionIdEnvs = (await Promise.all(SUPPORTED_RUNTIMES.map(id => getRuntime(id))))
+  .map(runtime => runtime.hooks.sessionIdEnv)
+  .filter(name => name !== UNSUPPORTED);
 
 const { readConfigStrict } = await loadCoreModule('config-store.js');
 const { readJsonSample } = await loadCoreModule('session-usage-reader.js');
@@ -640,7 +653,7 @@ export class StateEngine {
   }
 
   _originRuntime() {
-    return this._readOriginIdentity ? this._readOriginIdentity()?.runtime ?? 'unknown' : this._config.runtime || 'claude';
+    return this._readOriginIdentity ? this._readOriginIdentity()?.runtime ?? 'unknown' : this._config.runtime || DEFAULT_RUNTIME;
   }
 
   _isForeignRuntimeEvent(event) {
@@ -856,7 +869,7 @@ export class StateEngine {
 
   _currentSessionId() {
     if (this._readOriginIdentity) return this._readOriginIdentity()?.sessionId ?? null;
-    return process.env.CLAUDE_SESSION_ID || process.env.CODEX_SESSION_ID || null;
+    return sessionIdEnvs.map(name => process.env[name]).find(Boolean) ?? null;
   }
 
   _buildSourceHealth() {
@@ -865,6 +878,7 @@ export class StateEngine {
       const now = this._now();
 
       const currentRuntime = this._originRuntime();
+      const collector = usageCollectors.get(currentRuntime);
       const formatEntry = (name, { signalType = null, capability = 'supported', maxAgeS = 30, eventDriven = false, checkedWhenIdle = false } = {}) => {
         if (capability === 'unsupported') {
           return {
@@ -919,11 +933,9 @@ export class StateEngine {
 
       return {
         runtime_progress: {
-          jsonl_usage: !['claude', 'codex'].includes(currentRuntime)
-            ? formatEntry('jsonl_usage', { capability: 'unsupported' })
-            : currentRuntime === 'codex'
-            ? formatEntry('codex_rollout', { signalType: 'collector_liveness', checkedWhenIdle: true })
-            : formatEntry('jsonl_usage', { signalType: 'collector_liveness', eventDriven: true, maxAgeS: 60 })
+          jsonl_usage: collector
+            ? formatEntry(collector.sourceHealth.source, { ...collector.sourceHealth.options, eventDriven: collector.eventDriven })
+            : formatEntry('jsonl_usage', { capability: 'unsupported' }),
         },
         collector_liveness: {
           pm2_reader: formatEntry('pm2_reader', { signalType: 'collector_liveness', maxAgeS: 180 }),

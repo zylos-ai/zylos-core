@@ -9,6 +9,7 @@ import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb
 import { createPricingPanel } from './wb/settings-pricing.js';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js';
 import { renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js';
+import { runtimeNotFound } from './wb/settings-defaults.js';
 import { keyStillListed, wireSettingsConfirmations } from './wb/settings-wiring.js';
 import { coreVersion, renderBrandVersion, renderCoreUpdate, renderEngineVersion } from './wb/settings-version.js';
 import { mountConversationPage } from './wb/conversation-page.js';
@@ -33,6 +34,7 @@ import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPa
 import { createFleetSounds } from './fleet-sounds.js';
 import { refreshDashboardState } from './state-refresh.js';
 import { formatActionResult, actionFailureMessage } from './action-result.js';
+import { runtimeName } from './wb/plain-text.js';
 import { countLabel } from './count-label.js';
 
 const BASE_PATH = document.documentElement.dataset.basePath || '';
@@ -2370,14 +2372,19 @@ function renderCreatedApiKey(createdKey) {
 /** Settings confirmations share the dashboard's own dialog instead of the browser prompt. */
 function settingsWiring() {
   return settingsWiring.value ??= wireSettingsConfirmations({
-    document, t, runner: pageActions(), setBusy: setModalBodyDisabled, remoteTarget: viewedRemoteTarget,
+    document, t, runner: pageActions(),
+    recheck: () => requestAgentJson('/api/instance/actions/recheck-runtime-cli', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }),
+    setBusy: setModalBodyDisabled, remoteTarget: viewedRemoteTarget,
     keyPage: {
       request: async (method, path) => { const resp = await fetch(api(path), { method }); return { ok: resp.ok, data: await resp.json() }; },
       reload: () => keyList?.refresh(), renderCreated: renderCreatedApiKey, createdKey: () => fleetManageModal?._createdKey ?? null,
       status: (text, kind) => fleetManageStatus(text, kind, '#api-key-list'), busy: setApiKeyBusy, errorText: fleetManageError,
     },
     writable: () => !remoteIsReadOnly(), onGroup: openWorkbenchGroup,
-    engineVersion: (root, runtime) => renderEngineVersion(root, state.dashboardState?.versions, { runtime, upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly() }),
+    engineVersion: (root, runtime) => renderEngineVersion(root, state.dashboardState?.versions, {
+      runtime, upgrade: runtimeNotFound({ instance: state.dashboardState }, runtime) ? null : settingsUpgrade,
+      t, readOnly: remoteIsReadOnly(),
+    }),
   });
 }
 function confirmSetting(body, options) {
@@ -2997,7 +3004,7 @@ function createActionsModal() {
     <p id="action-mode-status" class="wb-note"></p>
     <p id="action-instance-status" class="wb-note"></p>
     <p id="action-restart-status" class="wb-note"></p>
-    <button class="wb-btn" data-action="upgrade-cc" type="button"><i class="wb-ico wb-ico-up wb-ico-xs" aria-hidden="true"></i><span id="action-cli-label">${esc(t('actions.upgrade_cc'))}</span><span class="action-ver" id="action-cc-ver"></span></button>
+    <button class="wb-btn" data-action="upgrade-cc" type="button"><i class="wb-ico wb-ico-up wb-ico-xs" aria-hidden="true"></i><span id="action-cli-label">${esc(t('actions.upgrade_runtime', { runtime: '' }).trim())}</span><span class="action-ver" id="action-cc-ver"></span></button>
   <div class="wb-note" id="action-status" role="status" hidden></div>`;
   document.body.appendChild(overlay);
   actionsModal = overlay;
@@ -3122,10 +3129,10 @@ async function sendAction(action, body) {
       body: JSON.stringify(request.body)
     });
     const result = await r.json();
-    if (action === 'upgrade-cc' && actionRuntime === 'agy' && r.status >= 500
+    if (action === 'upgrade-cc' && r.status >= 500
       && !['upgrade_failed', 'deadline_exceeded'].includes(result.error?.code ?? result.error)) {
-      result.messageKey = 'result.agy_upgrade_unknown';
-      result.messageParams = null;
+      result.messageKey = 'result.runtime_upgrade_unknown';
+      result.messageParams = { runtime: runtimeName(actionRuntime) || t('wb.unknown') };
     }
     if (action === 'restart-session' && result.requestId) {
       pendingManualRestart = result.submission === 'unknown' ? { requestId: result.requestId, submission: result.submission, runId: body?.runId } : null;
@@ -3173,7 +3180,7 @@ async function sendAction(action, body) {
     if (action === 'switch-runtime' || (action === 'switch-model' && body?.runtime)) throw err;
     if (statusEl) {
       statusEl.className = 'modal-status error';
-      statusEl.textContent = actionFailureMessage(action, actionRuntime, err, t);
+      statusEl.textContent = actionFailureMessage(action, runtimeName(actionRuntime) || t('wb.unknown'), err, t);
     }
     return false;
   }

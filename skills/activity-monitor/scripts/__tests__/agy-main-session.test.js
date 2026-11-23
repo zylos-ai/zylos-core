@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { handleAgyHook, normalizeAgyHook, runAgySessionStart } from '../agy-hooks.js';
+import { handleAgyHook, runAgySessionStart } from '../agy-hooks.js';
 import { publishBootstrapReady } from '../bootstrap-ready.js';
-import { acceptAgyMainEvent } from '../agy-main-session.js';
 import { handleHookActivity } from '../hook-activity.js';
 import { SessionActivity } from '../session-activity.js';
 import { publishContextSample } from '../context-monitor.js';
 import { buildKickPrompt } from '../../../../cli/lib/runtime/kick-prompt.js';
+import { hooks } from '../../../../cli/lib/runtime/agy/hooks.js';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-main-'));
@@ -32,7 +32,7 @@ test('interleaved child sessions cannot inject, change main identity or end the 
   assert.deepEqual(await f.send('SessionStart', 'early-child', { lastUserInput: 'worker task' }), {});
   assert.equal(fs.existsSync(path.join(f.dir, 'agy-main-session.json')), false);
   const injected = await f.kick();
-  assert.match(injected.injectSteps[0].systemMessage.systemMessage, /COMPLETE_SYSTEM_AND_USER_RULES/);
+  assert.match(JSON.parse(hooks.output({ event: 'SessionStart', result: injected })).injectSteps[0].systemMessage.systemMessage, /COMPLETE_SYSTEM_AND_USER_RULES/);
   await f.send('PreInvocation', 'parent', { invocationNum: 0 });
   assert.deepEqual(await f.send('SessionStart', 'child'), {});
   await f.send('PreInvocation', 'child', { invocationNum: 0 });
@@ -48,7 +48,7 @@ test('interleaved child sessions cannot inject, change main identity or end the 
 
 test('clear marker survives child events and only the new main kick advances identity', async t => {
   const f = fixture(t); await f.kick();
-  publishContextSample({ conversation_id: 'parent', agent_state: 'idle' }, { env: f.env, now: 2000 });
+  await publishContextSample({ conversation_id: 'parent', agent_state: 'idle' }, { env: f.env, now: 2000 });
   const marker = path.join(f.dir, 'agy-session-source');
   fs.writeFileSync(marker, JSON.stringify({ runId: 'run', source: 'clear' }));
   assert.deepEqual(await f.send('SessionStart', 'child'), {});
@@ -77,26 +77,30 @@ test('a child startup cannot replace the real bootstrap current-session record',
   assert.equal(fs.readFileSync(file, 'utf8'), before);
 });
 
-test('current run statusLine can prove main identity but a stale run cannot', t => {
+test('current run statusLine can prove main identity but a stale run cannot', async t => {
   const f = fixture(t);
-  publishContextSample({ conversation_id: 'parent' }, { env: { ...f.env, ZYLOS_RUN_ID: 'old-run' } });
-  assert.equal(acceptAgyMainEvent({ conversationId: 'parent' }, 'PreInvocation', f.env), null);
-  publishContextSample({ conversation_id: 'parent' }, { env: f.env });
-  assert.equal(acceptAgyMainEvent({ conversationId: 'child' }, 'SessionStart', f.env), null);
-  assert.equal(acceptAgyMainEvent({ conversationId: 'parent' }, 'PreInvocation', f.env).record.conversationId, 'parent');
+  await publishContextSample({ conversation_id: 'parent' }, { env: { ...f.env, ZYLOS_RUN_ID: 'old-run' } });
+  assert.equal(hooks.mainSession.accept({ conversationId: 'parent' }, 'PreInvocation', f.env).binding, null);
+  await publishContextSample({ conversation_id: 'parent' }, { env: f.env });
+  assert.equal(hooks.mainSession.accept({ conversationId: 'child' }, 'SessionStart', f.env).binding, null);
+  assert.equal(hooks.mainSession.accept({ conversationId: 'parent' }, 'PreInvocation', f.env).binding.record.conversationId, 'parent');
 });
 
 test('terminal custom hook ends normally and next main invocation restores rules once', async t => {
   const f = fixture(t); await f.kick();
   fs.writeFileSync(path.join(f.dir, 'agy-session-source'), JSON.stringify({ runId: 'run', source: 'clear' }));
   const cleared = await f.kick('new-parent');
-  assert.match(cleared.injectSteps[0].systemMessage.systemMessage, /do not reply to them again\./);
+  assert.match(JSON.parse(hooks.output({ event: 'SessionStart', result: cleared })).injectSteps[0].systemMessage.systemMessage, /do not reply to them again\./);
   const stop = { terminationReason: 'TERMINAL_CUSTOM_HOOK', fullyIdle: true };
-  assert.equal(normalizeAgyHook({ conversationId: 'parent', ...stop }, 'Stop').hook_event_name, 'Stop');
+  assert.equal(hooks.normalize({ conversationId: 'parent', ...stop }, 'Stop').hook_event_name, 'Stop');
   await f.send('Stop', 'new-parent', stop);
   assert.equal(await f.send('PreInvocation', 'child', { invocationNum: 0 }), null);
+  const instructions = f.options.instructions;
+  f.options.instructions = () => { throw new Error('fixture: instructions unreadable'); };
+  await assert.rejects(f.send('PreInvocation', 'new-parent', { invocationNum: 2 }), /instructions unreadable/);
+  f.options.instructions = instructions;
   const restored = await f.send('PreInvocation', 'new-parent', { invocationNum: 3 });
-  assert.equal(restored.injectSteps[0].systemMessage.systemMessage, 'COMPLETE_SYSTEM_AND_USER_RULES');
+  assert.equal(JSON.parse(hooks.output({ event: 'PreInvocation', result: restored })).injectSteps[0].systemMessage.systemMessage, 'COMPLETE_SYSTEM_AND_USER_RULES');
   assert.equal(f.startups.length, 2, 'rule restore must not rerun startup orchestration');
   assert.equal(await f.send('PreInvocation', 'new-parent', { invocationNum: 4 }), null);
 });
@@ -117,13 +121,13 @@ test('run_command native IDs track background tool start and completion only for
   const [pre, post] = events.filter(event => event.tool_use_id);
   assert.equal(pre.tool_use_id, post.tool_use_id); assert.equal(pre.tool, 'run_command');
   assert.deepEqual(pre.tool_input, { CommandLine: 'sleep 20', Cwd: '/isolated' });
-  const failed = normalizeAgyHook({ conversationId: 'parent', toolCall, error: 'private error' }, 'PostToolUse');
+  const failed = hooks.normalize({ conversationId: 'parent', toolCall, error: 'private error' }, 'PostToolUse');
   assert.equal(failed.hook_event_name, 'PostToolUseFailure'); assert.equal(failed.error, 'tool_error');
 });
 
 test('native network error strings produce only a sanitized health category', () => {
   for (const error of ['proxyconnect tcp: dial tcp: connection refused', 'ECONNREFUSED', 'ENETUNREACH']) {
-    assert.equal(normalizeAgyHook({ conversationId: 'main', terminationReason: 'ERROR', error }, 'Stop').error, 'network_error');
+    assert.equal(hooks.normalize({ conversationId: 'main', terminationReason: 'ERROR', error }, 'Stop').error, 'network_error');
   }
-  assert.equal(normalizeAgyHook({ conversationId: 'main', terminationReason: 'ERROR', error: 'proxyconnect API_KEY_INVALID' }, 'Stop').error, 'authentication_failed');
+  assert.equal(hooks.normalize({ conversationId: 'main', terminationReason: 'ERROR', error: 'proxyconnect API_KEY_INVALID' }, 'Stop').error, 'authentication_failed');
 });

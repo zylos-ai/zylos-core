@@ -1,10 +1,16 @@
-// Frozen collector from b927804f; only the three static import paths differ.
+// Collector from b927804f with the current pricing and transcript lookup signatures.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fastModeMultiplierForRuntime, modelPricesForRuntime } from '../../src/lib/config.js';
 import { Sanitizer } from '../../src/lib/sanitizer.js';
-import { claudeProjectSlug } from '../../src/lib/claude-project-path.js';
+import { loadCoreModule as loadTranscriptCore } from '../../src/lib/core-modules.js';
+import { getDashboardRuntime } from '../../src/lib/runtime/index.js';
+
+const { pricing: claudePricing } = await getDashboardRuntime('claude');
+
+const { getRuntime: getTranscriptRuntime } = await loadTranscriptCore('runtime/index.js');
+const { transcript: claudeTranscript } = (await getTranscriptRuntime('claude')).usage;
 
 const PER_MTOK = 1_000_000;
 const ASSISTANT_MESSAGE_SUMMARY_LIMIT = 500;
@@ -69,16 +75,9 @@ export class ConversationCollector {
     });
   }
 
-  _resolveProjectSlug() {
-    const zylosDir = this.config.zylosDir || path.join(process.env.HOME, 'zylos');
-    return claudeProjectSlug(zylosDir);
-  }
-
   _resolveProjectDir() {
-    return path.join(
-      this.config.homeDir || process.env.HOME,
-      '.claude', 'projects', this._resolveProjectSlug()
-    );
+    const zylosDir = this.config.zylosDir || path.join(process.env.HOME, 'zylos');
+    return claudeTranscript.projectDir({ home: this.config.homeDir || process.env.HOME, zylosDir });
   }
 
   // The state engine only learns the session id from session_start /
@@ -151,7 +150,7 @@ export class ConversationCollector {
 
   _resolveModelPrice(model) {
     if (!model) return null;
-    const prices = modelPricesForRuntime(this.config, 'claude');
+    const prices = modelPricesForRuntime(this.config, claudePricing);
     // A specific model (including a configured override) must win over its
     // family prefix, regardless of the table's insertion order.
     let matchedPrefix = null;
@@ -204,7 +203,7 @@ export class ConversationCollector {
 
   _calculateCost(usage, price, speed) {
     if (!price) return null;
-    const multiplier = speed === 'fast' ? (fastModeMultiplierForRuntime(this.config, 'claude', price) || 6) : 1;
+    const multiplier = speed === 'fast' ? (fastModeMultiplierForRuntime(this.config, claudePricing, price) || 6) : 1;
     const input = (usage.input_tokens || 0) * price.input * multiplier / PER_MTOK;
     const output = (usage.output_tokens || 0) * price.output * multiplier / PER_MTOK;
     const cacheRead = (usage.cache_read_input_tokens || 0) * price.cacheRead * multiplier / PER_MTOK;

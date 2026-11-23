@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import { claudeProjectSlug } from '../skills/dashboard/src/lib/claude-project-path.js';
+import { ClaudeHistory } from '../skills/dashboard/src/lib/runtime/claude/history.js';
 
 const record = text => JSON.stringify({ type: 'assistant', timestamp: '2026-01-02T00:00:00.000Z', message: { content: text } }) + '\n';
 const ids = Array.from({ length: 80 }, (_, index) => `session-${String(index).padStart(2, '0')}`);
@@ -20,7 +20,7 @@ async function fixture(t) {
   });
   const zylosDir = path.join(home, 'zylos');
   await fs.mkdir(zylosDir);
-  const project = path.join(home, '.claude', 'projects', claudeProjectSlug(zylosDir));
+  const project = new ClaudeHistory({ homeDir: home, zylosDir }).projectDir;
   await fs.mkdir(project, { recursive: true });
   const transcript = path.join(project, `${ids[0]}.jsonl`);
   const messages = Array.from({ length: 500 }, (_, index) => `Entry ${String(index).padStart(3, '0')}${index === 249 ? ' anchor needle' : ''}`);

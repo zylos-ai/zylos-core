@@ -1,0 +1,11 @@
+{
+  "program": "Codex CLI",
+  "version": "codex-cli 0.140.0",
+  "recordedAt": "2026-11-21T08:03:36.793Z",
+  "how": "Recorded a native codex exec rollout in an unprivileged Linux container with a fresh HOME and CODEX_HOME, Asia/Singapore and a loopback Responses API fixture. A trusted native SessionStart hook passed its stdin to Zylos hook-activity.js to record the matching event.",
+  "files": {
+    "rollout.jsonl": "One native turn_context and the token_count immediately following it. Unused turn_context payload fields were omitted.",
+    "session-start.jsonl": "Unmodified Zylos session_start from the same native run. The replay test resolves the recorded transcript to the fixture copy.",
+    "models_cache.json": "Subset of a real Codex CLI 0.159.2 model cache from a separate capture with a private CODEX_HOME on 2026-10-08T09:55:10.058728Z. Retains the public GPT-5.5 slug and native window; other entries and unused fields, including cache identity, are omitted."
+  }
+}

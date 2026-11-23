@@ -5,14 +5,16 @@ import { spawnSync } from 'node:child_process';
 import { deployTemplates, syncCoreSkills } from '../../cli/commands/init.js';
 import { buildInstructionFile, instructionPaths } from '../../cli/lib/runtime/instruction-builder.js';
 import { prepareUpgradeRuntime } from '../../cli/lib/upgrade-runtime-preparation.js';
-import { preparePostCutoff, publishPostCutoff } from '../../cli/lib/upgrade-post-cutoff.js';
+import { loadPostUpgradeSync, preparePostCutoff, publishPostCutoff } from '../../cli/lib/upgrade-post-cutoff.js';
+
+const postUpgradeSync = await loadPostUpgradeSync();
 
 const root = process.env.ZYLOS_DIR;
 const mode = process.argv[2];
 const user = '# Owner custom instructions\n\nKeep duplicate lines.\nKeep duplicate lines.\n中文与 literal $HOME.\n';
 const sync = syncCoreSkills();
 assert.ok(sync.installed.includes('comm-bridge'));
-deployTemplates({ freshInstall: true });
+await deployTemplates({ freshInstall: true });
 assert.equal(fs.readFileSync(path.join(root, 'ZYLOS.md'), 'utf8'),
   fs.readFileSync(new URL('../../templates/ZYLOS.md', import.meta.url), 'utf8'));
 for (const runtime of ['claude', 'codex']) {
@@ -37,7 +39,7 @@ if (mode === 'refresh') {
   assert.equal(preparation.replacements.some(item => item.path === 'ZYLOS.md'), false);
   const transactionDir = path.join(process.env.TMPDIR, 'transaction');
   fs.mkdirSync(transactionDir);
-  const postCutoff = preparePostCutoff({ ...preparation, transactionDir, zylosDir: root });
+  const postCutoff = preparePostCutoff({ ...preparation, transactionDir, zylosDir: root, sync: postUpgradeSync });
   const transactionId = 'instruction-deployment-test';
   const snapshotManifestHash = 'a'.repeat(64);
   const journal = { transactionId, zylosDir: root, phase: 'compensation_closed', snapshotManifestHash,

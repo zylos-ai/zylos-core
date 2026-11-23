@@ -6,7 +6,10 @@ import { registerHooks } from 'node:module';
 import { createDocument, allNodes, tick } from './helpers/conversation-dom.js';
 const schemaPath = new URL('../public/chat-schema.js', import.meta.url).pathname;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
   if (context.parentURL && new URL(specifier, context.parentURL).pathname === schemaPath) return next(sourceSchema, context);
   return next(specifier, context);
 } });
@@ -205,7 +208,6 @@ for (const locale of ['zh', 'en']) test(`working captions omit elapsed time in $
   }
 });
 
-
 test('detail preserves stale sample classification despite contradictory working events', async t => {
   const document = createDocument(), root = document.createElement('div'), now = 900000;
   const row = { sessionGroup: 'dashboard:a', presence: 'running', live: { runId: 'run', status: {
@@ -220,7 +222,6 @@ test('detail preserves stale sample classification despite contradictory working
   assert.equal(allNodes(head).some(node => node.classList.contains('wb-status-age')), true);
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-status-age')).length, 2);
 });
-
 
 test('ISO group sample clocks retain trusted working state and its busy polling cadence', async t => {
   const f = fixture(t, { isoWire: true });

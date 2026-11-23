@@ -7,9 +7,10 @@ import { once } from 'node:events';
 import { test } from 'node:test';
 import { readProcessInfo } from '../claude-pid.js';
 import {
-  PANE_PROCESS_FILE, belongsToPane, childRuntimeOf, classifyHookProcess, readPaneProcess,
-  readyProcessFields, writePaneProcess,
-} from '../pane-process.js';
+  PANE_PROCESS_FILE, belongsToPane, readPaneProcess, writePaneProcess,
+} from '../../../../cli/lib/runtime/pane-process.js';
+import { childRuntimeOf, classifyHookProcess, readyProcessFields } from '../pane-process.js';
+import { getRuntime, runtimesWith } from '../../../../cli/lib/runtime/index.js';
 
 function runDir(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-process-'));
@@ -59,8 +60,10 @@ const info = pid => {
 test('the record round-trips and malformed records read as missing', t => {
   const dir = runDir(t);
   assert.equal(readPaneProcess(dir), null);
-  const record = writePaneProcess(dir, { runId: 'run-1', runtime: 'claude', panePid: 42, paneStart: '1000' });
-  assert.deepEqual(readPaneProcess(dir), record);
+  for (const runtime of ['claude', 'codex', 'agy']) {
+    const record = writePaneProcess(dir, { runId: 'run-1', runtime, panePid: 42, paneStart: '1000' });
+    assert.deepEqual(readPaneProcess(dir), record);
+  }
   assert.equal((fs.statSync(path.join(dir, PANE_PROCESS_FILE)).mode & 0o777), 0o600);
   assert.throws(() => writePaneProcess(dir, { runId: 'run-1', runtime: 'gemini', panePid: 42, paneStart: '1' }), TypeError);
   for (const bad of ['{', '{"v":2,"runId":"r","runtime":"claude","panePid":1,"paneStart":"1"}',
@@ -77,11 +80,11 @@ test('a Claude pane process is main and any other process of the run is a child'
   writePaneProcess(dir, { runId: 'run-1', runtime: 'claude', panePid: pane.pid, paneStart: info(pane.pid).start });
   const env = { ZYLOS_RUN_ID: 'run-1' };
 
-  const main = classifyHookProcess({ env, dir, trigger: info(pane.pid) });
+  const main = await classifyHookProcess({ env, dir, trigger: info(pane.pid) });
   assert.equal(main.verdict, 'main');
   assert.equal(main.reason, 'pane_process');
 
-  const child = classifyHookProcess({ env, dir, trigger: info(other.pid) });
+  const child = await classifyHookProcess({ env, dir, trigger: info(other.pid) });
   assert.equal(child.verdict, 'child');
   assert.equal(child.reason, 'not_pane_process');
 });
@@ -90,7 +93,7 @@ test('a reused pane pid with a different start time is a child', async t => {
   const dir = runDir(t);
   const pane = await liveProcess(t);
   writePaneProcess(dir, { runId: 'run-1', runtime: 'claude', panePid: pane.pid, paneStart: '1' });
-  const result = classifyHookProcess({ env: { ZYLOS_RUN_ID: 'run-1' }, dir, trigger: info(pane.pid) });
+  const result = await classifyHookProcess({ env: { ZYLOS_RUN_ID: 'run-1' }, dir, trigger: info(pane.pid) });
   assert.equal(result.verdict, 'child');
   assert.equal(result.reason, 'pane_pid_reused');
 });
@@ -102,15 +105,15 @@ test('a Codex wrapper pane accepts its direct child and refuses other processes'
   writePaneProcess(dir, { runId: 'run-1', runtime: 'codex', panePid: wrapper.pid, paneStart: info(wrapper.pid).start });
   const env = { ZYLOS_RUN_ID: 'run-1' };
 
-  const native = classifyHookProcess({ env, dir, trigger: info(wrapper.childPid) });
+  const native = await classifyHookProcess({ env, dir, trigger: info(wrapper.childPid) });
   assert.equal(native.verdict, 'main');
   assert.equal(native.reason, 'pane_process_child');
-  assert.equal(classifyHookProcess({ env, dir, trigger: info(wrapper.pid) }).verdict, 'main');
-  assert.equal(classifyHookProcess({ env, dir, trigger: info(other.pid) }).verdict, 'child');
+  assert.equal((await classifyHookProcess({ env, dir, trigger: info(wrapper.pid) })).verdict, 'main');
+  assert.equal((await classifyHookProcess({ env, dir, trigger: info(other.pid) })).verdict, 'child');
 
   // The same parentage under a Claude record is not the pane process.
   writePaneProcess(dir, { runId: 'run-1', runtime: 'claude', panePid: wrapper.pid, paneStart: info(wrapper.pid).start });
-  assert.equal(classifyHookProcess({ env, dir, trigger: info(wrapper.childPid) }).verdict, 'child');
+  assert.equal((await classifyHookProcess({ env, dir, trigger: info(wrapper.childPid) })).verdict, 'child');
 });
 
 test('a native Codex pane process refuses its own direct child', async t => {
@@ -121,9 +124,9 @@ test('a native Codex pane process refuses its own direct child', async t => {
   writePaneProcess(dir, { runId: 'run-1', runtime: 'codex', panePid: pane.pid, paneStart: info(pane.pid).start });
   const env = { ZYLOS_RUN_ID: 'run-1' };
 
-  assert.equal(classifyHookProcess({ env, dir, trigger: info(pane.pid) }).reason, 'pane_process');
+  assert.equal((await classifyHookProcess({ env, dir, trigger: info(pane.pid) })).reason, 'pane_process');
   // `codex exec` or `claude -p` run by the Codex shell tool without an intermediate shell.
-  const child = classifyHookProcess({ env, dir, trigger: info(pane.childPid) });
+  const child = await classifyHookProcess({ env, dir, trigger: info(pane.childPid) });
   assert.deepEqual([child.verdict, child.reason], ['child', 'not_pane_process']);
 });
 
@@ -131,20 +134,20 @@ test('missing evidence is undetermined, never a refusal', async t => {
   const dir = runDir(t);
   const pane = await liveProcess(t);
   const env = { ZYLOS_RUN_ID: 'run-1' };
-  assert.deepEqual(classifyHookProcess({ env, dir, trigger: null }), { verdict: 'unknown', reason: 'process_unreadable' });
-  assert.deepEqual(classifyHookProcess({ env, dir, trigger: info(pane.pid) }), { verdict: 'unknown', reason: 'record_missing' });
+  assert.deepEqual(await classifyHookProcess({ env, dir, trigger: null }), { verdict: 'unknown', reason: 'process_unreadable' });
+  assert.deepEqual(await classifyHookProcess({ env, dir, trigger: info(pane.pid) }), { verdict: 'unknown', reason: 'record_missing' });
 
   writePaneProcess(dir, { runId: 'run-0', runtime: 'claude', panePid: pane.pid, paneStart: info(pane.pid).start });
-  assert.deepEqual(classifyHookProcess({ env, dir, trigger: info(pane.pid) }), { verdict: 'unknown', reason: 'record_other_run' });
+  assert.deepEqual(await classifyHookProcess({ env, dir, trigger: info(pane.pid) }), { verdict: 'unknown', reason: 'record_other_run' });
 
   writePaneProcess(dir, { runId: 'run-1', runtime: 'codex', panePid: pane.pid, paneStart: info(pane.pid).start });
-  const unreadableParent = classifyHookProcess({
+  const unreadableParent = await classifyHookProcess({
     env, dir, trigger: { pid: 999999, ppid: pane.pid, start: '5', comm: 'codex' }, readInfo: () => null,
   });
   assert.deepEqual([unreadableParent.verdict, unreadableParent.reason], ['unknown', 'pane_unreadable']);
 });
 
-test('a hook without a run id is the pane process only under the tmux server', () => {
+test('a hook without a run id is the pane process only under the tmux server', async () => {
   const tree = {
     1: { pid: 1, ppid: 0, start: '1', comm: 'tmux: server' },
     10: { pid: 10, ppid: 1, start: '10', comm: 'claude' },
@@ -164,16 +167,16 @@ test('a hook without a run id is the pane process only under the tmux server', (
   };
   const readInfo = pid => tree[pid] ?? null;
   const classify = pid => classifyHookProcess({ env: {}, trigger: tree[pid], readInfo });
-  assert.equal(classify(10).verdict, 'main');
-  assert.equal(classify(31).verdict, 'main', 'a shell between tmux and the runtime is skipped');
-  assert.equal(classify(21).verdict, 'main', 'native Codex under its launcher wrapper');
-  assert.equal(classify(12).verdict, 'child', 'claude -p under a Claude pane');
-  assert.equal(classify(23).verdict, 'child', 'codex exec under a Codex pane');
-  assert.equal(classify(50).verdict, 'main', 'native Codex as the pane process');
-  assert.equal(classify(51).verdict, 'child', 'codex exec started directly by a native Codex pane');
-  assert.equal(classify(53).verdict, 'child', 'codex exec through a shell of a native Codex pane');
-  assert.equal(classify(54).verdict, 'child', 'claude -p started directly by a native Codex pane');
-  assert.deepEqual(classifyHookProcess({ env: {}, trigger: { pid: 40, ppid: 41, start: '1', comm: 'claude' }, readInfo }),
+  assert.equal((await classify(10)).verdict, 'main');
+  assert.equal((await classify(31)).verdict, 'main', 'a shell between tmux and the runtime is skipped');
+  assert.equal((await classify(21)).verdict, 'main', 'native Codex under its launcher wrapper');
+  assert.equal((await classify(12)).verdict, 'child', 'claude -p under a Claude pane');
+  assert.equal((await classify(23)).verdict, 'child', 'codex exec under a Codex pane');
+  assert.equal((await classify(50)).verdict, 'main', 'native Codex as the pane process');
+  assert.equal((await classify(51)).verdict, 'child', 'codex exec started directly by a native Codex pane');
+  assert.equal((await classify(53)).verdict, 'child', 'codex exec through a shell of a native Codex pane');
+  assert.equal((await classify(54)).verdict, 'child', 'claude -p started directly by a native Codex pane');
+  assert.deepEqual(await classifyHookProcess({ env: {}, trigger: { pid: 40, ppid: 41, start: '1', comm: 'claude' }, readInfo }),
     { verdict: 'unknown', reason: 'process_unreadable' });
 });
 
@@ -184,7 +187,7 @@ test('pane membership compares start times only when both sides know them', () =
   assert.equal(belongsToPane({ pid: 5 }, pane), true);
   assert.equal(belongsToPane({ pid: 5, start: '101' }, { ...pane, paneStart: null }), true);
   assert.equal(belongsToPane({ pid: 6, ppid: 5, parentStart: '100' }, pane), false);
-  const wrapper = { ...pane, runtime: 'codex', paneComm: 'node' };
+  const wrapper = { ...pane, runtime: 'codex', paneComm: 'node', wrapsNative: true };
   assert.equal(belongsToPane({ pid: 6, ppid: 5, parentStart: '100' }, wrapper), true);
   assert.equal(belongsToPane({ pid: 6, ppid: 5, parentStart: '99' }, wrapper), false);
   assert.equal(belongsToPane({ pid: 6, ppid: 5, parentStart: '100' }, { ...wrapper, paneComm: 'codex' }), false);
@@ -203,10 +206,13 @@ test('READY process fields name the publisher and its parent', async t => {
   assert.equal('runtimeParentStart' in readyProcessFields({ pid: 3, ppid: 2, start: '1' }, { readInfo: () => null }), false);
 });
 
-test('a child runtime is named by its process or its transcript location', () => {
+test('a child runtime is named by its process or its transcript location', async () => {
+  const markers = await Promise.all(runtimesWith('usage').map(async id =>
+    [id, (await getRuntime(id)).usage.transcript.pathMarker]));
   assert.equal(childRuntimeOf({ comm: 'claude' }, null), 'claude');
   assert.equal(childRuntimeOf({ comm: 'codex.exe' }, null), 'codex');
-  assert.equal(childRuntimeOf({ comm: 'node' }, '/home/a/.codex/sessions/2026/x.jsonl'), 'codex');
-  assert.equal(childRuntimeOf({ comm: 'node' }, 'C:\\Users\\a\\.claude\\projects\\p\\s.jsonl'), 'claude');
-  assert.equal(childRuntimeOf({ comm: 'node' }, '/tmp/s.jsonl'), null);
+  assert.equal(childRuntimeOf({ comm: 'node' }, '/home/a/.codex/sessions/2026/x.jsonl', markers), 'codex');
+  assert.equal(childRuntimeOf({ comm: 'node' }, 'C:\\Users\\a\\.claude\\projects\\p\\s.jsonl', markers), 'claude');
+  assert.equal(childRuntimeOf({ comm: 'agy' }, null), null);
+  assert.equal(childRuntimeOf({ comm: 'node' }, '/tmp/s.jsonl', markers), null);
 });

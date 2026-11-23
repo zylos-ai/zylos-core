@@ -5,8 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { finalizeStatus, resumeFinalize } from '../upgrade-resume.js';
-import { preparePostCutoff, publishPostCutoff } from '../upgrade-post-cutoff.js';
+import { loadPostUpgradeSync, preparePostCutoff, publishPostCutoff } from '../upgrade-post-cutoff.js';
 import { formatFinalizeResult } from '../../commands/component.js';
+
+const sync = await loadPostUpgradeSync();
 
 const actual=createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 function fixture(t) {
@@ -21,7 +23,7 @@ function fixture(t) {
   let journal={formatVersion:1,transactionId:id,zylosDir:root,initialIdentity:{},installationIntent:true,
     dbBackupDir:db,snapshotManifestHash:hash,phase:'compensation_closed',from:'old',to:'new',originalServices:[],
     compensationCutoff:{formatVersion:1,closed:true,transactionId:id,snapshotManifestHash:hash,writer:'finalizer',closedAt:new Date().toISOString()},
-    postCutoff:preparePostCutoff({zylosDir:root,transactionDir:dir,homeDir:root,runtime:'claude',replacements:[]})};
+    postCutoff:preparePostCutoff({sync,zylosDir:root,transactionDir:dir,homeDir:root,runtime:'claude',replacements:[]})};
   actual.durable(path.join(dir,'journal.json'),journal);
   const calls=[];
   const m={...actual,canRecognizeProcesses:platform=>platform==='linux',discover:()=>({candidates:[{dir,journal:structuredClone(journal)}],diagnostics:[]}),
@@ -308,7 +310,7 @@ for(const corrupt of [false,true]) test(`resume preserves default reader access 
   fs.mkdirSync(path.dirname(stable),{recursive:true});
   fs.writeFileSync(stable,fs.readFileSync(new URL('../upgrade-maintenance.cjs',import.meta.url),'utf8'));
   fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/remove-owned-tree.js'),path.join(path.dirname(stable),'remove-owned-tree.mjs'));
-  const preparation=preparePostCutoff({transactionDir:f.dir,zylosDir:f.root,homeDir:f.root,runtime:'claude',
+  const preparation=preparePostCutoff({sync,transactionDir:f.dir,zylosDir:f.root,homeDir:f.root,runtime:'claude',
     replacements:[{path:'CLAUDE.md',content:'published'}]});
   f.journal={...f.journal,postCutoff:{...preparation,items:{hooks:{...preparation.items.hooks,state:'done'}}}};
   fs.writeFileSync(path.join(f.root,'CLAUDE.md'),'published');
@@ -362,7 +364,7 @@ test('real partial publication reports retained replace bytes when a later targe
   const f=fixture(t);
   fs.writeFileSync(path.join(f.root,'CLAUDE.md'),'old');
   fs.writeFileSync(path.join(f.root,'AGENTS.md'),'old');
-  f.journal={...f.journal,postCutoff:preparePostCutoff({zylosDir:f.root,transactionDir:f.dir,homeDir:f.root,runtime:'claude',
+  f.journal={...f.journal,postCutoff:preparePostCutoff({sync,zylosDir:f.root,transactionDir:f.dir,homeDir:f.root,runtime:'claude',
     replacements:[{id:'t01',path:'CLAUDE.md',content:'new'},{id:'t02',path:'AGENTS.md',content:'new'}]})};
   fs.writeFileSync(path.join(f.root,'AGENTS.md'),'conflict');
   const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async ctx=>{
@@ -379,7 +381,7 @@ test('real partial publication reports retained replace bytes when a later targe
 
 test('resume does not attribute unrelated target mutations to the finalizer',async t=>{
   const f=fixture(t);
-  f.journal={...f.journal,postCutoff:preparePostCutoff({zylosDir:f.root,transactionDir:f.dir,homeDir:f.root,
+  f.journal={...f.journal,postCutoff:preparePostCutoff({sync,zylosDir:f.root,transactionDir:f.dir,homeDir:f.root,
     replacements:[{path:'CLAUDE.md',content:'expected'}]})};
   const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async()=>{
     fs.writeFileSync(path.join(f.root,'CLAUDE.md'),'external write');

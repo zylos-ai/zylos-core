@@ -1,0 +1,72 @@
+{
+  "session_id": "4bab1249-1f67-4751-ba41-909b57f1b825",
+  "prompt_id": "fc7050d0-8f33-4f05-b80f-19fc9f7596ca",
+  "effort": {
+    "level": "medium"
+  },
+  "model": {
+    "id": "claude-opus-5-5",
+    "display_name": "Opus 5.5"
+  },
+  "version": "2.1.319",
+  "output_style": {
+    "name": "default"
+  },
+  "cost": {
+    "total_cost_usd": 0.4373490000000001,
+    "total_duration_ms": 102307,
+    "total_api_duration_ms": 47248,
+    "total_lines_added": 0,
+    "total_lines_removed": 0
+  },
+  "context_window": {
+    "total_input_tokens": 53961,
+    "total_output_tokens": 131,
+    "context_window_size": 1000000,
+    "current_usage": {
+      "input_tokens": 4,
+      "output_tokens": 131,
+      "cache_creation_input_tokens": 806,
+      "cache_read_input_tokens": 53151
+    },
+    "used_percentage": 5,
+    "remaining_percentage": 95
+  },
+  "exceeds_200k_tokens": false,
+  "prompt_cache": {
+    "warm": true,
+    "caching_observed": true,
+    "ttl": "1h",
+    "expires_at": 1794200283,
+    "requests": 8,
+    "misses": 0,
+    "expected_rebuilds": 0,
+    "hit_ratio": 0.9379911869141413,
+    "cache_write_tokens": 25195,
+    "miss_recache_tokens": 0,
+    "last_miss_at": null,
+    "last_miss_cause": null,
+    "miss_causes": {},
+    "recache_tokens_if_cold": 53961
+  },
+  "fast_mode": false,
+  "thinking": {
+    "enabled": true
+  },
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 5,
+      "resets_at": 1794200400
+    },
+    "seven_day": {
+      "used_percentage": 3,
+      "resets_at": 1794751200
+    }
+  },
+  "zylos": {
+    "v": 1,
+    "runId": "239184ea-f733-4020-983a-e4ba26f4df61",
+    "sessionGroup": "shell",
+    "capturedAt": 1794196685544
+  }
+}

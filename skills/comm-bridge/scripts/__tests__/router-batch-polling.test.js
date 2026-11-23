@@ -62,12 +62,12 @@ for (const size of [6, 12]) test(`pending ${size} activations share readiness po
   f.deps.readLiveIdentities = async groups => { batches++; return reader.readLiveIdentities(groups); };
   f.deps.readLiveIdentity = async group => { singles++; return reader.readLiveIdentity(group); };
   f.deps.listGroupTmuxSessions = () => listGroupTmuxSessions(connectionOptions);
-  f.deps.getSessionAdapter = () => ({
+  f.deps.session = {
     launch: async input => target.tmux('new-session', '-d', '-s', `zylos-group-${input.sessionGroup}`,
       '-e', `ZYLOS_RUN_ID=${input.runId}`, '-e', `ZYLOS_MODEL_CONFIG=${JSON.stringify(input.launchConfig)}`,
       '-e', `ZYLOS_SESSION_GROUP=${input.sessionGroup}`, 'sleep', '120'),
     stop: async input => { stopped.push({ ...input, singleReads: singles }); },
-  });
+  };
   const rows = Array.from({ length: size }, (_, i) => f.add(`pending${i}`));
   const router = f.create(); await router.initialize(); await f.rounds(3);
   assert.equal(router.state.activations.size, size);
@@ -157,9 +157,9 @@ test('a settled launch error reacquires identity and converges before the READY 
   let afterLaunch = false, convergenceReads = 0;
   const read = f.deps.readLiveIdentity;
   f.deps.readLiveIdentity = async group => { if (afterLaunch) convergenceReads++; return read(group); };
-  f.deps.getSessionAdapter = () => ({ launch: async () => {
+  f.deps.session = { launch: async () => {
       afterLaunch = true; throw Object.assign(new Error('failed'), { code: 'LAUNCH_FAILED' });
-    }, stop: async input => { f.calls.push(['stop', input]); } });
+    }, stop: async input => { f.calls.push(['stop', input]); } };
   const row = f.add('a'); const router = f.create(); await router.initialize();
   const startedAt = f.now();
   await f.rounds(2);

@@ -1,3 +1,4 @@
+import { SUPPORTED_RUNTIMES, runtimeDisplayName } from '../../runtime-descriptors.js';
 import { instantSeconds } from './api-time.js';
 import { formatZoned, zonedDay } from './instance-zone.js';
 export function element(document, tag, text, className) {
@@ -42,7 +43,10 @@ export function unnamedConversation(row, t = key => key, { now = Date.now(), loc
   return `${t('chat.unnamed')} · ${when}`;
 }
 /** Engine names read as product names: Claude, Codex. */
-export const runtimeName = runtime => runtime ? runtime.charAt(0).toUpperCase() + runtime.slice(1) : runtime;
+export function runtimeName(runtime) {
+  if (SUPPORTED_RUNTIMES.includes(runtime)) return runtimeDisplayName(runtime);
+  return runtime ? runtime.charAt(0).toUpperCase() + runtime.slice(1) : runtime;
+}
 /** Direct or group chat, from the group key alone: channels key direct chats as "<channel>:dm-<peer>". */
 export function chatKind(row) {
   const key = row.sessionGroup ?? '', colon = key.indexOf(':');

@@ -7,14 +7,17 @@ import { runComponents } from '../scripts/components.js';
 import { registerQuestion } from '../src/lib/chat/questions.js';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 import { CONTENT_PREFIX, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
-import { applyChatView } from '../public/js/wb/chat-view.js';
 import { dashboardSource } from '../../comm-bridge/scripts/dashboard-source.js';
 import { chatAttachmentPreview, conversationPreview, quotePreview } from '../src/lib/chat/history.js';
 const shared = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
   if (context.parentURL && new URL(specifier, context.parentURL).pathname.endsWith('/public/chat-schema.js')) return next(shared, context);
   return next(specifier, context);
 } });
+const { applyChatView } = await import('../public/js/wb/chat-view.js');
 const { renderChatContent } = await import('../public/js/wb/chat-blocks.js');
 const { readableText, previewLine } = await import('../public/js/wb/chat-compose-text.js');
 const encode = envelope => CONTENT_PREFIX + JSON.stringify(envelope);

@@ -3,6 +3,9 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 import { inspectDatabase, migrateDatabase } from './schema.js';
+import { loadCoreModule } from './core-modules.js';
+
+const { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
 
 export class Store {
   constructor(dbPath, schemaOptions) {
@@ -66,7 +69,7 @@ export class Store {
     this._childSessionIds = this.db.prepare(`SELECT DISTINCT child.session_id FROM usage_transcripts child
       WHERE child.kind = 'child' AND NOT EXISTS (
         SELECT 1 FROM usage_transcripts own WHERE own.session_id = child.session_id AND own.kind = 'session')`);
-    this._claudeMainTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'active' AND runtime = 'claude' AND parent_path IS NULL");
+    this._mainTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'active' AND runtime = ? AND parent_path IS NULL");
     this._missingUsageTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'missing'");
     this._restoreUsageTranscript = this.db.prepare("UPDATE usage_transcripts SET status = 'active' WHERE transcript_path = ? AND status = 'missing'");
     this._updateUsageTranscript = this.db.prepare(`UPDATE usage_transcripts
@@ -424,8 +427,8 @@ export class Store {
     const version = this.db.pragma('data_version', { simple: true });
     if (!this._historyAttribution || version !== this._historyDataVersion) {
       const rows = this.db.prepare(`SELECT session_id, runtime, session_group, MAX(timestamp) AS latest_timestamp, MAX(event_seq) AS latest_seq FROM runtime_events
-        WHERE session_id IS NOT NULL AND runtime IN ('claude', 'codex', 'agy')
-        GROUP BY session_id, runtime, session_group ORDER BY MAX(timestamp) DESC, MAX(event_seq) DESC`).all();
+        WHERE session_id IS NOT NULL AND runtime IN (${SUPPORTED_RUNTIMES.map(() => '?').join(', ')})
+        GROUP BY session_id, runtime, session_group ORDER BY MAX(timestamp) DESC, MAX(event_seq) DESC`).all(...SUPPORTED_RUNTIMES);
       this._historyAttribution = new Map(rows.map(row => [JSON.stringify([row.session_id, row.runtime, row.session_group]), row]));
       this._historyDataVersion = version;
       this.historyRevision++;
@@ -441,7 +444,7 @@ export class Store {
       ingest_id: event.ingest_id,
       event_seq: seq,
       timestamp: event.timestamp,
-      runtime: event.runtime || 'claude',
+      runtime: event.runtime || DEFAULT_RUNTIME,
       session_id: event.session_id || null,
       session_group: event.session_group ?? null,
       run_id: event.run_id ?? null,
@@ -453,8 +456,8 @@ export class Store {
       source: event.source || 'hook',
       confidence: event.confidence || 'actual'
     });
-    if (info.changes && event.session_id && ['claude', 'codex', 'agy'].includes(event.runtime || 'claude')) {
-      const row = { session_id: event.session_id, runtime: event.runtime || 'claude', session_group: event.session_group ?? null };
+    if (info.changes && event.session_id && SUPPORTED_RUNTIMES.includes(event.runtime || DEFAULT_RUNTIME)) {
+      const row = { session_id: event.session_id, runtime: event.runtime || DEFAULT_RUNTIME, session_group: event.session_group ?? null };
       const key = JSON.stringify([row.session_id, row.runtime, row.session_group]);
       if (!this._historyAttribution?.has(key)) this.historyRevision++;
       if (this._historyAttribution) {
@@ -552,7 +555,7 @@ export class Store {
   _runMetricInsert(stmt, point) {
     const info = stmt.run({
       timestamp: point.timestamp,
-      runtime: point.runtime || 'claude',
+      runtime: point.runtime || DEFAULT_RUNTIME,
       session_id: point.session_id || null,
       session_group: point.session_group ?? null,
       metric_name: point.metric_name,
@@ -716,7 +719,7 @@ export class Store {
     this._insertFact.run({
       timestamp: fact.timestamp,
       fact_type: fact.fact_type,
-      runtime: fact.runtime || 'claude',
+      runtime: fact.runtime || DEFAULT_RUNTIME,
       session_id: fact.session_id || null,
       project: fact.project || null,
       data: fact.data ? JSON.stringify(fact.data) : null
@@ -812,8 +815,8 @@ export class Store {
     return this._cleanupSessions.run(absoluteCutoff, idleCutoff);
   }
 
-  upsertCodexRolloutPath({ runtime = 'codex', sessionId, transcriptPath, lastEventAt }) {
-    if (!sessionId || !transcriptPath || typeof transcriptPath !== 'string') return { changes: 0 };
+  upsertCodexRolloutPath({ runtime, sessionId, transcriptPath, lastEventAt }) {
+    if (!runtime || !sessionId || !transcriptPath || typeof transcriptPath !== 'string') return { changes: 0 };
     if (!transcriptPath.endsWith('.jsonl')) return { changes: 0 };
     const previous = this.db.prepare('SELECT transcript_path FROM codex_rollout_paths WHERE runtime = ? AND session_id = ?').get(runtime, sessionId);
     const info = this._upsertCodexRolloutPath.run({
@@ -837,7 +840,7 @@ export class Store {
   getUsageTranscript(file) { return this._getUsageTranscript.get(file) ?? null; }
   activeUsageTranscripts(limit = 50) { return this._activeUsageTranscripts.all(limit); }
   currentOriginTranscript(runtime, runId) { return this._currentOriginTranscript.get(runtime, runId) ?? null; }
-  claudeMainTranscripts() { return this._claudeMainTranscripts.all(); }
+  mainTranscripts(runtime) { return this._mainTranscripts.all(runtime); }
   childSessionIds() { return this._childSessionIds.all().map(row => row.session_id); }
   missingUsageTranscripts() { return this._missingUsageTranscripts.all(); }
   restoreUsageTranscript(file) { return this._restoreUsageTranscript.run(file); }
@@ -846,7 +849,8 @@ export class Store {
   }
   pruneUsageTranscripts(before) { return this._pruneUsageTranscripts.run(before); }
 
-  latestCodexRolloutPath(runtime = 'codex') {
+  latestCodexRolloutPath(runtime) {
+    if (!runtime) return null;
     const row = this._latestCodexRolloutPath.get({ runtime });
     return row ? {
       runtime: row.runtime,
@@ -913,7 +917,7 @@ export class Store {
     return row.cache_read / row.total_input;
   }
 
-  getProjectDistribution({ since, until } = {}) {
+  getProjectDistribution({ since, until, toolWeights = {} } = {}) {
     const s = since || '1970-01-01T00:00:00Z';
     const u = until || '2099-12-31T23:59:59Z';
 
@@ -965,7 +969,7 @@ export class Store {
           hookCounts[project] = (hookCounts[project] || 0) + 1;
         }
       }
-      for (const [project, count] of Object.entries(this._projectWeightsFromCodexRollouts({ since: s, until: u }))) {
+      for (const [project, count] of Object.entries(toolWeights)) {
         hookCounts[project] = (hookCounts[project] || 0) + count;
       }
       const totalHookCalls = Object.values(hookCounts).reduce((a, b) => a + b, 0) || 1;
@@ -1009,72 +1013,6 @@ export class Store {
       paths.add(match[0]);
     }
     return [...paths];
-  }
-
-  _projectWeightsFromCodexRollouts({ since, until } = {}) {
-    const rows = this.db.prepare(`
-      SELECT transcript_path FROM codex_rollout_paths
-      WHERE runtime = 'codex'
-        AND last_event_at >= @since AND last_event_at <= @until
-    `).all({ since, until });
-
-    const weights = {};
-    for (const row of rows) {
-      const transcriptPath = row.transcript_path;
-      if (!transcriptPath || !fs.existsSync(transcriptPath)) continue;
-      let content;
-      try {
-        content = fs.readFileSync(transcriptPath, 'utf8');
-      } catch {
-        continue;
-      }
-      for (const line of content.split('\n')) {
-        if (!line.trim()) continue;
-        let event;
-        try { event = JSON.parse(line); } catch { continue; }
-        const payload = event.type === 'session_meta'
-          ? { ...(event.payload || {}), type: 'session_meta' }
-          : event.payload || {};
-        for (const project of this._extractProjectsFromRolloutPayload(payload)) {
-          weights[project] = (weights[project] || 0) + 1;
-        }
-      }
-    }
-    return weights;
-  }
-
-  _extractProjectsFromRolloutPayload(payload) {
-    const projects = new Set();
-    const addFromValue = (value) => {
-      if (!value) return;
-      if (typeof value === 'string') {
-        for (const filePath of this._extractFilePaths(value)) {
-          const project = this._extractProject(filePath);
-          if (project) projects.add(project);
-        }
-        const directProject = this._extractProject(value);
-        if (directProject) projects.add(directProject);
-      } else if (Array.isArray(value)) {
-        for (const item of value) addFromValue(item);
-      } else if (typeof value === 'object') {
-        for (const item of Object.values(value)) addFromValue(item);
-      }
-    };
-
-    if (payload.type === 'session_meta') addFromValue(payload.cwd);
-    if (payload.type !== 'function_call' && payload.type !== 'custom_tool_call') return [...projects];
-
-    addFromValue(payload.name);
-    addFromValue(payload.input);
-    if (payload.arguments) {
-      try {
-        addFromValue(JSON.parse(payload.arguments));
-      } catch {
-        addFromValue(payload.arguments);
-      }
-    }
-
-    return [...projects];
   }
 
   _extractProject(filePath) {

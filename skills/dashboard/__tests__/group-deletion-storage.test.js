@@ -24,6 +24,10 @@ import { buildAnnotatedContent } from '../../comm-bridge/scripts/attachment-anno
 import { createGroupDeletion } from '../../../cli/lib/group-delete.js';
 import { runGroupDeletionCli } from '../../../cli/lib/group-delete-cli.js';
 import { Readable } from 'node:stream';
+import { getDashboardRuntime as getCollectorRuntime } from '../src/lib/runtime/index.js';
+
+const collectors = Object.fromEntries(await Promise.all(['claude', 'codex'].map(async id =>
+  [id, (await getCollectorRuntime(id)).collector])));
 
 // Files/SQLite only. Run for deletion participants, final usage imports, or
 // source ownership changes. No services, PM2, tmux, network or model/API calls.
@@ -518,7 +522,7 @@ test('fresh Codex usage is imported through EOF and only exact rollout cursors a
   ].map(row => JSON.stringify(row)).join('\n') + '\n';
   const file = f.transcript(group, 'codex-session', 'codex', text);
   const other = f.transcript('dashboard:other-codex', 'codex-other', 'codex', text);
-  f.store.upsertCodexRolloutPath({ sessionId: 'codex-session', transcriptPath: file, lastEventAt: new Date().toISOString() });
+  f.store.upsertCodexRolloutPath({ runtime: 'codex', sessionId: 'codex-session', transcriptPath: file, lastEventAt: new Date().toISOString() });
   f.store.upsertCodexRolloutCursor({ transcriptPath: other, byteOffset: 0, sessionId: 'codex-other' });
   f.participant.finalizeTranscripts({ sessionGroup: group, processExited: true });
   assert.equal(f.store.getUsageTranscript(file).byte_offset, Buffer.byteLength(text));
@@ -684,7 +688,7 @@ test('a collector returning after deletion cannot downgrade the final EOF mappin
   const f = fixture(t), group = 'dashboard:inventory-race';
   const file = f.transcript(group, 'inventory-session');
   const inventory = new UsageTranscripts(f.store, { homeDir: f.home, zylosDir: f.zylos },
-    { getSnapshot: async () => ({ listKnown: true, rows: [] }) });
+    { collectors, getSnapshot: async () => ({ listKnown: true, rows: [] }) });
   let entered, resume;
   const waiting = new Promise(resolve => { entered = resolve; });
   const gate = new Promise(resolve => { resume = resolve; });
@@ -703,7 +707,7 @@ test('a collector cannot apply an old cursor to a replaced transcript name', asy
   const f = fixture(t), group = 'dashboard:replace-source';
   const file = f.transcript(group, 'replace-session', 'claude', 'old\n');
   const inventory = new UsageTranscripts(f.store, { homeDir: f.home, zylosDir: f.zylos },
-    { getSnapshot: async () => ({ listKnown: true, rows: [] }) });
+    { collectors, getSnapshot: async () => ({ listKnown: true, rows: [] }) });
   let entered, resume;
   const waiting = new Promise(resolve => { entered = resolve; });
   const gate = new Promise(resolve => { resume = resolve; });

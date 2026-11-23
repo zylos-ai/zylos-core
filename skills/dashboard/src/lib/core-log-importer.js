@@ -7,6 +7,8 @@ import { loadCoreModule } from './core-modules.js';
 import { Sanitizer } from './sanitizer.js';
 import { createRedactor, UNAVAILABLE } from './redaction/engine.js';
 
+const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
+
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const identity = row => `${row.file_dev}:${row.file_ino}`;
 const sameSnapshot = (a, b) => a && a.dev === b.dev && a.ino === b.ino
@@ -41,7 +43,7 @@ const string = value => typeof value === 'string' && value.length > 0 ? value : 
 export function childTranscriptMapping(row) {
   const text = value => typeof value === 'string' && value ? value : null;
   const transcript = text(row.transcript_path);
-  if (!['claude', 'codex'].includes(row.runtime) || !text(row.session_id) || !transcript ||
+  if (!runtimesWith('usage').includes(row.runtime) || !text(row.session_id) || !transcript ||
     !path.isAbsolute(transcript) || !transcript.endsWith('.jsonl')) return { warning: 'invalid_record' };
   return { mapping: { transcript_path: transcript, runtime: row.runtime, session_group: text(row.session_group),
     run_id: text(row.run_id), session_id: row.session_id, kind: 'child' }, warning: row.v > 1 ? 'unknown_version' : null };

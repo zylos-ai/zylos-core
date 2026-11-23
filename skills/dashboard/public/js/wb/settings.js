@@ -1,3 +1,4 @@
+import { SUPPORTED_RUNTIMES, runtimesWith } from '../../runtime-descriptors.js';
 import { element, icon } from './plain-text.js';
 import { createSettingsNavigation } from './settings-navigation.js';
 
@@ -186,20 +187,23 @@ export function createSettingsLoader({ read, onLoad }) {
     async open() {
       const current = ++generation;
       const count = filter => readSettingsGroups(read, filter, { limit: 1 }).then(knownGroupTotal);
+      const modelIds = runtimesWith('modelOverride'), priceIds = runtimesWith('usage');
       const values = await Promise.allSettled([
         read('/api/instance'), read('/api/settings/pricing'), read('/api/usage/pricing'),
-        read('/api/instance/runtime-options?runtime=claude'), read('/api/instance/runtime-options?runtime=codex'),
+        ...modelIds.map(id => read('/api/instance/runtime-options?' + new URLSearchParams({ runtime: id }))),
         count(runtimeFollowerFilter), count(runtimeOverrideFilter),
-        count(modelFollowerFilter('claude')), count(modelFollowerFilter('codex')),
-        count(priceUserFilter('claude')), count(priceUserFilter('codex')),
+        ...SUPPORTED_RUNTIMES.map(id => count(modelFollowerFilter(id))),
+        ...priceIds.map(id => count(priceUserFilter(id))),
       ]);
       if (current !== generation) return;
       const value = index => values[index].status === 'fulfilled' ? values[index].value : null;
+      const byRuntime = (ids, offset) => Object.fromEntries(ids.map((id, i) => [id, value(offset + i)]));
+      const counts = 3 + modelIds.length;
       onLoad({
-        instance: value(0), prices: value(1), usage: value(2), metadata: { claude: value(3), codex: value(4) },
+        instance: value(0), prices: value(1), usage: value(2), metadata: byRuntime(modelIds, 3),
         groupCounts: {
-          followers: value(5), overrides: value(6),
-          models: { claude: value(7), codex: value(8) }, pricing: { claude: value(9), codex: value(10) },
+          followers: value(counts), overrides: value(counts + 1),
+          models: byRuntime(SUPPORTED_RUNTIMES, counts + 2), pricing: byRuntime(priceIds, counts + 2 + SUPPORTED_RUNTIMES.length),
         },
       });
     },

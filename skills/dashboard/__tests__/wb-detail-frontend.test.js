@@ -1,17 +1,29 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
-import { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } from '../public/js/wb/detail.js';
-import { rawKey, renderOverview, detailNumbers, activeSubagents, detailEvidence, sampleAge, toolEventLabel, configStatus, configText, groupEventCount } from '../public/js/wb/detail-overview.js';
-import { createTimelineLoader, attributeMessages, renderTimeline } from '../public/js/wb/detail-timeline.js';
-import { createGroupConfig as productGroupConfig, responseError, fetchJson, runningText, validConfigChange, renderGroupConfig } from '../public/js/wb/group-config.js';
-import { saveGroupName, renderNameEditor } from '../public/js/wb/name-edit.js';
-import { namePromptResult, renderNameResult, sendNamePrompt } from '../public/js/wb/auto-name.js';
+
 import { displayTime, endReasonLabel, eventLabel } from '../public/js/wb/event-labels.js';
 import { eventChip, eventTypesFor, recentWindow } from '../public/js/wb/timeline-rows.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js';
 import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } = await import('../public/js/wb/detail.js');
+const { rawKey, renderOverview, detailNumbers, activeSubagents, detailEvidence, sampleAge, toolEventLabel, configStatus, configText, groupEventCount } = await import('../public/js/wb/detail-overview.js');
+const { createTimelineLoader, attributeMessages, renderTimeline } = await import('../public/js/wb/detail-timeline.js');
+const { createGroupConfig: productGroupConfig, responseError, fetchJson, runningText, validConfigChange, renderGroupConfig } = await import('../public/js/wb/group-config.js');
+const { saveGroupName, renderNameEditor } = await import('../public/js/wb/name-edit.js');
+const { namePromptResult, renderNameResult, sendNamePrompt } = await import('../public/js/wb/auto-name.js');
+
 // Times are expected in the instance zone; INSTANCE_TEST_ZONE differs from the process zone (see the helper).
 const ZONE = INSTANCE_TEST_ZONE;
 setInstanceZone(ZONE);
@@ -1167,15 +1179,52 @@ test('a failed engine switch shows the staged model and retry sends only the eng
 
 test('switching to Antigravity disables model and effort and saves only the engine', async context => {
   const f = await groupConfigFixture(context);
+  const view = () => f.document.createElement('div');
+  const controller = createGroupConfig({ key: 'telegram:a', request: async () => ({}) });
+  controller.state.value = { runtime: { data: { desired: { runtime: 'claude' } } }, modelOverrides: [] };
+  let rechecks = 0;
+  const options = { t, notFound: ['agy'], onRecheck: async () => { rechecks++; } };
+  const initial = view();
+  renderGroupConfig(initial, controller, options);
+  assert.equal(initial.querySelectorAll('.wb-note-act').length, 0);
+  const draft = configControl(initial, 'wb.term.runtime');
+  draft.value = 'agy';
+  draft.dispatch('change');
+  const blocked = view();
+  renderGroupConfig(blocked, controller, options);
+  assert.equal(blocked.querySelectorAll('.wb-cfg-actions')[0].children[0].disabled, true);
+  const note = blocked.querySelectorAll('.wb-note-act')[0];
+  assert.equal(note.children[0].textContent,
+    'wb.runtimeNotFound {"runtime":"Antigravity","command":"zylos group runtime set --group telegram:a --runtime agy"}');
+  const recheck = note.children[1];
+  await recheck.dispatch('click');
+  await recheck.dispatch('click');
+  assert.equal(rechecks, 1);
+  const select = configControl(blocked, 'wb.term.runtime');
+  select.value = 'inherit';
+  select.dispatch('change');
+  const inherited = view();
+  renderGroupConfig(inherited, controller, options);
+  assert.equal(inherited.querySelectorAll('.wb-note-act').length, 0);
+  assert.equal(inherited.querySelectorAll('.wb-cfg-actions')[0].children[0].disabled, false);
+
   await f.choose('wb.term.runtime', 'agy');
   const model = f.control('wb.config.model');
   assert.equal(model.disabled, true);
   assert.deepEqual(model.children.map(option => option.textContent), ['wb.config.followGlobal']);
   assert.equal(f.control('wb.term.effort').disabled, true);
+  assert.match(f.root.textContent, /wb\.config\.modelUnavailable \{"runtime":"Antigravity"\}/);
   f.saveButton().dispatch('click');
   f.confirmSave();
   await tick();
   assert.deepEqual(f.writes.filter(write => write.method === 'PUT').map(write => write.body), [{ kind: 'runtime', value: 'agy', confirmed: true }]);
+
+  controller.state.draft = {};
+  controller.state.value.runtime.data.desired.runtime = 'agy';
+  const saved = view();
+  renderGroupConfig(saved, controller, options);
+  assert.equal(configControl(saved, 'wb.term.runtime').value, 'agy');
+  assert.equal(saved.querySelectorAll('.wb-note-act').length, 0);
 });
 
 test('a replacement run observed while the save dialog is open needs a fresh confirmation', async context => {
@@ -1225,7 +1274,6 @@ test('single detail filters NULL events but sends actions through the Origin rou
   assert.equal(calls.some(([path]) => path === '/api/groups/origin/actions/interrupt'), true);
   f.controller.destroy();
 });
-
 
 test('technical detail header names an unreadable launch configuration instead of hiding the model', async () => {
   const current = row('telegram:a', { launchConfig: null, target: { runtime: 'codex', model: null, reason: 'launch_config_unreadable' } });
@@ -1339,7 +1387,6 @@ test('timeline back-to-latest tracks repeated scrolls and keeps its mounted body
   f.controller.destroy();
 });
 
-
 test('restart confirmation retains Origin wording and uses the approved immediate-restart wording for ordinary groups', async () => {
   const prompts = [];
   for (const key of ['origin', null, 'a']) {
@@ -1353,7 +1400,6 @@ test('restart confirmation retains Origin wording and uses the approved immediat
   }
   assert.deepEqual(prompts, ['confirm.restart', 'confirm.restart', 'wb.actions.restartConfirm']);
 });
-
 
 test('current message range advances with the clock while ended runs keep exact attribution bounds', async () => {
   let at = 2000;
@@ -1387,7 +1433,6 @@ test('current message range advances with the clock while ended runs keep exact 
   assert.equal(calls.some(url => url.pathname.endsWith('/events')), false, 'ended-only groups do not fetch current events');
   loader.close();
 });
-
 
 test('stopped Origin and single keep restart available with bound scope while ordinary groups do not', async () => {
   const sent = [];
@@ -1599,7 +1644,6 @@ test('an active timeline discards the previous run and reads the replacement run
   f.controller.destroy();
 });
 
-
 test('failed initial subagent pagination resumes at one page per later snapshot', async () => {
   const stream = Array.from({ length: 250 }, (_, index) => ({ id: `event-${index + 1}`, run_id: 'run-a', event_seq: index + 1,
     event_type: 'subagent_start', metadata: { agent_id: `worker-${index + 1}` } }));
@@ -1747,7 +1791,6 @@ test('a stale aborted refresh cannot report a read failure on the replacement ru
   assert.equal(f.controller.state.error, null);
   f.controller.destroy();
 });
-
 
 test('switching runs aborts a hanging subagent read so the shared refresh can finish', { timeout: 2000 }, async () => {
   let current = row('a'), holdOld = false, oldSignal, releaseOld;
@@ -1980,7 +2023,6 @@ test('technical group details offer a terminal, including sleeping groups that e
   assert.equal(allNodes(root).some(node => node.textContent === 'wb.detail.observeHistory'), false);
 });
 
-
 test('group model threshold is read only and follows the selected model and engine default', async () => {
   const document = createDocument(), root = document.createElement('div');
   const controller = { state: { value: { runtime: { data: { resolved: { runtime: 'claude' } } }, model: { data: { desired: { runtime: 'claude', mode: 'override', model: 'opus', effort: 'high' } } } },
@@ -2095,7 +2137,6 @@ test('evidence expansion survives a new preview while its stored-message fold ke
   } finally { f.controller.destroy(); }
 });
 
-
 test('timeline refresh updates keyed run and activity nodes in the mounted body', async () => {
   let version = 1;
   const current = row('a');
@@ -2121,6 +2162,62 @@ test('timeline refresh updates keyed run and activity nodes in the mounted body'
     assert.equal(allNodes(f.root).filter(node => node.classList.contains('wb-timeline-event')).length, 2);
     assert.match(heading.textContent, /"count":2/, 'the reused run header receives its new count');
   } finally { f.controller.destroy(); }
+});
+
+test('rechecking a missing engine reports failure and unlocks group settings after installation', async context => {
+  const current = row('a');
+  const versions = { agy: { installed: null }, codex: { installed: null }, claude: { installed: null } };
+  const installed = { versions: { ...versions, agy: { installed: '1.5.11' } } };
+  const requests = [], instances = [], successfulPost = deferred();
+  const config = { runtime: { data: { desired: {}, resolved: { runtime: 'claude' } } }, modelOverrides: [] };
+  const f = detailScrollFixture(async (path, options) => {
+    if (path === '/api/instance/actions/recheck-runtime-cli') {
+      requests.push([options.method, options.body]);
+      return requests.length === 1 ? response({ error: 'x' }, 500) : successfulPost.promise;
+    }
+    if (path === '/api/instance') return response(installed);
+    if (isGroupDetail(path)) return response({ config });
+    return response(defaultRead(path));
+  }, { onInstance: instance => instances.push(instance) });
+  context.after(() => f.controller.destroy());
+  const snapshot = { rows: [current], listKnown: true, instance: { versions } };
+  await f.controller.open(current, snapshot);
+  const button = label => allNodes(f.root).find(node => node.tagName === 'BUTTON' && node.textContent === label);
+  button('wb.detail.modify').dispatch('click');
+  await tick();
+  const choose = async value => {
+    const runtime = configControl(f.root, 'wb.term.runtime');
+    runtime.value = value;
+    runtime.dispatch('change');
+    await tick();
+  };
+  await choose('codex');
+  assert.equal(button('wb.config.save').disabled, false);
+  assert.equal(button('wb.recheck'), undefined);
+  await choose('claude');
+  assert.equal(button('wb.config.save').disabled, false);
+  assert.equal(button('wb.recheck'), undefined);
+  await choose('agy');
+  assert.equal(button('wb.config.save').disabled, true);
+  button('wb.recheck').dispatch('click');
+  await tick();
+  assert.equal(f.root.querySelector('.wb-config-error').textContent, 'status.failed {"error":"x"}');
+  assert.equal(button('wb.config.save').disabled, true);
+  const retry = button('wb.recheck');
+  retry.dispatch('click');
+  retry.dispatch('click');
+  assert.deepEqual(requests, [['POST', '{}'], ['POST', '{}']]);
+  successfulPost.resolve(response({ ok: true }));
+  await tick();
+  assert.equal(button('wb.config.save').disabled, false);
+  assert.equal(button('wb.recheck'), undefined);
+  assert.equal(f.root.querySelector('.wb-config-error'), undefined);
+  assert.deepEqual(instances, [installed]);
+
+  await f.controller.updateSnapshot(snapshot);
+  assert.equal(button('wb.config.save').disabled, true);
+  await f.controller.updateSnapshot({ ...snapshot, instance: installed });
+  assert.equal(button('wb.config.save').disabled, false, 'a board snapshot can unlock the mounted form');
 });
 
 // Catalog arrival fills the model choices. Subsequent edits and save must use the mounted controls.
@@ -2276,7 +2373,6 @@ test('an open name editor follows permission changes with fresh controls', async
   } finally { f.controller.destroy(); }
 });
 
-
 test('account source evidence reads each runtime before deciding whether sources are healthy', () => {
   const accountSources = { claude: { ok: true, readAt: 1000 }, codex: { ok: true, readAt: 2000 } };
   const current = row('telegram:accounts', { presence: 'not_running', live: null, target: { runtime: 'claude' }, state: { kind: 'starting' }, wait: { kind: 'pool_wait', position: 2 } });
@@ -2297,7 +2393,6 @@ test('account source evidence reads each runtime before deciding whether sources
     assert.equal(failures[0].runtime, runtime);
   }
 });
-
 
 test('plain working and offline summaries keep the primary state on one line', () => {
   const document = createDocument();
@@ -2410,7 +2505,6 @@ test('terminal entry stays technical and keeps its accessible name and navigatio
   assert.deepEqual(seen, ['live']);
 });
 
-
 test('detail terminal buttons use Chinese and English accessible labels', () => {
   const document = createDocument();
   for (const [locale, expected] of [['zh', '终端'], ['en', 'Terminal']]) {
@@ -2424,7 +2518,6 @@ test('detail terminal buttons use Chinese and English accessible labels', () => 
     assert.equal(button.getAttribute('aria-label'), expected);
   }
 });
-
 
 function overviewTranslation(locale) {
   const labels = JSON.parse(readFileSync(new URL('../public/i18n/wb.' + locale + '.json', import.meta.url), 'utf8'));
@@ -2483,7 +2576,6 @@ test('plain idle time uses readable elapsed units from the existing state durati
   }
 });
 
-
 test('conversation availability redraws the group action when remote access changes', async () => {
   let available = false;
   const f = detailFixture(async path => response(defaultRead(path)), {
@@ -2523,7 +2615,6 @@ for (const level of ['plain', 'technical']) for (const working of [false, true])
     } finally { f.controller.destroy(); }
   });
 }
-
 
 for (const level of ['plain', 'technical']) test(`group summaries agree on unknown when working is unavailable in ${level} detail`, async () => {
   const f = detailFixture(async path => response(defaultRead(path)), { detail: () => level });
@@ -2569,7 +2660,6 @@ test('periodic detail refresh skips stored-message and configuration extras with
   assert.match(fold().textContent, /stored original/);
 });
 
-
 test('canonical group detail displays CLI runtime evidence in both views without list hydration', async () => {
   for (const level of ['plain', 'technical']) {
     const detail = row('telegram:a', { runtimeInfo: { runtime: 'codex', model: 'actual-model', effort: 'high', runningVersion: '1.0', installedVersion: '1.1', update: '1.2', pendingRestart: true } });
@@ -2583,7 +2673,6 @@ test('canonical group detail displays CLI runtime evidence in both views without
     f.controller.destroy();
   }
 });
-
 
 test('canonical optional read failures keep detail available and expose their own source errors', async () => {
   const config = productGroupConfig({ key: 'a', t, request: async () => ({ config: null, configError: { code: 'CORE_UNAVAILABLE', message: 'Config could not be read' } }) });
@@ -2607,7 +2696,6 @@ test('canonical optional read failures keep detail available and expose their ow
   f.controller.destroy();
 });
 
-
 test('drawer actions wait for canonical detail and preserve stopped Origin scope after hydration', async () => {
   for (const sessionGroup of [null, 'origin']) {
     const pending = deferred(), sent = [];
@@ -2628,7 +2716,6 @@ test('drawer actions wait for canonical detail and preserve stopped Origin scope
     f.controller.destroy();
   }
 });
-
 
 test('automatic naming explains permission refusals and other client rejections without retry advice', () => {
   for (const language of ['zh', 'en']) {
@@ -2652,7 +2739,6 @@ test('automatic naming explains permission refusals and other client rejections 
     assert.equal(namePromptResult(undefined, new Error('offline'), say).text, words['wb.name.unknown']);
   }
 });
-
 
 test('shared response errors show matching code and message once while preserving distinct detail', async () => {
   assert.equal(responseError({ error: { code: 'not_allowed_via_fleet', message: 'not_allowed_via_fleet' } }), 'not_allowed_via_fleet');

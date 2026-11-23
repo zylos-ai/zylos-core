@@ -10,7 +10,7 @@ const environment = createTestEnvironment();
 const c4 = await import('../../../comm-bridge/scripts/c4-db.js');
 const { RuntimeHealthCoordinator } = await import('../runtime-health.js');
 const { SupervisorHealthObserver } = await import('../supervisor-health-observer.js');
-const { getSessionAdapter } = await import('../../../../cli/lib/runtime/index.js');
+const { getRuntime } = await import('../../../../cli/lib/runtime/index.js');
 after(() => { c4.close(); environment.cleanup(); });
 
 // Integration boundary: real C4 insert/read, private SQLite, observer, health
@@ -112,13 +112,13 @@ for (const runtime of ['codex', 'claude']) {
     const scenario = runtime === 'codex'
       ? { args: 'login status', stderr: 'Not logged in', exitCode: 1 }
       : { args: '-p ping --max-turns 1', stdout: 'Not logged in · Please run /login', exitCode: 1 };
-    const adapter = getSessionAdapter(runtime, { root, env: { HOME: root, ZYLOS_DIR: root,
+    const options = { root, env: { HOME: root, ZYLOS_DIR: root,
       CODEX_HOME: path.join(root, '.codex'), CODEX_BIN: command, CLAUDE_BIN: command,
       PM2_HOME: path.join(root, 'pm2'), TMPDIR: path.join(root, 'tmp'),
       TMUX_TMPDIR: path.join(root, 'tmux'), CLAUDE_CONFIG_DIR: path.join(root, 'claude'),
-      TEST_AUTH_PROBE_SCENARIO: JSON.stringify(scenario) } });
+      TEST_AUTH_PROBE_SCENARIO: JSON.stringify(scenario) } };
     let checks = 0;
-    f.observer.checkAuth = async () => { checks++; const result = await adapter.checkAuth(); assert.equal(result.status, 'failure'); return result; };
+    f.observer.checkAuth = async () => { checks++; const result = await (await getRuntime(runtime)).auth.checkAuth(options); assert.equal(result.status, 'failure'); return result; };
     f.observer.matchScreen = () => ({ authFailure: { detected: true } });
     f.observer.readScreen = () => 'Not logged in';
     f.observer.notifyDelivered({ ...f.scene, pastedAt: f.now() });

@@ -4,10 +4,15 @@ import test from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { DEFAULT_CLAUDE_MODEL_PRICES } from '../src/lib/config.js';
 import { Store } from '../src/lib/store.js';
-import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
-import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
+import { ConversationCollector } from '../src/lib/runtime/claude/collector.js';
+import { loadCoreModule as loadTranscriptCore } from '../src/lib/core-modules.js';
+import { getDashboardRuntime } from '../src/lib/runtime/index.js';
+
+const { pricing: claudePricing } = await getDashboardRuntime('claude');
+
+const { getRuntime: getTranscriptRuntime } = await loadTranscriptCore('runtime/index.js');
+const { transcript: claudeTranscript } = (await getTranscriptRuntime('claude')).usage;
 
 function makeTmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'conv-collector-test-'));
@@ -134,8 +139,7 @@ function makeCollector(store, tmpDir, sessionId = 'test-session-123', getSession
     ...configOverrides
   };
   const zylosResolved = fs.realpathSync(tmpDir);
-  const projectSlug = claudeProjectSlug(zylosResolved);
-  const projectDir = path.join(tmpDir, '.claude', 'projects', projectSlug);
+  const projectDir = claudeTranscript.projectDir({ home: tmpDir, zylosDir: zylosResolved });
   fs.mkdirSync(projectDir, { recursive: true });
 
   const jsonlPath = path.join(projectDir, `${sessionId}.jsonl`);
@@ -721,8 +725,7 @@ test('session file switch resets offset', () => {
   const { collector } = makeCollector(store, tmpDir, 'session-a', () => currentSession, config);
 
   const zylosResolved = fs.realpathSync(tmpDir);
-  const projectSlug = claudeProjectSlug(zylosResolved);
-  const projectDir = path.join(tmpDir, '.claude', 'projects', projectSlug);
+  const projectDir = claudeTranscript.projectDir({ home: tmpDir, zylosDir: zylosResolved });
   fs.mkdirSync(projectDir, { recursive: true });
 
   // Write session A
@@ -968,7 +971,7 @@ for (const sample of [
     t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
     const store = makeMockStore();
     const { collector, jsonlPath } = makeCollector(store, tmpDir, undefined, null, {
-      modelPrices: DEFAULT_CLAUDE_MODEL_PRICES
+      modelPrices: claudePricing.defaultModelPrices
     });
     fs.writeFileSync(jsonlPath, makeJsonlLine('price-sample', sample) + '\n');
     collector.collect();
@@ -982,8 +985,8 @@ for (const sample of [
 test('specific Claude model prices win regardless of insertion order and retain configured overrides', (t) => {
   const tmpDir = makeTmpDir();
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
-  const family = DEFAULT_CLAUDE_MODEL_PRICES['claude-fable-5'];
-  const specific = DEFAULT_CLAUDE_MODEL_PRICES['claude-fable-5-1'];
+  const family = claudePricing.defaultModelPrices['claude-fable-5'];
+  const specific = claudePricing.defaultModelPrices['claude-fable-5-1'];
   const override = { ...specific, cacheRead: 0.125 };
   const { collector } = makeCollector(makeMockStore(), tmpDir, undefined, null, {
     runtimeModelPrices: { claude: {
@@ -1012,7 +1015,7 @@ for (const scenario of [
         fs.rmSync(tmpDir, { recursive: true, force: true });
       });
       const { config } = makeCollector(store, tmpDir, undefined, null, {
-        modelPrices: DEFAULT_CLAUDE_MODEL_PRICES
+        modelPrices: claudePricing.defaultModelPrices
       });
       const usage = { input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 100,
         cache_creation_input_tokens: 200,

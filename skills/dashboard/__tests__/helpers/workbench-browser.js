@@ -232,7 +232,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     // keeps work running (ordinary button); switching the session mode interrupts it (destructive button).
     const english = language === 'en';
     const upgradeAsked = await confirmFlow(page, upgrade, 'upgrade-cc', { runtime: 'claude' });
-    assert.deepEqual([upgradeAsked.title, upgradeAsked.danger], [english ? 'Upgrade Claude Code' : '升级 Claude Code', false]);
+    assert.deepEqual([upgradeAsked.title, upgradeAsked.danger], [english ? 'Upgrade Claude' : '升级 Claude', false]);
     await pick('machine');
     const single = () => page.locator('#action-mode-seg button[data-mode="single"]');
     await single().waitFor({ state: 'visible' });

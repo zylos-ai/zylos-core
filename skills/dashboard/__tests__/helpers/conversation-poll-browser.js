@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const defaultPublic = fileURLToPath(new URL('../../public/', import.meta.url));
 const defaultSchema = fileURLToPath(new URL('../../../comm-bridge/scripts/c4-content-schema.js', import.meta.url));
+const runtimeDescriptors = fileURLToPath(new URL('../../../../cli/lib/runtime/descriptors.js', import.meta.url));
 
 export async function runConversationPollBrowser(t) {
   const publicDir = path.resolve(process.env.ZYLOS_CHAT_BROWSER_SOURCE || defaultPublic);
@@ -75,8 +76,9 @@ await window.page.open();window.ready=true;</script></html>`;
     }
     if (url.pathname === '/') { res.writeHead(200, { 'content-type': 'text/html', 'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'" }); return res.end(html); }
     if (url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
-    const file = url.pathname === '/chat-schema.js' ? schemaFile : path.resolve(publicDir, '.' + url.pathname);
-    if (file !== schemaFile && !file.startsWith(publicDir + path.sep)) { res.writeHead(403); return res.end(); }
+    const file = url.pathname === '/chat-schema.js' ? schemaFile :
+      url.pathname === '/runtime-descriptors.js' ? runtimeDescriptors : path.resolve(publicDir, '.' + url.pathname);
+    if (file !== schemaFile && file !== runtimeDescriptors && !file.startsWith(publicDir + path.sep)) { res.writeHead(403); return res.end(); }
     try { const data = fs.readFileSync(file); res.writeHead(200, { 'content-type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.json') ? 'application/json' : 'application/octet-stream' }); res.end(data); }
     catch { res.writeHead(404); res.end(); }
   });

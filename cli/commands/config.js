@@ -1,4 +1,4 @@
-import { readDefaultModels, setModelThreshold } from '../lib/model-rotation-thresholds.js';
+import { loadRuntimeContexts, readDefaultModels, setModelThreshold } from '../lib/model-rotation-thresholds.js';
 /**
  * zylos config - View and update Zylos configuration
  *
@@ -91,9 +91,9 @@ function getConfig(key) {
 async function setConfig(key, value) {
   if (key === 'new_session_threshold' || key === 'codex_new_session_threshold') {
     const runtime = key === 'new_session_threshold' ? 'claude' : 'codex';
-    const model = readDefaultModels()[runtime];
+    const model = readDefaultModels({ contexts: await loadRuntimeContexts() })[runtime];
     if (!model) throw Object.assign(new Error('Configure the engine default model before setting its threshold'), { code: 'CONFIG_VALUE_INVALID' });
-    setModelThreshold({ runtime, model, value });
+    await setModelThreshold({ runtime, model, value });
     console.log(`${runtime}/${model} threshold = ${value}`);
     return;
   }

@@ -61,7 +61,7 @@ test('send failure propagates the original child-process error', () => {
 test('doctor JSON reports enabled, legacy and unknown with reason', () => {
   for (const version of ['tmux 3.3a', 'tmux 3.7c', 'unrecognized']) {
     const capability = parseTmuxVersion(version);
-    const diag = { runtime: 'codex', display: 'Codex', apiHost: 'example.test', system: { tmux: { installed: true, ...capability }, pm2: { installed: false }, network: { reachable: true } },
+    const diag = { runtime: 'codex', display: 'Codex', system: { tmux: { installed: true, ...capability }, pm2: { installed: false } },
       ai: { cli: { installed: true }, auth: true, autonomous: true }, services: { running: false, procs: [] } };
     const json = buildDiagnosticJson(diag, { success: false });
     const tmux = json.groups.system.checks.tmux;
@@ -70,9 +70,8 @@ test('doctor JSON reports enabled, legacy and unknown with reason', () => {
     assert.equal(tmux.versionReason, capability.reason);
     const missingCli = buildDiagnosticJson({ ...diag, ai: { ...diag.ai, cli: { installed: false } } }, { success: false });
     assert.equal(missingCli.issues.find(issue => issue.id === 'cli_missing').label, 'Codex CLI not installed');
-    const claude = { ...diag, runtime: 'claude', display: 'Claude', apiHost: 'claude.example.test', ai: { ...diag.ai, cli: { installed: false } } };
+    const claude = { ...diag, runtime: 'claude', display: 'Claude', ai: { ...diag.ai, cli: { installed: false } } };
     assert.equal(buildDiagnosticJson(claude, { success: false }).issues.find(issue => issue.id === 'cli_missing').label, 'Claude CLI not installed');
-    assert.equal(buildDiagnosticJson(diag, { success: false }).groups.system.checks.network.host, 'example.test');
   }
 });
 // The retired dispatcher source extraction moved to router-delivery.test.js:

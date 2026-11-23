@@ -4,12 +4,15 @@ import fs from 'node:fs';
 import { registerHooks } from 'node:module';
 import { createDocument, allNodes, tick } from './helpers/conversation-dom.js';
 import { createConversationDeletion } from '../public/js/wb/conversation-delete.js';
-import { createLiveArea } from '../public/js/wb/conversation-activity.js';
 const schemaPath = new URL('../public/chat-schema.js', import.meta.url).pathname;
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
   if (context.parentURL && new URL(specifier, context.parentURL).pathname === schemaPath) return next(new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href, context);
   return next(specifier, context);
 } });
+const { createLiveArea } = await import('../public/js/wb/conversation-activity.js');
 const { createAnnotationUi } = await import('../public/js/wb/chat-annotations.js');
 const { mountConversationPage } = await import('../public/js/wb/conversation-page.js');
 const pack = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));

@@ -1,3 +1,4 @@
+import { registerHooks } from 'node:module';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
@@ -9,10 +10,18 @@ import { publicDir } from '../src/lib/config.js';
 import { FleetProxy } from '../src/lib/fleet-proxy.js';
 import { FleetPoller } from '../src/lib/fleet-poller.js';
 import { acceptObserverWebSocket, connectObserverWebSocket } from '../src/lib/observer-websocket.js';
-import { renderAgentFleetHtml as renderAgentFleetHtmlPage } from '../public/js/agent-fleet.js';
 import { objectResponse } from './fixtures/fleet-object-api.js';
 import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
 
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { renderAgentFleetHtml: renderAgentFleetHtmlPage } = await import('../public/js/agent-fleet.js');
 const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
 
 async function listen(handler) {
@@ -916,6 +925,15 @@ test('fleet proxy forwards SSE and whitelisted writes with their bodies', async 
     assert.equal(actionContentType, 'application/json');
     assert.equal(actionBody, '{"runtime":"codex"}');
 
+    actionAuth = undefined;
+    const recheck = await fetch(`${hub.origin}/fleet/Remote/api/instance/actions/recheck-runtime-cli`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(recheck.status, 200);
+    assert.deepEqual(await recheck.json(), { ok: true });
+    assert.equal(actionAuth, 'Bearer zylos_st_secret');
     actionBody = null;
     const read = await fetch(`${hub.origin}/fleet/Remote${readPath}`, {
       method: 'PUT',

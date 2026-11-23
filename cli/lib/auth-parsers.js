@@ -2,8 +2,8 @@
  * auth-parsers.js — pure parsers for runtime CLI auth-status output.
  *
  * Zero imports / no side effects by design: this leaf module is shared by both
- * `runtime-setup.js` (the `zylos init` flow) and the runtime adapters
- * (`runtime/codex.js`, runtime-switch + health probe) without dragging
+ * runtime adapters (including the `zylos init` flow)
+ * (`runtime/codex/auth.js`, runtime-switch + health probe) without dragging
  * `node:child_process` into adapter test graphs that mock it.
  *
  * Both parsers key off explicit signals rather than process exit codes, which

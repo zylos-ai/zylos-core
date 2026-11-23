@@ -6,6 +6,9 @@ import { loadCoreModule } from './core-modules.js';
 import { durableJson } from './runtime-generation.js';
 import { enqueueMachineControl } from './machine-control.js';
 import { UsageMonitor } from './usage-monitor.js';
+
+const { findRuntime, getRuntime, runtimesWith } = await loadCoreModule('runtime/index.js');
+const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
 const { readSessionMode, readZylosConfigOrThrow } = await loadCoreModule('config.js');
 const { readRuntimeHealth, readAccountUsage } = await loadCoreModule('session-state-reader.js');
 const { zylosRoot } = await loadCoreModule('session-group-paths.js');
@@ -21,7 +24,6 @@ function runScript(script, timeoutMs) {
     reject(detail?new Error(`${error.killed?'timed out: ':''}${detail}`):error);
   }));
 }
-export const DAILY_UPGRADE_PROMPT = 'Daily upgrade. Use the upgrade-claude skill to upgrade Claude Code to the latest version.';
 export const HEALTH_CHECK_PROMPT = 'System health check. Use the health-check skill sanitized helper for PM2 services; never run or print raw pm2 jlist output. Check disk space (df -h) and memory (free -m). If any issues found, use your judgment to notify whoever is most likely to help — check your memory for a designated owner or ops person, otherwise pick the person you normally work with. Log results to ~/zylos/logs/health.log.';
 
 /** Machine maintenance never owns lifecycle state and never blocks the loop on a child. */
@@ -57,18 +59,22 @@ export class SupervisorMachineTasks {
       this.write(id,{last_date:parts.date,...(recordFailure?{last_status:'ok'}:{}),updated_at:new Date(this.now()).toISOString()});
     });
   }
-  monitor(runtime,config,hour) {
+  async #accountQuotas() {
+    this.quotas ??= new Map(await Promise.all(runtimesWith('accountQuota').map(async id =>
+      [id, (await getRuntime(id)).usage.accountQuota])));
+    return this.quotas;
+  }
+  monitor(runtime,config,hour,quota) {
     let monitor=this.monitors.get(runtime);
-    const opts={zylosDir:this.zylosDir,usageStateFile:path.join(this.zylosDir,'activity-monitor','usage.json'),
-      usageCodexStateFile:path.join(this.zylosDir,'activity-monitor','usage-codex.json'),
-      usageAlertStateFile:path.join(this.zylosDir,'activity-monitor',runtime==='claude'?'usage-alert-state.json':'usage-codex-alert-state.json'),
+    const opts={zylosDir:this.zylosDir,usageStateFile:path.join(this.zylosDir,'activity-monitor',quota.stateFile),
+      usageAlertStateFile:path.join(this.zylosDir,'activity-monitor',quota.alertStateFile),
       monitorEnabled:enabled(config.usage_monitor_enabled,true),alertEnabled:enabled(config.usage_alert_enabled,false),
       checkIntervalSec:number(config.usage_check_interval,3600),
       warnThreshold:number(config.usage_warn_threshold,80),highThreshold:number(config.usage_high_threshold,90),criticalThreshold:number(config.usage_critical_threshold,95),
       notifyCooldownSec:number(config.usage_notify_cooldown,14400),activeHoursStart:number(config.usage_active_hours_start,8),activeHoursEnd:number(config.usage_active_hours_end,23),
       getLocalHour:()=>hour,readMode:this.readMode,readAccountUsage:this.readUsage,log:this.log,
       enqueueMachineControl:this.enqueue};
-    if(!monitor){monitor=new UsageMonitor({runtimeId:runtime},opts);monitor.lastUsageCheckAt=monitor.initializeLastCheckAt(Math.floor(this.now()/1000));this.monitors.set(runtime,monitor);}
+    if(!monitor){monitor=new UsageMonitor({runtimeId:runtime,accountQuota:quota},opts);monitor.lastUsageCheckAt=monitor.initializeLastCheckAt(Math.floor(this.now()/1000));this.monitors.set(runtime,monitor);}
     else monitor.options=opts;
     return monitor;
   }
@@ -86,8 +92,9 @@ export class SupervisorMachineTasks {
     const upgradeDue=enabled(config.upgrade_check_enabled,true) && dailyDue('upgrade-check-state',6);
     const dailyUpgradeDue=enabled(config.daily_upgrade_enabled,false) && dailyDue('daily-upgrade-state',5);
     const healthDue=enabled(config.health_check_enabled,true) && !this.pending.has('health-check') && seconds-(this.state('health-check-state')?.last_check_at??0)>=86400;
-    const usageDue=['claude','codex'].flatMap(runtime=>{
-      const monitor=this.monitor(runtime,config,parts.hour);
+    const quotas=await this.#accountQuotas();
+    const usageDue=runtimesWith('accountQuota').flatMap(runtime=>{
+      const monitor=this.monitor(runtime,config,parts.hour,quotas.get(runtime));
       if(this.pending.has(`usage:${runtime}`))return [];
       const sample=monitor.isMonitorEnabled() && seconds-monitor.getLastMonitorRunAt()>=monitor.options.checkIntervalSec;
       const alert=monitor.isAlertEnabled() && seconds-monitor.getLastAlertRunAt()>=number(config.usage_alert_interval,3600);
@@ -99,7 +106,13 @@ export class SupervisorMachineTasks {
     const healthy=health && !health.unreadable && (health.missing||health.health==='ok');
     if(healthy) {
       if(upgradeDue)this.daily('upgrade-check-state',6,parts,()=>this.execute(fileURLToPath(new URL('./upgrade-check.js',import.meta.url)),300000),{catchUp:true});
-      if(dailyUpgradeDue&&targetRuntime==='claude')this.daily('daily-upgrade-state',5,parts,()=>this.control(DAILY_UPGRADE_PROMPT),{catchUp:true});
+      if (dailyUpgradeDue) {
+        const rt = await findRuntime(targetRuntime);
+        const prompt = rt?.install.dailyUpgradePrompt;
+        if (prompt && prompt !== UNSUPPORTED) {
+          this.daily('daily-upgrade-state', 5, parts, () => this.control(prompt), { catchUp: true });
+        }
+      }
       if(healthDue) {
         this.schedule('health-check',async()=>{await this.control(HEALTH_CHECK_PROMPT);this.write('health-check-state',{last_check_at:seconds,last_check_human:date.toISOString().replace('T',' ').slice(0,19)});});
       }

@@ -5,6 +5,9 @@ import { initialHealthEvidence, reduceHealthEvidence, sanitizeHealthEvent, safeH
 import { durableJson, runtimeRoot, syncDirectory } from './runtime-generation.js';
 import { reduceFailureContinuation } from './failure-continuation.js';
 import { currentOutageNotice } from './outage-notice.js';
+import { loadCoreModule } from './core-modules.js';
+
+const { DEFAULT_RUNTIME } = await loadCoreModule('runtime/descriptors.js');
 
 export const HEALTH_GROUP_IDLE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -100,7 +103,7 @@ function fromFile(record,runtime,sessionGroup) {
 
 // AM is the only writer. Health, replay marker and pending reply commit together.
 export class HealthStore {
-  constructor({ runtime = 'claude', zylosDir = runtimeRoot(), now = Date.now, freezeNotice = () => null, log = () => {} } = {}) {
+  constructor({ runtime = DEFAULT_RUNTIME, zylosDir = runtimeRoot(), now = Date.now, freezeNotice = () => null, log = () => {} } = {}) {
     this.runtime = runtime; this.now = now; this.freezeNotice = freezeNotice; this.log=log; this.loaded=false;
     this.file = path.join(zylosDir, 'activity-monitor', 'runtime-health', `${runtime}.json`);
     this.initial = {...initialHealthEvidence(),rateLimitActive:false,groups:{},scheduling:{...ENGINE_DEFAULTS}};
@@ -193,25 +196,25 @@ export class HealthStore {
     } else this.write({ ...state, pending_notice: { ...state.pending_notice, ...patch } },sessionGroup);
     return true;
   }
-  #evaluateTerminalHook(event, prior, { identity, quota, authConfirmed } = {}) {
+  #evaluateTerminalHook(event, prior, { identity, quota, hookHealth, authConfirmed } = {}) {
     if (!['stop', 'stop_failure'].includes(event.event)) return { state: prior, status: 'ignored', reason: 'nonterminal_event' };
     if (event.received_at <= (prior.last_processed?.received_at ?? 0)) return { state: prior, status: 'ignored', reason: 'replay' };
-    return reduceHealthEvidence(prior, event, { identity, quota, authConfirmed, now: this.now() });
+    return reduceHealthEvidence(prior, event, { identity, quota, hookHealth, authConfirmed, now: this.now() });
   }
-  prepareAuthConfirmation(raw, { identity, sessionGroup = 'origin' } = {}) {
+  prepareAuthConfirmation(raw, { identity, hookHealth, sessionGroup = 'origin' } = {}) {
     const event = sanitizeHealthEvent(raw);
     const prior = this.read(sessionGroup);
-    const result = this.#evaluateTerminalHook(event, prior, { identity, authConfirmed: true });
+    const result = this.#evaluateTerminalHook(event, prior, { identity, hookHealth, authConfirmed: true });
     if (result.reason !== 'hook_failure' || result.state.health !== 'auth_failed') return undefined;
     return this.freezeNotice({ runtime: this.runtime, state: result.state, identity, event, result, sessionGroup }) ?? null;
   }
-  consume(raw, { identity, quota, fallbackId, sessionGroup = 'origin', runId, retryControl, expireControl, authConfirmed, frozenNotice } = {}) {
+  consume(raw, { identity, quota, hookHealth, fallbackId, sessionGroup = 'origin', runId, retryControl, expireControl, authConfirmed, frozenNotice } = {}) {
     const event = sanitizeHealthEvent(raw, fallbackId);
     const prior = this.read(sessionGroup);
     // A delivery notification queued ahead of this hook may have cleared or
     // replaced the retry after its control was sampled outside this writer.
     if(retryControl?.id!==prior.failure_retry?.controlId)retryControl=null;
-    const result = this.#evaluateTerminalHook(event, prior, { identity, quota, authConfirmed });
+    const result = this.#evaluateTerminalHook(event, prior, { identity, quota, hookHealth, authConfirmed });
     if (result.status !== 'processed') return result;
     const healthChanged = result.state !== prior;
     result.state = { ...result.state, revision: prior.revision + (healthChanged ? 1 : 0),
@@ -225,7 +228,7 @@ export class HealthStore {
       : frozenNotice && result.notice?.eligible && { ...frozenNotice, notice: result.notice,
         health: authConfirmed ? 'auth_failed' : 'unavailable', reason: result.notice.reason || event.error };
     if (pending) result.state.pending_notice = pending;
-    reduceFailureContinuation(result.state,{runtime:this.runtime,event,identity,runId,pending,control:retryControl,eligible:!result.verify && result.notice?.eligible});
+    reduceFailureContinuation(result.state,{event,identity,runId,pending,control:retryControl,eligible:!result.verify && result.notice?.eligible});
     result.state.rateLimitActive = result.state.health === 'rate_limited' || (result.state.health !== 'ok' && prior.rateLimitActive);
     // Expire an older pending retry before publishing this failure's replay
     // marker, so a crash cannot lose its control id while leaving it executable.

@@ -102,8 +102,8 @@ test('multi terminal delivery recovery respects open admission', { timeout: 8000
     readRuntimeHealth: () => ({ missing: true }),
     openTmuxConnection: async () => ({ command: async args => args.at(-1) === '#{cursor_x}' ? '2' : '0', close: async () => {} }),
     resolveSessionTarget: async () => target, revalidateSessionTarget: async () => {},
-    getSessionAdapter: () => ({ sendText: async () => { pastes++; }, sendKeys: async () => { throw Object.assign(new Error('unverified'), { code: 'ENTER_UNVERIFIED' }); },
-      captureScreen: async () => 'prompt', launch: async () => assert.fail('run already READY') }),
+    session: { sendText: async () => { pastes++; }, sendKeys: async () => { throw Object.assign(new Error('unverified'), { code: 'ENTER_UNVERIFIED' }); },
+      captureScreen: async () => 'prompt', launch: async () => assert.fail('run already READY') },
     sleep: async ms => { clock += ms; },
     submit: async () => assert.fail('run already READY'),
   }, { delivery: { periodicEnabled: false, retryBaseMs: 1, verifyWaitMs: 1 } });

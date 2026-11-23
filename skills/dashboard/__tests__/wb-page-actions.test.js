@@ -1,9 +1,19 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { actionConfirmText, bindActionControls, createPageActions, prepareAction } from '../public/js/wb/page-actions.js';
 import { CONFIRM_ACTIONS } from '../public/js/wb/action-runner.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { actionConfirmText, bindActionControls, createPageActions, prepareAction } = await import('../public/js/wb/page-actions.js');
 
 const t = (key, params = {}) => key + (Object.keys(params).length ? ':' + JSON.stringify(params) : '');
 
@@ -31,24 +41,24 @@ function controls() {
   return { root, upgrade, mode, seg };
 }
 
-test('upgrading the CLI from the session controls asks first under its own title, without the destructive button; cancelling sends nothing', async () => {
+test('upgrading the CLI from the engine card asks first under its own title, without the destructive button; cancelling sends nothing', async () => {
   const no = actions({ answer: false }), c = controls();
   bindActionControls(c.root, no.run, { runtime: () => 'claude' });
   await c.upgrade.dispatch('click');
-  assert.deepEqual(no.asked, ['confirm.upgrade_cc']);
-  assert.deepEqual(no.options, [{ title: 'wb.settings.confirm.upgradeEngine:{"engine":"Claude Code"}', danger: false }]);
+  assert.deepEqual(no.asked, ['confirm.upgrade_runtime:{"runtime":"Claude"}']);
+  assert.deepEqual(no.options, [{ title: 'wb.settings.confirm.upgradeEngine:{"engine":"Claude"}', danger: false }]);
   assert.deepEqual(no.sent, []);
   const yes = actions({ runtime: 'codex' }), c2 = controls();
   bindActionControls(c2.root, yes.run, { runtime: () => 'codex' });
   await c2.upgrade.dispatch('click');
-  assert.deepEqual(yes.asked, ['confirm.upgrade_codex'], 'a Codex machine is asked about upgrading Codex');
+  assert.deepEqual(yes.asked, ['confirm.upgrade_runtime:{"runtime":"Codex"}'], 'a Codex machine is asked about upgrading Codex');
   assert.deepEqual(yes.sent, [{ action: 'upgrade-cc', body: { runtime: 'codex' } }]);
   // The default engine card upgrades the engine chosen in it, even when the page's default is another one.
   const chosen = actions({ runtime: 'claude' }), c3 = controls();
   bindActionControls(c3.root, chosen.run, { runtime: () => 'codex' });
   await c3.upgrade.dispatch('click');
-  assert.deepEqual(chosen.asked, ['confirm.upgrade_codex']);
-  assert.deepEqual(chosen.options, [{ title: 'wb.settings.confirm.upgradeEngine:{"engine":"Codex CLI"}', danger: false }]);
+  assert.deepEqual(chosen.asked, ['confirm.upgrade_runtime:{"runtime":"Codex"}']);
+  assert.deepEqual(chosen.options, [{ title: 'wb.settings.confirm.upgradeEngine:{"engine":"Codex"}', danger: false }]);
   assert.deepEqual(chosen.sent, [{ action: 'upgrade-cc', body: { runtime: 'codex' } }]);
 });
 
@@ -104,7 +114,8 @@ test('every action that changes the running agent is asked with its own question
     assert.deepEqual(a.sent, [], action);
   }
   assert.equal(actionConfirmText('switch-effort', { effort: 'high' }, { t, effortLabel: value => `effort:${value}` }), 'confirm.switch_effort:{"value":"effort:high"}');
-  assert.equal(actionConfirmText('switch-runtime', { runtime: 'codex' }, { t }), 'confirm.switch_runtime_codex');
+  assert.equal(actionConfirmText('switch-runtime', { runtime: 'codex' }, { t }), 'confirm.switch_runtime:{"value":"Codex"}');
+  assert.equal(actionConfirmText('switch-runtime', { runtime: 'agy' }, { t }), 'confirm.switch_runtime:{"value":"Antigravity"}');
 });
 
 test('nothing is asked or sent while the viewed machine was reached with a read-only key', async () => {
@@ -149,7 +160,6 @@ test('Origin restart identity is cleared on machine changes and accepted only af
   assert.ok(read >= 0 && guard > read && accept > guard, 'a late Origin read cannot become the next machine’s restart target');
 });
 
-
 test('manual restarts preserve canonical single and multi Origin scope with run binding', async () => {
   for (const sessionGroup of [null, 'origin']) {
     const a = actions({ shown: { sessionGroup, runId: 'run-exact', sessionId: 'session-exact' } });
@@ -160,7 +170,6 @@ test('manual restarts preserve canonical single and multi Origin scope with run 
   const send = app.slice(app.indexOf('async function sendAction('), app.indexOf('async function sendAction(') + 1400);
   assert.match(send, /sessionGroup: origin\.sessionGroup, runId: origin\.live\.runId/, 'the missing-run fallback preserves the canonical null or origin scope');
 });
-
 
 test('restart fallback binds only a readable run on the same viewed machine', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
@@ -174,7 +183,7 @@ test('restart fallback binds only a readable run on the same viewed machine', ()
 });
 
 test('Antigravity and unknown runtime confirmations name the viewed instance runtime', async () => {
-  for (const [runtime, name] of [['agy', 'Antigravity'], ['future', 'future'], [null, 'wb.unknown'], ['', 'wb.unknown']]) {
+  for (const [runtime, name] of [['agy', 'Antigravity'], ['future', 'Future'], [null, 'wb.unknown'], ['', 'wb.unknown']]) {
     const a = actions({ runtime }); await a.run.exec('upgrade-cc');
     assert.deepEqual(a.asked, ['confirm.upgrade_runtime:' + JSON.stringify({ runtime: name })]);
     assert.equal(a.sent.length, 1);

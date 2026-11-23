@@ -41,7 +41,7 @@ for(const kind of ['connect_failed','rejected','name_conflict','launch_failure']
  const f=routerFixture(t,{poolSize:1});held(f);const before=f.db.listSlotOccupancy()[0];
  if(kind==='connect_failed'||kind==='rejected'){
   f.health.set('claude',{health:'down'});f.deps.submit=async request=>kind==='connect_failed'?{kind:'connect_failed',sent:false}:{kind:'rejected',reply:{...request,ok:false,code:'probe_inflight'}};
- }else f.deps.getSessionAdapter=()=>({launch:async()=>{throw Object.assign(new Error(kind),{code:kind==='name_conflict'?'NAME_CONFLICT':'LAUNCH_FAILED'});},stop:async()=>{}});
+ }else f.deps.session = {launch:async()=>{throw Object.assign(new Error(kind),{code:kind==='name_conflict'?'NAME_CONFLICT':'LAUNCH_FAILED'});},stop:async()=>{}};
  await start(f);f.advance(5000);await f.rounds(4);assert.deepEqual(f.db.listSlotOccupancy(),[before]);assert.equal(f.db.listPendingContinuations().length,1);
 });
 
@@ -69,7 +69,7 @@ test('failed inbound claim restores a retained row without launching',async t=>{
 
 test('unconfirmed adapter stop retains startup occupancy until stop succeeds',async t=>{
  const f=routerFixture(t,{poolSize:1,readyTimeoutMs:1000});const message=f.add('b');
- f.deps.getSessionAdapter=()=>({launch:async input=>{f.put(input.sessionGroup,{runId:input.runId,ready:false});},stop:async()=>{if(f.scene.has('b'))throw Object.assign(new Error('stop unconfirmed'),{code:'STOP_UNCONFIRMED'});}});
+ f.deps.session = {launch:async input=>{f.put(input.sessionGroup,{runId:input.runId,ready:false});},stop:async()=>{if(f.scene.has('b'))throw Object.assign(new Error('stop unconfirmed'),{code:'STOP_UNCONFIRMED'});}};
  await start(f);f.advance(1000);await f.rounds(2);assert.equal(f.db.listSlotOccupancy()[0].state,'running');
  assert.equal(f.row(message.id).status,'running');assert.equal(f.row(message.id).retry_count,0);
  assert.ok(f.events.some(row=>row.event==='stop_unconfirmed'&&row.reason==='STOP_UNCONFIRMED'));
@@ -85,7 +85,7 @@ test('Router restart preserves the retained slot and gives it to its owner',asyn
 
 test('five failed continuation launches restore held state until its original expiry',async t=>{
  const f=routerFixture(t,{poolSize:1});held(f);const original=f.db.listSlotOccupancy()[0];let attempts=0;
- f.deps.getSessionAdapter=()=>({launch:async()=>{attempts++;throw new Error('launch rejected');},stop:async()=>{}});
+ f.deps.session = {launch:async()=>{attempts++;throw new Error('launch rejected');},stop:async()=>{}};
  await start(f);
  for(const delay of [5000,10000,20000,40000]){
   f.advance(delay);await f.rounds(4);assert.deepEqual(f.db.listSlotOccupancy(),[original]);
@@ -117,7 +117,7 @@ test('authentication recovery gives expired reservation to inbound while retaini
 
 test('an adapter stop timeout retains occupancy and the running message until retry succeeds',async t=>{
  const f=routerFixture(t,{poolSize:1,readyTimeoutMs:1000});const message=f.add('b');let unconfirmed=true;
- f.deps.getSessionAdapter=()=>({launch:async input=>f.put(input.sessionGroup,{runId:input.runId,ready:false}),stop:async()=>{if(unconfirmed)throw Object.assign(new Error('stop timed out'),{code:'TMUX_TIMEOUT'});f.scene.delete('b');}});
+ f.deps.session = {launch:async input=>f.put(input.sessionGroup,{runId:input.runId,ready:false}),stop:async()=>{if(unconfirmed)throw Object.assign(new Error('stop timed out'),{code:'TMUX_TIMEOUT'});f.scene.delete('b');}};
  await start(f);f.advance(1000);await f.rounds(2);
  assert.equal(f.db.listSlotOccupancy().length,1);
  assert.equal(f.router.state.activations.has('b'),true);
@@ -130,7 +130,7 @@ test('an adapter stop timeout retains occupancy and the running message until re
 
 for (const retained of [false,true]) test(`inbound name conflict returns ${retained ? 'retained' : 'new'} occupancy`,async t=>{
  const f=routerFixture(t,{poolSize:1});if(retained)held(f);const before=f.db.listSlotOccupancy();const message=f.add('b');let conflicts=0;
- f.deps.getSessionAdapter=()=>({launch:async()=>{conflicts++;throw Object.assign(new Error('name already exists'),{code:'NAME_CONFLICT'});},stop:async()=>assert.fail('name conflict must not stop another run')});
+ f.deps.session = {launch:async()=>{conflicts++;throw Object.assign(new Error('name already exists'),{code:'NAME_CONFLICT'});},stop:async()=>assert.fail('name conflict must not stop another run')};
  await start(f);assert.ok(conflicts>0);assert.deepEqual(f.db.listSlotOccupancy(),before);
  assert.equal(f.row(message.id).status,'pending');assert.equal(f.row(message.id).retry_count,0);
 });

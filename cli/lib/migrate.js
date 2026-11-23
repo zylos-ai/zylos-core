@@ -8,7 +8,7 @@ import { migrateModelThresholds } from './model-rotation-thresholds.js';
 const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..');
 const DEFAULT_TEMPLATES_DIR = path.join(PACKAGE_ROOT, 'templates');
 
-export function runMigrations({
+export async function runMigrations({
   zylosDir = ZYLOS_DIR,
   templatesDir = DEFAULT_TEMPLATES_DIR,
 } = {}) {
@@ -17,7 +17,7 @@ export function runMigrations({
   if (migrateClaudeMdToZylosMd({ zylosDir: root, templatesDir })) {
     migrated.push('v0.4.0/claude-md-to-zylos-md');
   }
-  if (migrateNewSessionThresholdDefaults({ zylosDir: root })) {
+  if (await migrateNewSessionThresholdDefaults({ zylosDir: root })) {
     migrated.push('v0.4.11/new-session-threshold-defaults');
   }
   return { migrated };
@@ -67,6 +67,6 @@ export function migrateClaudeMdToZylosMd({
   return true;
 }
 
-export function migrateNewSessionThresholdDefaults({ zylosDir = ZYLOS_DIR } = {}) {
-  return migrateModelThresholds({ zylosDir: path.resolve(zylosDir) }).changed;
+export async function migrateNewSessionThresholdDefaults({ zylosDir = ZYLOS_DIR } = {}) {
+  return (await migrateModelThresholds({ zylosDir: path.resolve(zylosDir) })).changed;
 }

@@ -1,7 +1,7 @@
 import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { settleLaunch } from '../session-launch.js';
+import { settleLaunch } from '../launch-flow.js';
 import { writeSessionLaunchScript, shellQuote } from '../session-command.js';
 export const binary = process.env.TEST_TMUX_BIN || 'tmux';
 export const delay = ms => new Promise(resolve => setTimeout(resolve, ms));

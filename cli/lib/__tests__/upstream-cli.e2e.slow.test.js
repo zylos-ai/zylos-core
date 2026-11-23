@@ -221,6 +221,9 @@ test('successful CLI init source flags are temporary with absent or existing set
   }
 });
 
+// Real first init and upstream resolution with private HOME, ZYLOS_DIR, PM2_HOME,
+// TMPDIR and C4 DB. The fixture's tmux, PM2, runtime and network commands are stubs.
+// Run for init setup or upstream resolution changes.
 test('init environment source applies only to that process and preserves saved settings', t => {
   for (const saved of [false, true]) {
     const f = fixture(t, { initialized: true });
@@ -237,7 +240,12 @@ test('init environment source applies only to that process and preserves saved s
     assert.equal(active.endpoints.apiBase.url, 'https://mirror.example.test/api/');
     assert.equal(active.trustSelectedBy, 'environment');
     assert.equal(active.endpoints.apiBase.tokenPolicy, 'locally authorized when requested; redirects rechecked');
-    const result = f.success(f.run(['init', '--yes', '--quiet', '--runtime', 'claude', '--timezone', 'UTC', '--no-caddy'], env));
+    const envFile = path.join(f.zylosDir, '.env');
+    assert.equal(fs.existsSync(envFile), false);
+    const result = f.success(f.run(['init', '--yes', '--quiet', '--runtime', 'claude', '--no-caddy'], {
+      ...env, TZ: 'Asia/Singapore', TMUX_TMPDIR: path.join(f.root, 'tmp'),
+    }));
+    assert.match(fs.readFileSync(envFile, 'utf8'), /^TZ=Asia\/Singapore$/m);
     assert.equal(/PENDING MIGRATION|Database init failed/.test(result.stdout), false, 'init must not report preparation failures');
     assert.equal(/Database initialized/.test(result.stdout), true, 'init must initialize the database');
     assert.equal(fs.existsSync(settings), saved);

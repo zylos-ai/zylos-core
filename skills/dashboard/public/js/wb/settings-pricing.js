@@ -1,3 +1,4 @@
+import { DEFAULT_RUNTIME, runtimesWith } from '../../runtime-descriptors.js';
 import { countLabel } from '../count-label.js';
 import { element, icon, runtimeName } from './plain-text.js';
 import { money } from './instance-strip.js';
@@ -90,13 +91,16 @@ export function priceRowCosts(payload, costs = []) {
 
 export function createPricingPanel({ root, host, groupCounts = {}, data, usage = {}, document = root.ownerDocument,
   t = key => key, formatTokens = value => Number(value).toLocaleString(), writable = () => true, write, onRuntime = () => {}, onDirty = () => {} }) {
-  let runtime = data.active === 'codex' ? 'codex' : 'claude', stopped = false;
+  const usageRuntimes = runtimesWith('usage');
+  const mode = id => data.runtimes[id]?.fastMode?.mode;
+  const pricingRuntime = value => usageRuntimes.includes(value) ? value : DEFAULT_RUNTIME;
+  let runtime = pricingRuntime(data.active), stopped = false;
   const saved = structuredClone(data.runtimes), drafts = structuredClone(data.runtimes), usedModels = usage?.models ?? [];
   const top = host.querySelector('#settings-pricing-top') ?? root;
   const summary = element(document, 'p', undefined, 'wb-price-sum'), unmatched = element(document, 'div');
   const tabs = element(document, 'div', undefined, 'wb-rt-tabs'); tabs.setAttribute('role', 'tablist');
   const tabButtons = new Map();
-  for (const value of ['claude', 'codex']) {
+  for (const value of runtimesWith('usage')) {
     const button = element(document, 'button', undefined, 'wb-rt-tab'); button.type = 'button'; button.id = 'settings-price-tab-' + value; button.setAttribute('role', 'tab');
     button.addEventListener('click', () => { try { capture(); runtime = value; render(); } catch (error) { status.textContent = error.message; status.hidden = false; } });
     tabs.append(button); tabButtons.set(value, button);
@@ -110,14 +114,16 @@ export function createPricingPanel({ root, host, groupCounts = {}, data, usage =
   const table = baseRows.closest('.settings-table-scroll') ?? baseRows;
   const pages = mountPagedList({ document, t, list: table, rows: () => [...baseRows.querySelectorAll('tr')], text: row => row.querySelector('input')?.value ?? '', placeholder: t('wb.settings.searchModels') });
   table.before(pages.search); table.after(pages.empty, pages.pager);
-  let fastSaved = String(saved.claude?.fastMode?.configuredMultiplier ?? '');
-  fastInput?.addEventListener('input', () => { fastInput.classList.toggle('wb-dirty-in', fastInput.value !== fastSaved); refreshDirty(); });
+  const fastSaved = Object.fromEntries(usageRuntimes
+    .filter(id => mode(id) === 'multiplier')
+    .map(id => [id, String(saved[id]?.fastMode?.configuredMultiplier ?? '')]));
+  fastInput?.addEventListener('input', () => { fastInput.classList.toggle('wb-dirty-in', fastInput.value !== fastSaved[runtime]); refreshDirty(); });
   function capture() {
     const payload = drafts[runtime];
     const rendered = collectPriceRows([...baseRows.querySelectorAll('tr')]);
     payload.modelPrices = rendered;
-    if (runtime === 'codex') payload.priorityModelPrices = collectPriceRows([...priorityRows.querySelectorAll('tr')]);
-    else if (fastInput.value !== fastInput.dataset.initialValue) {
+    if (mode(runtime) === 'service_tier') payload.priorityModelPrices = collectPriceRows([...priorityRows.querySelectorAll('tr')]);
+    else if (mode(runtime) === 'multiplier' && fastInput.value !== fastInput.dataset.initialValue) {
       const value = fastInput.value === '' ? null : Number(fastInput.value);
       if (value !== null && (!Number.isFinite(value) || value <= 0)) throw Error('invalid_fast_multiplier');
       payload._editedFastMultiplier = value;
@@ -126,19 +132,23 @@ export function createPricingPanel({ root, host, groupCounts = {}, data, usage =
   /** Unsaved changes per engine: the visible tab is read as typed, the other one from its captured draft. */
   function changes() {
     const counts = {};
-    for (const value of ['claude', 'codex']) {
+    for (const value of runtimesWith('usage')) {
       const payload = drafts[value], original = saved[value] ?? {};
       const base = value === runtime ? draftPriceRows([...baseRows.querySelectorAll('tr')]) : payload.modelPrices;
       let count = countPriceChanges(original.modelPrices, base);
-      if (value === 'codex') count += countPriceChanges(original.priorityModelPrices, value === runtime ? draftPriceRows([...priorityRows.querySelectorAll('tr')]) : payload.priorityModelPrices);
-      const fast = value === runtime && value === 'claude' ? fastInput?.value ?? '' : Object.hasOwn(payload, '_editedFastMultiplier') ? String(payload._editedFastMultiplier ?? '') : fastSaved;
-      if (value === 'claude' && fast !== fastSaved) count++;
+      if (mode(value) === 'service_tier') count += countPriceChanges(original.priorityModelPrices, value === runtime ? draftPriceRows([...priorityRows.querySelectorAll('tr')]) : payload.priorityModelPrices);
+      if (mode(value) === 'multiplier') {
+        let fast = fastSaved[value];
+        if (value === runtime) fast = fastInput.value;
+        else if (Object.hasOwn(payload, '_editedFastMultiplier')) fast = String(payload._editedFastMultiplier ?? '');
+        if (fast !== fastSaved[value]) count++;
+      }
       counts[value] = count;
     }
     return counts;
   }
   function refreshDirty() {
-    const counts = changes(), total = counts.claude + counts.codex;
+    const counts = changes(), total = usageRuntimes.reduce((sum, id) => sum + counts[id], 0);
     for (const [value, button] of tabButtons) {
       const users = groupCounts[value] ?? t('wb.unknown');
       const sw = element(document, 'i', undefined, 'wb-sw wb-sw-' + value);
@@ -148,7 +158,7 @@ export function createPricingPanel({ root, host, groupCounts = {}, data, usage =
       if (counts[value]) button.append(element(document, 'span', t('wb.settings.changedN', { count: counts[value] }), 'wb-dirty'));
     }
     if (savebar) savebar.hidden = !total;
-    if (dirtyText) dirtyText.textContent = t('wb.settings.unsavedList', { list: ['claude', 'codex'].filter(value => counts[value]).map(value => t('wb.settings.unsavedRuntime', { runtime: runtimeName(value), count: counts[value] })).join(t('wb.settings.listSep')) });
+    if (dirtyText) dirtyText.textContent = t('wb.settings.unsavedList', { list: runtimesWith('usage').filter(value => counts[value]).map(value => t('wb.settings.unsavedRuntime', { runtime: runtimeName(value), count: counts[value] })).join(t('wb.settings.listSep')) });
     onDirty(total);
     return total;
   }
@@ -165,16 +175,16 @@ export function createPricingPanel({ root, host, groupCounts = {}, data, usage =
     priorityRows.replaceChildren();
     for (const [key, prices] of Object.entries(payload.priorityModelPrices ?? {})) appendPriceRow(priorityRows, key, prices, (payload.builtInPriorityModels ?? []).includes(key),
       { document, t, saved: original.priorityModelPrices?.[key], onChange: refreshDirty });
-    host.querySelector('#settings-priority-pricing-group').hidden = runtime !== 'codex';
-    host.querySelector('#settings-fast-mode-group').hidden = runtime !== 'claude';
+    host.querySelector('#settings-priority-pricing-group').hidden = mode(runtime) !== 'service_tier';
+    host.querySelector('#settings-fast-mode-group').hidden = mode(runtime) !== 'multiplier';
     const multiplier = Object.hasOwn(payload, '_editedFastMultiplier') ? payload._editedFastMultiplier : payload.fastMode?.configuredMultiplier;
     fastInput.value = multiplier == null ? '' : String(multiplier);
     fastInput.dataset.initialValue = fastInput.value;
-    fastInput.classList.toggle('wb-dirty-in', fastInput.value !== fastSaved);
+    fastInput.classList.toggle('wb-dirty-in', fastInput.value !== fastSaved[runtime]);
     summary.replaceChildren();
     if (usage == null) summary.append(element(document, 'span', t('wb.unknown') + ' · ' + t('wb.readFailed')));
     else {
-      for (const value of ['claude', 'codex']) {
+      for (const value of runtimesWith('usage')) {
         const part = element(document, 'span', undefined, 'wb-price-sum-rt');
         part.append(element(document, 'i', undefined, 'wb-sw wb-sw-' + value), element(document, 'span', runtimeName(value)),
           element(document, 'b', money(usedModels.filter(row => row.runtime === value).reduce((sum, row) => sum + Number(row.cost ?? 0), 0))));
@@ -186,18 +196,22 @@ export function createPricingPanel({ root, host, groupCounts = {}, data, usage =
     for (const item of usage?.unmatched ?? []) {
       const line = element(document, 'div', undefined, 'wb-warn-row');
       const text = element(document, 'div');
-      text.append(element(document, 'b', item.model ?? t('wb.unknown'), 'wb-mono'), element(document, 'span', t('wb.settings.unmatchedTitle', { runtime: runtimeName(item.runtime === 'codex' ? 'codex' : 'claude') })),
+      text.append(element(document, 'b', item.model ?? t('wb.unknown'), 'wb-mono'), element(document, 'span', t('wb.settings.unmatchedTitle', { runtime: runtimeName(item.runtime) })),
         element(document, 'small', t('wb.settings.unmatchedNote', { tokens: formatTokens(item.tokens ?? 0) })));
-      const add = element(document, 'button', t('wb.settings.addPrice'), 'wb-btn'); add.type = 'button'; add.disabled = !writable();
-      add.addEventListener('click', () => {
-        try {
-          capture(); runtime = item.runtime === 'codex' ? 'codex' : 'claude';
-          drafts[runtime].modelPrices[item.model] ??= { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
-          render();
-          pages.refresh({ reveal: [...baseRows.querySelectorAll('tr')].find(row => row.dataset.prefix === item.model) });
-        } catch (error) { status.textContent = error.message; status.hidden = false; }
-      });
-      line.append(icon(document, 'alert'), text, add); unmatched.append(line);
+      line.append(icon(document, 'alert'), text);
+      if (tabButtons.has(item.runtime)) {
+        const add = element(document, 'button', t('wb.settings.addPrice'), 'wb-btn'); add.type = 'button'; add.disabled = !writable();
+        add.addEventListener('click', () => {
+          try {
+            capture(); runtime = item.runtime;
+            drafts[runtime].modelPrices[item.model] ??= { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+            render();
+            pages.refresh({ reveal: [...baseRows.querySelectorAll('tr')].find(row => row.dataset.prefix === item.model) });
+          } catch (error) { status.textContent = error.message; status.hidden = false; }
+        });
+        line.append(add);
+      }
+      unmatched.append(line);
     }
     if (baseCount) baseCount.textContent = countLabel(t, 'wb.settings.priceCount', Object.keys(payload.modelPrices ?? {}).length);
     pages.refresh();
@@ -212,24 +226,24 @@ export function createPricingPanel({ root, host, groupCounts = {}, data, usage =
       try {
         capture();
         const runtimes = {};
-        for (const value of ['claude', 'codex']) {
+        for (const value of runtimesWith('usage')) {
           const payload = drafts[value]; runtimes[value] = { modelPrices: payload.modelPrices };
-          if (value === 'codex') runtimes[value].priorityModelPrices = payload.priorityModelPrices;
-          else if (Object.hasOwn(payload, '_editedFastMultiplier')) runtimes[value].fastModeMultiplier = payload._editedFastMultiplier;
+          if (mode(value) === 'service_tier') runtimes[value].priorityModelPrices = payload.priorityModelPrices;
+          else if (mode(value) === 'multiplier' && Object.hasOwn(payload, '_editedFastMultiplier')) runtimes[value].fastModeMultiplier = payload._editedFastMultiplier;
         }
         await write({ runtimes });
         if (stopped) return;
         // What was written is the new baseline: dirty marks, the save bar and the navigation count all clear.
-        for (const value of ['claude', 'codex']) {
+        for (const value of runtimesWith('usage')) {
           saved[value] ??= {};
           saved[value].modelPrices = structuredClone(runtimes[value].modelPrices);
-          if (value === 'codex') saved[value].priorityModelPrices = structuredClone(runtimes[value].priorityModelPrices);
-        }
-        if (Object.hasOwn(runtimes.claude, 'fastModeMultiplier')) {
-          const multiplier = runtimes.claude.fastModeMultiplier;
-          for (const side of [saved.claude, drafts.claude]) side.fastMode = { ...side.fastMode, configuredMultiplier: multiplier };
-          delete drafts.claude._editedFastMultiplier;
-          fastSaved = String(multiplier ?? '');
+          if (mode(value) === 'service_tier') saved[value].priorityModelPrices = structuredClone(runtimes[value].priorityModelPrices);
+          if (mode(value) === 'multiplier' && Object.hasOwn(runtimes[value], 'fastModeMultiplier')) {
+            const multiplier = runtimes[value].fastModeMultiplier;
+            for (const side of [saved[value], drafts[value]]) side.fastMode = { ...side.fastMode, configuredMultiplier: multiplier };
+            delete drafts[value]._editedFastMultiplier;
+            fastSaved[value] = String(multiplier ?? '');
+          }
         }
         render();
         status.hidden = false; status.textContent = t('wb.settings.pricesSaved');

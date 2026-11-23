@@ -1,16 +1,28 @@
+import { registerHooks } from 'node:module';
 import { formatZoned, setInstanceZone } from '../public/js/wb/instance-zone.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } from '../public/js/wb/settings.js';
-import { runtimeHealth, runtimeSaveConfirmation, renderDefaults as renderDefaultsCard, renderHotTtl, modelSaveConfirmation } from '../public/js/wb/settings-defaults.js';
-import { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, orderedPricePrefixes } from '../public/js/wb/settings-pricing.js';
 import { remoteStatus } from '../public/js/fleet-status.js';
-import { keyActionConfirmation, renderKeyTable, renderRemoteAgents } from '../public/js/wb/settings-access.js';
-import { mountLanguageControl, mountThemeControl } from '../public/js/wb/settings-ui.js';
-import { coreVersion, coreUpgradePrompt, renderBrandVersion, renderCoreUpdate, renderEngineVersion } from '../public/js/wb/settings-version.js';
+
 import { documentFixture, node } from './fixtures/settings-dom.js';
 import { deferred, tick } from './fixtures/workbench-dom.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } = await import('../public/js/wb/settings.js');
+const { runtimeHealth, runtimeSaveConfirmation, renderDefaults: renderDefaultsCard, renderHotTtl, modelSaveConfirmation } = await import('../public/js/wb/settings-defaults.js');
+const { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, orderedPricePrefixes } = await import('../public/js/wb/settings-pricing.js');
+const { keyActionConfirmation, renderKeyTable, renderRemoteAgents } = await import('../public/js/wb/settings-access.js');
+const { mountLanguageControl, mountThemeControl } = await import('../public/js/wb/settings-ui.js');
+const { coreVersion, coreUpgradePrompt, renderBrandVersion, renderCoreUpdate, renderEngineVersion } = await import('../public/js/wb/settings-version.js');
+
 const t = (key, params = {}) => key + (Object.keys(params).length ? ':' + JSON.stringify(params) : '');
 const hotTtlMeta = (overrides = {}) => ({ session_hot_ttl: { seconds: 1800, minutes: 30, source: 'config', mode: 'multi', read_only: false,
   environment_set: false, environment_valid: false, min_minutes: 5, max_minutes: 1440, ...overrides } });
@@ -24,6 +36,12 @@ function groupPage(items, total = items.length, nextCursor = null) {
   return { items, total, nextCursor, listKnown: true };
 }
 
+async function selectEngine(root, runtime) {
+  const select = root.querySelector('#settings-engine');
+  select.value = runtime;
+  await select.dispatch('change');
+}
+
 function renderDefaults(root, { snapshot: data = snapshot(), groupCounts, read, ...options }) {
   const rows = data.rows.map(row => ({ ...row, id: row.sessionGroup, displayName: row.name?.displayName, runtime: row.target?.runtime }));
   const followers = rows.filter(row => row.presence === 'running' && !data.overrides?.runtime.find(value => value.sessionGroup === row.id));
@@ -33,7 +51,7 @@ function renderDefaults(root, { snapshot: data = snapshot(), groupCounts, read, 
   return renderDefaultsCard(root, {
     instance,
     groupCounts: groupCounts ?? { followers: data.overrides == null ? null : followers.length, overrides: data.overrides?.runtime.length ?? null,
-      models: { claude: models('claude').length, codex: models('codex').length } },
+      models: { claude: models('claude').length, codex: models('codex').length, agy: models('agy').length } },
     read: async path => {
       const url = new URL(path, 'http://fixture');
       if (url.pathname === '/api/groups') {
@@ -71,6 +89,7 @@ test('settings opens with filtered totals and invalidates stale opens', async ()
   const expected = [
     'side=running&runtimeOverridden=false', 'runtimeOverridden=true',
     'side=running&runtime=claude&modelOverridden=false', 'side=running&runtime=codex&modelOverridden=false',
+    'side=running&runtime=agy&modelOverridden=false',
     'side=running&runtime=claude', 'side=running&runtime=codex',
   ].map(filter => '/api/groups?' + filter + '&limit=1&include=total');
   assert.deepEqual(paths.filter(path => path.startsWith('/api/groups')), expected);
@@ -79,13 +98,13 @@ test('settings opens with filtered totals and invalidates stale opens', async ()
   await first;
   assert.equal(loads.length, 0);
   const second = loader.open();
-  pending.slice(11).forEach((item, index) => item.resolve(index === 0 ? { default_runtime: 'claude' }
+  pending.slice(12).forEach((item, index) => item.resolve(index === 0 ? { default_runtime: 'claude' }
     : { ...groupPage([], index), listKnown: index !== 8 }));
   await second;
   assert.equal(loads.length, 1);
-  assert.equal(paths.length, 22);
+  assert.equal(paths.length, 24);
   assert.equal(loads[0].instance.default_runtime, 'claude');
-  assert.deepEqual(loads[0].groupCounts, { followers: 5, overrides: 6, models: { claude: 7, codex: null }, pricing: { claude: 9, codex: 10 } });
+  assert.deepEqual(loads[0].groupCounts, { followers: 5, overrides: 6, models: { claude: 7, codex: null, agy: 9 }, pricing: { claude: 10, codex: 11 } });
 });
 
 test('folded override rows load on demand, reuse previous cursors and recover after a restart', async () => {
@@ -304,21 +323,23 @@ test('idle reclaim missing metadata stays unknown and does not reuse the prior i
   assert.equal(root.querySelector('#settings-hot-ttl-source').textContent, 'wb.unknown');
 });
 
-test('each engine choice carries its own sign-in state, and group lines with a count of zero are left out', () => {
+test('each engine choice carries its own sign-in state, and group lines with a count of zero are left out', async () => {
   const document = documentFixture(), root = document.createElement('div');
   const quiet = { ...snapshot(), rows: snapshot().rows.map(row => ({ ...row, presence: 'not_running' })) };
   renderDefaults(root, { confirm: async () => true, snapshot: quiet, groupCounts: { followers: 0, overrides: 0 }, metadata: {}, document, t, read: async () => ({}), execute: async () => true });
-  const claude = root.querySelector('#settings-use-claude'), codex = root.querySelector('#settings-use-codex');
-  // The state sits inside the engine's own button, so it cannot wrap away from the engine it describes.
-  assert.match(claude.textContent, /^Claude.*wb\.settings\.health\.available$/);
-  assert.match(codex.textContent, /^Codex.*wb\.settings\.health\.unavailable$/);
-  assert.equal(root.querySelectorAll('.wb-login').every(login => login.closest('#settings-use-claude, #settings-use-codex')), true, 'no sign-in state outside the engine choices');
+  const [claude, codex, agy] = root.querySelector('#settings-engine').children;
+  assert.equal(claude.textContent, 'Claude · wb.settings.health.available · wb.settings.defaultEngineBadge');
+  assert.equal(codex.textContent, 'Codex · wb.settings.health.unavailable');
+  assert.equal(agy.textContent, 'Antigravity · wb.settings.health.unknown');
+  await selectEngine(root, 'agy');
+  assert.equal(root.querySelector('.wb-set-split').hidden, false);
   const counts = root.querySelectorAll('.wb-gsum');
   assert.ok(counts.every(count => count.parentElement.hidden), 'both zero-count lines are hidden');
   assert.equal(root.querySelector('.wb-glist'), null);
 
   const busy = document.createElement('div');
   renderDefaults(busy, { confirm: async () => true, snapshot: snapshot(), groupCounts: { followers: 3, overrides: 2 }, metadata: {}, document, t, read: async () => ({}), execute: async () => true });
+  await selectEngine(busy, 'agy');
   const lines = busy.querySelectorAll('.wb-gsum').filter(line => !line.parentElement.hidden).map(line => line.textContent);
   assert.deepEqual(lines, ['wb.settings.followers:{"count":3}', 'wb.settings.overrides:{"count":2}'], 'counts above zero keep their lines');
 });
@@ -335,8 +356,8 @@ test('when default engine followers cannot be listed, their count stays unknown 
   assert.equal(follower.textContent, 'wb.settings.followers:{"count":"wb.unknown"}');
   assert.equal(follower.parentElement.hidden, false, 'an unknown count is not hidden like a zero');
   assert.equal(follower.parentElement.querySelectorAll('.wb-note').length, 1, 'the read failure is said under it');
-  await root.querySelector('#settings-use-codex').dispatch('click');
-  await root.querySelector('#settings-save-runtime').dispatch('click');
+  await selectEngine(root, 'codex');
+  await root.querySelector('#settings-set-default').dispatch('click');
   assert.equal(confirmations.length, 1);
   assert.match(confirmations[0], /wb\.settings\.cannotList/);
   panel.destroy();
@@ -346,8 +367,11 @@ test('default engine keeps the sign-in gate and model and effort save together p
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const meta = runtime => ({ runtime, current_model: 'one', current_effort: 'high', models: [{ id: 'one' }, { id: 'two' }], efforts_by_model: { one: ['high'], two: ['low'] } });
   const panel = renderDefaults(root, { confirm: async () => true, snapshot: snapshot(), metadata: { claude: meta('claude'), codex: meta('codex') }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body }); return true; } });
-  // Codex is signed out: it cannot become the default, and the reason is its tooltip.
-  assert.equal(root.querySelector('#settings-use-codex').disabled, true); assert.match(root.querySelector('#settings-use-codex').title, /unavailable/);
+  await selectEngine(root, 'codex');
+  assert.equal(root.querySelector('#settings-engine').disabled, false);
+  assert.equal(root.querySelector('#settings-set-default').disabled, true);
+  assert.equal(root.querySelectorAll('.wb-note').find(note => note.textContent === 'wb.settings.runtimeNote').hidden, false);
+  assert.equal(root.querySelector('.wb-set-split').hidden, true);
   const save = root.querySelector('#settings-save-models');
   assert.equal(save.disabled, true, 'nothing to save yet'); assert.equal(save.hidden, true);
   const model = root.querySelector('#settings-model-codex'); model.value = 'two'; await model.dispatch('change');
@@ -361,40 +385,75 @@ test('default engine keeps the sign-in gate and model and effort save together p
   panel.destroy();
 });
 
-test('changing the default engine is a draft until saved and the undo restores the current one', async () => {
+test('selecting an engine is separate from setting the default and checking installation', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
-  const healthy = { ...snapshot(), instance: { runtimeHealth: { codex: { health: 'ok' }, claude: { health: 'ok' } } } };
+  const healthy = { ...snapshot(), instance: { runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'ok' }, agy: { health: 'ok' } },
+    versions: { codex: { installed: null }, agy: { installed: null } } } };
+  const confirmations = [];
   healthy.rows[0].run = { runId: 'run-origin' };
   let rejection = "Fixture credentials were rejected";
   const detailReads = [];
-  const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, document, t, read: async path => {
+  let recheckError = true, rechecks = 0;
+  const panel = renderDefaults(root, { confirm: async text => { confirmations.push(text); return true; }, snapshot: healthy, document, t,
+    recheck: async () => { rechecks++; if (recheckError) throw new Error('x'); },
+    read: async path => {
+    if (path === '/api/instance') return { versions: { codex: { installed: null }, agy: { installed: '1.5.11' } } };
     detailReads.push(path);
     if (path === '/api/groups/chat%3Amissing') return { displayName: 'Name outside preview' };
     throw Error('missing detail');
   }, execute: async (action, body) => { calls.push({ action, body });
     if (rejection) throw new Error(rejection);
-    return { ok: true, data: { baseline: 'codex', groups: [
+    return { ok: true, data: { baseline: body.runtime, groups: [
       { sessionGroup: 'origin', restart: { status: 'not_restarted', reason: 'fence_conflict' } },
       { sessionGroup: 'c', restart: { status: 'unknown', reason: 'no_reply' } },
       { sessionGroup: 'chat:missing', restart: { status: 'unknown', reason: 'no_reply' } },
       { sessionGroup: 'chat:gone', restart: { status: 'unknown', reason: 'no_reply' } },
       { sessionGroup: 'chat:ok', restart: { status: 'accepted' } },
-    ] }, messageKey: 'result.runtime_saved', messageParams: { value: 'Codex' } }; } });
-  const save = root.querySelector('#settings-save-runtime');
-  assert.equal(save.hidden, true); assert.equal(root.querySelector('#settings-use-claude').getAttribute('aria-pressed'), 'true');
-  await root.querySelector('#settings-use-codex').dispatch('click');
-  assert.equal(save.hidden, false); assert.equal(save.disabled, false); assert.equal(calls.length, 0);
-  await root.querySelector('#settings-undo-runtime').dispatch('click');
-  assert.equal(save.hidden, true, 'undo drops the draft'); assert.equal(root.querySelector('#settings-use-claude').getAttribute('aria-pressed'), 'true');
-  assert.equal(root.querySelector('#settings-use-codex').getAttribute('aria-pressed'), 'false'); assert.equal(calls.length, 0);
-  await root.querySelector('#settings-use-codex').dispatch('click');
+    ] }, messageKey: 'result.runtime_saved', messageParams: { value: body.runtime } }; } });
+  const save = root.querySelector('#settings-set-default');
+  const select = root.querySelector('#settings-engine');
+  const badge = root.querySelector('.wb-default-badge');
+  const split = root.querySelector('.wb-set-split');
+  assert.equal(select.value, 'claude');
+  assert.equal(save.hidden, true);
+  assert.equal(badge.hidden, false);
+  assert.equal(split.hidden, true);
+  await selectEngine(root, 'codex');
+  assert.equal(save.hidden, false);
+  assert.equal(save.disabled, false, 'an absent Codex version does not block setting it as default');
+  assert.equal(split.hidden, false);
+  assert.equal(calls.length, 0);
+  await selectEngine(root, 'claude');
+  assert.equal(save.hidden, true);
+  assert.equal(badge.hidden, false);
+  assert.equal(calls.length, 0);
+  await selectEngine(root, 'agy');
+  const install = root.querySelector('.wb-note-act');
+  assert.equal(save.disabled, true);
+  assert.equal(install.hidden, false);
+  assert.equal(root.querySelector('#settings-threshold-agy'), null);
+  assert.equal(root.querySelector('#settings-save-models').hidden, true);
+  assert.match(install.textContent, /wb\.runtimeNotFound:\{"runtime":"Antigravity","command":"zylos runtime agy"\}/);
+  assert.equal(split.hidden, true);
+  const recheck = install.querySelector('button');
+  await recheck.dispatch('click');
+  assert.equal(install.hidden, false);
+  assert.equal(save.disabled, true);
+  assert.equal(root.querySelector('#settings-engine-result').textContent, 'status.failed:{"error":"x"}');
+  recheckError = false;
+  await Promise.all([recheck.dispatch('click'), recheck.dispatch('click')]);
+  assert.equal(rechecks, 2, 'a second click during the successful check sends nothing');
+  assert.equal(install.hidden, true);
+  assert.equal(save.disabled, false);
+  assert.equal(root.querySelector('#settings-engine-result').textContent, '');
+  await selectEngine(root, 'codex');
   await save.dispatch('click');
   assert.match(root.textContent, /Fixture credentials were rejected/);
-  assert.equal(save.hidden, false, 'a failed save leaves the change as a draft');
+  assert.equal(save.hidden, false, 'a failed switch keeps the candidate available to retry');
   rejection = null;
   await save.dispatch('click');
   assert.deepEqual(calls, Array.from({ length: 2 }, () => ({ action: 'switch-runtime', body: { runtime: 'codex', confirmed: true } })));
-  assert.match(root.textContent, /result.runtime_saved/);
+  assert.match(root.textContent, /result\.runtime_saved:\{"value":"Codex"\}/);
   const feedback = root.querySelector('#settings-engine-result').textContent;
   assert.match(feedback, /savedRestartFailed.*Name origin.*fence_conflict/);
   assert.match(feedback, /savedRestartUnknown.*Name c.*no_reply/);
@@ -402,9 +461,14 @@ test('changing the default engine is a draft until saved and the undo restores t
   assert.match(feedback, /savedRestartUnknown.*chat:gone.*no_reply/);
   assert.deepEqual(detailReads, ['/api/groups/chat%3Amissing', '/api/groups/chat%3Agone']);
   assert.equal(save.hidden, true, 'successful save updates the baseline in the mounted card');
-  await root.querySelector('#settings-use-claude').dispatch('click');
-  await root.querySelector('#settings-undo-runtime').dispatch('click');
-  assert.equal(root.querySelector('#settings-use-codex').getAttribute('aria-pressed'), 'true');
+  assert.equal(badge.hidden, false);
+  assert.equal(split.hidden, true);
+  assert.match(select.children[1].textContent, / · wb\.settings\.defaultEngineBadge$/);
+  assert.doesNotMatch(select.children[0].textContent, /defaultEngineBadge/);
+  await selectEngine(root, 'claude');
+  await save.dispatch('click');
+  assert.match(confirmations.at(-1), /^confirm\.switch_runtime:\{"value":"Claude"\}/);
+  assert.match(root.textContent, /result\.runtime_saved:\{"value":"Claude"\}/);
   panel.destroy();
 });
 
@@ -436,26 +500,47 @@ test('the mounted default effort uses configured metadata and only saves a user 
     assert.equal(root.querySelector('#settings-model-result').textContent, 'wb.settings.defaultsSaved wb.settings.effortNextStart');
   } finally { panel.destroy(); }
 });
-async function draftBothEngines(root) {
-  for (const runtime of ['claude', 'codex']) {
-    const model = root.querySelector('#settings-model-' + runtime); model.value = 'two'; await model.dispatch('change');
-    const effort = root.querySelector('#settings-effort-' + runtime); effort.value = runtime === 'codex' ? 'minimal' : 'low'; await effort.dispatch('change');
-  }
+async function draftEngine(root, runtime) {
+  await selectEngine(root, runtime);
+  const model = root.querySelector('#settings-model-' + runtime); model.value = 'two'; await model.dispatch('change');
+  const effort = root.querySelector('#settings-effort-' + runtime); effort.value = runtime === 'codex' ? 'minimal' : 'low'; await effort.dispatch('change');
 }
 
-test('saving model and effort for both engines asks once, lists every change and runs them without asking again', async () => {
+async function draftBothEngines(root) {
+  for (const runtime of ['claude', 'codex']) await draftEngine(root, runtime);
+}
+
+test('saving model and effort confirms and writes only the selected engine', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [], asked = [];
   const tr = (key, params) => key === 'effort.minimal' ? 'Minimal' : t(key, params);
-  const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t: tr, read: async () => ({}),
+  const claude = { ...effortMeta('claude'), model_thresholds: { one: 70, two: 70 }, model_threshold_max: { two: 95 } };
+  const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude, codex: effortMeta('codex') }, document, t: tr, read: async () => ({}),
     confirm: async text => { asked.push(text); return true; }, execute: async (action, body, options) => { calls.push({ action, body, options }); return true; } });
-  await draftBothEngines(root);
-  await root.querySelector('#settings-save-models').dispatch('click');
-  assert.equal(asked.length, 1, 'one confirmation for the whole card');
-  assert.match(asked[0], /Name origin.*\nName c/);
-  assert.doesNotMatch(asked[0], /Name b/, 'model overrides are excluded');
+  await draftEngine(root, 'claude');
+  const threshold = root.querySelector('#settings-threshold-claude');
+  threshold.value = '96';
+  await threshold.dispatch('input');
+  await draftEngine(root, 'codex');
+  const save = root.querySelector('#settings-save-models');
+  assert.equal(save.disabled, false, 'an invalid threshold on Claude does not block saving Codex');
+  await save.dispatch('click');
+  assert.equal(asked.length, 1);
   assert.match(asked[0], /Name a/, 'the explicit engine still inherits its default model');
-  assert.match(asked[0], /Minimal/); assert.doesNotMatch(asked[0], /effort\.minimal/);
-  assert.equal(calls.length, 4); assert.ok(calls.every(call => call.options?.confirmed === true), 'no action asks again');
+  assert.match(asked[0], /Minimal/);
+  assert.doesNotMatch(asked[0], /effort\.minimal|Name origin|Name c|Name b|"runtime":"Claude"/);
+  assert.deepEqual(calls.map(({ action, body }) => [action, body.runtime]), [['switch-model', 'codex'], ['switch-effort', 'codex']]);
+  assert.equal(root.querySelector('#settings-save-models').hidden, true);
+  await selectEngine(root, 'claude');
+  assert.equal(root.querySelector('#settings-model-claude').closest('.wb-pref-c').querySelector('.wb-dirty').hidden, false);
+  assert.equal(root.querySelector('#settings-model-result').textContent, '');
+  threshold.value = '70';
+  await threshold.dispatch('input');
+  await root.querySelector('#settings-save-models').dispatch('click');
+  assert.equal(asked.length, 2);
+  assert.match(asked[1], /Name origin.*\nName c/);
+  assert.doesNotMatch(asked[1], /Name b|"runtime":"Codex"/);
+  assert.deepEqual(calls.slice(2).map(({ action, body }) => [action, body.runtime]), [['switch-model', 'claude'], ['switch-effort', 'claude']]);
+  assert.ok(calls.every(call => call.options?.confirmed === true), 'no action asks again');
   assert.equal(root.querySelector('#settings-save-models').hidden, true);
   assert.equal(modelSaveConfirmation([{ runtime: 'claude', key: 'effort', value: 'max' }], tr).split('\n').length, 2);
   assert.match(modelSaveConfirmation([{ runtime: 'codex', key: 'model', value: 'two' }], (key, params) => params ? params.value : key, { codex: { models: [{ id: 'two', display_name: 'Two Pro' }] } }), /Two Pro/, 'models are named as the dropdown shows them'); panel.destroy();
@@ -469,9 +554,10 @@ test('saving an engine or model with no running followers skips confirmation', a
   const panel = renderDefaults(root, { document, snapshot: data, metadata: { claude: effortMeta('claude') }, t, read: async () => ({}),
     confirm: async () => assert.fail('the only running session has a runtime override'),
     execute: async (action, body) => { calls.push({ action, body }); return true; } });
-  await root.querySelector('#settings-use-codex').dispatch('click');
-  await root.querySelector('#settings-save-runtime').dispatch('click');
+  await selectEngine(root, 'codex');
+  await root.querySelector('#settings-set-default').dispatch('click');
   assert.deepEqual(calls, [{ action: 'switch-runtime', body: { runtime: 'codex' } }]);
+  await selectEngine(root, 'claude');
   const model = root.querySelector('#settings-model-claude');
   model.value = 'two'; await model.dispatch('change');
   await root.querySelector('#settings-save-models').dispatch('click');
@@ -484,8 +570,8 @@ test('a defaults card wired without a confirmation runs no change', async () => 
   const healthy = { ...snapshot(), instance: { runtimeHealth: { codex: { health: 'ok' }, claude: { health: 'ok' } } } };
   const panel = renderDefaults(root, { snapshot: healthy, metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document, t,
     read: async () => ({}), execute: async (action, body) => { calls.push({ action, body }); return true; } });
-  await root.querySelector('#settings-use-codex').dispatch('click');
-  const saveRuntime = root.querySelector('#settings-save-runtime'); assert.equal(saveRuntime.disabled, false);
+  await selectEngine(root, 'codex');
+  const saveRuntime = root.querySelector('#settings-set-default'); assert.equal(saveRuntime.disabled, false);
   await saveRuntime.dispatch('click');
   await draftBothEngines(root);
   const saveModels = root.querySelector('#settings-save-models'); assert.equal(saveModels.disabled, false);
@@ -523,12 +609,15 @@ test('a model save that fails part way names what took effect and what did not',
   const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { claude: effortMeta('claude'), codex: effortMeta('codex') }, document,
     t: (key, params) => params ? key + JSON.stringify(params) : key, read: async () => ({}),
     confirm: async () => true, execute: async (action, body) => { calls.push({ action, body }); return calls.length < 2; } });
-  await draftBothEngines(root);
+  const model = root.querySelector('#settings-model-claude');
+  model.value = 'two'; await model.dispatch('change');
+  const effort = root.querySelector('#settings-effort-claude');
+  effort.value = 'low'; await effort.dispatch('change');
   await root.querySelector('#settings-save-models').dispatch('click');
   assert.equal(calls.length, 2, 'stops at the first failure');
   const text = root.textContent;
   assert.match(text, /wb\.settings\.partlySaved/);
-  assert.match(text, /"done":"wb\.settings\.changeModel\{\\"runtime\\":\\"Claude Code\\",\\"value\\":\\"two\\"\}"/);
+  assert.match(text, /"done":"wb\.settings\.changeModel\{\\"runtime\\":\\"Claude\\",\\"value\\":\\"two\\"\}"/);
   assert.match(text, /"left":"wb\.settings\.changeEffort/);
   assert.equal(root.querySelector('#settings-save-models').hidden, false, 'what did not apply is still a draft'); panel.destroy();
 });
@@ -540,7 +629,7 @@ function priceFixture() {
   root.querySelector('#settings-fast-mode-group').append(node(document, 'input', 'settings-fast-multiplier'));
   for (const id of ['settings-status', 'settings-save', 'settings-add-model', 'settings-add-priority-model']) root.append(node(document, 'button', id));
   const rate = { input: 1, output: 2, cacheRead: 0.1, cacheCreation: 1 };
-  const data = { active: 'claude', runtimes: { claude: { builtInModels: ['base', 'unused'], modelPrices: { base: { ...rate, fastModeMultiplier: 3, longContext: { input: 2 } }, unused: rate, custom: rate }, fastMode: { configuredMultiplier: 6 } }, codex: { builtInModels: ['gpt'], modelPrices: { gpt: rate }, priorityModelPrices: { gpt: rate }, builtInPriorityModels: ['gpt'] } } };
+  const data = { active: 'claude', runtimes: { claude: { builtInModels: ['base', 'unused'], modelPrices: { base: { ...rate, fastModeMultiplier: 3, longContext: { input: 2 } }, unused: rate, custom: rate }, fastMode: { mode: 'multiplier', configuredMultiplier: 6 } }, codex: { builtInModels: ['gpt'], modelPrices: { gpt: rate }, priorityModelPrices: { gpt: rate }, builtInPriorityModels: ['gpt'], fastMode: { mode: 'service_tier' } } } };
   return { document, root, host, base, priority, data, rate };
 }
 
@@ -682,11 +771,11 @@ test('the engine version shows the chosen engine CLI and reuses the upgrade cont
   const document = documentFixture(), root = document.createElement('div'), upgrade = node(document, 'button'); upgrade.append(node(document, 'span', 'action-cli-label'), node(document, 'span', 'action-cc-ver')); let called = 0; upgrade.addEventListener('click', () => called++);
   renderEngineVersion(root, { codex: { installed: '1', update: '2' }, claude: { installed: '9' } }, { document, upgrade, t, runtime: 'codex', readOnly: true });
   assert.match(root.textContent, /Codex · v1 ↑2/); assert.doesNotMatch(root.textContent, /v9/, 'only the chosen engine');
-  assert.equal(root.querySelector('button'), upgrade); assert.equal(upgrade.querySelector('#action-cli-label').textContent, 'actions.upgrade_codex');
+  assert.equal(root.querySelector('button'), upgrade); assert.equal(upgrade.querySelector('#action-cli-label').textContent, 'actions.upgrade_runtime:{"runtime":"Codex"}');
   assert.equal(upgrade.querySelector('#action-cc-ver').classList.contains('action-ver-dot'), true, 'a newer CLI marks the button');
   assert.equal(upgrade.disabled, true); assert.equal(upgrade.title, 'remote.actions_read_only_tooltip');
   renderEngineVersion(root, { codex: { installed: '1' }, claude: { installed: '9' } }, { document, upgrade, t, runtime: 'claude', readOnly: false });
-  assert.match(root.textContent, /Claude Code · v9/); assert.equal(upgrade.querySelector('#action-cli-label').textContent, 'actions.upgrade_cc');
+  assert.match(root.textContent, /Claude · v9/); assert.equal(upgrade.querySelector('#action-cli-label').textContent, 'actions.upgrade_runtime:{"runtime":"Claude"}');
   assert.equal(upgrade.querySelector('#action-cc-ver').classList.contains('action-ver-dot'), false);
   await upgrade.dispatch('click'); assert.equal(called, 1); assert.equal(upgrade.disabled, false);
   renderEngineVersion(root, {}, { document, t, runtime: 'codex' }); assert.match(root.textContent, /Codex · wb\.unknown/); assert.equal(root.querySelector('button'), null);
@@ -722,7 +811,6 @@ test('removed header entry selectors have no startup bindings and account contro
   for (const key of Object.keys(zh)) assert.ok(Object.hasOwn(en, key), key);
 });
 
-
 test('settings draft reset clears target-specific controls and disables writes until new data loads', () => {
   const fixture = priceFixture(), defaults = node(fixture.document, 'div', 'settings-defaults'); fixture.root.append(defaults); defaults.append(node(fixture.document, 'button', 'old-target'));
   const idleReclaim = node(fixture.document, 'div', 'settings-idle-reclaim'); fixture.root.append(idleReclaim); idleReclaim.append(node(fixture.document, 'input', 'settings-hot-ttl-minutes'));
@@ -751,9 +839,10 @@ test('default controls retain the restart lock after an accepted runtime change'
   const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, metadata: { claude: meta, codex: meta }, document, t,
     read: async () => ({}), writable: () => writable,
     execute: async () => { writable = false; return true; } });
-  await root.querySelector('#settings-use-codex').dispatch('click');
-  await root.querySelector('#settings-save-runtime').dispatch('click');
-  for (const id of ['settings-use-claude', 'settings-use-codex', 'settings-save-runtime', 'settings-save-models', 'settings-model-claude', 'settings-effort-claude', 'settings-model-codex', 'settings-effort-codex'])
+  await selectEngine(root, 'codex');
+  await root.querySelector('#settings-set-default').dispatch('click');
+  assert.equal(root.querySelector('#settings-engine').disabled, false, 'read-only settings still allow browsing engines');
+  for (const id of ['settings-set-default', 'settings-save-models', 'settings-model-claude', 'settings-effort-claude', 'settings-model-codex', 'settings-effort-codex'])
     assert.equal(root.querySelector('#' + id).disabled, true, id);
   panel.destroy();
 });
@@ -916,7 +1005,6 @@ test('the pricing panel reports unsaved changes to its navigation badge and save
   panel.destroy(); assert.equal(counts.at(-1), 0); assert.equal(bar.hidden, true);
 });
 
-
 test('model thresholds switch with the selected model and save an explicit engine/model only', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const meta = { runtime: 'claude', current_model: 'opus', current_effort: 'high', models: [{ id: 'opus' }, { id: 'opus[1m]' }],
@@ -945,6 +1033,7 @@ test('custom model threshold waits for metadata and ignores a late response for 
     model_thresholds: { one: 70 }, model_threshold_max: { one: 95 } };
   const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { codex: meta }, document, t,
     read: path => { const item = deferred(); pending.push({ path, ...item }); return item.promise; } });
+  await selectEngine(root, 'codex');
   const model = root.querySelector('#settings-model-codex'), custom = root.querySelector('#settings-model-custom-codex'), threshold = root.querySelector('#settings-threshold-codex');
   model.value = '__custom__'; await model.dispatch('change'); custom.value = 'custom-large'; await custom.dispatch('input');
   assert.equal(threshold.disabled, true); assert.equal(threshold.value, ''); assert.equal(root.querySelector('#settings-save-models').disabled, true);
@@ -957,7 +1046,6 @@ test('custom model threshold waits for metadata and ignores a late response for 
   await tick(); assert.equal(threshold.value, '40'); assert.equal(threshold.max, '40'); assert.equal(threshold.disabled, false);
   panel.destroy();
 });
-
 
 test('an unchanged migrated threshold outside new write limits does not block effort changes', async () => {
   for (const previous of [5, 100]) {
@@ -973,7 +1061,6 @@ test('an unchanged migrated threshold outside new write limits does not block ef
   panel.destroy();
   }
 });
-
 
 test('threshold-only save reports next-decision effect in both interface languages', async () => {
   for (const locale of ['en', 'zh']) {
@@ -993,7 +1080,6 @@ test('threshold-only save reports next-decision effect in both interface languag
   }
 });
 
-
 test('a custom model requests its own threshold instead of showing the current model fallback', async () => {
   const document = documentFixture(), root = document.createElement('div'), requests = [], response = deferred();
   const meta = { runtime: 'codex', current_model: 'small', current_effort: 'high', models: [{ id: 'small' }],
@@ -1001,6 +1087,7 @@ test('a custom model requests its own threshold instead of showing the current m
     model_thresholds: { small: 62 }, model_threshold_max: { small: 95 } };
   const panel = renderDefaults(root, { snapshot: snapshot(), metadata: { codex: meta }, document, t,
     read: path => { requests.push(path); return response.promise; } });
+  await selectEngine(root, 'codex');
   const model = root.querySelector('#settings-model-codex'), custom = root.querySelector('#settings-model-custom-codex');
   const threshold = root.querySelector('#settings-threshold-codex');
   assert.equal(threshold.value, '62');
@@ -1026,12 +1113,14 @@ test('settings group status labels include sample age and last-known status tool
   const data = snapshot(), sampledAt = Date.now() - 20000;
   data.rows[0] = { ...data.rows[0], state: { kind: 'idle', stale: true, sampledAt } };
   const panel = renderDefaults(root, { snapshot: data, document, t });
+  await selectEngine(root, 'agy');
   const details = root.querySelector('details'); details.open = true;
   await details.dispatch('toggle');
   assert.ok(root.querySelector('.wb-status-age'));
   data.rows[0].state = { kind: 'unknown', reason: 'stale', sampledAt, lastState: 'idle' };
   panel.destroy();
   const next = renderDefaults(root, { snapshot: data, document, t });
+  await selectEngine(root, 'agy');
   const updated = root.querySelector('details'); updated.open = true;
   await updated.dispatch('toggle');
   const labels = root.querySelectorAll('small');
@@ -1064,7 +1153,6 @@ test('key table formats UTC key clocks in the instance timezone', () => {
     assert.doesNotMatch(row.textContent, /2026-02-03T04:05/);
   } finally { setInstanceZone(null); }
 });
-
 
 test('default model without effort options hides the whole field and restores it on model change', async () => {
   const document = documentFixture(), root = node(document, 'div');

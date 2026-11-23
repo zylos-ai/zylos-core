@@ -40,7 +40,7 @@ for (const mode of ['single', 'multi']) test(`${mode} real dispatcher paste in f
 async function realInflight(t, mode) {
   const f = fixture(t, mode), m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
   const router = await m1(t, f, 'inflight');
-  const id = f.db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','fixture','OLD_PASTE_ONLY','pending',?)").run(mode === 'single' ? '' : 'origin').lastInsertRowid;
+  const id = f.db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','fixture','OLD_PASTE_ONLY','pending',?)").run('origin').lastInsertRowid;
   for (let i = 0; i < 5; i++) await router.call('tick');
   const boundary = await router.barrier(); assert.deepEqual(boundary, { barrier: 'after-real-paste', runId: 'run-1' });
   assert.equal(f.db.prepare('SELECT status FROM conversations WHERE id=?').pluck().get(id), 'running');

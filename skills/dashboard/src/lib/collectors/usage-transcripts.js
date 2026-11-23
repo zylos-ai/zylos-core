@@ -1,10 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { claudeProjectSlug } from '../claude-project-path.js';
+import { UNSUPPORTED } from '../runtime/contract.js';
 import { sameSourceFile } from '../source-file-identity.js';
+import { loadCoreModule } from '../core-modules.js';
+
+const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
 
 const DAY = 86400000;
-const INACTIVE_MS = 30 * 60000;
+export const INACTIVE_MS = 30 * 60000;
 // Healthy snapshots reuse existing identity/lifecycle signals between refreshes.
 const SNAPSHOT_FALLBACK_MS = 10 * 60000;
 // Persisted lifecycle signals still work when Origin is asleep and costKey is
@@ -23,9 +26,10 @@ export function groupMainTranscript(mapping) {
 export const childTranscript = mapping => mapping?.kind === 'child';
 
 export class UsageTranscripts {
-  constructor(store, config, { getSnapshot, getSnapshotKey, now = Date.now } = {}) {
+  constructor(store, config, { collectors = {}, getSnapshot, getSnapshotKey, now = Date.now } = {}) {
     this.store = store;
     this.config = config;
+    this.collectors = collectors;
     this.getSnapshot = getSnapshot;
     this.getSnapshotKey = getSnapshotKey;
     this._lifecycleSequence = null;
@@ -37,8 +41,7 @@ export class UsageTranscripts {
     this.snapshot = null;
     this._snapshotAt = null;
     this._snapshotKey = undefined;
-    this._legacySessionId = null;
-    this._legacyStatusStale = false;
+    this._legacy = null;
     this._lastChecked = new Map();
   }
 
@@ -56,41 +59,22 @@ export class UsageTranscripts {
       byte_offset: Number.isSafeInteger(offsets[row.transcript_path]) && offsets[row.transcript_path] >= 0
         ? offsets[row.transcript_path] : 0 }, stamp);
     for (const row of this.store.transcriptStartsSince(cutoff)) {
-      if (!['claude', 'codex'].includes(row.runtime) || !row.session_id ||
+      if (!runtimesWith('usage').includes(row.runtime) || !row.session_id ||
           typeof row.transcript_path !== 'string' || !path.isAbsolute(row.transcript_path) ||
           !row.transcript_path.endsWith('.jsonl')) continue;
       const inserted = insert(row);
-      if (row.runtime === 'codex' && inserted.changes === 1 && ['origin', null].includes(row.session_group)) {
-        const first = this.store.getUsageTranscript(row.transcript_path);
-        this.store.upsertCodexRolloutPath({ sessionId: first.session_id,
-          transcriptPath: first.transcript_path, lastEventAt: row.timestamp });
+      const collector = this.collectors[row.runtime];
+      if (collector && collector.onRegistered !== UNSUPPORTED &&
+          inserted.changes === 1 && ['origin', null].includes(row.session_group)) {
+        collector.onRegistered(this.store, row, inserted, this.store.getUsageTranscript(row.transcript_path));
       }
     }
-    let mains = this.store.claudeMainTranscripts();
-    this._legacySessionId = null;
-    this._legacyStatusStale = false;
-    try {
-      const zylosDir = this.config.zylosDir || path.join(process.env.HOME, 'zylos');
-      const statusFile = path.join(zylosDir, 'activity-monitor', 'statusline.json');
-      const status = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
-      // A legacy statusline left behind by multi-session startup is not liveness.
-      if (status.session_id) {
-        this._legacySessionId = status.session_id;
-        this._legacyStatusStale = fs.statSync(statusFile).mtimeMs < at - INACTIVE_MS;
-        if (!this._legacyStatusStale && !mains.some(main => main.session_id === status.session_id)) {
-          const file = path.join(this.config.homeDir || process.env.HOME, '.claude', 'projects',
-            claudeProjectSlug(zylosDir), `${status.session_id}.jsonl`);
-          if (fs.existsSync(file)) insert({ transcript_path: file, runtime: 'claude', session_id: status.session_id });
-        }
-      }
-    } catch { /* Legacy sessions may have no statusline. */ }
-    mains = this.store.claudeMainTranscripts();
-    for (const main of mains) {
-      const dir = path.join(path.dirname(main.transcript_path), main.session_id, 'subagents');
-      let names;
-      try { names = fs.readdirSync(dir); } catch { continue; }
-      for (const name of names) {
-        if (name.endsWith('.jsonl')) insert({ ...main, transcript_path: path.join(dir, name), parent_path: main.transcript_path });
+    this._legacy = null;
+    for (const [runtime, collector] of Object.entries(this.collectors)) {
+      if (collector.discover === UNSUPPORTED) continue;
+      const result = collector.discover({ store: this.store, config: this.config, insert, at });
+      if (result?.legacySessionId != null) {
+        this._legacy = { runtime, sessionId: result.legacySessionId, stale: result.legacyStatusStale };
       }
     }
     for (const row of this.store.missingUsageTranscripts()) {
@@ -106,12 +90,13 @@ export class UsageTranscripts {
   isOriginCurrent(row, snapshot) {
     if (!snapshot || childTranscript(row) || !['origin', null].includes(row.session_group)) return false;
     const current = this._currentRun(row, snapshot);
-    if (row.runtime === 'codex' && row.run_id != null && row.run_id === current) {
-      return this.store.currentOriginTranscript('codex', current)?.transcript_path === row.transcript_path;
+    const collector = this.collectors[row.runtime];
+    if (collector && collector.currentTranscript !== UNSUPPORTED && row.run_id != null && row.run_id === current) {
+      return collector.currentTranscript(this.store, row, current);
     }
     return (row.run_id != null && row.run_id === current) ||
-      (row.run_id == null && row.session_group == null && !this._legacyStatusStale &&
-        row.session_id === this._legacySessionId);
+      (row.run_id == null && row.session_group == null && this._legacy !== null && !this._legacy.stale &&
+        row.session_id === this._legacy.sessionId);
   }
 
   _currentRun(row, snapshot) {
@@ -213,9 +198,9 @@ export class UsageTranscripts {
             written += result?.written ?? 0;
           }
           const stat = fs.statSync(row.transcript_path);
-          const ended = snapshot && (row.runtime === 'claude' && row.run_id == null &&
-            row.session_group == null && this._legacySessionId != null
-            ? this._legacyStatusStale || row.session_id !== this._legacySessionId
+          const legacyRow = this._legacy?.runtime === row.runtime && row.run_id == null && row.session_group == null;
+          const ended = snapshot && (legacyRow
+            ? this._legacy.stale || row.session_id !== this._legacy.sessionId
             : row.run_id !== this._currentRun(row, snapshot));
           const ownershipKnown = !snapshot?.transcriptIdentityOnly || this._currentRun(row, snapshot) !== null;
           if (snapshot && ownershipKnown && stat.size === offset && stat.mtimeMs < at - INACTIVE_MS && ended) status = 'finished';

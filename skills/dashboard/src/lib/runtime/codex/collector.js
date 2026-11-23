@@ -1,0 +1,1495 @@
+// This module awaits the Core runtime factory at module scope.
+// The corresponding runtime implementations must not statically import it.
+
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+import { loadCoreModule } from '../../core-modules.js';
+import { UNSUPPORTED } from '../contract.js';
+import pricing from './pricing.js';
+import { modelPricesForRuntime, normalizeServiceTier } from '../../config.js';
+import { Sanitizer } from '../../sanitizer.js';
+import { UsageTranscripts, groupMainTranscript, childTranscript } from '../../collectors/usage-transcripts.js';
+import { sameSourceFile } from '../../source-file-identity.js';
+import { codexToolOutputFailed, codexToolOutputText } from './tool-outcome.js';
+
+const { getRuntime } = await loadCoreModule('runtime/index.js');
+const { transcript } = (await getRuntime('codex')).usage;
+
+const PER_MTOK = 1_000_000;
+const ASSISTANT_MESSAGE_SUMMARY_LIMIT = 500;
+const DEFAULT_MAX_OVERSIZED_LINE_SKIP_BYTES = 8 * 1024 * 1024;
+const BUILTIN_CODEX_MODEL_IDS = new Set([
+  ...Object.keys(pricing.defaultModelPrices),
+  ...Object.keys(pricing.serviceTiers.priority)
+]);
+
+export class CodexRolloutCollector {
+  constructor(store, config, { transcripts, getSnapshot } = {}) {
+    this.store = store;
+    this.config = config;
+    this._transcripts = transcripts || new UsageTranscripts(store, config, { collectors: { codex: collector }, getSnapshot });
+    this._timer = null;
+    this._metadataByPath = new Map();
+    this._toolSummaryByCallId = new Map();
+    this._toolNameByCallId = new Map();
+    this._subagentSpawnByCallId = new Map();
+    this._subagentStartedAt = new Map();
+    this._subagentWaitByCallId = new Map();
+    this._codeModeWrapsByCallId = new Map();
+    // Code-mode execs that spawn and have not answered yet (by rollout file), and the threads Codex reported they
+    // spawned.
+    this._pendingSpawnExecs = [];
+    this._spawnedThreadsByCallId = new Map();
+    // The code-mode cell each `wait` resumes.
+    this._waitCellByCallId = new Map();
+    this._onEvent = null;
+    this._onMetric = null;
+    this._sanitizer = config.sanitizer || new Sanitizer(config.zylosDir || process.cwd());
+  }
+
+  async collect() {
+    const written = await this._transcripts.collect('codex', (mapping, isOriginCurrent) => {
+      const written = this.collectMapping({ ...mapping, isOriginCurrent });
+      return { written, byteOffset: this.store.getCodexRolloutCursor(mapping.transcript_path)?.byte_offset ?? 0 };
+    });
+    // Current-file liveness is independent of whether this round had bytes to read.
+    const snapshot = this._transcripts.snapshot;
+    if (snapshot) {
+      const runId = snapshot.rows?.find(row => (row.sessionGroup ?? 'origin') === 'origin')?.live?.runId;
+      const current = runId == null ? null : this.store.currentOriginTranscript('codex', runId);
+      let readable = false;
+      try { readable = !!current && fs.statSync(current.transcript_path).isFile(); } catch { /* Missing current transcript. */ }
+      if (!readable) this._updateLiveness(null, 'unavailable', {
+        reason: current ? 'rollout_unreadable' : 'no_hook_transcript_path',
+        last_checked: new Date().toISOString()
+      });
+    }
+    return written;
+  }
+
+  collectMapping(mapping) {
+    let identity;
+    try { identity = fs.statSync(mapping?.transcript_path); }
+    catch { return this._collectCurrentMapping(mapping); }
+    return this.store.db.transaction(() => {
+      if (!sameSourceFile(mapping.transcript_path, identity)) return 0;
+      return this._collectCurrentMapping(mapping);
+    }).immediate();
+  }
+
+  _collectCurrentMapping(mapping) {
+    const now = new Date().toISOString();
+
+    if (!mapping?.transcript_path) {
+      this._updateLiveness(mapping, 'unavailable', {
+        reason: 'no_hook_transcript_path',
+        last_checked: now
+      });
+      return 0;
+    }
+
+    let stat;
+    try {
+      stat = fs.statSync(mapping.transcript_path);
+    } catch (err) {
+      this._updateLiveness(mapping, 'unavailable', {
+        reason: 'rollout_unreadable',
+        error: err.code || err.message,
+        transcript_path: mapping.transcript_path,
+        session_id: mapping.session_id,
+        last_checked: now
+      });
+      return 0;
+    }
+
+    const cursor = this.store.getCodexRolloutCursor?.(mapping.transcript_path);
+    let offset = cursor?.byte_offset || 0;
+    if (stat.size < offset) offset = 0;
+
+    const sessionMeta = { ...this._getTranscriptMetadata(mapping.transcript_path) };
+
+    if (stat.size === offset) {
+      const backfilled = offset > 0 ? this._backfillRateLimits(mapping, sessionMeta) : 0;
+      this._updateLiveness(mapping, 'stale', {
+        transcript_path: mapping.transcript_path,
+        session_id: mapping.session_id,
+        byte_offset: offset,
+        metrics_written: backfilled,
+        last_checked: now
+      });
+      this.store.upsertSourceHealth('jsonl_usage', 'runtime_progress', 'healthy', {
+        transcript_path: mapping.transcript_path,
+        session_id: mapping.session_id,
+        byte_offset: offset,
+        metrics_written: backfilled,
+        last_success: now
+      });
+      return backfilled;
+    }
+
+    const maxBytes = Math.max(4096, Number(this.config.codexRolloutMaxBytesPerCollect) || 256 * 1024);
+    const maxLines = Math.max(1, Number(this.config.codexRolloutMaxLinesPerCollect) || 200);
+    const length = Math.min(stat.size - offset, maxBytes);
+    const buf = Buffer.alloc(length);
+    const fd = fs.openSync(mapping.transcript_path, 'r');
+    try {
+      fs.readSync(fd, buf, 0, length, offset);
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    const chunk = buf.toString('utf8');
+    const lastNewline = chunk.lastIndexOf('\n');
+    if (lastNewline === -1) {
+      if (length === maxBytes) {
+        const skippedTo = this._skipOversizedLine(mapping.transcript_path, offset, stat.size, maxBytes);
+        const skippedBytes = skippedTo - offset;
+        this.store.upsertCodexRolloutCursor?.({
+          transcriptPath: mapping.transcript_path,
+          byteOffset: skippedTo,
+          sessionId: mapping.session_id
+        });
+        this._updateLiveness(mapping, 'healthy', {
+          reason: 'oversized_line_skipped',
+          transcript_path: mapping.transcript_path,
+          session_id: mapping.session_id,
+          byte_offset: skippedTo,
+          skipped_bytes: skippedBytes,
+          last_success: now
+        });
+        this.store.upsertSourceHealth('jsonl_usage', 'runtime_progress', 'healthy', {
+          reason: 'oversized_line_skipped',
+          transcript_path: mapping.transcript_path,
+          session_id: mapping.session_id,
+          byte_offset: skippedTo,
+          skipped_bytes: skippedBytes,
+          metrics_written: 0,
+          last_success: now
+        });
+        return 0;
+      }
+      this._updateLiveness(mapping, 'stale', {
+        reason: 'partial_line',
+        transcript_path: mapping.transcript_path,
+        session_id: mapping.session_id,
+        byte_offset: offset,
+        last_checked: now
+      });
+      return 0;
+    }
+
+    const complete = chunk.slice(0, lastNewline + 1);
+
+    let written = 0;
+    let currentOffset = offset;
+    let lineIndex = 0;
+    let processedLines = 0;
+    const rawLines = complete.split('\n');
+    for (const rawLine of rawLines.slice(0, -1)) {
+      const line = rawLine.trim();
+      const lineOffset = currentOffset;
+      currentOffset += Buffer.byteLength(`${rawLine}\n`, 'utf8');
+      lineIndex++;
+      if (!line) continue;
+      if (processedLines >= maxLines) {
+        currentOffset = lineOffset;
+        break;
+      }
+      processedLines++;
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      written += this._ingestEvent(event, mapping, sessionMeta, {
+        byteOffset: lineOffset,
+        lineIndex
+      });
+    }
+
+    this.store.upsertCodexRolloutCursor?.({
+      transcriptPath: mapping.transcript_path,
+      byteOffset: currentOffset,
+      sessionId: mapping.session_id
+    });
+
+    this._updateLiveness(mapping, 'healthy', {
+      transcript_path: mapping.transcript_path,
+      session_id: mapping.session_id,
+      byte_offset: currentOffset,
+      metrics_written: written,
+      last_success: now
+    });
+    this.store.upsertSourceHealth('jsonl_usage', 'runtime_progress', 'healthy', {
+      transcript_path: mapping.transcript_path,
+      session_id: mapping.session_id,
+      byte_offset: currentOffset,
+      metrics_written: written,
+      last_success: now
+    });
+
+    return written;
+  }
+
+  _skipOversizedLine(transcriptPath, offset, statSize, maxBytes) {
+    const configuredMaxSkip = Number(this.config.codexRolloutMaxOversizedLineSkipBytes);
+    const maxSkipBytes = Math.max(
+      maxBytes,
+      Number.isFinite(configuredMaxSkip) && configuredMaxSkip > 0
+        ? configuredMaxSkip
+        : DEFAULT_MAX_OVERSIZED_LINE_SKIP_BYTES
+    );
+    const target = Math.min(statSize, offset + maxSkipBytes);
+    const scanSize = Math.min(maxBytes, 256 * 1024);
+    const fd = fs.openSync(transcriptPath, 'r');
+    try {
+      let position = offset;
+      const buf = Buffer.alloc(scanSize);
+      while (position < target) {
+        const bytesToRead = Math.min(scanSize, target - position);
+        const bytesRead = fs.readSync(fd, buf, 0, bytesToRead, position);
+        if (bytesRead <= 0) break;
+        const newlineIndex = buf.subarray(0, bytesRead).indexOf(0x0a);
+        if (newlineIndex >= 0 && newlineIndex < bytesRead) {
+          return position + newlineIndex + 1;
+        }
+        position += bytesRead;
+      }
+      return position;
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+
+  start(intervalMs = 5_000) {
+    this.stop();
+    this._timer = setInterval(() => this.collect().catch(error => {
+      process.stderr.write(`[codex-rollout-collector] ${error.message}\n`);
+    }), intervalMs);
+    this._timer.unref();
+  }
+
+  stop() {
+    if (this._timer) {
+      clearInterval(this._timer);
+      this._timer = null;
+    }
+  }
+
+  _updateLiveness(mapping, status, extra) {
+    if (mapping?.isOriginCurrent || !mapping) {
+      this.store.upsertSourceHealth('codex_rollout', 'collector_liveness', status, extra);
+    }
+  }
+
+  _ingestEvent(event, mapping, sessionMeta = {}, position = {}) {
+    const payload = event.payload || {};
+    if (event.type === 'session_meta' && subagentThreadMeta(payload)) sessionMeta.subagentThread = true;
+    if (event.type === 'turn_context') {
+      sessionMeta.model = payload.model || undefined;
+      sessionMeta.serviceTier = runtimeServiceTier(payload.service_tier ?? payload.serviceTier);
+      return 0;
+    }
+    // A child runtime started inside a session (`codex exec`) counts for cost only.
+    if (childTranscript(mapping) && !(event.type === 'event_msg' && payload.type === 'token_count')) return 0;
+    // A subagent's own thread names its parent as the session; its turns, tools and words are not the parent's.
+    // Only its token usage and turn timing metrics are kept.
+    const subagentThread = sessionMeta.subagentThread === true;
+    if (event.type === 'response_item') {
+      return subagentThread ? 0 : this._ingestResponseItem(payload, timestampForEvent(event), mapping, position);
+    }
+    if (event.type !== 'event_msg' || !payload.type) return 0;
+
+    const timestamp = event.timestamp || payload.timestamp || new Date().toISOString();
+    if (payload.type === 'token_count') {
+      return this._ingestTokenCount(payload.info || {}, timestamp, mapping, {
+        rateLimits: payload.rate_limits || payload.info?.rate_limits,
+        model: sessionMeta.model,
+        serviceTier: normalizeServiceTier(payload.service_tier ?? payload.serviceTier ?? payload.info?.service_tier ?? payload.info?.serviceTier ?? sessionMeta.serviceTier),
+        position
+      });
+    }
+    if (payload.type === 'task_complete') {
+      return this._ingestTaskComplete(payload, timestamp, mapping, position, { turnEvent: !subagentThread });
+    }
+    if (subagentThread) return 0;
+    if (payload.type === 'response_item') {
+      return this._ingestResponseItem(payload, timestamp, mapping, position);
+    }
+    if (payload.type === 'item_completed') {
+      return this._ingestItemCompleted(payload.item, timestamp, mapping, position);
+    }
+    return 0;
+  }
+
+  /**
+   * Codex reports subagent activity as completed items: multi-agent v2 writes `SubAgentActivity` (`started` /
+   * `completed` / `interrupted` / `interacted`, naming the agent by its task path); code mode writes
+   * `CollabAgentToolCall` for the agent tools an `exec` called, naming the threads it spawned. Other items, such as
+   * the `CommandExecution` of a command finishing inside a still-running code-mode cell, are neither steps nor ends,
+   * and nothing of them (command, directory, output) is kept.
+   */
+  _ingestItemCompleted(item, timestamp, mapping, position = {}) {
+    if (!item || typeof item !== 'object') return 0;
+    if (item.type === 'SubAgentActivity') {
+      const agentId = firstString(item.agent_path, item.agent_thread_id);
+      if (!agentId) return 0;
+      if (item.kind === 'started') {
+        return this._insertSubagentStart(agentId, item.id, {}, timestamp, mapping, position, 'subagent_activity');
+      }
+      if (item.kind === 'completed') return this._insertSubagentStop(agentId, timestamp, mapping, 'subagent_activity', position);
+      if (item.kind === 'interrupted') {
+        return this._insertSubagentStop(agentId, timestamp, mapping, 'subagent_activity', position, null, { status: 'interrupted' });
+      }
+      return 0;
+    }
+    const pending = item.type === 'CollabAgentToolCall' && item.tool === 'spawn_agent'
+      ? this._pendingSpawnExecs.findIndex(entry => entry.path === mapping.transcript_path) : -1;
+    if (pending >= 0) {
+      const threads = uniqueStrings([...(Array.isArray(item.receiver_thread_ids) ? item.receiver_thread_ids : []),
+        ...(Array.isArray(item.receiver_agents) ? item.receiver_agents.map(agent => agent?.thread_id) : [])]);
+      if (threads.length) this._spawnedThreadsByCallId.set(this._pendingSpawnExecs.splice(pending, 1)[0].callId, threads);
+    }
+    return 0;
+  }
+
+  _ingestTokenCount(info, timestamp, mapping, context = {}) {
+    const lastUsage = info.last_token_usage || {};
+    const totalUsage = info.total_token_usage || {};
+    const usage = Object.keys(lastUsage).length > 0 ? lastUsage : totalUsage;
+    const model = info.model || info.model_slug || context.model || null;
+    const serviceTier = normalizeServiceTier(info.service_tier ?? info.serviceTier ?? context.serviceTier);
+    const position = context.position || {};
+    const eventId = info.id || rolloutPositionId('token_count', mapping, position);
+
+    const contextInput = numberOrNull(lastUsage.input_tokens);
+    const contextWindow = numberOrNull(info.model_context_window);
+    const tokenDims = normalizeUsage(usage);
+    const totalInput = tokenDims.input;
+    tokenDims.total_input = totalInput;
+    tokenDims.uncached_input = Math.max(totalInput - tokenDims.cache_read - tokenDims.cache_creation, 0);
+    tokenDims.runtime_semantics = 'openai_input_includes_cached';
+    tokenDims.model = model;
+    tokenDims.service_tier = serviceTier;
+    tokenDims.event_id = eventId;
+    tokenDims.run_id = mapping.run_id ?? null;
+    // A child runtime's sample keeps that fact after its transcript registration is pruned.
+    if (childTranscript(mapping)) tokenDims.child = true;
+    tokenDims.rollout_offset = position.byteOffset ?? null;
+    tokenDims.rollout_line = position.lineIndex ?? null;
+
+    if (contextInput != null) tokenDims.context_input_tokens = contextInput;
+    if (contextWindow && contextWindow > 0) {
+      tokenDims.model_context_window = contextWindow;
+      if (contextInput != null) tokenDims.context_pct = (contextInput / contextWindow) * 100;
+    }
+
+    applyRateLimitDimensions(tokenDims, context.rateLimits);
+
+    if (totalInput > 0) {
+      tokenDims.cache_hit_rate = tokenDims.cache_read / totalInput;
+      const price = this._resolveModelPrice(model, serviceTier);
+      // Cumulative usage cannot establish an individual request's context tier.
+      const hasRequestUsage = Object.keys(lastUsage).length > 0;
+      const cost = this._calculateCost(tokenDims, price, hasRequestUsage);
+      if (price?.longContext && !hasRequestUsage) {
+        tokenDims.cost_estimation_note = 'cannot_determine_request_context';
+      }
+      if (cost != null) {
+        tokenDims.cost = cost;
+        tokenDims.cost_confidence = 'estimated';
+      } else {
+        this.store.upsertSourceHealth('codex_cost', 'collector_liveness', 'unavailable', {
+          reason: 'missing_model_price',
+          model,
+          last_checked: timestamp
+        });
+      }
+    }
+
+    const hasUsage = totalInput > 0 || tokenDims.output > 0 || tokenDims.reasoning > 0;
+    const hasCapacity = tokenDims.context_pct != null || tokenDims.rate_limit_7d != null;
+    if (!hasUsage && !hasCapacity) return 0;
+
+    return this._insertUsageEventOnce({
+      timestamp,
+      runtime: 'codex',
+      session_id: mapping.session_id,
+      session_group: mapping.session_group ?? null,
+      metric_name: 'usage_event',
+      metric_value: totalInput,
+      dimensions: tokenDims,
+      source: 'jsonl_usage',
+      confidence: 'actual'
+    });
+  }
+
+  _ingestTaskComplete(payload, timestamp, mapping, position = {}, { turnEvent = true } = {}) {
+    let written = 0;
+    const duration = numberOrNull(payload.duration_ms);
+    const ttft = numberOrNull(payload.time_to_first_token_ms);
+    if (duration != null) {
+      written += this._insertMetricOnce({
+        timestamp,
+        runtime: 'codex',
+        session_id: mapping.session_id,
+        session_group: mapping.session_group ?? null,
+        metric_name: 'turn_duration',
+        metric_value: duration,
+        dimensions: {
+          event_id: rolloutPositionId('turn_duration', mapping, position),
+          rollout_offset: position.byteOffset ?? null,
+          rollout_line: position.lineIndex ?? null
+        },
+        source: 'rollout',
+        confidence: 'actual'
+      });
+    }
+    if (ttft != null) {
+      written += this._insertMetricOnce({
+        timestamp,
+        runtime: 'codex',
+        session_id: mapping.session_id,
+        session_group: mapping.session_group ?? null,
+        metric_name: 'ttft',
+        metric_value: ttft,
+        dimensions: {
+          event_id: rolloutPositionId('ttft', mapping, position),
+          rollout_offset: position.byteOffset ?? null,
+          rollout_line: position.lineIndex ?? null
+        },
+        source: 'rollout',
+        confidence: 'actual'
+      });
+    }
+    if (turnEvent && (duration != null || ttft != null)) {
+      const ingestId = `codex-turn-complete-${rolloutPositionId('task_complete', mapping, position)}`;
+      const result = this._insertEvent({
+        id: stableEventId(ingestId),
+        ingest_id: ingestId,
+        timestamp,
+        runtime: 'codex',
+        session_id: mapping.session_id,
+        session_group: mapping.session_group ?? null,
+        run_id: mapping.run_id ?? null,
+        event_type: 'turn_complete',
+        category: 'turn',
+        summary: 'Turn completed',
+        duration_ms: duration,
+        metadata: {
+          ttft_ms: ttft,
+          source_event: 'task_complete',
+          rollout_offset: position.byteOffset ?? null,
+          rollout_line: position.lineIndex ?? null
+        },
+        source: 'rollout',
+        confidence: 'actual'
+      });
+      written += result?.inserted ? 1 : 0;
+    }
+    return written;
+  }
+
+  _insertMetricOnce(point) {
+    const eventId = point.dimensions?.event_id || null;
+    if (eventId && this.store.hasMetricEventId?.({
+      metricName: point.metric_name,
+      sessionId: point.session_id,
+      source: point.source,
+      eventId
+    })) {
+      return 0;
+    }
+    this.store.insertMetric(point);
+    if (this._onMetric) {
+      this._onMetric(point);
+    }
+    return 1;
+  }
+
+  _insertUsageEventOnce(point) {
+    const result = this.store.insertMetricOnce?.(point) || this.store.insertMetric?.(point);
+    if (!result?.inserted) {
+      const existing = this.store.db.prepare(`SELECT id FROM metric_points
+        WHERE source = ? AND metric_name = ? AND COALESCE(session_id, '') = COALESCE(?, '')
+          AND json_extract(dimensions, '$.event_id') = ? LIMIT 1`).get(
+        point.source, point.metric_name, point.session_id, point.dimensions.event_id);
+      if (existing) this.store.updateMetric(existing.id, { session_group: point.session_group });
+      return 0;
+    }
+    if (this._onMetric) {
+      this._onMetric(point);
+    }
+    return 1;
+  }
+
+  _ingestResponseItem(payload, timestamp, mapping, position = {}) {
+    const item = payload.item || payload.response_item || payload || {};
+    if (item.type === 'message' && item.role === 'assistant') {
+      return this._ingestMessage(item, payload, timestamp, mapping, position);
+    }
+    if (item.type === 'message' && (item.role === 'user' || item.role === 'developer')) {
+      return this._ingestSubagentNotification(item, timestamp, mapping, position);
+    }
+    if (!['function_call', 'function_call_output', 'custom_tool_call', 'custom_tool_call_output'].includes(item.type)) return 0;
+    const name = item.name || payload.name || null;
+    const callId = item.call_id || payload.call_id || null;
+    if (!name && !callId) return 0;
+    const normalizedName = normalizeToolName(name || this._toolNameByCallId.get(callId));
+    const isOutput = item.type === 'function_call_output' || item.type === 'custom_tool_call_output';
+    const toolArgs = parseToolArgs(item.arguments || item.input || payload.arguments || payload.input);
+
+    if (callId && !isOutput && name) this._toolNameByCallId.set(callId, name);
+    // In code mode (multi-agent v1) the agent calls spawn_agent / wait_agent from JavaScript run by `exec`; such an
+    // exec is a subagent control, not a command.
+    if (callId && !isOutput && normalizedName === 'exec') {
+      const wraps = codeModeAgentCalls(item.input ?? item.arguments ?? payload.input ?? payload.arguments);
+      if (wraps.length) this._codeModeWrapsByCallId.set(callId, wraps);
+      if (wraps.includes('spawn_agent') && !this._pendingSpawnExecs.some(entry => entry.callId === callId)) {
+        this._pendingSpawnExecs.push({ path: mapping.transcript_path, callId });
+      }
+    }
+    // A code-mode `wait` with a `cell_id` resumes a yielded `exec`: it reads that exec's further output.
+    if (callId && !isOutput && normalizedName === 'wait' && typeof toolArgs.cell_id === 'string' && toolArgs.cell_id) {
+      this._waitCellByCallId.set(callId, toolArgs.cell_id);
+    }
+    const cellId = normalizedName === 'wait' && callId ? this._waitCellByCallId.get(callId) ?? null : null;
+    const wraps = normalizedName === 'exec' && callId ? this._codeModeWrapsByCallId.get(callId) ?? null : null;
+    const running = isOutput && (normalizedName === 'exec' || cellId) ? runningCell(item.output ?? payload.output) : null;
+    if (isOutput && cellId) this._waitCellByCallId.delete(callId);
+
+    if (!isOutput && normalizedName === 'spawn_agent' && callId) {
+      this._subagentSpawnByCallId.set(callId, {
+        agent_type: toolArgs.agent_type || 'default',
+        description: this._sanitizer.safeSummary(toolArgs.message, 200)
+      });
+    }
+
+    const positionId = rolloutPositionId('response_item', mapping, position);
+    const eventKey = callId || positionId;
+    const summary = isOutput
+      ? this._toolSummaryByCallId.get(callId) || 'Tool completed'
+      : this._summarizeToolCall(name, item.arguments || item.input || payload.arguments || payload.input);
+    if (callId && !isOutput) this._toolSummaryByCallId.set(callId, summary);
+
+    const ingestId = `codex-rollout-${mapping.session_id || 'unknown'}-${eventKey}-${item.type}`;
+    let written = 0;
+    const toolEvent = {
+      id: stableEventId(ingestId),
+      ingest_id: ingestId,
+      timestamp,
+      runtime: 'codex',
+      session_id: mapping.session_id,
+      session_group: mapping.session_group ?? null,
+      run_id: mapping.run_id ?? null,
+      event_type: isOutput ? 'tool_result' : 'tool_call',
+      category: 'tool',
+      summary,
+      duration_ms: null,
+      metadata: {
+        tool_name: name,
+        call_id: callId,
+        source_event: 'response_item',
+        raw_type: item.type,
+        rollout_offset: position.byteOffset ?? null,
+        rollout_line: position.lineIndex ?? null,
+        ...(wraps ? { wraps_agent_tools: wraps } : {}),
+        // The cell a yielded exec left running, or the cell a `wait` resumes (its result names no tool).
+        ...(cellId ? { resumes_cell: cellId } : running ? { cell_id: running } : {}),
+        ...(running ? { cell_running: true } : {}),
+        // Only whether the call failed is kept; the output itself is never stored.
+        ...(isOutput ? { outcome: codexToolOutputFailed(item.output ?? payload.output) ? 'failed' : 'succeeded' } : {})
+      },
+      source: 'rollout',
+      confidence: 'actual'
+    };
+
+    const targetAgentId = subagentTargetFromArgs(normalizedName, toolArgs);
+    if (targetAgentId) toolEvent.metadata.agent_id = targetAgentId;
+
+    const toolResult = this._insertEvent(toolEvent);
+    written += toolResult?.inserted ? 1 : 0;
+
+    if (isOutput && wraps) {
+      written += this._ingestCodeModeAgentOutput(wraps, callId, item.output ?? payload.output, timestamp, mapping, position);
+    } else if (isOutput) {
+      written += this._ingestSubagentLifecycleOutput(normalizedName, callId, item.output ?? payload.output, timestamp, mapping, position);
+    } else {
+      written += this._ingestSubagentLifecycleCall(normalizedName, toolArgs, timestamp, mapping, position, callId);
+    }
+
+    return written;
+  }
+
+  _ingestSubagentLifecycleOutput(toolName, callId, output, timestamp, mapping, position = {}) {
+    if (toolName === 'spawn_agent') {
+      // v1 answers with the agent id. A v2 spawn answers only its task path; its start is the `SubAgentActivity`
+      // Codex writes for the same call.
+      const parsed = parseToolOutput(output);
+      const agentId = agentIdFromObject(parsed);
+      if (!agentId) return 0;
+      return this._insertSubagentStart(agentId, callId, parsed, timestamp, mapping, position, 'spawn_agent');
+    }
+    return this._ingestSubagentEndOutput(toolName, callId, output, timestamp, mapping, position);
+  }
+
+  _insertSubagentStart(agentId, callId, parsed, timestamp, mapping, position, sourceTool) {
+    const spawn = this._subagentSpawnByCallId.get(callId) || {};
+    const ingestId = `codex-subagent-start-${mapping.session_id || 'unknown'}-${agentId}`;
+    this._subagentStartedAt.set(agentId, timestamp);
+    const result = this._insertEvent({
+      id: stableEventId(ingestId),
+      ingest_id: ingestId,
+      timestamp,
+      runtime: 'codex',
+      session_id: mapping.session_id,
+      session_group: mapping.session_group ?? null,
+      run_id: mapping.run_id ?? null,
+      event_type: 'subagent_start',
+      category: 'subagent',
+      summary: 'Subagent started',
+      duration_ms: null,
+      metadata: {
+        agent_id: agentId,
+        nickname: parsed.nickname || parsed.name || null,
+        agent_type: spawn.agent_type || 'default',
+        status: 'running',
+        description: spawn.description || null,
+        source_event: 'response_item',
+        source_tool: sourceTool,
+        rollout_offset: position.byteOffset ?? null,
+        rollout_line: position.lineIndex ?? null
+      },
+      source: 'rollout',
+      confidence: 'actual'
+    });
+    return result?.inserted ? 1 : 0;
+  }
+
+  _ingestSubagentEndOutput(toolName, callId, output, timestamp, mapping, position = {}) {
+    if (toolName === 'wait_agent') {
+      const parsed = parseToolOutput(output);
+      const wait = this._subagentWaitByCallId.get(callId) || null;
+      let written = 0;
+      for (const status of waitAgentStatuses(parsed, wait?.targets || [])) {
+        const waitLatencyMs = wait ? elapsedMs(wait.startedAt, timestamp) : null;
+        if (status.completed) {
+          written += this._insertSubagentStop(status.agentId, timestamp, mapping, 'wait_agent', position, status.summary, {
+            waitLatencyMs
+          });
+        } else if (status.timedOut) {
+          written += this._insertSubagentUpdate(status.agentId, timestamp, mapping, 'wait_agent', position, {
+            status: 'waiting',
+            summary: 'Subagent wait timed out',
+            lastActivity: 'Wait timed out',
+            waitStartedAt: wait?.startedAt || null,
+            waitLatencyMs,
+            waitTimeoutMs: wait?.timeoutMs ?? null,
+            waitTimedOut: true,
+            failureReason: 'wait_timeout'
+          });
+        }
+      }
+      return written;
+    }
+
+    if (toolName === 'close_agent') {
+      const parsed = parseToolOutput(output);
+      const agentId = agentIdFromObject(parsed) || agentIdFromObject(parsed.previous_status);
+      return agentId ? this._insertSubagentStop(agentId, timestamp, mapping, 'close_agent', position) : 0;
+    }
+
+    return 0;
+  }
+
+  _ingestSubagentLifecycleCall(toolName, args, timestamp, mapping, position = {}, callId = null) {
+    if (toolName === 'send_input') {
+      const agentId = agentIdFromObject(args);
+      return agentId ? this._insertSubagentUpdate(agentId, timestamp, mapping, 'send_input', position, {
+        status: 'running',
+        summary: 'Subagent input sent',
+        lastActivity: 'Input sent'
+      }, callId) : 0;
+    }
+    if (toolName === 'wait_agent') {
+      const targets = subagentTargetsFromArgs(args);
+      let written = 0;
+      if (callId) {
+        this._subagentWaitByCallId.set(callId, {
+          startedAt: timestamp,
+          targets,
+          timeoutMs: numberOrNull(args.timeout_ms ?? args.timeoutMs)
+        });
+      }
+      for (const agentId of targets) {
+        written += this._insertSubagentUpdate(agentId, timestamp, mapping, 'wait_agent', position, {
+          status: 'waiting',
+          summary: 'Waiting for subagent',
+          lastActivity: 'Waiting for completion',
+          waitStartedAt: timestamp,
+          waitTimeoutMs: numberOrNull(args.timeout_ms ?? args.timeoutMs)
+        }, callId);
+      }
+      return written;
+    }
+    if (toolName !== 'close_agent') return 0;
+    const agentId = agentIdFromObject(args);
+    return agentId ? this._insertSubagentStop(agentId, timestamp, mapping, 'close_agent', position) : 0;
+  }
+
+  /**
+   * The output of an exec that called agent tools from code mode (or of a `wait` resuming it): whatever the script
+   * printed. A spawn's agent id is taken from it when printed, else from the threads Codex reported spawning.
+   */
+  _ingestCodeModeAgentOutput(wraps, callId, output, timestamp, mapping, position = {}) {
+    let written = 0;
+    const printed = printedObjects(output);
+    if (wraps.includes('spawn_agent')) {
+      this._pendingSpawnExecs = this._pendingSpawnExecs.filter(entry => entry.callId !== callId);
+      const reported = this._spawnedThreadsByCallId.get(callId) || [];
+      this._spawnedThreadsByCallId.delete(callId);
+      const printedIds = uniqueStrings(printed.map(agentIdFromObject));
+      for (const agentId of printedIds.length ? printedIds : reported) {
+        written += this._insertSubagentStart(agentId, callId, printed.find(value => agentIdFromObject(value) === agentId) || {},
+          timestamp, mapping, position, 'exec');
+      }
+    }
+    for (const tool of ['wait_agent', 'close_agent']) {
+      if (!wraps.includes(tool)) continue;
+      for (const value of printed) written += this._ingestSubagentEndOutput(tool, callId, value, timestamp, mapping, position);
+    }
+    return written;
+  }
+
+  /**
+   * Codex reports a finished subagent to its parent as a `<subagent_notification>` input naming the agent (its task
+   * path in multi-agent v2, its agent id in v1).
+   */
+  _ingestSubagentNotification(item, timestamp, mapping, position = {}) {
+    const text = (Array.isArray(item.content) ? item.content : [])
+      .map(part => typeof part?.text === 'string' ? part.text : '').join('\n');
+    let written = 0;
+    for (const match of text.matchAll(/<subagent_notification>([\s\S]*?)<\/subagent_notification>/g)) {
+      const notice = parseToolArgs(match[1].trim());
+      const agentId = firstString(notice.agent_path, notice.task_name, notice.agent_id, notice.id, notice.target);
+      if (!agentId) continue;
+      written += this._insertSubagentStop(agentId, timestamp, mapping, 'subagent_notification', position);
+    }
+    return written;
+  }
+
+  _insertSubagentUpdate(agentId, timestamp, mapping, sourceTool, position = {}, opts = {}, callId = null) {
+    const positionId = rolloutPositionId('subagent_update', mapping, position);
+    const eventKey = callId || `${sourceTool}-${positionId}`;
+    const ingestId = `codex-subagent-update-${mapping.session_id || 'unknown'}-${agentId}-${eventKey}`;
+    const result = this._insertEvent({
+      id: stableEventId(ingestId),
+      ingest_id: ingestId,
+      timestamp,
+      runtime: 'codex',
+      session_id: mapping.session_id,
+      session_group: mapping.session_group ?? null,
+      run_id: mapping.run_id ?? null,
+      event_type: 'subagent_update',
+      category: 'subagent',
+      summary: opts.summary || 'Subagent updated',
+      duration_ms: null,
+      metadata: {
+        agent_id: agentId,
+        status: opts.status || 'running',
+        last_activity: opts.lastActivity || opts.summary || null,
+        source_event: 'response_item',
+        source_tool: sourceTool,
+        rollout_offset: position.byteOffset ?? null,
+        rollout_line: position.lineIndex ?? null,
+        wait_started_at: opts.waitStartedAt || null,
+        wait_latency_ms: opts.waitLatencyMs ?? null,
+        wait_timeout_ms: opts.waitTimeoutMs ?? null,
+        wait_timed_out: opts.waitTimedOut || false,
+        failure_reason: opts.failureReason || null
+      },
+      source: 'rollout',
+      confidence: 'actual'
+    });
+    return result?.inserted ? 1 : 0;
+  }
+
+  _insertSubagentStop(agentId, timestamp, mapping, sourceTool, position = {}, completionSummary = null, opts = {}) {
+    const ingestId = `codex-subagent-stop-${mapping.session_id || 'unknown'}-${agentId}`;
+    const summary = completionSummary ? `Subagent completed: ${completionSummary}` : 'Subagent completed';
+    const durationMs = elapsedMs(this._subagentStartedAt.get(agentId), timestamp);
+    const result = this._insertEvent({
+      id: stableEventId(ingestId),
+      ingest_id: ingestId,
+      timestamp,
+      runtime: 'codex',
+      session_id: mapping.session_id,
+      session_group: mapping.session_group ?? null,
+      run_id: mapping.run_id ?? null,
+      event_type: 'subagent_stop',
+      category: 'subagent',
+      summary,
+      duration_ms: durationMs,
+      metadata: {
+        agent_id: agentId,
+        status: opts.status || 'completed',
+        completion_summary: completionSummary,
+        wait_latency_ms: opts.waitLatencyMs ?? null,
+        source_event: 'response_item',
+        source_tool: sourceTool,
+        rollout_offset: position.byteOffset ?? null,
+        rollout_line: position.lineIndex ?? null
+      },
+      source: 'rollout',
+      confidence: 'actual'
+    });
+    if (result?.inserted) this._subagentStartedAt.delete(agentId);
+    return result?.inserted ? 1 : 0;
+  }
+
+  _ingestMessage(item, payload, timestamp, mapping, position = {}) {
+    // Other groups' main rollouts keep their assistant words for their conversation pages, without notifying the
+    // origin listeners.
+    const origin = Boolean(mapping.isOriginCurrent);
+    if (!origin && !groupMainTranscript(mapping)) return 0;
+    const textBlocks = Array.isArray(item.content)
+      ? item.content
+        .filter(c => c.type === 'output_text' && c.text?.trim())
+        .map(c => c.text.trim())
+      : [];
+    if (textBlocks.length === 0) return 0;
+
+    const text = textBlocks.join('\n');
+    const summary = this._sanitizer.safeAssistantSummary(text, ASSISTANT_MESSAGE_SUMMARY_LIMIT);
+    if (!summary) return 0;
+    const ingestId = this._messageIngestId(item.role, mapping.session_id, timestamp, summary);
+    const event = {
+      id: stableEventId(ingestId),
+      ingest_id: ingestId,
+      timestamp,
+      runtime: 'codex',
+      session_id: mapping.session_id,
+      session_group: mapping.session_group ?? null,
+      run_id: mapping.run_id ?? null,
+      event_type: 'assistant_message',
+      category: 'assistant',
+      summary,
+      duration_ms: null,
+      metadata: {
+        role: item.role,
+        phase: payload.phase || item.phase || null,
+        content_types: [...new Set(item.content.map(c => c.type).filter(Boolean))],
+        rollout_offset: position.byteOffset ?? null,
+        rollout_line: position.lineIndex ?? null
+      },
+      source: 'rollout',
+      confidence: 'actual'
+    };
+
+    const result = origin ? this._insertEvent(event) : this.store.insertEvent(event);
+    return result?.inserted ? 1 : 0;
+  }
+
+  _insertEvent(event) {
+    const result = this.store.insertEvent(event);
+    if (result?.inserted && this._onEvent) {
+      this._onEvent(event);
+    }
+    return result;
+  }
+
+  _messageIngestId(role, sessionId, timestamp, text) {
+    const hash = crypto.createHash('sha256')
+      .update(`${sessionId || 'unknown'}\n${timestamp || ''}\n${text}`)
+      .digest('hex')
+      .slice(0, 24);
+    return `codex-${role || 'message'}-${sessionId || 'unknown'}-${hash}`;
+  }
+
+  _summarizeToolCall(name, args) {
+    if (!name) return 'Tool call';
+    if (name === 'apply_patch') return summarizePatchCall(args);
+    const toolArgs = parseToolArgs(args);
+    const normalizedName = normalizeToolName(name);
+    if (normalizedName === 'send_input') return `Send input to subagent: ${shortAgentId(toolArgs.target || toolArgs.id)}`;
+    if (normalizedName === 'wait_agent') {
+      const targets = subagentTargetsFromArgs(toolArgs);
+      return targets.length === 1 ? `Wait for subagent: ${shortAgentId(targets[0])}` : 'Wait for subagents';
+    }
+    if (normalizedName === 'close_agent') return `Close subagent: ${shortAgentId(toolArgs.target || toolArgs.id)}`;
+    if (normalizedName === 'spawn_agent') return `Start subagent${toolArgs.agent_type ? `: ${toolArgs.agent_type}` : ''}`;
+    if (normalizedName === 'write_stdin') return summarizeShellContinuation(toolArgs);
+    if (name === 'exec_command' || name === 'functions.exec_command') {
+      return summarizeShellCommand(toolArgs);
+    }
+    return name.replace(/^functions\./, '');
+  }
+
+  _resolveModelPrice(model, serviceTier = 'standard') {
+    if (!model) return null;
+    const prices = modelPricesForRuntime(this.config, pricing, serviceTier);
+    // Built-in IDs stay exact/date even after Settings materializes their rows
+    // in config. Custom keys retain the legacy prefix contract in either tier.
+    const matches = Object.keys(prices).filter(prefix => model === prefix ||
+      (!BUILTIN_CODEX_MODEL_IDS.has(prefix) && model.startsWith(prefix)) ||
+      (model.startsWith(`${prefix}-`) && /^\d{4}-\d{2}-\d{2}$/.test(model.slice(prefix.length + 1))));
+    matches.sort((a, b) => b.length - a.length);
+    return matches.length ? prices[matches[0]] : null;
+  }
+
+  _calculateCost(usage, price, hasRequestUsage = true) {
+    if (!price) return null;
+    if (hasRequestUsage && price.longContext && usage.input > price.longContext.inputTokenThreshold) {
+      price = price.longContext;
+    }
+    const uncachedInput = Math.max(usage.input - usage.cache_read - usage.cache_creation, 0);
+    const input = uncachedInput * price.input / PER_MTOK;
+    const output = usage.output * price.output / PER_MTOK;
+    const cacheRead = usage.cache_read * price.cacheRead / PER_MTOK;
+    const cacheCreation = usage.cache_creation * price.cacheCreation / PER_MTOK;
+    return input + output + cacheRead + cacheCreation;
+  }
+
+  _getTranscriptMetadata(transcriptPath) {
+    const stat = fs.statSync(transcriptPath);
+    const cached = this._metadataByPath.get(transcriptPath);
+    if (cached?.size === stat.size && cached.mtimeMs === stat.mtimeMs &&
+        cached.ctimeMs === stat.ctimeMs && cached.ino === stat.ino) return cached;
+
+    const metadata = { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino };
+    try {
+      const text = fs.readFileSync(transcriptPath, 'utf8');
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue;
+        let event;
+        try {
+          event = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (event.type === 'turn_context') {
+          metadata.model = event.payload?.model || undefined;
+          metadata.serviceTier = runtimeServiceTier(event.payload?.service_tier ?? event.payload?.serviceTier);
+        }
+        if (event.type === 'session_meta' && subagentThreadMeta(event.payload)) metadata.subagentThread = true;
+        if (event.type === 'event_msg' && event.payload?.type === 'token_count' && event.payload.rate_limits) {
+          metadata.rateLimits = event.payload.rate_limits;
+          metadata.rateLimitTimestamp = event.timestamp || event.payload.timestamp || null;
+        }
+      }
+    } catch {
+      // Missing metadata is non-fatal; token and context metrics can still be recorded.
+    }
+
+    this._metadataByPath.set(transcriptPath, metadata);
+    return metadata;
+  }
+
+  _backfillRateLimits(mapping, sessionMeta) {
+    return 0;
+  }
+}
+
+function runtimeServiceTier(value) {
+  return value === 'priority' || value === 'standard' ? value : null;
+}
+
+function numberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function rateLimitDimensions(limit) {
+  if (!limit || typeof limit !== 'object') return null;
+  const value = numberOrNull(limit.percent_used ?? limit.usage_pct ?? limit.used_percent);
+  if (value == null) return null;
+  return {
+    value,
+    window_minutes: limit.window_minutes ?? null,
+    resets_at: limit.resets_at ?? null
+  };
+}
+
+function applyRateLimitDimensions(dimensions, rateLimits) {
+  for (const limit of [rateLimits?.primary, rateLimits?.secondary]) {
+    const rate = rateLimitDimensions(limit);
+    if (!rate) continue;
+
+    if (Number(rate.window_minutes) === 10080) {
+      dimensions.rate_limit_7d = rate.value;
+      dimensions.rate_limit_7d_window_minutes = rate.window_minutes;
+      dimensions.rate_limit_7d_resets_at = rate.resets_at;
+    }
+  }
+}
+
+function stableEventId(seed) {
+  return crypto.createHash('sha256')
+    .update(String(seed))
+    .digest('hex');
+}
+
+function rolloutPositionId(kind, mapping, position = {}) {
+  const transcriptPath = mapping?.transcript_path || 'unknown';
+  const sessionId = mapping?.session_id || 'unknown';
+  const byteOffset = Number.isFinite(position.byteOffset) ? position.byteOffset : 'unknown';
+  const lineIndex = Number.isFinite(position.lineIndex) ? position.lineIndex : 'unknown';
+  const hash = crypto.createHash('sha256')
+    .update(`${kind}\n${sessionId}\n${transcriptPath}\n${byteOffset}\n${lineIndex}`)
+    .digest('hex')
+    .slice(0, 24);
+  return `${kind}-${sessionId}-${byteOffset}-${lineIndex}-${hash}`;
+}
+
+function timestampForEvent(event) {
+  return event.timestamp || event.payload?.timestamp || new Date().toISOString();
+}
+
+function elapsedMs(startedAt, endedAt) {
+  if (!startedAt || !endedAt) return null;
+  const start = new Date(startedAt).getTime();
+  const end = new Date(endedAt).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+  return end - start;
+}
+
+function normalizeUsage(usage) {
+  return {
+    input: numberOrNull(usage.input_tokens) || 0,
+    output: numberOrNull(usage.output_tokens) || 0,
+    cache_read: numberOrNull(usage.cached_input_tokens ?? usage.input_tokens_details?.cached_tokens ?? usage.cache_read_input_tokens) || 0,
+    cache_creation: numberOrNull(usage.cache_write_input_tokens ?? usage.input_tokens_details?.cache_write_tokens ?? usage.cache_creation_input_tokens) || 0,
+    reasoning: numberOrNull(usage.reasoning_output_tokens ?? usage.reasoning_tokens) || 0
+  };
+}
+
+function parseToolArgs(args) {
+  if (!args) return {};
+  if (typeof args === 'object') return args;
+  if (typeof args !== 'string') return {};
+  try {
+    return JSON.parse(args);
+  } catch {
+    return {};
+  }
+}
+
+function normalizeToolName(name) {
+  if (!name || typeof name !== 'string') return '';
+  return name.replace(/^functions\./, '');
+}
+/** A tool output as an object: a JSON string, an object, or the JSON text of a content array. */
+function parseToolOutput(output) {
+  if (output && typeof output === 'object' && !Array.isArray(output) && output.content === undefined) return output;
+  return parseToolArgs(typeof output === 'string' ? output : codexToolOutputText(output).trim());
+}
+/** JSON objects a code-mode script printed (one per text part or line), for agent ids and statuses. */
+function printedObjects(output) {
+  const text = typeof output === 'string' ? output : codexToolOutputText(output);
+  const values = [];
+  for (const chunk of [text, ...text.split('\n')]) {
+    const start = chunk.indexOf('{'), end = chunk.lastIndexOf('}');
+    if (start < 0 || end <= start) continue;
+    const value = parseToolArgs(chunk.slice(start, end + 1));
+    if (value && typeof value === 'object' && Object.keys(value).length) values.push(value);
+  }
+  return values;
+}
+const CODE_MODE_AGENT_TOOLS = ['spawn_agent', 'wait_agent', 'close_agent', 'send_input', 'resume_agent'];
+/**
+ * Agent tools a code-mode script calls: `tools.multi_agent_v1__spawn_agent(…)` (as Codex 0.167.0 names them),
+ * `tools.spawn_agent(…)`, `tools["wait_agent"](…)`.
+ */
+function codeModeAgentCalls(input) {
+  const code = typeof input === 'string' ? input : '';
+  const name = tool => `(?:multi_agent_v\\d+__)?${tool}`;
+  return CODE_MODE_AGENT_TOOLS.filter(tool => new RegExp(`\\btools\\s*(?:\\.\\s*${name(tool)}\\b|\\[\\s*['"\`]${name(tool)}['"\`]\\s*\\])`).test(code));
+}
+/** A rollout of a subagent's own thread (its `session_meta` names a parent thread). */
+function subagentThreadMeta(meta) {
+  return meta?.thread_source === 'subagent' || !!meta?.source?.subagent ||
+    (typeof meta?.parent_thread_id === 'string' && meta.parent_thread_id !== '' && meta.id !== meta.parent_thread_id);
+}
+/** The cell id of a code-mode result that yielded while its script still runs (`Script running with cell ID …`). */
+function runningCell(output) {
+  const text = codexToolOutputText(output);
+  const body = text.search(/^Output:$/m);
+  return (body < 0 ? text : text.slice(0, body)).match(/^Script running with cell ID (\S+)/m)?.[1] ?? null;
+}
+
+function summarizeShellContinuation(args) {
+  const sessionId = args?.session_id != null ? String(args.session_id) : null;
+  const chars = typeof args?.chars === 'string' ? args.chars : '';
+  const hasInput = chars.length > 0;
+  const action = hasInput ? 'Continue shell session' : 'Wait for command output';
+  return sessionId ? `${action}: ${sessionId}` : action;
+}
+
+function subagentTargetFromArgs(toolName, args) {
+  if (toolName === 'send_input') return agentIdFromObject(args);
+  if (toolName === 'close_agent') return agentIdFromObject(args);
+  const targets = subagentTargetsFromArgs(args);
+  if (toolName === 'wait_agent' && targets?.length === 1) return targets[0];
+  return null;
+}
+
+function subagentTargetsFromArgs(args) {
+  if (!args || typeof args !== 'object') return [];
+  const values = [];
+  if (Array.isArray(args.targets)) values.push(...args.targets);
+  if (Array.isArray(args.ids)) values.push(...args.ids);
+  if (Array.isArray(args.agent_ids)) values.push(...args.agent_ids);
+  if (Array.isArray(args.agentIds)) values.push(...args.agentIds);
+  values.push(args.target, args.id, args.agent_id, args.agentId);
+  return uniqueStrings(values);
+}
+
+function waitAgentStatuses(output, fallbackTargets = []) {
+  const statuses = new Map();
+  if (!output || typeof output !== 'object') return [];
+  const parentTimedOut = Boolean(output.timed_out || output.timedOut);
+  const add = (record) => {
+    if (!record?.agentId || (!record.completed && !record.timedOut)) return;
+    const key = `${record.agentId}:${record.completed ? 'completed' : 'timeout'}`;
+    statuses.set(key, record);
+  };
+
+  const collectStatus = (value, fallbackAgentId = null) => {
+    if (Array.isArray(value)) {
+      for (const entry of value) collectStatus(entry);
+      return;
+    }
+    if (!value || typeof value !== 'object') {
+      if (fallbackAgentId) add(normalizeWaitStatus(fallbackAgentId, value, parentTimedOut));
+      return;
+    }
+    const agentId = agentIdFromObject(value) || fallbackAgentId;
+    if (agentId) add(normalizeWaitStatus(agentId, value, parentTimedOut));
+    if (value.status && typeof value.status === 'object' && !Array.isArray(value.status)) {
+      for (const [nestedAgentId, nestedValue] of Object.entries(value.status)) {
+        add(normalizeWaitStatus(nestedAgentId, nestedValue, parentTimedOut));
+      }
+    }
+  };
+
+  if (Array.isArray(output.status)) {
+    collectStatus(output.status);
+  } else if (output.status && typeof output.status === 'object') {
+    for (const [agentId, value] of Object.entries(output.status)) {
+      add(normalizeWaitStatus(agentId, value, parentTimedOut));
+    }
+  } else {
+    collectStatus(output);
+  }
+
+  if (output.completed && typeof output.completed === 'object' && !Array.isArray(output.completed)) {
+    for (const [agentId, value] of Object.entries(output.completed)) {
+      add({
+        agentId,
+        completed: true,
+        timedOut: false,
+        summary: summarizeCompletion(value)
+      });
+    }
+  } else if (output.completed && fallbackTargets.length === 1) {
+    add({
+      agentId: fallbackTargets[0],
+      completed: true,
+      timedOut: false,
+      summary: summarizeCompletion(output.completed)
+    });
+  }
+
+  if (parentTimedOut) {
+    for (const agentId of fallbackTargets) {
+      add({
+        agentId,
+        completed: false,
+        timedOut: true,
+        summary: null
+      });
+    }
+  }
+
+  return [...statuses.values()];
+}
+
+function normalizeWaitStatus(agentId, value, parentTimedOut) {
+  if (!agentId) return null;
+  if (value && typeof value === 'object') {
+    const state = String(value.status || value.state || '').toLowerCase();
+    const completedValue = Object.prototype.hasOwnProperty.call(value, 'completed')
+      ? value.completed
+      : completionValueFromState(state, value);
+    const completed = completedValue != null;
+    const timedOut = Boolean(parentTimedOut || value.timed_out || value.timedOut || state === 'timeout' || state === 'timed_out');
+    return {
+      agentId,
+      completed,
+      timedOut: completed ? false : timedOut,
+      summary: completed ? summarizeCompletion(completedValue) : null
+    };
+  }
+  const state = String(value || '').toLowerCase();
+  const completed = ['completed', 'complete', 'done', 'success', 'succeeded'].includes(state);
+  const timedOut = parentTimedOut || state === 'timeout' || state === 'timed_out';
+  return {
+    agentId,
+    completed,
+    timedOut: completed ? false : timedOut,
+    summary: null
+  };
+}
+
+function completionValueFromState(state, value) {
+  if (!['completed', 'complete', 'done', 'success', 'succeeded'].includes(state)) return null;
+  return value.summary || value.message || value.result || value.output || value.status || true;
+}
+
+function agentIdFromObject(value) {
+  if (!value || typeof value !== 'object') return null;
+  return firstString(value.target, value.id, value.agent_id, value.agentId);
+}
+
+function firstString(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return null;
+}
+
+function uniqueStrings(values) {
+  const result = [];
+  const seen = new Set();
+  for (const value of values) {
+    if (typeof value !== 'string' || !value.trim() || seen.has(value)) continue;
+    result.push(value);
+    seen.add(value);
+  }
+  return result;
+}
+
+function summarizeCompletion(value) {
+  if (typeof value === 'string') return truncateText(redactCredentials(value.trim().replace(/\s+/g, ' ')), 160);
+  if (value && typeof value === 'object') {
+    const text = value.summary || value.message || value.status || null;
+    if (typeof text === 'string') return truncateText(redactCredentials(text.trim().replace(/\s+/g, ' ')), 160);
+  }
+  return null;
+}
+
+function shortAgentId(agentId) {
+  return agentId ? String(agentId).slice(0, 12) : 'unknown';
+}
+
+function truncateText(text, limit) {
+  if (typeof text !== 'string' || text.length <= limit) return text;
+  return text.slice(0, limit - 3) + '...';
+}
+
+function summarizePatchCall(args) {
+  const patch = typeof args === 'string' ? args : args?.input || args?.patch || '';
+  const files = extractPatchFiles(patch);
+  return files.length > 0 ? `Edit files: ${files.join(', ')}` : 'Edit files';
+}
+
+function summarizeShellCommand(args) {
+  const cmd = typeof args === 'string' ? args : args?.cmd || args?.command || '';
+  if (!cmd || typeof cmd !== 'string') return 'Run shell command';
+  const line = firstCommandLine(cmd);
+  const fullCommand = cmd.replace(/\s+/g, ' ').trim();
+  const readable = readableCommand(line);
+  if (/^git\s+diff\s+--check\b/.test(line) ||
+      /^node\s+--check\b/.test(line) ||
+      /(?:playwright|puppeteer)/i.test(fullCommand)) {
+    return `Run verification: ${browserCheckSummary(fullCommand) || readable}`;
+  }
+  if (/^(npm|pnpm|yarn)\s+(test|run\s+(test|check|lint|smoke|ci))\b/.test(line) ||
+      /^node\s+--test\b/.test(line) ||
+      /^go\s+test\b/.test(line) ||
+      /^make\s+(test|ci|check|smoke)\b/.test(line)) {
+    return `Run verification: ${readable}`;
+  }
+  if (/^git\s+(status|log|show|branch|diff)\b/.test(line)) return `Inspect git state: ${readable}`;
+  if (/^git\s+(push|commit|merge|rebase|fetch|pull)\b/.test(line)) return `Update git branch: ${readable}`;
+  if (/^(rg|grep|find|ls|sed|cat|nl|wc)\b/.test(line)) return `Inspect files: ${readable}`;
+  if (/^pm2\s+(restart|reload|start|stop)\b/.test(line)) return `Restart service: ${readable}`;
+  if (/^pm2\s+(status|list|logs|describe)\b/.test(line)) return `Check service status: ${readable}`;
+  if (/^(curl|wget)\b/.test(line)) return `Check HTTP endpoint: ${readable}`;
+  if (/^sqlite3\b/.test(line)) return `Inspect database: ${readable}`;
+  if (/^gh\s+pr\b/.test(line)) return `Check pull request: ${readable}`;
+  if (/^zylos\s+(upgrade|install|runtime|restart)\b/.test(line)) return `Update Zylos runtime: ${readable}`;
+  return `Run shell command: ${readable}`;
+}
+
+function browserCheckSummary(cmd) {
+  if (!/(?:playwright|puppeteer)/i.test(cmd)) return null;
+  if (/screenshot/i.test(cmd)) return 'browser screenshot check';
+  if (/(?:getBoundingClientRect|evaluate|locator|page\.)/i.test(cmd)) return 'browser render check';
+  return 'browser check';
+}
+
+function firstCommandLine(cmd) {
+  let line = cmd.split('\n').map(l => l.trim()).find(l => l && !l.startsWith('#')) || '';
+  line = line.replace(/^cd\s+\S+\s*&&\s*/i, '');
+  line = line.replace(/^export\s+\$\([^)]*\)\s*&&\s*/i, '');
+  const pipeIdx = line.indexOf('|');
+  if (pipeIdx > 0) line = line.slice(0, pipeIdx).trim();
+  return line;
+}
+
+function readableCommand(line) {
+  const redacted = redactCredentials(line)
+    .replace(/(?<=^|[\s"'=])(?:\/(?:home|Users|tmp|var|usr|opt|etc|root)(?:\/[^\s"'|;:]+){3,}|~(?:\/[^\s"'|;:]+){3,})/g, shortenPath);
+  return redacted.length > 120 ? redacted.slice(0, 117) + '...' : redacted;
+}
+
+function extractPatchFiles(patch) {
+  if (typeof patch !== 'string' || !patch) return [];
+  const files = [];
+  const seen = new Set();
+  const patterns = [
+    /^\*\*\* (?:Add|Update|Delete) File:\s+(.+)$/gm,
+    /^\*\*\* Move to:\s+(.+)$/gm
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(patch)) !== null) {
+      const file = shortenPath(match[1].trim());
+      if (file && !seen.has(file)) {
+        files.push(file);
+        seen.add(file);
+      }
+      if (files.length >= 3) return files;
+    }
+  }
+  return files;
+}
+
+function shortenPath(fullPath) {
+  const normalized = String(fullPath).replace(/^["']|["']$/g, '');
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length <= 3) return normalized;
+  return parts.slice(-3).join('/');
+}
+
+function redactCredentials(text) {
+  return text
+    .replace(/sk-[a-zA-Z0-9_-]{20,}/g, '[REDACTED]')
+    .replace(/xoxb-[a-zA-Z0-9-]+/g, '[REDACTED]')
+    .replace(/ghp_[a-zA-Z0-9]{36,}/g, '[REDACTED]')
+    .replace(/Bearer\s+[a-zA-Z0-9._-]+/g, 'Bearer [REDACTED]')
+    .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '[EMAIL]');
+}
+
+function projectWeights(store, { since, until }) {
+  const rows = store.db.prepare(`
+    SELECT transcript_path FROM codex_rollout_paths
+    WHERE runtime = 'codex'
+      AND last_event_at >= @since AND last_event_at <= @until
+  `).all({ since, until });
+
+  const weights = {};
+  for (const row of rows) {
+    const transcriptPath = row.transcript_path;
+    if (!transcriptPath || !fs.existsSync(transcriptPath)) continue;
+    let content;
+    try {
+      content = fs.readFileSync(transcriptPath, 'utf8');
+    } catch {
+      continue;
+    }
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue;
+      let event;
+      try { event = JSON.parse(line); } catch { continue; }
+      const payload = event.type === 'session_meta'
+        ? { ...(event.payload || {}), type: 'session_meta' }
+        : event.payload || {};
+      for (const project of extractProjectsFromRolloutPayload(store, payload)) {
+        weights[project] = (weights[project] || 0) + 1;
+      }
+    }
+  }
+  return weights;
+}
+
+function extractProjectsFromRolloutPayload(store, payload) {
+  const projects = new Set();
+  const addFromValue = (value) => {
+    if (!value) return;
+    if (typeof value === 'string') {
+      for (const filePath of store._extractFilePaths(value)) {
+        const project = store._extractProject(filePath);
+        if (project) projects.add(project);
+      }
+      const directProject = store._extractProject(value);
+      if (directProject) projects.add(directProject);
+    } else if (Array.isArray(value)) {
+      for (const item of value) addFromValue(item);
+    } else if (typeof value === 'object') {
+      for (const item of Object.values(value)) addFromValue(item);
+    }
+  };
+
+  if (payload.type === 'session_meta') addFromValue(payload.cwd);
+  if (payload.type !== 'function_call' && payload.type !== 'custom_tool_call') return [...projects];
+
+  addFromValue(payload.name);
+  addFromValue(payload.input);
+  if (payload.arguments) {
+    try {
+      addFromValue(JSON.parse(payload.arguments));
+    } catch {
+      addFromValue(payload.arguments);
+    }
+  }
+
+  return [...projects];
+}
+
+
+function ownedFiles(row, { homeDir, ownedPath, fail }) {
+  const root = transcript.root({ home: homeDir });
+  const file = ownedPath(row.transcript_path, root);
+  if (!transcript.isTranscriptFile(file)) throw fail('group_delete_path_unavailable');
+  return [[file, root]];
+}
+
+function flush(instance, row, file, identity, { store, withinBudget, fail }) {
+  let offset = row.byte_offset;
+  while (offset < identity.size) {
+    withinBudget();
+    instance.collectMapping({ ...row, isOriginCurrent: false });
+    const next = store.getCodexRolloutCursor(file)?.byte_offset ?? 0;
+    if (next <= offset) throw fail('group_delete_usage_pending');
+    offset = next;
+  }
+  return offset;
+}
+
+const collector = Object.freeze({
+  create: (store, config, options) => new CodexRolloutCollector(store, config, options),
+  taskName: 'codexRollout',
+  logName: 'Codex rollout collector',
+  eventDriven: false,
+  sourceHealth: Object.freeze({
+    source: 'codex_rollout',
+    options: Object.freeze({ signalType: 'collector_liveness', checkedWhenIdle: true }),
+  }),
+  discover: UNSUPPORTED,
+  onRegistered(store, row, _inserted, first) {
+    store.upsertCodexRolloutPath({ runtime: row.runtime, sessionId: first.session_id,
+      transcriptPath: first.transcript_path, lastEventAt: row.timestamp });
+  },
+  currentTranscript(store, row, runId) {
+    return store.currentOriginTranscript(row.runtime, runId)?.transcript_path === row.transcript_path;
+  },
+  ownedFiles,
+  discoverChildren: UNSUPPORTED,
+  flush,
+  projectWeights,
+});
+
+export default collector;

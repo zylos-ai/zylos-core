@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { enqueueRestartIfNeeded, syncCodexConfig, desiredClaudeHooks, syncRuntimeHooks } from '../sync-runtime-hooks.js';
+import { enqueueRestartIfNeeded, syncRuntimeHooks } from '../sync-runtime-hooks.js';
 import { approvePermission } from '../../../skills/activity-monitor/scripts/hook-auth-prompt.js';
-import { isCoreCodexHook } from '../codex-hooks.js';
+import { desiredClaudeHooks } from '../runtime/claude/hooks.js';
+import { isCoreCodexHook, syncCodexConfig } from '../runtime/codex/hooks.js';
 
 const payload = { hook_event_name: 'PermissionRequest', session_id: 'real-session' };
 const env = { ZYLOS_RUN_ID: 'run-1' };
@@ -124,7 +125,7 @@ test('both-runtime preparation preserves unrelated hook identity', () => {
   assert.equal(failed.fatal, true);
 });
 
-test('init hook sync generates both runtime assets idempotently without restart', t => {
+test('init hook sync generates both runtime assets idempotently without restart', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-control-hook-sync-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
@@ -139,7 +140,9 @@ test('init hook sync generates both runtime assets idempotently without restart'
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
   const userHook = { type: 'command', command: 'node /user/custom-hook.js' };
   fs.writeFileSync(settingsPath, JSON.stringify({ model: 'user-model', hooks: { Stop: [{ hooks: [userHook] }], StopFailure: [{ hooks: [{ type: 'command', command: `exec node ${root}/.claude/skills/activity-monitor/scripts/hook-entry.js ${root}/.claude/skills/activity-monitor/scripts/hook-health.js`, async: false, timeout: 5 }] }] } }));
-  syncRuntimeHooks({ zylosDir: root, stopFailureSupported: true, subagentHooksSupported: true, log: () => {} });
+  const options = { zylosDir: root, stopFailureSupported: true, subagentHooksSupported: true, log: () => {} };
+  const first = await syncRuntimeHooks(options);
+  assert.equal(first.changed, true);
   const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
   assert.equal(settings.model, 'user-model');
   assert.ok(settings.hooks.Stop[0].hooks.some(h => h.command === userHook.command));
@@ -150,25 +153,59 @@ test('init hook sync generates both runtime assets idempotently without restart'
   const codexPath = path.join(root, '.codex', 'hooks.json');
   const before = [fs.readFileSync(settingsPath, 'utf8'), fs.readFileSync(codexPath, 'utf8')];
   assert.match(before[1], /session-start-orchestrator\.js --shard c4-conversations/);
-  const repeated = syncRuntimeHooks({ zylosDir: root, stopFailureSupported: true, subagentHooksSupported: true, log: () => {} });
+  const repeated = await syncRuntimeHooks(options);
+  assert.equal(repeated.changed, false);
   assert.deepEqual(repeated.claude, { added: 0, updated: 0, removed: 0 });
   assert.deepEqual([fs.readFileSync(settingsPath, 'utf8'), fs.readFileSync(codexPath, 'utf8')], before);
   assert.equal(fs.existsSync(path.join(root, 'comm-bridge', 'c4.db')), false);
   assert.equal(fs.existsSync(path.join(root, '.zylos', 'config.json')), false);
-  assert.match(fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8'), /trust_level/);
+  const globalConfig = path.join(home, '.codex', 'config.toml');
+  assert.match(fs.readFileSync(globalConfig, 'utf8'), /trust_level/);
+
+  fs.writeFileSync(globalConfig, 'fixture_global_setting = true\n');
+  const globalOnly = await syncRuntimeHooks(options);
+  assert.equal(globalOnly.changed, false);
+  assert.match(fs.readFileSync(globalConfig, 'utf8'), /trust_level/);
+  assert.deepEqual([fs.readFileSync(settingsPath, 'utf8'), fs.readFileSync(codexPath, 'utf8')], before);
+
+  delete settings.hooks.SubagentStart;
+  fs.writeFileSync(settingsPath, JSON.stringify(settings));
+  const claudeOnly = await syncRuntimeHooks(options);
+  assert.equal(claudeOnly.changed, true);
+  assert.equal(claudeOnly.codex.changed, false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), JSON.parse(before[0]));
 });
 
-test('init hook sync preserves unreadable settings and reports failure before Codex generation', t => {
+test('init hook sync preserves unreadable settings and reports failure before Codex generation', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-control-bad-hook-sync-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const settingsPath = path.join(root, '.claude', 'settings.json');
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
   for (const bad of ['{broken', '[]', '{"hooks":[]}']) {
     fs.writeFileSync(settingsPath, bad);
-    assert.throws(() => syncRuntimeHooks({ zylosDir: root, stopFailureSupported: false, log: () => {} }), { code: 'SETTINGS_UNREADABLE' });
+    await assert.rejects(syncRuntimeHooks({ zylosDir: root, stopFailureSupported: false, log: () => {} }), { code: 'SETTINGS_UNREADABLE' });
     assert.equal(fs.readFileSync(settingsPath, 'utf8'), bad);
     assert.equal(fs.existsSync(path.join(root, '.codex', 'hooks.json')), false);
   }
+});
+
+test('init hook sync rejects malformed project Codex TOML before persisting Claude settings', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-control-bad-codex-toml-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const settings = path.join(root, '.claude', 'settings.json');
+  const config = path.join(root, '.codex', 'config.toml');
+  fs.mkdirSync(path.dirname(settings));
+  fs.mkdirSync(path.dirname(config));
+  const before = Buffer.from('{"hooks":{}}\n');
+  fs.writeFileSync(settings, before);
+  fs.writeFileSync(config, 'foo = "');
+
+  await assert.rejects(
+    syncRuntimeHooks({ zylosDir: root, stopFailureSupported: false, subagentHooksSupported: false, log: () => {} }),
+    { message: 'Failed to refresh Codex project config: check TOML syntax and deployment environment.' },
+  );
+  assert.deepEqual(fs.readFileSync(settings), before);
+  assert.equal(fs.existsSync(path.join(root, '.codex', 'hooks.json')), false);
 });
 
 test('upgrade refreshes stale Codex hooks with unchanged TOML and dry-run preserves them', t => {

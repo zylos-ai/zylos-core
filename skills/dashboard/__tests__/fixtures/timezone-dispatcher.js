@@ -26,7 +26,7 @@ await main({ create: () => createDispatcher({
   readSessionState: async () => ({ identity: target, status: { valid: true,
     value: { state: 'idle', idle_seconds: 60, health: 'ok', proc: { alive: true } } } }),
   listGroupTmuxSessions: async () => [{ sessionGroup: 'origin', tmuxName: target.tmuxName }],
-  readRuntimeHealth: () => ({ health: 'ok' }), getSessionAdapter: () => adapter,
+  readRuntimeHealth: () => ({ health: 'ok' }), session: adapter,
   resolveSessionTarget: async () => target, revalidateSessionTarget: async () => {},
   openTmuxConnection: async () => ({ close: async () => {}, async command(args) {
     if (args.at(-1) !== '#{cursor_x}') return '0';

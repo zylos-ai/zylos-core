@@ -28,16 +28,16 @@ async function setup(t, { readConfig = () => ({ state: 'ok', config: {} }), send
   f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
   f.db.recordRunEnd('a', { runId: 'previous', reason: 'unexpected' });
   const sends = [], logs = [];
-  const adapter = f.deps.getSessionAdapter;
+  const adapter = f.deps.session;
   const dependencies = { ...f.deps,
     readZylosConfigStrict: readConfig,
     diagnostics: { diagnostic: f.deps.diagnostic, maintain() {} },
     log: message => logs.push(message),
     sendAlert: async (target, message) => { sends.push({ target, message }); return send(target, message, sends.length); },
-    getSessionAdapter: runtime => ({ ...adapter(runtime), launch: async input => {
+    session: { ...adapter, launch: async input => {
       f.calls.push(['launch', input]);
       throw Object.assign(Error('private launch diagnostic must not appear in a notice'), { code: 'START_FAILED' });
-    } }),
+    } },
   };
   delete dependencies.alert;
   const { poolSize, ...options } = f.options;

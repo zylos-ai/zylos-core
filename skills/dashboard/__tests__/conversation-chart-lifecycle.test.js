@@ -5,7 +5,10 @@ import { registerHooks } from 'node:module';
 import { createDocument, allNodes, visibleNodes, tick } from './helpers/conversation-dom.js';
 import { CONTENT_PREFIX } from '../../comm-bridge/scripts/c4-content-schema.js';
 const shared = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
   if (context.parentURL && new URL(specifier, context.parentURL).pathname.endsWith('/public/chat-schema.js')) return next(shared, context);
   return next(specifier, context);
 } });
@@ -61,7 +64,6 @@ test('remote closure releases chart resources immediately and final destroy does
   assert.equal(f.instances[0].disposals, 1); assert.equal(f.root.querySelector('canvas'), null);
   f.page.destroy(); assert.equal(f.instances[0].disposals, 1);
 });
-
 
 test('message ids disappearing from a snapshot release their chart and DOM while retained ids remain mounted', () => {
   const document = createDocument(), root = document.createElement('div'), instances = [];

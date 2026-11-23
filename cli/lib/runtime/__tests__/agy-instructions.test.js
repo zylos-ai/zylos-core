@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { activateFreshSplitInstructions, buildInstructionFile, agyInstructionContext,
+import { getRuntime } from '../index.js';
+import { activateFreshSplitInstructions, buildInstructionFile,
   assertInstructionReady, instructionPaths } from '../instruction-builder.js';
+
+const { instructions: { sessionStartInjection } } = await getRuntime('agy');
 
 function fixture(t, { split = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-instructions-'));
@@ -16,7 +19,8 @@ function fixture(t, { split = true } = {}) {
 test('agy and Codex build byte-identical complete AGENTS in the same root', t => {
   const root = fixture(t);
   fs.appendFileSync(path.join(root, 'ZYLOS.md'), 'user rule '.repeat(4000) + '\nUSER_TAIL_MARKER');
-  const file = buildInstructionFile('codex', { zylosDir: root });
+  // These fixture writes can share an mtime with the initial render.
+  const file = buildInstructionFile('codex', { zylosDir: root, force: true });
   const codex = fs.readFileSync(file);
   assert.ok(codex.includes(Buffer.from('USER_TAIL_MARKER')));
   assert.ok(codex.includes(Buffer.from('## Codex — Runtime-Specific Rules')));
@@ -47,7 +51,7 @@ test('agy injection retains full system and user tails with explicit runtime pre
   fs.appendFileSync(paths.userPath, '\n' + '中'.repeat(16000) + '\nUSER_TAIL_MARKER');
   buildInstructionFile('codex', { zylosDir: root, force: true });
   const original = fs.readFileSync(paths.outputPath);
-  const content = agyInstructionContext({ zylosDir: root });
+  const content = sessionStartInjection({ zylosDir: root });
   assert.match(content, /^This injection contains the complete Zylos instructions\./);
   assert.ok(content.includes('this injection takes precedence.'));
   assert.ok(content.includes('SYSTEM_TAIL_MARKER'));
@@ -72,7 +76,7 @@ test('legacy AGENTS above the native file limit stays unchanged and is injected 
     assert.equal(assertInstructionReady(runtime, { zylosDir: root }), true);
     assert.ok(original.equals(fs.readFileSync(file)));
   }
-  const injected = agyInstructionContext({ zylosDir: root });
+  const injected = sessionStartInjection({ zylosDir: root });
   assert.ok(injected.includes(content));
   assert.ok(injected.startsWith('This injection contains the complete Zylos instructions.'));
 });

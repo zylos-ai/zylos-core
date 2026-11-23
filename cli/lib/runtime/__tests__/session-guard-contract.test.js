@@ -15,7 +15,7 @@ await fs.mkdir(path.join(root,'.zylos'));
 await fs.writeFile(path.join(root,'.zylos/config.json'),JSON.stringify({runtime:'claude',session_mode:'multi'}));
 const {openTmuxConnection}=await import('../tmux-connection.js');
 const {resolveSessionTarget}=await import('../session-target.js');
-const {SessionAdapter}=await import('../session-adapter.js');
+const {createSessionOps}=await import('../session-ops.js');
 const {createCoreObserver}=await import('../../../../skills/comm-bridge/scripts/c4-runtime-observer.js');
 const {createStore}=await import('../../../../skills/comm-bridge/scripts/c4-v2-store.js');
 const c4=await import('../../../../skills/comm-bridge/scripts/c4-db.js');
@@ -69,13 +69,13 @@ for(const position of ['initial','identity-environment'])test(`hanging ${positio
 
 test('hanging command and unusable executable remain unknown; no server is absent',async t=>{
   const f=await fixture(t);await fs.writeFile(f.flag,'1');
-  const adapter=new SessionAdapter({tmux:f.options});
+  const adapter=createSessionOps({tmux:f.options});
   await assert.rejects(adapter.isRunning({tmuxName:'zylos-group-origin'}),{code:'TMUX_UNAVAILABLE',cause:'timeout'});
   await assert.rejects(adapter.stop({tmuxName:'zylos-group-origin',expectedRunId:'guard-run'}),{code:'STOP_UNCONFIRMED',cause:'timeout'});
-  const missing=new SessionAdapter({tmux:{socketPath:f.options.socketPath,binary:path.join(f.dir,'not-executable')}});
+  const missing=createSessionOps({tmux:{socketPath:f.options.socketPath,binary:path.join(f.dir,'not-executable')}});
   await assert.rejects(missing.isRunning({tmuxName:'zylos-group-origin'}),{code:'TMUX_UNAVAILABLE',cause:'error'});
   const deniedBinary=path.join(f.dir,'denied-tmux');await fs.writeFile(deniedBinary,'#!/bin/sh\nexit 0\n',{mode:0o600});
-  const denied=new SessionAdapter({tmux:{socketPath:f.options.socketPath,binary:deniedBinary}});
+  const denied=createSessionOps({tmux:{socketPath:f.options.socketPath,binary:deniedBinary}});
   await assert.rejects(denied.isRunning({tmuxName:'zylos-group-origin'}),{code:'TMUX_UNAVAILABLE',cause:'error'});
   await fs.unlink(f.flag);
   if(process.getuid?.()!==0){
@@ -123,10 +123,10 @@ for(const scenario of ['absent','missing-run','timeout'])test(`first-resolution 
     const connection=await openTmuxConnection(f.options);t.after(()=>connection.close());
     const target=await resolveSessionTarget({sessionGroup:'origin',connection});
     assert.deepEqual({serverGeneration:target.serverGeneration,sessionId:target.tmuxSessionId,paneId:target.paneId},JSON.parse(targetBinding).tmuxTarget);
-    const adapter=new SessionAdapter();
+    const adapter=createSessionOps();
     for(const {kind,row} of rows){
       assert.equal(kind==='conversation'?c4.claimConversation(row.id):c4.claimControl(row.id),true);
-      await adapter.sendText({connection,target,text:`recovered-${kind}`});
+      await adapter.sendText({ runtime: 'claude', connection,target,text:`recovered-${kind}`});
       await adapter.sendKeys({connection,target,keys:['Enter']});
     }
     let received='';for(let i=0;i<50;i++){try{received=await fs.readFile(f.input,'utf8');}catch{}if(received.includes('recovered-control'))break;await delay(10);}
@@ -161,10 +161,10 @@ const r=cp.spawnSync(${JSON.stringify(actualBinary)},a,{stdio:'inherit'});proces
 
 test('marker-looking pane content and message syntax are data, not guard output or commands',async t=>{
   const f=await fixture(t),connection=await openTmuxConnection(f.options);t.after(()=>connection.close());
-  const target=await resolveSessionTarget({sessionGroup:'origin',connection}),adapter=new SessionAdapter();
+  const target=await resolveSessionTarget({sessionGroup:'origin',connection}),adapter=createSessionOps();
   const marker=path.join(f.dir,'must-not-exist');
   const payload=`ZYLOS_STALE 999:1 ; run-shell 'touch ${marker}' ; $HOME \\ end`;
-  await adapter.sendText({connection,target,text:payload});await adapter.sendKeys({connection,target,keys:['Enter']});
+  await adapter.sendText({ runtime: 'claude', connection,target,text:payload});await adapter.sendKeys({connection,target,keys:['Enter']});
   let received='';for(let i=0;i<50;i++){try{received=await fs.readFile(f.input,'utf8');}catch{}if(received.includes(payload))break;await delay(10);}
   assert.equal(received.trim(),payload);
   const screen=await adapter.captureScreen({connection,target});assert.match(screen,/ZYLOS_STALE 999:1/);
@@ -180,25 +180,25 @@ for(const method of ['sendText','sendKeys'])test(`${method} guarded command time
   // suite load its startup can exceed the deliberately short fault deadline.
   f.options.timeoutMs=2000;
   const connection=await openTmuxConnection(f.options);t.after(()=>connection.close());
-  const target=await resolveSessionTarget({sessionGroup:'origin',connection}),adapter=new SessionAdapter();
+  const target=await resolveSessionTarget({sessionGroup:'origin',connection}),adapter=createSessionOps();
   f.options.timeoutMs=100; // Keep the actual injected hang deadline unchanged.
   await fs.writeFile(f.flag,'1');
   const started=performance.now();
-  await assert.rejects(adapter[method]({connection,target,text:'never sent',keys:['Enter']}),{code:method==='sendText'?'PASTE_FAILED':'ENTER_UNVERIFIED',cause:'timeout'});
+  await assert.rejects(adapter[method]({runtime:'claude',connection,target,text:'never sent',keys:['Enter']}),{code:method==='sendText'?'PASTE_FAILED':'ENTER_UNVERIFIED',cause:'timeout'});
   assert.ok(performance.now()-started>=90,'injected command must reach its 100ms timeout');
   assert.equal(connection.closed,false);
   await fs.unlink(f.flag);
   f.options.timeoutMs=2000;
-  await adapter[method]({connection,target,text:'retry on original target',keys:['Enter']});
+  await adapter[method]({runtime:'claude',connection,target,text:'retry on original target',keys:['Enter']});
 });
 
 test('replacing the bound server blocks old text and keys from the new pane',async t=>{
   const f=await fixture(t),connection=await openTmuxConnection(f.options);t.after(()=>connection.close());
-  const target=await resolveSessionTarget({sessionGroup:'origin',connection}),adapter=new SessionAdapter();
+  const target=await resolveSessionTarget({sessionGroup:'origin',connection}),adapter=createSessionOps();
   f.tmux('kill-server');await delay(50);
   f.tmux('-f','/dev/null','new-session','-d','-s','keeper','sleep 120');
   f.tmux('new-session','-d','-s','zylos-group-origin','-e','ZYLOS_RUN_ID=guard-run',`exec cat > '${f.input}'`);
-  for(const method of ['sendText','sendKeys'])await assert.rejects(adapter[method]({connection,target,text:'must-not-arrive',keys:['Enter']}),{code:'GENERATION_CHANGED'});
+  for(const method of ['sendText','sendKeys'])await assert.rejects(adapter[method]({runtime:'claude',connection,target,text:'must-not-arrive',keys:['Enter']}),{code:'GENERATION_CHANGED'});
   await assert.rejects(connection.command(['send-keys','-t',target.paneId,'Enter']),{code:'GENERATION_CHANGED'});
   await delay(25);assert.equal(await fs.readFile(f.input,'utf8'),'');
   // Direct ordinary commands below are a deliberately unsafe test control.

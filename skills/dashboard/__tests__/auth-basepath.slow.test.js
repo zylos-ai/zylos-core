@@ -674,7 +674,12 @@ test('/api/instance exposes stable agent identity without fleet secrets', { time
     assert.equal(Object.hasOwn(body, 'new_session_threshold'), false, 'per-session threshold belongs to the group');
     assert.equal(Object.hasOwn(body, 'runtime_info'), false);
     assert.deepEqual(Object.keys(body.versions).sort(), ['agy', 'claude', 'codex', 'zylos']);
-    for (const version of Object.values(body.versions)) assert.deepEqual(Object.keys(version).sort(), ['installed', 'latest', 'update']);
+    for (const [runtime, version] of Object.entries(body.versions)) {
+      const keys = ['installed', 'latest', 'update'];
+      if (runtime === 'agy') keys.push('update_check');
+      assert.deepEqual(Object.keys(version).sort(), keys);
+    }
+    assert.equal(body.versions.agy.update_check, 'unsupported');
     assert.ok(body.resources && typeof body.resources === 'object');
     assert.ok(Object.hasOwn(body.resources, 'cpu_pct'));
     assert.ok(Object.hasOwn(body.resources, 'mem_pct'));
@@ -2158,16 +2163,16 @@ test('group thresholds follow actual session models while Fleet omits Origin ses
     assertNoSessionFields(self);
   }
   fs.writeFileSync(path.join(root, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
-  fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ model_rotation_thresholds: { claude: { 'opus[1m]': 30 } } }));
+  fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ model_rotation_thresholds: { claude: { 'opus[1m]': 25 } } }));
   const metaResponse = await fetch(running.origin + '/api/instance/runtime-options?runtime=claude&model=claude-opus-4-6%5B1m%5D', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
   assert.equal(metaResponse.status, 200);
   const meta = await metaResponse.json();
-  assert.equal(meta.model_thresholds['opus[1m]'], 30);
-  assert.equal(meta.model_thresholds['claude-opus-4-6[1m]'], 40);
+  assert.equal(meta.model_thresholds['opus[1m]'], 25);
+  assert.equal(meta.model_thresholds['claude-opus-4-6[1m]'], 20);
   runtime = 'claude';
   for (const [model, launch, expected] of [
-    ['claude-opus-5-5', { runtime, mode: 'default' }, 30],
-    ['claude-opus-4-6', { runtime, mode: 'override', model: 'claude-opus-4-6[1m]' }, 40],
+    ['claude-opus-5-5', { runtime, mode: 'default' }, 25],
+    ['claude-opus-4-6', { runtime, mode: 'override', model: 'claude-opus-4-6[1m]' }, 20],
   ]) {
     launchConfig = launch; snapshotClock += 2100;
     usage = { valid: true, value: { model: { id: model }, context_window: { context_window_size: 1000000 } } };

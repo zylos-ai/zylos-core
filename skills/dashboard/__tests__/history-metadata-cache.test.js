@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { ClaudeHistory } from '../src/lib/history/claude-history.js';
-import { CodexHistory } from '../src/lib/history/codex-history.js';
-import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
+import { ClaudeHistory } from '../src/lib/runtime/claude/history.js';
+import { CodexHistory } from '../src/lib/runtime/codex/history.js';
+import { loadCoreModule as loadTranscriptCore } from '../src/lib/core-modules.js';
+const { getRuntime: getTranscriptRuntime } = await loadTranscriptCore('runtime/index.js');
+const { transcript: claudeTranscript } = (await getTranscriptRuntime('claude')).usage;
 
 async function fixture(t, runtime, count = 260) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'history-metadata-')));
@@ -14,7 +16,7 @@ async function fixture(t, runtime, count = 260) {
   const zylosDir = path.join(homeDir, 'zylos');
   await fs.mkdir(zylosDir, { recursive: true });
   const transcriptRoot = runtime === 'claude'
-    ? path.join(homeDir, '.claude', 'projects', claudeProjectSlug(zylosDir))
+    ? claudeTranscript.projectDir({ home: homeDir, zylosDir: zylosDir })
     : path.join(homeDir, '.codex', 'sessions');
   await fs.mkdir(transcriptRoot, { recursive: true });
   const rows = Array.from({ length: count }, (_, i) => ({

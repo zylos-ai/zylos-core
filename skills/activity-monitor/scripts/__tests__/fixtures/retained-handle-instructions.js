@@ -1,3 +1,5 @@
-// Resolve normally while retaining a referenced handle past protocol output.
+// Resolve the real implementation while retaining a handle past protocol output.
 setInterval(() => {}, 1000);
-export const agyInstructionContext = () => '';
+export async function getRuntime() {
+  return (await import('../../../../../cli/lib/runtime/agy/index.js')).default;
+}

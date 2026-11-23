@@ -1,0 +1,11 @@
+{
+  "session_id": "01a1fd05-a36c-7252-b9c2-530b2431d407",
+  "turn_id": "01a1fd05-a3a8-79d0-adff-f2ff8f105594",
+  "transcript_path": "/tmp/zy6hooks.PdwtkDLG/.codex/sessions/2026/11/21/rollout-2026-11-21T15-32-47-01a1fd05-a36c-7252-b9c2-530b2431d407.jsonl",
+  "cwd": "/tmp/zy6hooks.PdwtkDLG/workspace",
+  "hook_event_name": "Stop",
+  "model": "gpt-5.4-mini",
+  "permission_mode": "bypassPermissions",
+  "stop_hook_active": false,
+  "last_assistant_message": "DONE"
+}

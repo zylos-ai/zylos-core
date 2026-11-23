@@ -1,12 +1,24 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 import { eventChip, eventTypesFor, showsEvent, newestFirst, mergeRepeats, recentRows, recentLimit,
   plainEventTypes, lifecycleEventTypes, toolEventTypes } from '../public/js/wb/timeline-rows.js';
-import { repeatRow } from '../public/js/wb/detail-overview.js';
-import { chipNames } from '../public/js/wb/detail-timeline.js';
+
 import { setInstanceZone } from '../public/js/wb/instance-zone.js';
 import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { repeatRow } = await import('../public/js/wb/detail-overview.js');
+const { chipNames } = await import('../public/js/wb/detail-timeline.js');
+
 // Times are expected in the instance zone; INSTANCE_TEST_ZONE differs from the process zone (see the helper).
 const ZONE = INSTANCE_TEST_ZONE;
 setInstanceZone(ZONE);

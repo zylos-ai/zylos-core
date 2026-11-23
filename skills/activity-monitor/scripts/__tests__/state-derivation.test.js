@@ -40,10 +40,10 @@ function assertActive(f) {
 for(const runtime of ['claude','codex']) {
  test(`state derivation: ${runtime} prompt screen, fresh statusline and interrupt cannot complete a tool`,async t=>{
   const f=fixture(t,runtime);f.activity.consume([f.row('pre_tool',{tool_use_id:'active',tool:'Bash'})]);
-  f.delivered();f.advance(5000);f.freshStatus();await f.observer.tick();
+  f.delivered();f.advance(5000);await f.freshStatus();await f.observer.tick();
   assert.equal(f.captures.length,1);assertActive(f);
   f.advance(5000);await f.observer.tick();assert.equal(f.interrupts.length,1);assertActive(f);
-  f.advance(5000);f.freshStatus();await f.observer.tick();assert.equal(f.stops.length,0);assertActive(f);
+  f.advance(5000);await f.freshStatus();await f.observer.tick();assert.equal(f.stops.length,0);assertActive(f);
   f.advance(1);await f.observer.tick();assert.equal(f.stops.length,1);assertActive(f);
   // Positive evidence is an actual hook, independently of a screen or statusline.
   f.activity.consume([f.row('post_tool',{tool_use_id:'active'})]);f.advance(3001);

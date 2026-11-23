@@ -22,8 +22,10 @@ test('CLI upgrades invoke the requested runtime and preserve existing results', 
       assert.equal(jsonResponse(200, result, { command: true }).status, 400);
     } else {
       assert.equal(result.ok, true); assert.equal(result.requires_restart, true);
-      assert.equal(result.messageKey, `result.${{ agy: 'agy', claude: 'cc', codex: 'codex' }[runtime]}_updated`);
-      if (runtime === 'agy') assert.match(result.message, /Antigravity/);
+      const name = { agy: 'Antigravity', claude: 'Claude', codex: 'Codex' }[runtime];
+      assert.equal(result.messageKey, 'result.runtime_updated');
+      assert.deepEqual(result.messageParams, { runtime: name });
+      assert.equal(result.message, `${name} updated. Restart session to apply.`);
     }
   }
   const recorded = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
@@ -31,7 +33,31 @@ test('CLI upgrades invoke the requested runtime and preserve existing results', 
   assert.equal(recorded[0].auto, 'true');
 });
 
-test('Antigravity nonzero exit is a named failure without success or restart', async t => {
+// A configured <ID>_BIN names the program to upgrade even when PATH has another one.
+test('CLI upgrade runs the configured runtime binary instead of the same name on PATH', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-upgrade-bin-'));
+  const calls = path.join(root, 'calls');
+  const saved = { PATH: process.env.PATH, CLAUDE_BIN: process.env.CLAUDE_BIN };
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  for (const dir of ['path', 'configured']) {
+    fs.mkdirSync(path.join(root, dir));
+    fs.writeFileSync(path.join(root, dir, 'claude'),
+      `#!${process.execPath}\nimport fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(calls)}, ${JSON.stringify(dir)} + '\\n'); console.log('updated');`, { mode: 0o755 });
+  }
+  process.env.PATH = path.join(root, 'path');
+  process.env.CLAUDE_BIN = path.join(root, 'configured', 'claude');
+  const result = await handleAction('upgrade-cc', { runtime: 'claude', case: 'configured-bin' }, { zylosDir: root });
+  assert.equal(result.ok, true);
+  assert.deepEqual(fs.readFileSync(calls, 'utf8').trim().split('\n'), ['configured']);
+});
+
+test('Antigravity nonzero exit preserves the error without success or restart', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-upgrade-failure-'));
   const saved = process.env.PATH;
   t.after(() => { process.env.PATH = saved; fs.rmSync(root, { recursive: true, force: true }); });
@@ -39,17 +65,22 @@ test('Antigravity nonzero exit is a named failure without success or restart', a
   process.env.PATH = root;
   const result = await handleAction('upgrade-cc', { runtime: 'agy', case: 'failed' }, { zylosDir: root });
   assert.equal(result.ok, false); assert.equal(result.error, 'upgrade_failed');
-  assert.match(result.message, /Antigravity upgrade failed/); assert.equal(result.requires_restart, undefined);
+  assert.equal(result.message, 'download refused\n');
+  assert.equal(result.messageKey, 'result.upgrade_failed');
+  assert.equal(result.requires_restart, undefined);
 });
 
-test('lost Antigravity replies say result unknown while explicit timeout stays incomplete in both languages', async () => {
+test('lost upgrade replies identify the runtime in both languages', async () => {
   const { actionFailureMessage, formatActionResult } = await import('../../../public/js/action-result.js');
   for (const [language, expected] of [['en', /result is unknown/], ['zh', /结果未知/]]) {
     const dictionary = JSON.parse(fs.readFileSync(new URL(`../../../public/i18n/${language}.json`, import.meta.url)));
     const t = (key, params = {}) => (dictionary[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => params[name]);
-    assert.match(actionFailureMessage('upgrade-cc', 'agy', new Error('connection lost'), t), expected);
-    assert.equal(actionFailureMessage('upgrade-cc', 'claude', new Error('failed'), t), t('status.failed', { error: 'failed' }));
-    assert.match(formatActionResult({ messageKey: 'result.agy_updated' }, t), /Antigravity/);
+    for (const runtime of ['Antigravity', 'Claude', 'Codex']) {
+      const message = actionFailureMessage('upgrade-cc', runtime, new Error('connection lost'), t);
+      assert.match(message, expected);
+      assert.match(message, new RegExp(runtime));
+    }
+    assert.match(formatActionResult({ messageKey: 'result.runtime_updated', messageParams: { runtime: 'Antigravity' } }, t), /Antigravity/);
   }
 });
 

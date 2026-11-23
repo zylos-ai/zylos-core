@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { desiredClaudeHooks, syncHooks } from '../cli/lib/sync-runtime-hooks.js';
-import { codexHooksPath, installCoreCodexHook } from '../cli/lib/codex-hooks.js';
+import { desiredClaudeHooks, syncHooks } from '../cli/lib/runtime/claude/hooks.js';
+import { codexHooksPath, installCoreCodexHook } from '../cli/lib/runtime/codex/hooks.js';
 
 // Boundary: real declaration loading and Claude reconciliation, real Codex file
 // synchronization, then the actual content-shard CLI emitting startup context.

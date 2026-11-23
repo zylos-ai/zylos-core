@@ -63,7 +63,8 @@ test('Antigravity upgrade response survives more than sixty seconds through brow
     return { status: response.status, data: await response.json() };
   }, base);
   assert.ok(Date.now() - started >= 65000); assert.equal(result.status, 200);
-  assert.equal(result.data.ok, true); assert.equal(result.data.messageKey, 'result.agy_updated');
+  assert.equal(result.data.ok, true); assert.equal(result.data.messageKey, 'result.runtime_updated');
+  assert.deepEqual(result.data.messageParams, { runtime: 'Antigravity' });
   assert.equal(fs.readFileSync(calls, 'utf8'), 'agy update\n');
   console.log('Slow upgrade elapsed ms:', Date.now() - started, 'server socket timeout:', server.timeout);
 });

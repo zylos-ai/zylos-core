@@ -1,4 +1,5 @@
-import { element, icon } from './plain-text.js';
+import { runtimesWith } from '../../runtime-descriptors.js';
+import { element, icon, runtimeName } from './plain-text.js';
 import { money } from './instance-strip.js';
 import { dateField } from './date-field.js';
 import { instantFromInput } from './instance-zone.js';
@@ -178,10 +179,10 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
     summary.append(box);
     return box;
   };
-  const runtimeCost = runtime => `${runtime === 'claude' ? 'Claude' : 'Codex'} ${totals.costByRuntime?.[runtime] == null
+  const runtimeCost = runtime => `${runtimeName(runtime)} ${totals.costByRuntime?.[runtime] == null
     ? t('wb.unknown') : money(totals.costByRuntime[runtime])}`;
   const costBox = addTotal(t('wb.usage.cost'), totals.cost == null ? t('wb.unknown') : money(totals.cost),
-    `${runtimeCost('claude')} · ${runtimeCost('codex')}`);
+    runtimesWith('usage').map(runtimeCost).join(' · '));
   // The part of the total that runtimes zylos starts itself spent, shown even at $0.
   // An instance without this field (an older fleet member) shows no line.
   if (typeof totals.otherCost === 'number') {
@@ -205,7 +206,7 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
   const buckets = value.buckets ?? [];
   const labels = bucketLabels(buckets, { tz: value.tz ?? 'UTC', bucket: value.bucket, now, t });
   const per = t(value.bucket === 'hour' ? 'wb.usage.perHour' : 'wb.usage.perDay');
-  const runtimeSeries = field => ['claude', 'codex'].map(runtime => { const points = new Map((value[field] ?? []).filter(row => row.runtime === runtime).map(row => [row.at, row.value])); return { label: runtime === 'claude' ? 'Claude' : 'Codex', data: buckets.map(at => numeric(points.get(at))) }; });
+  const runtimeSeries = field => runtimesWith('usage').map(runtime => { const points = new Map((value[field] ?? []).filter(row => row.runtime === runtime).map(row => [row.at, row.value])); return { label: runtimeName(runtime), data: buckets.map(at => numeric(points.get(at))) }; });
   const messages = new Map((value.messages ?? []).map(row => [row.at, row]));
   const rotations = new Map((value.rotations ?? []).map(row => [row.at, row.value]));
   const add = spec => {

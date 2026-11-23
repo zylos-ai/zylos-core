@@ -92,9 +92,9 @@ const wait = async (predicate, label, timeoutMs = 90000) => {
 try {
   const load = relative => import(pathToFileURL(path.join(packageRoot, relative)).href);
   const { syncRuntimeHooks } = await load('cli/lib/sync-runtime-hooks.js');
-  const { writeCodexConfig } = await load('cli/lib/runtime-setup.js');
+  const { writeCodexConfig } = await load('cli/lib/runtime/codex/hooks.js');
   // These functions configure only the already-created private fixture homes.
-  syncRuntimeHooks({ zylosDir: root, stopFailureSupported: true, log() {} });
+  await syncRuntimeHooks({ zylosDir: root, stopFailureSupported: true, log() {} });
   const resources = prepareNativeRuntimeResources(sandbox);
   check(resources.agents.length === 3 && resources.agents.every(name => fs.existsSync(path.join(resources.destination, name))), 'Packaged memory agents installed for native Sync');
   check(fs.realpathSync(resources.codexSkill) === fs.realpathSync(resources.memorySkill)
@@ -110,7 +110,8 @@ try {
   const actualCore = await new ChatSender({ zylosDir: root }).loadCore();
   api.setInvoke(args => actualCore.receive(args));
   coreDb = await load('skills/comm-bridge/scripts/c4-db.js');
-  const { getSessionAdapter } = await load('cli/lib/runtime/index.js');
+  const { createSessionOps } = await load('cli/lib/runtime/session-ops.js');
+  const { launchSession } = await load('cli/lib/runtime/launch-flow.js');
   const { SupervisorScenes } = await load('skills/activity-monitor/scripts/supervisor-scenes.js');
   const { startSupervisor } = await load('skills/activity-monitor/scripts/supervisor-main.js');
   const { createDispatcher } = await load('skills/comm-bridge/scripts/router/factory.js');
@@ -119,8 +120,9 @@ try {
     readMode: () => ({ mode: 'multi' }), readActivity: scene => liveSupervisor?.readActivity(scene) });
   supervisor = await startSupervisor({ env: process.env, scenes, log });
   liveSupervisor = supervisor.supervisor;
+  const sessionOptions = { root, env: process.env, tmux: tmuxOptions };
   dispatcher = createDispatcher({ env: process.env, log,
-    getSessionAdapter: runtime => getSessionAdapter(runtime, { root, env: process.env, tmux: tmuxOptions }),
+    session: { ...createSessionOps(sessionOptions), launch: input => launchSession(input, sessionOptions) },
   }, { tmux: tmuxOptions });
   await dispatcher.start();
   if (attachmentScenario) {

@@ -73,8 +73,8 @@ test('Origin authentication expiry sends the bilingual owner alert with the runt
   assert.equal(messages.length,1);
   assert.deepEqual(messages[0].target,{channel:'dashboard',endpoint:'origin'});
   assert.equal(messages[0].message, [
-    '[Zylos] Claude Code 登录失效，Origin 从 2026-11-21 10:00 Asia/Singapore 起有消息还没处理。系统在自动重试，登录恢复后会接着处理；如果一直不恢复，请检查 Claude Code 的登录。',
-    '[Zylos] Claude Code sign-in has failed, and Origin has had unprocessed messages since 2026-11-21 10:00 Asia/Singapore. The system keeps retrying and will continue once sign-in is restored. If it does not recover, check the Claude Code login.',
+    '[Zylos] Claude 登录失效，Origin 从 2026-11-21 10:00 Asia/Singapore 起有消息还没处理。系统在自动重试，登录恢复后会接着处理；如果一直不恢复，请检查 Claude 的登录。',
+    '[Zylos] Claude sign-in has failed, and Origin has had unprocessed messages since 2026-11-21 10:00 Asia/Singapore. The system keeps retrying and will continue once sign-in is restored. If it does not recover, check the Claude login.',
   ].join('\n'));
 });
 

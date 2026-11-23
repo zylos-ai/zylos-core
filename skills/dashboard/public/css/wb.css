@@ -488,6 +488,11 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-cfg-model { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .wb-cfg-field :is(input, select):disabled { background: var(--wb-hover); color: var(--text-muted); cursor: not-allowed; }
 .wb-cfg-edit .wb-note { margin: 0; }
+.wb-note-act { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wb-note-act[hidden] { display: none; }
+.wb-note-act > span { min-width: 0; overflow-wrap: anywhere; }
+.wb-cfg-command-word { white-space: nowrap; }
+.wb-cfg-command-group { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
 .wb-cfg-state { color: var(--text-dim); }
 .wb-config-result { margin: 8px 0 0; color: var(--text-dim); font-size: 12px; }
 .wb-config-error { margin: 8px 0 0; font-size: 12px; }
@@ -1284,18 +1289,17 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-hdot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--wb-work); }
 .wb-hdot.warn { background: var(--wb-wait); }
 .wb-hdot.err { background: var(--wb-err); }
-.wb-login { display: inline-flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 12px; }
-/* Engine choice: the engine name with its own sign-in state underneath, inside the same button. */
-.wb-seg2.wb-seg-engine { height: auto; }
-.wb-seg-engine button { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 3px; min-height: var(--wb-h); padding: 7px 16px; line-height: 1.2; text-align: left; }
-.wb-seg-engine .wb-login { font-size: 11.5px; font-weight: 400; line-height: 1.2; }
-@media (min-width: 761px) {
-  #settings-current-runtime .wb-set-inline:has(> .wb-seg-engine) { align-items: stretch; }
-  #settings-current-runtime :is(#settings-save-runtime, #settings-undo-runtime) { height: auto; }
-}
-.wb-login-unavailable { color: var(--wb-err); }
-.wb-login-unavailable .wb-hdot { background: var(--wb-err); }
-.wb-login-unknown .wb-hdot { background: var(--wb-off); }
+.wb-engine-select { width: 240px; max-width: 100%; }
+.wb-engine-select .wb-select { min-width: 0; }
+.wb-default-badge { display: inline-flex; align-items: center; min-height: 24px; padding: 0 9px; border: 1px solid var(--wb-accent-line); border-radius: 999px; color: var(--accent); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.wb-default-badge[hidden], .wb-set-split[hidden] { display: none; }
+#settings-current-runtime .wb-note-act { display: inline-flex; gap: 4px 10px; }
+#settings-current-runtime .wb-note-act[hidden] { display: none; }
+#settings-current-runtime .wb-note-act .wb-btn-sm { height: var(--wb-control-compact); }
+.wb-engine-models { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--wb-line); }
+.wb-engine-models > .wb-pref-c[hidden], .wb-engine-model-actions[hidden] { display: none; }
+.wb-engine-models .wb-pref-c > .wb-note { margin: 0; }
+.wb-engine-model-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 12px; }
 .wb-sw { display: inline-block; flex: none; width: 9px; height: 9px; border-radius: 2px; background: var(--accent); }
 .wb-sw-codex { background: color-mix(in srgb, var(--wb-work) 40%, var(--text)); }
 .wb-dirty { color: var(--accent); font-size: 11.5px; font-weight: 600; }
@@ -1636,7 +1640,8 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   .wb-set-lead { margin-bottom: 12px; font-size: 13px; }
   .wb-set-card { padding: 12px; border-radius: 10px; }
   .wb-set-card-h { margin-bottom: 8px; }
-  .wb-seg-engine { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  .wb-engine-select { flex: 1 1 100%; width: 100%; }
+  #settings-current-runtime .wb-note-act .wb-btn-sm { height: var(--wb-control-touch); }
   /* "How are models matched?" opens across the card's width instead of from the link, so it stays on screen. */
   .wb-tip-anchor { position: static; }
   .wb-tip-anchor .tip-popover { top: 44px; left: 12px; right: 12px; width: auto; max-width: none; }
@@ -1675,7 +1680,8 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
 /* Same-row controls share a size tier; segmented sizes always describe the rail,
    leaving its existing 2px inset for the selected surface. */
 :is(.wb-seg, .wb-seg2, .wb-seg-sm) { align-items: stretch; }
-:is(.wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) > button { height: 100%; min-height: 0; }
+/* The extra [class] specificity keeps segment sizing above page-level height rules. */
+:is(.wb-seg, .wb-seg2, .wb-seg-sm)[class] > button { height: 100%; min-height: 0; }
 .wb-bh { align-items: center; }
 :is(.wb-name-editor, .wb-cfg-controls) { --wb-h: var(--wb-control-compact); align-items: center; }
 :is(.wb-name-editor, .wb-cfg-controls) :is(.wb-input, input, select, .wb-btn-sm, .wb-link-btn) { height: var(--wb-h); }
@@ -1704,12 +1710,11 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   .wb-switch-l { min-height: 40px; }
   /* Measure the search outer frame once; its input fits inside the border. */
   .wb-search { min-height: var(--wb-control-touch); }
-  /* Multiline engine options retain their content-driven height. */
-  :is(.wb-seg, .wb-seg2) { height: auto; }
-  :is(.wb-btn-sm, .wb-icon-btn-sm, .wb-search, .wb-input, .wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) { height: var(--wb-control-touch); }
+  /* [class] keeps the touch sizing above page-level height rules. */
+  :is(.wb-btn-sm, .wb-icon-btn-sm, .wb-search, .wb-input, .wb-seg, .wb-seg2, .wb-seg-sm)[class] { height: var(--wb-control-touch); }
   :is(.wb-name-editor, .wb-cfg-controls) { --wb-h: var(--wb-control-touch); }
   :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
-    :is(.wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) > :is(button, .wb-btn) { height: 100%; min-height: 0; }
+    :is(.wb-seg, .wb-seg2, .wb-seg-sm)[class] > :is(button, .wb-btn) { height: 100%; min-height: 0; }
   .wb-date-native { min-height: 0; }
   #wb-auto-name { height: var(--wb-control-touch); }
   .app-header .header-icon-btn { width: 44px; min-width: 44px; min-height: 44px; }

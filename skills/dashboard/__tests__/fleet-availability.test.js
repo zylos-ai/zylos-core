@@ -1,9 +1,18 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FleetPoller, stateToFleetRecord } from '../src/lib/fleet-poller.js';
-import { buildAgentFleetView as buildAgentFleetViewPage, fleetSelfFromSnapshot, renderAgentFleetHtml as renderAgentFleetHtmlPage } from '../public/js/agent-fleet.js';
 import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
 
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { buildAgentFleetView: buildAgentFleetViewPage, fleetSelfFromSnapshot, renderAgentFleetHtml: renderAgentFleetHtmlPage } = await import('../public/js/agent-fleet.js');
 const buildAgentFleetView = (payload, options) => buildAgentFleetViewPage(fleetPageFixture(payload), options);
 const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
 

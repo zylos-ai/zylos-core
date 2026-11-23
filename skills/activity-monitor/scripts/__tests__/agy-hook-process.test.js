@@ -6,8 +6,8 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
-import { acceptAgyMainEvent } from '../agy-main-session.js';
 import { buildKickPrompt } from '../../../../cli/lib/runtime/kick-prompt.js';
+import { hooks } from '../../../../cli/lib/runtime/agy/hooks.js';
 
 const repo = fileURLToPath(new URL('../../../../', import.meta.url));
 const entry = fileURLToPath(new URL('../agy-hooks.js', import.meta.url));
@@ -29,7 +29,7 @@ function coreWithInstructions(root, instructions) {
     if (name !== 'runtime') fs.symlinkSync(path.join(repo, 'cli/lib', name), path.join(lib, name));
   }
   for (const name of fs.readdirSync(path.join(repo, 'cli/lib/runtime'))) {
-    const source = name === 'instruction-builder.js'
+    const source = name === 'index.js'
       ? fileURLToPath(new URL(`./fixtures/${instructions}`, import.meta.url)) : path.join(repo, 'cli/lib/runtime', name);
     fs.symlinkSync(source, path.join(lib, 'runtime', name));
   }
@@ -54,7 +54,7 @@ test('hook process deadline covers an import retaining a live handle', { timeout
 
 test('tool tracking allows a child conversation without binding it as main', t => {
   const { root, env } = fixture(t);
-  acceptAgyMainEvent({ conversationId: 'parent', lastUserInput: buildKickPrompt() }, 'SessionStart', env);
+  hooks.mainSession.accept({ conversationId: 'parent', lastUserInput: buildKickPrompt() }, 'SessionStart', env);
   const file = path.join(root, 'activity-monitor/session-groups/origin/agy-main-session.json');
   const before = fs.readFileSync(file, 'utf8');
   const result = spawnSync(process.execPath, [entry, 'PreToolUse'], {
@@ -80,6 +80,34 @@ test('tool tracking allows execution when an import reaches the process deadline
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), { decision: 'allow' });
   assert.match(result.stderr, /process deadline/);
+});
+
+test('a rejected runtime load preserves the hook exit protocol', { timeout: 9000 }, t => {
+  const { root, env } = fixture(t);
+  const fake = coreWithInstructions(root, 'rejecting-runtime.js');
+  for (const [event, stdout, status] of [
+    ['PreToolUse', '{"decision":"allow"}\n', 0],
+    ['PreInvocation', '{}\n', 1],
+  ]) {
+    const result = spawnSync(process.execPath, [entry, event], {
+      env: { ...env, ZYLOS_PACKAGE_ROOT: fake }, input: '{}', encoding: 'utf8', timeout: 3000,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.signal, null);
+    assert.equal(result.status, status);
+    assert.equal(result.stdout, stdout);
+    assert.match(result.stderr, /Zylos AGY hook failed/);
+  }
+  const denied = spawnSync(process.execPath, [guard], {
+    env: { ...env, ZYLOS_PACKAGE_ROOT: fake }, input: '{}', encoding: 'utf8', timeout: 2000,
+  });
+  assert.equal(denied.error, undefined);
+  assert.equal(denied.signal, null);
+  assert.equal(denied.status, 1);
+  assert.deepEqual(JSON.parse(denied.stdout), {
+    decision: 'deny',
+    reason: 'Cannot validate tool input. Ask the user in plain text instead.',
+  });
 });
 
 test('tool tracking allows execution after a lifecycle exception', t => {
@@ -116,7 +144,7 @@ test('hook exits after protocol output when a resolved module retains a live han
 
 test('native hook entrypoints emit bounded protocol responses with measured wall time', { timeout: 12000 }, t => {
   const { env } = fixture(t);
-  acceptAgyMainEvent({ conversationId: 'parent', lastUserInput: buildKickPrompt() }, 'SessionStart', env);
+  hooks.mainSession.accept({ conversationId: 'parent', lastUserInput: buildKickPrompt() }, 'SessionStart', env);
   const toolCall = { id: 'command', name: 'run_command', args: { CommandLine: 'echo isolated', Cwd: env.ZYLOS_DIR } };
   const cases = [
     ['bare Node', fileURLToPath(new URL('./fixtures/empty-hook.js', import.meta.url)), null, {}],

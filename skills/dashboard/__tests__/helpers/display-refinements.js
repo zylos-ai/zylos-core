@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const publicRoot = fileURLToPath(new URL('../../public/', import.meta.url));
 const schema = fileURLToPath(new URL('../../../comm-bridge/scripts/c4-content-schema.js', import.meta.url));
+const runtimeDescriptors = fileURLToPath(new URL('../../../../cli/lib/runtime/descriptors.js', import.meta.url));
 
 const fixture = `<!doctype html><html lang="en" data-theme="light"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -62,9 +63,10 @@ export async function runDisplayRefinements(sandbox) {
   const server = http.createServer((req, res) => {
     const pathname = new URL(req.url, 'http://localhost').pathname;
     if (pathname === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(fixture); return; }
-    const filename = pathname === '/chat-schema.js' ? schema : pathname === '/vendor/chart.umd.js' ? chartPath
+    const filename = pathname === '/chat-schema.js' ? schema :
+      pathname === '/runtime-descriptors.js' ? runtimeDescriptors : pathname === '/vendor/chart.umd.js' ? chartPath
       : path.resolve(publicRoot, '.' + pathname);
-    if (![schema, chartPath].includes(filename) && !filename.startsWith(publicRoot)) { res.writeHead(404); res.end(); return; }
+    if (![schema, runtimeDescriptors, chartPath].includes(filename) && !filename.startsWith(publicRoot)) { res.writeHead(404); res.end(); return; }
     if (!fs.existsSync(filename) || !fs.statSync(filename).isFile()) { res.writeHead(404); res.end(); return; }
     const type = filename.endsWith('.css') ? 'text/css' : filename.endsWith('.json') ? 'application/json' : 'text/javascript';
     res.writeHead(200, { 'content-type': type }); fs.createReadStream(filename).pipe(res);

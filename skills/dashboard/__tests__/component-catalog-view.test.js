@@ -7,7 +7,10 @@ import { CONTENT_PREFIX, COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS, makeQ
 
 const browserSchema = new URL('../public/chat-schema.js', import.meta.url).pathname;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
   if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserSchema) return next(sourceSchema, context);
   return next(specifier, context);
 } });
@@ -49,7 +52,6 @@ test('every advertised component has a shipped renderer beyond fallback text', (
     assert.ok(allNodes(root).some(node => node.tagName === expectedTag), item.key);
   }
 });
-
 
 test('advertised conditional form example has live active-field controls in the shipped renderer', () => {
   assert.ok(REGISTERED_COMPONENT_KEYS.includes('form_intent@2'));

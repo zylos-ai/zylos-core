@@ -15,7 +15,8 @@ import { submit } from '../../../../../cli/lib/am-sock-client.js';
 import { createSessionReader } from '../../../../../cli/lib/session-state-reader-async.js';
 import { readRuntimeHealth } from '../../../../../cli/lib/session-state-reader.js';
 import { readReadyIdentity } from '../../../../../cli/lib/runtime/session-target.js';
-import { getSessionAdapter } from '../../../../../cli/lib/runtime/index.js';
+import { createSessionOps } from '../../../../../cli/lib/runtime/session-ops.js';
+import { launchSession } from '../../../../../cli/lib/runtime/launch-flow.js';
 import { listGroupTmuxSessions } from '../../../../../cli/lib/session-group-paths.js';
 const Database = createRequire(new URL('../../../../comm-bridge/package.json', import.meta.url))('better-sqlite3');
 const [role, root, tmuxSocket, binary, initialClock] = process.argv.slice(2);
@@ -55,15 +56,14 @@ if (role === 'm4') {
     return response;
   };
 } else {
+  const sessionOptions = { root, env, tmux };
+  const session = createSessionOps(sessionOptions);
+  const launch = input => launchSession(input, { ...sessionOptions, runtimeExecutable: () => path.join(root, input.runtime) });
+  session.launch = async input => { trace('launch', { input, f10: JSON.parse(fs.readFileSync(path.join(root, 'activity-monitor/runtime-health', `${input.runtime}.json`), 'utf8')) }); return launch(input); };
   router = createRouter({ db, now: () => clock, readSessionMode: readMode,
     readLiveIdentity: reader.readLiveIdentity, readLiveIdentities: reader.readLiveIdentities, readCurrentSession: readReadyIdentity,
     listGroupTmuxSessions: () => listGroupTmuxSessions(tmux), readRuntimeHealth,
-    getSessionAdapter: runtime => {
-      const adapter = getSessionAdapter(runtime, { root, env, tmux, runtimeExecutable: () => path.join(root, runtime) });
-      const launch = adapter.launch.bind(adapter);
-      adapter.launch = async input => { trace('launch', { input, f10: JSON.parse(fs.readFileSync(path.join(root, 'activity-monitor/runtime-health', `${runtime}.json`), 'utf8')) }); return launch(input); };
-      return adapter;
-    },
+    session,
     submit: async request => {
       trace('request', { request, round:router.state.round });
       const result = await submit(request, { socketPath: path.join(root, 'activity-monitor/am.sock'), replyMaxMs: 150 });

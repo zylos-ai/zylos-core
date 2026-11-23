@@ -1,3 +1,4 @@
+import { checkAuth } from '../runtime/claude/auth.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -5,9 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { ClaudeAdapter } from '../runtime/claude.js';
-import { resolveCodexBypassPermissions } from '../runtime-setup.js';
-import { readEnvTimezone, needsBypassAcceptance } from '../../commands/init.js';
+
+import { resolveCodexBypassPermissions } from '../runtime/codex/hooks.js';
+import { readEnvTimezone } from '../../commands/init.js';
 import { ZYLOS_DIR } from '../config.js';
 import { createPrivateFixture, runPrivateFixture } from '../../../test/helpers/private-instance-fixture.js';
 import { readEnvFile, writeEnvEntries } from '../env.js';
@@ -36,14 +37,14 @@ test('Claude auth probe uses dotenv values without contacting a runtime', async 
     "CLAUDE_CODE_OAUTH_TOKEN='fixture setup' # comment", 'export ANTHROPIC_BASE_URL=https://fixture.invalid # comment',
   ].join('\n'));
   let calls = 0;
-  const adapter = new ClaudeAdapter({ root, env: { HOME: root, PATH: '/empty' }, execFile: async (_, __, { env }) => {
+  const adapterOptions = { root, env: { HOME: root, PATH: '/empty' }, execFile: async (_, __, { env }) => {
     calls++;
     assert.equal(env.ANTHROPIC_API_KEY, 'fixture api # literal');
     assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, 'fixture setup');
     assert.equal(env.ANTHROPIC_BASE_URL, 'https://fixture.invalid');
     return { stdout: 'ok' };
-  } });
-  assert.equal((await adapter.checkAuth()).status, 'success');
+  } };
+  assert.equal((await checkAuth(adapterOptions)).status, 'success');
   assert.equal(calls, 1);
 });
 
@@ -66,18 +67,16 @@ test('Codex permission preference uses dotenv and preserves explicit precedence'
   assert.throws(() => resolveCodexBypassPermissions(path.join(root, 'unreadable')), { code: 'EISDIR' });
 });
 
-test('init reads timezone and bypass preference with dotenv', () => {
+test('init reads timezone with dotenv', () => {
   fs.mkdirSync(ZYLOS_DIR, { recursive: true });
   const file = path.join(ZYLOS_DIR, '.env');
   assert.equal(fs.existsSync(file), false, 'runner provides a fresh isolated instance');
   try {
     fs.writeFileSync(file, [
       'TZ=obsolete', 'export TZ="UTC" # comment',
-      'export CLAUDE_BYPASS_PERMISSIONS="false" # comment',
     ].join('\n'));
     const before = fs.readFileSync(file, 'utf8');
     assert.equal(readEnvTimezone(), 'UTC');
-    assert.equal(needsBypassAcceptance(), false);
     assert.equal(fs.readFileSync(file, 'utf8'), before);
   } finally { fs.rmSync(file, { force: true }); }
 });

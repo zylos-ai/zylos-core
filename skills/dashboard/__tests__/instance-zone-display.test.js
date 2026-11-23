@@ -1,16 +1,27 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 // The same module URL the page modules import, so the zone set here is the zone they read.
 import { setInstanceZone, instanceZone, formatZoned, zonedDay, zonedInputValue, instantFromInput } from '../public/js/wb/instance-zone.js';
-import { unnamedConversation } from '../public/js/wb/plain-text.js';
 import { displayTime } from '../public/js/wb/event-labels.js';
-import { eventTime } from '../public/js/wb/detail-overview.js';
-import { formatStartedAt } from '../public/js/wb/detail.js';
+
 import { waitText } from '../public/js/wb/view-mode.js';
-import { activityStrip } from '../public/js/wb/activity-strip.js';
-import { renderHost } from '../public/js/wb/host-panel.js';
-import { renderAttention } from '../public/js/wb/attention-bar.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { unnamedConversation } = await import('../public/js/wb/plain-text.js');
+const { eventTime } = await import('../public/js/wb/detail-overview.js');
+const { formatStartedAt } = await import('../public/js/wb/detail.js');
+const { activityStrip } = await import('../public/js/wb/activity-strip.js');
+const { renderHost } = await import('../public/js/wb/host-panel.js');
+const { renderAttention } = await import('../public/js/wb/attention-bar.js');
 
 // Direct modules with an injected DOM; no browser, network or storage. The process zone stands in for the browser's
 // and is set apart from the instance zone, so only the instance zone can give the expected text.

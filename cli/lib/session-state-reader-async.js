@@ -1,3 +1,5 @@
+import { findRuntime, getRuntime } from './runtime/index.js';
+import { runtimesWith } from './runtime/descriptors.js';
 import path from 'node:path';
 import { openReadStore } from './c4-read-store.js';
 import { zylosRoot } from './session-group-paths.js';
@@ -6,7 +8,7 @@ import { openTmuxConnection } from './runtime/tmux-connection.js';
 import { isIdentityError, tmuxError } from './runtime/tmux-protocol.js';
 import { observeSessionTarget } from './runtime/session-target.js';
 import { observeSessionTargets } from './runtime/session-batch-observation.js';
-import { readJsonSample, readCodexSampleForIdentity, sampleResult, sameIdentity } from './session-usage-reader.js';
+import { readJsonSample, sampleResult, sameIdentity } from './session-usage-reader.js';
 import { readRecordedAccountUsage } from './recorded-account-usage.js';
 
 const publicIdentity = value => Object.fromEntries(['present','tmuxName','runId','createdAt','runtime','launchConfig','ready','sessionId'].map(key => [key, value[key]]));
@@ -49,19 +51,17 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
         const target = first.get(group ?? 'origin') ?? absent(group);
         const dir = groupRunDir(group ?? 'origin', env);
         const status = readJsonSample(path.join(dir, 'agent-status.json'), 'status');
-        let usage = { error:'missing', sampledAt:null };
-        if (['claude', 'agy'].includes(target.runtime)) usage = readJsonSample(path.join(dir, 'statusline.json'), 'usage');
-        if (target.runtime === 'codex') {
-          const found = readCodexSampleForIdentity({ sessionGroup:group, identity:target, env });
-          if (found) usage = { value:found.sample, sampledAt:found.sample.capturedAt, identity:found.sample.identity };
-        }
-        return [group, { target, status, usage, sampled:await sampleTarget?.(group, target) }];
+        const context = (await findRuntime(target.runtime))?.context;
+        const usage = context?.readUsageSample({ dir, sessionGroup: group, identity: target, env })
+          ?? { error: 'missing', sampledAt: null };
+        const usageFreshness = context?.usageSampleExpires === false ? Infinity : usageFreshnessMs;
+        return [group, { target, status, usage, usageFreshness, sampled:await sampleTarget?.(group, target) }];
       })));
       let last;
       try { last = await read(); }
       catch (error) { if (!isIdentityError(error) && error.code !== 'TMUX_NO_SERVER') throw error; last = new Map(); }
       return new Map([...samples].map(([group, sample]) => {
-        const { target, status, usage } = sample;
+        const { target, status, usage, usageFreshness } = sample;
         const final = last.get(group ?? 'origin') ?? absent(group);
         const stable = target.present && final.present && ['runId','serverGeneration','tmuxSessionId','paneId','runtime','createdAt','sessionId'].every(key => target[key] === final[key]);
         return [group, { identity:publicIdentity(target),
@@ -69,7 +69,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
           ...(sampleTarget ? { sampled:sample.sampled } : {}),
           ...(target.present && !stable ? { observationError:tmuxError('TARGET_GONE', 'Batch target changed during observation') } : {}),
           status:sampleResult(status, target, final, freshnessMs, now()),
-          usage:sampleResult(usage, target, final, target.runtime === 'agy' ? Infinity : usageFreshnessMs, now()) }];
+          usage:sampleResult(usage, target, final, usageFreshness, now()) }];
       }));
     } finally { await connection.close(); }
   }
@@ -93,12 +93,10 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
       const first = await read();
       const dir = groupRunDir(group ?? 'origin', env);
       const status = readJsonSample(path.join(dir, 'agent-status.json'), 'status');
-      let usage = { error: 'missing', sampledAt: null };
-      if (['claude', 'agy'].includes(first.runtime)) usage = readJsonSample(path.join(dir, 'statusline.json'), 'usage');
-      if (first.runtime === 'codex') {
-        const found = readCodexSampleForIdentity({ sessionGroup: group, identity: first, env });
-        if (found) usage = { value: found.sample, sampledAt: found.sample.capturedAt, identity: found.sample.identity };
-      }
+      const context = (await findRuntime(first.runtime))?.context;
+      const usage = context?.readUsageSample({ dir, sessionGroup: group, identity: first, env })
+        ?? { error: 'missing', sampledAt: null };
+      const usageFreshness = context?.usageSampleExpires === false ? Infinity : usageFreshnessMs;
       let last;
       try { last = await read(); }
       catch (error) {
@@ -106,15 +104,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
         last = absent(group);
       }
       return { identity: publicIdentity(first), status: sampleResult(status, first, last, freshnessMs, now()),
-        usage: sampleResult(usage, first, last, first.runtime === 'agy' ? Infinity : usageFreshnessMs, now()) };
-    });
-  }
-  async function readCodexUsageSample({ sessionGroup }) {
-    return withConnection(sessionGroup, async read => {
-      const first = await read();
-      const found = readCodexSampleForIdentity({ sessionGroup, identity: first, env });
-      const last = await read();
-      return sameIdentity(first, last) ? found?.sample ?? null : null;
+        usage: sampleResult(usage, first, last, usageFreshness, now()) };
     });
   }
   async function resolveTargetRuntime(sessionGroup) {
@@ -130,7 +120,8 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
     return (await resolve({ sessionGroup, sessionMode: sessionGroup === null ? 'single' : 'multi' })).runtime;
   }
   async function readAccountSamples(runtime) {
-    if (!['claude','codex'].includes(runtime)) throw new TypeError('Unknown runtime');
+    if (!runtimesWith('accountQuota').includes(runtime)) throw new TypeError('Unknown runtime');
+    const { accountQuota } = (await getRuntime(runtime)).usage;
     const samples = [];
     const connection = await open(connectionOptions);
     try {
@@ -139,19 +130,14 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
       const candidates = [];
       for (const [sessionGroup, identity] of first) {
         if (!identity.ready || identity.runtime !== runtime) continue;
-        const sample = runtime === 'claude' ? readJsonSample(path.join(groupRunDir(sessionGroup, env), 'statusline.json'), 'usage') :
-          readCodexSampleForIdentity({ sessionGroup, identity, env, account:true });
+        const sample = accountQuota.readLiveSample({ sessionGroup, identity, env });
         candidates.push({ sessionGroup, identity, sample });
       }
       if (!candidates.length) return samples;
       const last = await read();
       for (const { sessionGroup, identity, sample } of candidates) {
         if (!sameIdentity(identity, last.get(sessionGroup))) continue;
-        if (runtime === 'codex') {
-          if (sample?.sample.rateLimits) samples.push({ value:sample.sample.rateLimits, mtime:sample.mtime, recordedAt:sample.sample.capturedAt });
-        } else if (!sample.error && sample.identity.runId === identity.runId && sample.identity.sessionId === identity.sessionId && sample.value.rate_limits) {
-          samples.push({ value:sample.value.rate_limits, mtime:sample.mtime, recordedAt:sample.sampledAt ?? sample.mtime });
-        }
+        if (sample) samples.push(sample);
       }
     } finally { await connection.close(); }
     samples.sort((a, b) => b.mtime - a.mtime);
@@ -166,8 +152,8 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
   async function readAccountUsageSnapshot(runtime) {
     const samples = await readAccountSamples(runtime);
     return { live: samples[0]?.value ?? null,
-      recorded: readRecordedAccountUsage(runtime, env, now(), samples) };
+      recorded: await readRecordedAccountUsage(runtime, env, now(), samples) };
   }
   return { readLiveIdentity, readSessionState, readLiveIdentities, readSessionTargets, readSessionStates,
-    resolveTargetRuntime, readCodexUsageSample, readAccountUsage, readAccountUsageSnapshot };
+    resolveTargetRuntime, readAccountUsage, readAccountUsageSnapshot };
 }

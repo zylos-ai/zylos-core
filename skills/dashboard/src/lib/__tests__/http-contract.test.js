@@ -13,6 +13,8 @@ test('JSON failures retain diagnostics and map command rejection status', () => 
     [{ ok: false, error: 'INVALID_RUNTIME' }, 400],
     [{ ok: false, error: { code: 'AUTH_FAILED', message: 'Replace rejected runtime credentials' } }, 403],
     [{ ok: false, error: { code: 'AUTH_NOT_CONFIRMED', message: 'Confirm runtime authentication' } }, 403],
+    [{ ok: false, error: { code: 'INSTRUCTIONS_UNAVAILABLE', message: 'Could not rebuild runtime instructions' } }, 503],
+    [{ ok: false, error: { code: 'RUNTIME_SETUP_INCOMPLETE', message: 'Runtime setup is missing or out of date' } }, 503],
     [{ ok: false, error: 'new_upstream_failure' }, 502],
     [{ ok: false, code: 'TASK_NOT_FOUND', message: 'Task missing' }, 404],
     [{ result: 'rejected', code: 'TASK_WRONG_STATUS', message: 'Paused', status: 'paused' }, 409],

@@ -6,7 +6,6 @@ import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import * as childProcess from 'node:child_process';
 import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
-import { StateEngine } from '../../src/lib/state-engine.js';
 import { AuthGate, hashApiKey } from '../../src/lib/auth.js';
 import { C4Reader, prepareLatestReceived, receivedMessage } from '../../src/lib/c4-reader.js';
 import { EventLoopMonitor } from '../../src/lib/event-loop-monitor.js';
@@ -54,8 +53,19 @@ export async function setupMemoryHttp(t) {
   const calls = [], restarts = [], versionCalls = [];
   let unexpectedChild;
   const previous = process.env.ZYLOS_DIR;
+  const runtimeBins = {
+    CLAUDE_BIN: path.join(root, 'claude'),
+    CODEX_BIN: path.join(root, 'codex'),
+    AGY_BIN: path.join(root, 'agy'),
+  };
+  const previousRuntimeBins = Object.fromEntries(
+    Object.keys(runtimeBins).map(key => [key, process.env[key]]),
+  );
   t.after(async () => {
     if (previous === undefined) delete process.env.ZYLOS_DIR; else process.env.ZYLOS_DIR = previous;
+    for (const [key, value] of Object.entries(previousRuntimeBins)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
     server?.closeAllConnections();
     if (server?.listening) await new Promise(resolve => server.close(resolve));
     clearInterval(auth?._cleanupTimer);
@@ -66,6 +76,10 @@ export async function setupMemoryHttp(t) {
     // Product readers may catch transport errors; retain the first fixture violation.
     if (unexpectedChild) throw unexpectedChild;
   });
+  for (const [key, file] of Object.entries(runtimeBins)) {
+    fs.writeFileSync(file, '', { mode: 0o700 });
+    process.env[key] = file;
+  }
   t.mock.method(Date, 'now', () => clock);
   t.mock.method(EventLoopMonitor.prototype, 'start', function () { return this; });
   t.mock.method(VersionChecker.prototype, 'start', () => {});
@@ -99,8 +113,9 @@ export async function setupMemoryHttp(t) {
     throw unexpectedChild;
   };
   const execFile = () => assert.fail('callback child invocation must not bypass the injected transport');
+  const versionCommands = ['zylos', ...Object.values(runtimeBins)];
   execFile[promisify.custom] = async (file, args) => {
-    if (['zylos', 'claude', 'codex', 'agy'].includes(file) && args.length === 1 && args[0] === '--version') {
+    if (versionCommands.includes(file) && args.length === 1 && args[0] === '--version') {
       versionCalls.push({ file, args });
       return { stdout: '1.0.0' };
     }
@@ -117,6 +132,8 @@ export async function setupMemoryHttp(t) {
     execFileSync: (file, args) => { assert.deepEqual(args, ['--version']); return '1.0.0'; },
     spawn: () => assert.fail('HTTP fixture must not spawn a process'),
   } });
+  // StateEngine now loads the Core runtimes, which capture the subprocess transport at import.
+  const { StateEngine } = await import('../../src/lib/state-engine.js');
   t.mock.module('../../src/lib/state-engine.js', { namedExports: {
     StateEngine: class extends StateEngine { constructor(...args) { super(...args); engine = this; } },
   } });
@@ -139,6 +156,7 @@ export async function setupMemoryHttp(t) {
   } });
   t.mock.module('../../src/lib/core-modules.js', { namedExports: {
     loadCoreModule: async name => {
+      if (['runtime/descriptors.js', 'runtime/index.js', 'runtime/contract.js'].includes(name)) return import(new URL(`../../../../cli/lib/${name}`, import.meta.url));
       if (name === 'config.js') return { ZYLOS_DIR: root, readSessionMode: () => ({ mode: 'multi' }) };
       if (['model-rotation-thresholds.js', 'session-usage-reader.js', 'session-hot-ttl.js', 'config-store.js', 'config-lock.js', 'private-file.js', 'pm2.js', 'session-group-paths.js'].includes(name)) {
         return import(new URL(`../../../../cli/lib/${name}`, import.meta.url));

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createSessionReader } from '../session-state-reader-async.js';
 import { UsageMonitor } from '../../../skills/activity-monitor/scripts/usage-monitor.js';
-import { readRecordedCodexSample } from '../session-usage-reader.js';
+import { readRecordedCodexSample } from '../runtime/codex/rollout.js';
 import { performance } from 'node:perf_hooks';
 
 const now = Date.parse('2026-11-10T00:10:00+08:00');

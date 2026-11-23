@@ -1,3 +1,4 @@
+import { SUPPORTED_RUNTIMES, runtimesWith } from '../../runtime-descriptors.js';
 import { groupDetailPath } from './group-data.js';
 import { element, icon, runtimeName } from './plain-text.js';
 
@@ -38,8 +39,8 @@ function restartText(restart, t) {
 }
 
 export function validConfigChange(change) {
-  return change?.kind === 'runtime' ? ['inherit', 'claude', 'codex', 'agy'].includes(change.value)
-    : change?.kind === 'model' && ['claude', 'codex'].includes(change.runtime) &&
+  return change?.kind === 'runtime' ? ['inherit', ...SUPPORTED_RUNTIMES].includes(change.value)
+    : change?.kind === 'model' && runtimesWith('modelOverride').includes(change.runtime) &&
       (change.reset === true || (typeof change.model === 'string' && change.model.trim() !== '' &&
         typeof change.effort === 'string' && change.effort.trim() !== ''));
 }
@@ -50,7 +51,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
   const thresholdRequests = new Set();
   let confirming = false;
   async function loadThreshold(runtime, model) {
-    if (!model || !['claude', 'codex', 'agy'].includes(runtime) || Number.isFinite(state.meta[runtime]?.model_thresholds?.[model])) return;
+    if (!model || !SUPPORTED_RUNTIMES.includes(runtime) || Number.isFinite(state.meta[runtime]?.model_thresholds?.[model])) return;
     const id = runtime + ':' + model;
     if (thresholdRequests.has(id)) return;
     thresholdRequests.add(id);
@@ -63,7 +64,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
   }
   // The editor accepts a typed model when the catalog is unavailable.
   async function loadMeta(runtime) {
-    if (!['claude', 'codex', 'agy'].includes(runtime) || runtime in state.meta) return state.meta[runtime];
+    if (!SUPPORTED_RUNTIMES.includes(runtime) || runtime in state.meta) return state.meta[runtime];
     state.meta[runtime] = undefined;
     let value = null;
     try { value = await request('/api/instance/runtime-options?runtime=' + runtime); } catch {}
@@ -84,7 +85,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
     return value;
   }
   return {
-    state, load, loadMeta, loadThreshold, redraw: publish,
+    key, state, load, loadMeta, loadThreshold, redraw: publish,
     async save(changes, { confirm } = {}) {
       if (!active() || confirming || state.busy || !changes.length) return;
       if (!changes.every(validConfigChange)) {
@@ -185,7 +186,7 @@ export function effortChoices(meta, model, current) {
 }
 
 function savedPair(value, runtime) {
-  if (runtime === 'agy') return { model: '', effort: '' };
+  if (runtimesWith('modelOverride', 'unsupported').includes(runtime)) return { model: '', effort: '' };
   const envelope = value?.model;
   const data = envelope?.data;
   const hasCurrentPair = envelope?.ok !== false && (data?.runtime ?? data?.desired?.runtime) === runtime && Boolean(runtime);
@@ -196,7 +197,8 @@ function savedPair(value, runtime) {
 }
 
 export function renderGroupConfig(root, controller, { document = root.ownerDocument, t = key => key, writable = true,
-  defaultRuntime, rotationThreshold = null, onSave = controller.save, onCancel = () => {} } = {}) {
+  defaultRuntime, rotationThreshold = null, onSave = controller.save, onCancel = () => {},
+  notFound = [], onRecheck = async () => {} } = {}) {
   const { state } = controller;
   state.draft ??= {};
   const engine = state.value?.runtime;
@@ -224,23 +226,25 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   };
   const savedRuntime = engine?.data?.desired?.runtime ?? 'inherit';
   const runtimeLabel = t('wb.term.runtime');
-  const runtime = select(runtimeLabel, ['inherit', 'claude', 'codex', 'agy'].map(value => ({
+  const runtime = select(runtimeLabel, ['inherit', ...SUPPORTED_RUNTIMES].map(value => ({
     value, label: value === 'inherit' ? t('wb.config.followGlobal') : runtimeName(value),
   })), state.draft.runtime ?? savedRuntime);
+  const blocked = notFound.includes(runtime.value) && runtime.value !== savedRuntime;
   runtime.disabled = locked;
   const resolved = engine?.data?.resolved?.runtime;
   const target = runtime.value === 'inherit' ? defaultRuntime ?? (savedRuntime === 'inherit' ? resolved : null) : runtime.value;
+  const supportsModelOverride = !runtimesWith('modelOverride', 'unsupported').includes(target);
   const start = savedPair(state.value, target);
   const meta = state.meta[target];
   const modelLabel = t('wb.config.model');
   const effortLabel = t('wb.term.effort');
-  const pairLocked = locked || target === 'agy' || start == null;
+  const pairLocked = locked || !supportsModelOverride || start == null;
   const draft = state.draft.modelRuntime === target ? state.draft : {};
-  const manualModel = start != null && target !== 'agy' && !meta?.models?.length;
+  const manualModel = start != null && supportsModelOverride && !meta?.models?.length;
   const modelValue = draft.model ?? start?.model ?? '';
   const model = manualModel ? element(document, 'input') : select(modelLabel, [
     { value: '', label: t(start == null ? 'wb.unknown' : 'wb.config.followGlobal') },
-    ...modelChoices(target === 'agy' ? null : meta, modelValue),
+    ...modelChoices(!supportsModelOverride ? null : meta, modelValue),
   ], modelValue);
   if (manualModel) {
     model.type = 'text';
@@ -261,7 +265,7 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
     effort.disabled = pairLocked || !modelId();
   };
   setEffort(draft.effort ?? start?.effort ?? '');
-  if (ready && target !== 'agy') void controller.loadMeta(target);
+  if (ready && supportsModelOverride) void controller.loadMeta(target);
 
   const threshold = element(document, 'p', '', 'wb-note wb-cfg-threshold');
   threshold.setAttribute('aria-live', 'polite');
@@ -271,7 +275,7 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
     threshold.textContent = Number.isFinite(value) ? t('wb.config.modelThreshold', { value }) : t('wb.config.modelThresholdUnknown');
     if (selected && !Number.isFinite(value) && meta) void controller.loadThreshold(target, selected);
   };
-  if (target !== 'agy') showThreshold();
+  if (supportsModelOverride) showThreshold();
 
   const changes = () => {
     const edits = [];
@@ -290,7 +294,7 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   save.type = 'button';
   const syncSave = () => {
     const edits = changes();
-    save.disabled = locked || edits.length === 0 || !edits.every(validConfigChange);
+    save.disabled = locked || blocked || edits.length === 0 || !edits.every(validConfigChange);
   };
   const rememberPair = () => { Object.assign(state.draft, { modelRuntime: target, model: modelId(), effort: effort.value }); };
   runtime.addEventListener('change', () => {
@@ -318,8 +322,38 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   modelRow.append(field(modelLabel, model), field(effortLabel, effort));
   const actions = element(document, 'div', undefined, 'wb-cfg-controls wb-cfg-actions');
   actions.append(save, cancel);
-  form.append(engineRow, modelRow, target === 'agy'
-    ? element(document, 'p', t('wb.config.modelUnavailable'), 'wb-note') : threshold, actions);
+  form.append(engineRow);
+  if (blocked) {
+    const prefix = ['zylos', 'group', 'runtime', 'set', '--group'];
+    const command = [...prefix, controller.key, '--runtime', runtime.value];
+    const commandText = command.join(' ');
+    const message = t('wb.runtimeNotFound', { runtime: runtimeName(runtime.value), command: commandText });
+    const hint = element(document, 'span');
+    const start = message.indexOf(commandText);
+    if (start === -1) {
+      hint.textContent = message;
+    } else {
+      hint.append(message.slice(0, start));
+      command.forEach((word, index) => {
+        if (index > 0) hint.append(' ');
+        hint.append(element(document, 'span', word, index === prefix.length ? 'wb-cfg-command-group' : 'wb-cfg-command-word'));
+      });
+      hint.append(message.slice(start + commandText.length));
+    }
+    const note = element(document, 'p', undefined, 'wb-note wb-note-act');
+    const recheck = element(document, 'button', t('wb.recheck'), 'wb-btn wb-btn-sm');
+    recheck.type = 'button';
+    recheck.disabled = locked;
+    recheck.addEventListener('click', async () => {
+      if (recheck.disabled) return;
+      recheck.disabled = true;
+      await onRecheck();
+    });
+    note.append(hint, recheck);
+    form.append(note);
+  }
+  form.append(modelRow, !supportsModelOverride
+    ? element(document, 'p', t('wb.config.modelUnavailable', { runtime: runtimeName(target) }), 'wb-note') : threshold, actions);
   root.append(form);
   if (!writable) root.append(element(document, 'p', t('wb.readOnly'), 'wb-note'));
   const feedback = element(document, 'div');

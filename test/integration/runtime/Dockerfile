@@ -25,7 +25,7 @@ RUN npm install -g pm2@latest \
 # time. init's auth probe is made to resolve without network via a throwaway
 # `claude` stub on PATH (the Docker build itself still installs apt/npm packages
 # — only the auth probe is offline). The stub answers only `claude auth status`
-# (what isClaudeAuthenticated() calls) and lives at a build-only path that is
+# (used by the Claude auth probe) and lives at a build-only path that is
 # absent from the runtime PATH, so it never shadows the real test shims mounted
 # at /runtime/bin.
 #

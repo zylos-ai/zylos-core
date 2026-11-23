@@ -241,7 +241,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
       const status = observerStatus();
       return observerAvailable(status) && groupObservable(status, mode.detailLevel(), row);
     },
-    onRename: () => controller.refresh(), onClose: () => { if (!stopped) redraw(); },
+    onInstance: applyInstance, onRename: () => controller.refresh(), onClose: () => { if (!stopped) redraw(); },
   });
   hostPanel = createHostPanel({ root: document.querySelector('#wb-side'), document, t, read, identity,
     detail: () => mode.detailLevel(), onOpen: () => groupDetail.close(), onClose: () => { if (!stopped) redraw(); },
@@ -537,14 +537,15 @@ export function mountWorkbench({ document = globalThis.document, window = global
     document.removeEventListener('dashboard-locale-change', localeChange);
     window.removeEventListener('popstate', visibility);
   }
+  function applyInstance(instance) {
+    instanceRead = { owner: identity(), promise: Promise.resolve(instance) };
+    transition = instance.session_mode?.transition ?? null;
+    if (snapshot) snapshot = groupSnapshot(instance, snapshot.groupCounts, snapshot);
+    redraw();
+  }
   return {
     setViewDetail: redraw,
-    applyInstance(instance) {
-      instanceRead = { owner: identity(), promise: Promise.resolve(instance) };
-      transition = instance.session_mode?.transition ?? null;
-      if (snapshot) snapshot = groupSnapshot(instance, snapshot.groupCounts, snapshot);
-      redraw();
-    },
+    applyInstance,
     refresh(counts) {
       pushedCounts = counts ?? null;
       if (snapshot && counts) { snapshot = groupSnapshot(snapshot.instance, counts, snapshot); redraw(); }

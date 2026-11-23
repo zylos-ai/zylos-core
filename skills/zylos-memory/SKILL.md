@@ -44,6 +44,15 @@ configuration. Origin Sync uses Origin's actual runtime.
   only the files listed for that job under Worker procedures. Include their paths, the requested job,
   and all facts and environment bindings it needs; it cannot see the parent
   conversation.
+- Antigravity: use `invoke_subagent` with `Model` set to `flash`. It runs in the
+  background and its result returns to this conversation automatically; do not
+  poll it and do not use `swarm`. Start the worker prompt with this exact sentence:
+  > You are this session's already-launched Memory Sync subagent; do not read the zylos-memory SKILL.md or launch another subagent.
+
+  Then give the worker self-contained instructions to read
+  only the files listed for that job under Worker procedures. Include their paths, the requested job,
+  and all facts and environment bindings it needs; it cannot see the parent
+  conversation.
 - Never use a new `codex exec`, PM2 service, or detached shell as a substitute.
   If background tools or the restricted memory tool are unavailable, report
   `TOOL_UNAVAILABLE` and stop; do not silently run an unrestricted writer.
@@ -78,6 +87,10 @@ These rules apply to group, Origin, and global Sync; the parent owns owner notif
 - Claude: continue current work without waiting for an ordinary background
   Sync. Handle its completion notification and report failure to the owner.
 - Codex: continue useful current work after launching, but **before ending the parent turn**, use native agent wait/result tools to read this worker's terminal result. A timeout or an empty wait is not a terminal result; wait again while keeping the input channel responsive. If the worker no longer exists, has been closed, or its result can no longer be retrieved, stop waiting and treat it as a result that cannot be retrieved. `Completed` describes worker execution, not successful Sync: inspect checkpoint, state commit and release outcomes. Idle notifications may not trigger another turn; retrieve the result now.
+- Antigravity: continue current work without waiting for an ordinary background
+  Sync; its result returns automatically. Do not enqueue `/clear` while the
+  worker is running: its result would go to the cleared conversation and never
+  be seen. Handle the returned result and report failure to the owner.
 - Only the worker's final result decides whether Sync succeeded or failed.
   Messages the worker sends while it is still running are not a Sync outcome;
   do not report success or failure from them.

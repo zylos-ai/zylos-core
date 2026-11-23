@@ -151,7 +151,7 @@ test(`${runtime} real delivery entry passes projected ${name} text to its adapte
     resolveSessionTarget: async () => target, revalidateSessionTarget: async () => {},
     readSessionState: async () => ({ identity: target, status: { valid: true, value: { state: 'idle', health: 'ok' } } }),
     readRuntimeHealth: () => ({ health: 'ok' }), readCurrentSession: async () => ({ runId: target.runId, sessionId: 'fixture-session' }),
-    getSessionAdapter: () => ({ sendText: async ({ text }) => { sent.push(text); }, sendKeys: async () => {}, captureScreen: async () => '❯ ' }),
+    session: { sendText: async ({ text }) => { sent.push(text); }, sendKeys: async () => {}, captureScreen: async () => '❯ ' },
     formatConversation, notifyDelivered: () => {}, sleep: async () => {},
     db: { markDelivered: () => { delivered++; return true; }, requeueConversation: () => assert.fail('delivery blocked'),
       failDelivery: () => assert.fail('delivery failed') },

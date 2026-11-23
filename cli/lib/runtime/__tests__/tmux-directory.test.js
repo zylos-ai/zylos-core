@@ -1,3 +1,5 @@
+import { launchSession } from '../launch-flow.js';
+import { createSessionOps } from '../session-ops.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -12,8 +14,8 @@ import { createTmuxSender } from '../../../../skills/comm-bridge/scripts/tmux-se
 import { isManagedClaudeProcess } from '../../../../skills/activity-monitor/scripts/runtime-generation.js';
 import { checkMainProcess } from '../../../../skills/activity-monitor/scripts/main-process-check.js';
 import { targetArgs, outerArgs } from '../../../../skills/dashboard/src/lib/observer-tmux-state.js';
-import { SessionAdapter } from '../session-adapter.js';
-import { settleLaunch } from '../session-launch.js';
+
+import { settleLaunch } from '../launch-flow.js';
 import { attachCommand } from '../../../commands/attach.js';
 import { collectDiagnostics } from '../../../commands/doctor.js';
 import { selfUninstall } from '../../../commands/self-uninstall.js';
@@ -121,10 +123,15 @@ test('missing directory rejects every shared client before executing any binary'
     readTrigger: () => null, exec }), { code });
   await assert.rejects(async () => runTmuxCommand(['list-sessions'], { binary: '/must-not-execute' }), { code });
   await assert.rejects(listGroupTmuxSessions({ exec }), { code });
-  const adapter = new SessionAdapter({ tmux: { binary: '/must-not-execute' } });
+  const adapterOptions = {
+    root,
+    env: { HOME: root, PATH: '/nonexistent' },
+    tmux: { binary: '/must-not-execute' },
+  };
+  const adapter = createSessionOps(adapterOptions);
   await assert.rejects(adapter.isRunning({ tmuxName: 'test' }), { code });
   await assert.rejects(adapter.stop({ tmuxName: 'test' }), { code });
-  await assert.rejects(adapter.launch({ sessionGroup: 'origin' }), { code });
+  await assert.rejects(launchSession({ runtime: 'claude', sessionGroup: 'origin' }, adapterOptions), { code });
   let cleaned = false;
   await assert.rejects(settleLaunch({ tmuxName: 'test', runId: 'test', launchConfig: {}, sessionGroup: null,
     root: '/unused', script: { file: '/unused', cleanup() { cleaned = true; } } }), { code });
@@ -182,11 +189,10 @@ test('doctor and uninstall propagate missing directory before service actions', 
   t.mock.method(console, 'log', () => {});
   syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-  await assert.rejects(collectDiagnostics({}, {
+  await assert.rejects(collectDiagnostics(new Map(), {
     resolve: async () => ({ runtime: 'unknown', live: { tmuxName: 'fixture' } }),
     tmuxCheck: () => ({ installed: true }), pm2Check: () => ({ installed: false }),
     psCheck: () => ({ installed: true }),
-    network: () => assert.fail('unknown runtime must skip network'),
   }), { code });
   await assert.rejects(selfUninstall(['--force']), { code });
   assert.equal(calls, 0);
@@ -195,12 +201,12 @@ test('doctor and uninstall propagate missing directory before service actions', 
 test('adapter capture and delivery preserve directory failures without writing', async () => {
   const error = Object.assign(Error('directory gone'), { code: 'TMUX_DIR_MISSING' });
   let writes = 0;
-  const adapter = new SessionAdapter({ dependencies: { revalidateSessionTarget: async () => { throw error; } } });
+  const adapter = createSessionOps({ dependencies: { revalidateSessionTarget: async () => { throw error; } } });
   const connection = { command: async () => { writes++; }, commandBatch: async () => { writes++; }, cleanupBuffer: async () => {} };
   const target = { paneId: '%1' };
   for (const action of [() => adapter.captureScreen({ target, connection }),
     () => adapter.sendKeys({ target, connection, keys: ['Enter'] }),
-    () => adapter.sendText({ target, connection, text: 'test' })]) {
+    () => adapter.sendText({ runtime: 'claude', target, connection, text: 'test' })]) {
     await assert.rejects(action(), e => e === error);
   }
   assert.equal(writes, 0);

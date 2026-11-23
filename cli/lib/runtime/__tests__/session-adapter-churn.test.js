@@ -1,10 +1,12 @@
+import { launchSession } from '../launch-flow.js';
+import { createSessionOps } from '../session-ops.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isolatedTmux, waitForServerExit } from '../../../../test/helpers/isolated-tmux.js';
-import { SessionAdapter } from '../session-adapter.js';
+
 import { openTmuxConnection, runTmuxCommand } from '../tmux-connection.js';
 import { resolveSessionTarget, revalidateSessionTarget } from '../session-target.js';
 
@@ -31,14 +33,14 @@ process.stdin.resume();
   const tmuxOptions = { binary, socketPath: f.socketPath, configFile: '/dev/null', timeoutMs: 5000 };
   const start = () => f.tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'keeper', '/bin/sleep 600');
   start();
-  class Adapter extends SessionAdapter { get runtimeId() { return 'claude'; } }
-  const adapter = new Adapter({ root: f.dir, tmux: tmuxOptions,
+  const adapterOptions = { root: f.dir, tmux: tmuxOptions,
     paths: { tmuxNameForGroup: group => group.replaceAll(':', '-') },
     env: { HOME: f.dir, ZYLOS_DIR: f.dir, PATH: process.env.PATH, LANG: 'C.UTF-8', TERM: 'xterm-256color' },
     runtimeExecutable: () => executable,
-  });
-  const launch = (group, runId) => adapter.launch({ sessionGroup: group, sessionMode: 'multi', runId,
-    launchConfig: { runtime: 'claude', mode: 'default' } });
+  };
+  const adapter = createSessionOps(adapterOptions);
+  const launch = (group, runId) => launchSession({ runtime: 'claude', sessionGroup: group, sessionMode: 'multi', runId,
+    launchConfig: { runtime: 'claude', mode: 'default' } }, adapterOptions);
   async function ready(runId) {
     for (let i = 0; i < 200; i++) {
       try { await fs.access(path.join(f.dir, `ready-${runId}`)); return; } catch { await delay(10); }
@@ -80,7 +82,7 @@ test('real adapter survives 300 launches and 150 deliveries on one socket under 
         launches++;
         if (i % 2 === 0) {
           const text = `delivery-${deliveries}: ZYLOS_OK #{pid} 'quoted'`;
-          await f.adapter.sendText({ target, connection, text });
+          await f.adapter.sendText({ runtime: 'claude', target, connection, text });
           await f.adapter.sendKeys({ target, connection, keys: ['Enter'] });
           expected += `${text}\r`; deliveries++;
         }
@@ -118,7 +120,7 @@ test('same fixture rejects stale generation; constant-true guard positive contro
     }
     const connection = await open(f.tmuxOptions); t.after(() => connection.close());
     const target = await resolveSessionTarget({ tmuxName: 'stress-receiver', connection, readReady: async () => null });
-    const adapter = new SessionAdapter({ dependencies: {
+    const adapter = createSessionOps({ dependencies: {
       revalidateSessionTarget: async options => {
         await revalidateSessionTarget(options);
         f.tmux('kill-server'); await waitForServerExit(f); f.start();
@@ -128,7 +130,7 @@ test('same fixture rejects stale generation; constant-true guard positive contro
       },
     } });
     let code = null;
-    try { await adapter.sendText({ target, connection, text: 'stale-message' }); }
+    try { await adapter.sendText({ runtime: 'claude', target, connection, text: 'stale-message' }); }
     catch (error) { code = error.code; }
     for (let i = 0; badControl && i < 100 && await f.read('replacement') === ''; i++) await delay(10);
     assert.deepEqual({ code, received: await f.read('replacement') }, { code: 'GENERATION_CHANGED', received: '' });

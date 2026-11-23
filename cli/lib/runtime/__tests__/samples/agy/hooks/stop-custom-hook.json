@@ -1,0 +1,17 @@
+{
+  "artifactDirectoryPath": "/work/reviewer/.gemini/antigravity-cli/brain/d9369788-c278-43f0-9d65-373100450fd5",
+  "continuationActive": false,
+  "conversationId": "d9369788-c278-43f0-9d65-373100450fd5",
+  "cwd": "/work/reviewer/capture",
+  "error": "",
+  "executionNum": 0,
+  "fullyIdle": true,
+  "hookEventName": "Stop",
+  "lastUserInput": "/compact",
+  "modelName": "gemini-3.1-pro-low",
+  "terminationReason": "TERMINAL_CUSTOM_HOOK",
+  "transcriptPath": "/work/reviewer/.gemini/antigravity-cli/brain/d9369788-c278-43f0-9d65-373100450fd5/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/work/reviewer/capture"
+  ]
+}

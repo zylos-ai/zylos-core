@@ -5,7 +5,10 @@ import { registerHooks } from 'node:module';
 import { createDocument, visibleNodes, visibleText, tick, deferred } from './helpers/conversation-dom.js';
 import { CONTENT_PREFIX } from '../../comm-bridge/scripts/c4-content-schema.js';
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
   if (context.parentURL && new URL(specifier, context.parentURL).pathname.endsWith('/public/chat-schema.js')) return next(sourceSchema, context);
   return next(specifier, context);
 } });

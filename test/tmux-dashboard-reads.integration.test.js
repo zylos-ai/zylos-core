@@ -188,7 +188,7 @@ test('real Dashboard observes three groups for 10s without if-shell; real delive
       for (const index of [1, 2]) assert.equal(fs.readFileSync(path.join(sandbox.root, `input-${index}`), 'utf8'), '');
       console.log('Dashboard tmux acceptance evidence:', JSON.stringify({ durationMs: readEnd - readStart,
         readRounds, readClients: readTrace.length, readIfShell: 0, groups: 3, states: 'idle', contexts: [21, 22, 23],
-        weeklyRemaining: 63, delivery: 'real SessionAdapter paste/send-keys succeeded with if-shell write guard' }));
+        weeklyRemaining: 63, delivery: 'real session paste/send-keys succeeded with if-shell write guard' }));
       await browser.close();
       child.kill('SIGTERM');
       await child.completion;

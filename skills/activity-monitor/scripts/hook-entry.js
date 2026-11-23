@@ -49,11 +49,11 @@ async function readPayload(stream) {
 }
 
 /** The single record a refused child leaves: what the Dashboard needs to count its cost. */
-export function childSessionRecord(payload, { env, location, trigger, nowMs }) {
+export function childSessionRecord(payload, { env, location, trigger, nowMs, markers = [] }) {
   if (payload?.hook_event_name !== 'SessionStart') return null;
   if (typeof payload.session_id !== 'string' || !payload.session_id) return null;
   const transcript = typeof payload.transcript_path === 'string' && payload.transcript_path ? payload.transcript_path : null;
-  const runtime = childRuntimeOf(trigger, transcript);
+  const runtime = childRuntimeOf(trigger, transcript, markers);
   if (!runtime || !transcript) return null;
   return {
     v: 1, ts: nowMs, runtime,
@@ -81,7 +81,7 @@ export async function runHookEntry(argv = process.argv, {
   try {
     location = runDirFromEnv(env);
     trigger = readTrigger();
-    decision = classifyHookProcess({ env, dir: location.dir, trigger, readInfo });
+    decision = await classifyHookProcess({ env, dir: location.dir, trigger, readInfo });
   } catch (error) {
     decision = { verdict: 'unknown', reason: `error:${error.code || error.message}` };
   }
@@ -89,7 +89,20 @@ export async function runHookEntry(argv = process.argv, {
   if (decision.verdict === 'child') {
     if (path.basename(target) === 'hook-activity.js') {
       try {
-        const record = childSessionRecord(await readPayload(stdin), { env, location, trigger, nowMs: nowMs() });
+        const payload = await readPayload(stdin);
+        const markers = [];
+        if (payload?.hook_event_name === 'SessionStart' && typeof payload.transcript_path === 'string' &&
+            payload.transcript_path && childRuntimeOf(trigger, null) === null) {
+          const { getRuntime, runtimesWith } = await loadCoreModule('runtime/index.js');
+          const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
+          for (const id of runtimesWith('usage')) {
+            const { transcript } = (await getRuntime(id)).usage;
+            if (transcript !== UNSUPPORTED && transcript.pathMarker !== UNSUPPORTED) {
+              markers.push([id, transcript.pathMarker]);
+            }
+          }
+        }
+        const record = childSessionRecord(payload, { env, location, trigger, nowMs: nowMs(), markers });
         if (record) {
           const { appendEvent } = await loadCoreModule('event-log.js');
           appendEvent(path.join(location.dir, RUN_FILES.CHILD_SESSIONS), record);

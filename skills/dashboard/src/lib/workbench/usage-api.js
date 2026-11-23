@@ -1,12 +1,15 @@
 import { dayBoundsUTC } from '../day-bounds.js';
 import { costRows, resolveUsageTimezone, usageBounds, usageTokenRows } from './cost-query.js';
+import { loadCoreModule } from '../core-modules.js';
+
+const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
 
 function emptyUsage() {
   return { tokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheHitRate: null, cost: 0 };
 }
 
 function summarizePeriod(store, bounds, group) {
-  const byRuntime = { claude: emptyUsage(), codex: emptyUsage() };
+  const byRuntime = Object.fromEntries(runtimesWith('usage').map(runtime => [runtime, emptyUsage()]));
   for (const row of usageTokenRows(store, { ...bounds, bucket: 'total', group })) {
     const usage = byRuntime[row.runtime] ??= emptyUsage();
     usage.inputTokens += row.inputTokens;
@@ -37,7 +40,7 @@ export function usageSummary(store, { tz, now = new Date(), group } = {}) {
 }
 
 function periodCost(store, bounds) {
-  const byRuntime = { claude: 0, codex: 0 };
+  const byRuntime = Object.fromEntries(runtimesWith('usage').map(runtime => [runtime, 0]));
   for (const row of costRows(store, { ...bounds, bucket: 'total' })) {
     byRuntime[row.runtime] = (byRuntime[row.runtime] ?? 0) + row.value;
   }

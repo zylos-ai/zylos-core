@@ -271,11 +271,11 @@ test('native fixture shares Claude onboarding config and preserves proxy launch 
   assert.equal(launchEnv.HOME, sandbox.paths.home);
   assert.equal(Object.hasOwn(launchEnv, 'CLAUDE_CONFIG_DIR'), false);
   for (const key of runtimeProxyNames) { assert.equal(env[key], proxies[key]); assert.equal(launchEnv[key], proxies[key]); }
-  const { ClaudeAdapter } = await import('../../../cli/lib/runtime/claude.js');
-  const adapter = new ClaudeAdapter({ root: sandbox.paths.zylos, env: { ...env, CLAUDE_BIN: process.execPath },
+  const { launchSession } = await import('../../../cli/lib/runtime/launch-flow.js');
+  const adapterOptions = { root: sandbox.paths.zylos, env: { ...env, CLAUDE_BIN: process.execPath },
     dependencies: { openTmuxConnection: async () => { const error = Error('Private preflight boundary'); error.code = 'TMUX_NO_SERVER'; throw error; } },
-    runtimeExecutable: () => { throw Error('Stop after real onboarding, before runtime launch'); } });
-  await assert.rejects(adapter.launch({ sessionGroup: null, runId: 'private-onboarding', sessionMode: 'single', launchConfig: { runtime: 'claude', mode: 'default' } }), { code: 'LAUNCH_FAILED' });
+    runtimeExecutable: () => { throw Error('Stop after real onboarding, before runtime launch'); } };
+  await assert.rejects(launchSession({ runtime: 'claude', sessionGroup: null, runId: 'private-onboarding', sessionMode: 'single', launchConfig: { runtime: 'claude', mode: 'default' } }, adapterOptions), { code: 'LAUNCH_FAILED' });
   const config = JSON.parse(fs.readFileSync(path.join(env.HOME, '.claude.json'), 'utf8'));
   assert.equal(config.hasCompletedOnboarding, true);
   assert.equal(config.projects[sandbox.paths.zylos].hasTrustDialogAccepted, true);

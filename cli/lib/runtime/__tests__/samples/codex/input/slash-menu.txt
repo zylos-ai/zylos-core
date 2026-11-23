@@ -1,0 +1,50 @@
+
+  >_ OpenAI Codex (v0.169.1)
+     /tmp/zt-cc/ws
+  permissions: YOLO mode
+
+  To get started, describe a task or try one of these commands:
+
+  /init - create an AGENTS.md file with instructions for Codex
+  /status - show current session configuration
+  /permissions - choose what Codex is allowed to do
+  /model - choose what model and reasoning effort to use
+  /review - review any changes and find issues
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› /model         choose what model and reasoning effort to use
+  /fast          2x speed, increased usage
+  /presets       run or save reusable prompts and slash commands
+  /daybreak      Manage broader access for cybersecurity work
+  /ide           include current selection, open files, and other context from your IDE
+  /permissions   choose what Codex is allowed to do
+  /keymap        remap TUI shortcuts
+  /vim           toggle Vim mode for the composer
+
+› /
+
+  GPT-6.2-Sol default · /tmp/zt-cc/ws

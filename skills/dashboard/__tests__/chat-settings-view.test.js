@@ -1,8 +1,18 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mountChatSettings } from '../public/js/wb/chat-settings.js';
 import { documentFixture } from './fixtures/settings-dom.js';
 import { deferred } from './fixtures/workbench-dom.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { mountChatSettings } = await import('../public/js/wb/chat-settings.js');
 
 function fixture(options = {}) {
   const document = documentFixture(), root = document.createElement('div');

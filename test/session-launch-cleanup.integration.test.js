@@ -5,7 +5,7 @@ import path from 'node:path';
 import { setupLaunch, binary } from '../cli/lib/runtime/__tests__/launch-tmux-fixture.js';
 import { injectLaunchCleanupRace } from '../cli/lib/runtime/__tests__/helpers/launch-cleanup-race.js';
 import { writeSessionLaunchScript, shellQuote } from '../cli/lib/runtime/session-command.js';
-import { settleLaunch } from '../cli/lib/runtime/session-launch.js';
+import { settleLaunch } from '../cli/lib/runtime/launch-flow.js';
 
 // Boundary: real tmux settlement plus real launch-script cleanup. Run when
 // launch cleanup or its settlement caller changes; skip for unrelated changes.

@@ -3,14 +3,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { registerHooks } from 'node:module';
 import { createDocument, allNodes, tick, visibleText } from './helpers/conversation-dom.js';
-import { renderInternalMessage } from '../public/js/wb/conversation-internal.js';
 
 const schemaPath = new URL('../public/chat-schema.js', import.meta.url).pathname;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
   if (context.parentURL && new URL(specifier, context.parentURL).pathname === schemaPath) return next(sourceSchema, context);
   return next(specifier, context);
 } });
+const { renderInternalMessage } = await import('../public/js/wb/conversation-internal.js');
 const { mountConversationPage } = await import('../public/js/wb/conversation-page.js');
 const translations = locale => JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
 const relay = (direction = 'in') => ({ id: 5, channel: 'internal', direction,

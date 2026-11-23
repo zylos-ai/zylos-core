@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const schema = fileURLToPath(new URL('../../../comm-bridge/scripts/c4-content-schema.js', import.meta.url));
+const runtimeDescriptors = fileURLToPath(new URL('../../../../cli/lib/runtime/descriptors.js', import.meta.url));
 const fixture = fileURLToPath(new URL('./chat-nested-spacing-fixture.js', import.meta.url));
 export async function runNestedSpacingBrowser(sandbox, { width, theme }) {
   assert.ok([1280, 390].includes(width)); assert.ok(['light', 'dark'].includes(theme));
@@ -22,9 +23,10 @@ export async function runNestedSpacingBrowser(sandbox, { width, theme }) {
     if (req.method !== 'GET') { res.writeHead(405); return res.end(); }
     if (url.pathname === '/') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(html); }
     if (url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
-    const file = url.pathname === '/chat-schema.js' ? schema : url.pathname === '/fixture.js' ? fixture
+    const file = url.pathname === '/chat-schema.js' ? schema :
+      url.pathname === '/runtime-descriptors.js' ? runtimeDescriptors : url.pathname === '/fixture.js' ? fixture
       : path.resolve(publicDir, '.' + decodeURIComponent(url.pathname));
-    if ((!file.startsWith(publicDir + path.sep) && ![schema, fixture].includes(file)) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    if ((!file.startsWith(publicDir + path.sep) && ![schema, runtimeDescriptors, fixture].includes(file)) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
       if (missing.length < 5) missing.push(url.pathname); res.writeHead(404); return res.end();
     }
     const types = { '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.woff2': 'font/woff2' };

@@ -1,9 +1,10 @@
+import { SUPPORTED_RUNTIMES, runtimeDisplayName } from '../runtime/index.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG_FILE } from '../config.js';
-import { prepareInitRuntimeClis, prepareInitRuntimeAssets, reportInitPreparation, ensureInitMemoryMigration, parseInitFlags, initCommand, runInitNativeLogin } from '../../commands/init.js';
+import { chooseInitRuntime, prepareInitRuntimeClis, prepareInitRuntimeAssets, reportInitPreparation, ensureInitMemoryMigration, parseInitFlags, initCommand, runInitNativeLogin } from '../../commands/init.js';
 
 test('init prepares both CLIs idempotently and continues after one failure', async () => {
   const installed = new Set(['claude']); const calls = [];
@@ -27,6 +28,12 @@ test('init prepares both hook/instruction sets and reports partial completion', 
   assert.deepEqual(result.failed, [{ item: 'codex.hooks', message: 'trust' }]);
   const lines = []; reportInitPreparation(result, line => lines.push(line));
   assert.match(lines[0], /部分完成/); assert.match(lines.join('\n'), /Failed: codex.hooks/);
+  const withNotice = [];
+  reportInitPreparation({ ...result, notices: [{ runtime: 'agy', message: 'fixture notice' }] }, line => withNotice.push(line));
+  assert.deepEqual(withNotice, [...lines, '  Note: agy: fixture notice']);
+  const repeated = [];
+  reportInitPreparation({ ...result, notices: [] }, line => repeated.push(line));
+  assert.deepEqual(repeated, lines);
 });
 
 test('init --json text compatibility and unknown argument rejection', () => {
@@ -74,4 +81,13 @@ test('init native cancellation selects 130 independently of prior partial failur
     assert.deepEqual(exits, [130]);
   }
   runInitNativeLogin('codex', ['login'], { spawn: () => ({ status: 0 }), exit: () => assert.fail('successful login must continue') });
+});
+
+test('interactive init can select the third registered runtime', async () => {
+  const selected = await chooseInitRuntime((question, labels) => {
+    assert.equal(question, '  Which agent runtime would you like to use?');
+    assert.deepEqual(labels, SUPPORTED_RUNTIMES.map(runtimeDisplayName));
+    return 3;
+  });
+  assert.equal(selected, SUPPORTED_RUNTIMES[2]);
 });

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { after, beforeEach, test } from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
+import { runtimeAuthFixture } from './helpers/runtime-auth.js';
 import { seedCodexTrustFixture, codexAppServerFixtureSource } from '../../../test/helpers/codex-trust.js';
 
 const root = process.env.ZYLOS_DIR;
@@ -28,13 +29,14 @@ ${codexAppServerFixtureSource()}
 
 const { executeRuntimeSwitch, runtimeCommand } = await import('../../commands/runtime.js');
 const { readZylosConfigStrict } = await import('../config.js');
-const { codexTrustMarkerPath, isCodexTrustValid } = await import('../codex-hooks.js');
+const { codexTrustMarkerPath, isCodexTrustValid } = await import('../runtime/codex/hooks.js');
 
 const appServerStarts = () => fs.existsSync(appServerLog) ? fs.readFileSync(appServerLog, 'utf8').split('\n').filter(Boolean).length : 0;
 const calls = [];
 const deps = {
-  exists: () => true,
-  adapter: () => ({ checkAuth: async () => { calls.push({ auth: appServerStarts() }); return { status: 'success' }; } }),
+  runtimeFor: id => runtimeAuthFixture(id, {
+    auth: { checkAuth: async () => { calls.push({ auth: appServerStarts() }); return { status: 'success' }; } },
+  }),
 };
 
 beforeEach(() => {
@@ -74,10 +76,10 @@ test('a failed rebuild rejects the switch with its reason and keeps the configur
   const result = await runtimeCommand(['codex'], { execute: (target, flags) => executeRuntimeSwitch(target, flags, deps) });
   process.exitCode = undefined;
   assert.equal(result.ok, false);
-  assert.equal(result.error.code, 'HOOKS_NOT_READY');
-  assert.match(result.error.message, /^Codex hook trust is invalid \(missing_marker\) and rebuilding it failed: Codex hook trust failed \(.+fixture app-server unavailable/);
+  assert.equal(result.error.code, 'RUNTIME_SETUP_INCOMPLETE');
+  assert.match(result.error.message, /^Could not check Zylos setup for Codex: Codex hook trust is invalid \(missing_marker\) and rebuilding it failed: Codex hook trust failed \(.+fixture app-server unavailable/);
   assert.deepEqual(result.error.persisted, []);
-  assert.deepEqual(stderr, [`Error [HOOKS_NOT_READY]: ${result.error.message}`]);
+  assert.deepEqual(stderr, [`Error [RUNTIME_SETUP_INCOMPLETE]: ${result.error.message}`]);
   assert.equal(appServerStarts(), 1);
   assert.deepEqual(calls, [], 'authentication is not probed after a failed rebuild');
   assert.equal(readZylosConfigStrict().config.runtime, 'claude');

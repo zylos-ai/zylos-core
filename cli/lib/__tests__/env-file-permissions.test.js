@@ -67,7 +67,9 @@ describe('.env file permissions', { skip: !posix && 'POSIX permission bits only'
     ['saveCodexBaseUrlToEnv', 'OPENAI_BASE_URL', 'https://openai-relay.example.test/v1'],
   ]) {
     test(`${name} leaves .env owner-only`, async () => {
-      const setup = await import('../runtime-setup.js');
+      const setup = name.startsWith('saveCodex')
+        ? await import('../runtime/codex/auth.js')
+        : await import('../runtime/claude/auth.js');
       const saved = Object.fromEntries(['ANTHROPIC_BASE_URL', 'OPENAI_API_KEY', 'OPENAI_BASE_URL'].map(k => [k, process.env[k]]));
       try {
         fs.writeFileSync(envFile, 'TZ=UTC\n');
@@ -90,7 +92,7 @@ describe('.env file permissions', { skip: !posix && 'POSIX permission bits only'
     fs.writeFileSync(path.join(process.env.ZYLOS_DIR, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude' }));
     const initModule = new URL('../../commands/init.js', import.meta.url).href;
     execFileSync(process.execPath, ['--input-type=module', '--eval',
-      `import { deployTemplates } from ${JSON.stringify(initModule)}; deployTemplates();`], {
+      `import { deployTemplates } from ${JSON.stringify(initModule)}; await deployTemplates();`], {
       stdio: 'pipe', env: { ...process.env, HOME: tmpRoot, ZYLOS_DIR: process.env.ZYLOS_DIR },
     });
     assert.equal(mode(envFile), '600');
@@ -144,8 +146,8 @@ describe('.env file permissions', { skip: !posix && 'POSIX permission bits only'
 
   test('doctor fails on an .env it could not tighten and passes a tightened one', async () => {
     const { buildDiagnosticJson } = await import('../../commands/doctor.js');
-    const diag = envFile => ({ runtime: 'claude', display: 'Claude', apiHost: 'example.test',
-      system: { tmux: { installed: true }, pm2: { installed: true, version: '6.0.0' }, network: { reachable: true }, envFile },
+    const diag = envFile => ({ runtime: 'claude', display: 'Claude',
+      system: { tmux: { installed: true }, pm2: { installed: true, version: '6.0.0' }, envFile },
       ai: { cli: { installed: true }, auth: true, autonomous: true }, services: { running: false, procs: [] } });
 
     const open = buildDiagnosticJson(diag({ ok: false, mode: '644', fixed: false }), { success: false });
@@ -167,7 +169,7 @@ describe('.env file permissions', { skip: !posix && 'POSIX permission bits only'
     const { collectDiagnostics } = await import('../../commands/doctor.js');
     fs.writeFileSync(envFile, 'A=1\n');
     fs.chmodSync(envFile, 0o644);
-    const diag = await collectDiagnostics({}, {
+    const diag = await collectDiagnostics(new Map(), {
       resolve: async () => ({ runtime: 'unknown', sessionGroup: null, live: { tmuxName: 'zylos-test-none' } }),
       pm2Check: () => ({ installed: false }),
     });

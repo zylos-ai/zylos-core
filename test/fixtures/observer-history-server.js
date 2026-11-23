@@ -2,7 +2,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parentPort, workerData } from 'node:worker_threads';
-import { ClaudeHistory } from '../../skills/dashboard/src/lib/history/claude-history.js';
+import { ClaudeHistory } from '../../skills/dashboard/src/lib/runtime/claude/history.js';
 import { HistoryService } from '../../skills/dashboard/src/lib/history/history-service.js';
 import { sendHtml, serveStatic } from '../../skills/dashboard/src/lib/http.js';
 

@@ -16,6 +16,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { ZYLOS_DIR } from '../lib/config.js';
+import { getRuntime, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
+import { UNSUPPORTED } from '../lib/runtime/contract.js';
 import { bold, dim, green, red, cyan, success, warn, heading } from '../lib/colors.js';
 import { promptYesNo } from '../lib/prompts.js';
 import { commandExists } from '../lib/shell-utils.js';
@@ -68,8 +70,7 @@ export async function selfUninstall(args) {
 
   // ── Phase 4: Optional cleanup (ask BEFORE removing ~/zylos/) ──
   let removePm2 = false;
-  let removeClaude = false;
-  let removeCodex = false;
+  const removeRuntimeClis = [];
 
   if (!force) {
     console.log(heading('Optional cleanup'));
@@ -82,16 +83,13 @@ export async function selfUninstall(args) {
       );
     }
 
-    if (commandExists('claude')) {
-      removeClaude = await promptYesNo(
-        `  Remove Claude CLI? ${dim('(npm uninstall -g + remove ~/.claude/)')} [y/N] `
-      );
-    }
-
-    if (commandExists('codex')) {
-      removeCodex = await promptYesNo(
-        `  Remove Codex CLI? ${dim('(npm uninstall -g @openai/codex + remove ~/.codex/)')} [y/N] `
-      );
+    for (const id of SUPPORTED_RUNTIMES) {
+      const rt = await getRuntime(id);
+      const uninstall = rt.install.uninstall;
+      if (uninstall === UNSUPPORTED || rt.identity.findExecutable() === null) continue;
+      if (await promptYesNo(`  Remove ${uninstall.label}? ${dim(`(${uninstall.detail})`)} [y/N] `)) {
+        removeRuntimeClis.push(uninstall);
+      }
     }
     console.log();
   }
@@ -125,16 +123,11 @@ export async function selfUninstall(args) {
     console.log(success('PM2 removed'));
   }
 
-  if (removeClaude) {
-    console.log(dim('Removing Claude CLI...'));
-    uninstallClaudeCli();
-    console.log(success('Claude CLI removed'));
-  }
-
-  if (removeCodex) {
-    console.log(dim('Removing Codex CLI...'));
-    uninstallCodexCli();
-    console.log(success('Codex CLI removed'));
+  for (const { label, npmPackage, dataDir } of removeRuntimeClis) {
+    console.log(dim(`Removing ${label}...`));
+    npmUninstallGlobal(npmPackage);
+    removeDirectory(path.join(os.homedir(), dataDir));
+    console.log(success(`${label} removed`));
   }
 
   // ── Phase 5: Data directory removal (explicit opt-in) ──
@@ -354,24 +347,4 @@ function uninstallPm2() {
   // Remove PM2 data directory
   const pm2Dir = path.join(os.homedir(), '.pm2');
   removeDirectory(pm2Dir);
-}
-
-/**
- * Remove Claude CLI and its data directory.
- */
-function uninstallClaudeCli() {
-  npmUninstallGlobal('@anthropic-ai/claude-code');
-
-  const claudeDir = path.join(os.homedir(), '.claude');
-  removeDirectory(claudeDir);
-}
-
-/**
- * Remove Codex CLI and its config directory.
- */
-function uninstallCodexCli() {
-  npmUninstallGlobal('@openai/codex');
-
-  const codexDir = path.join(os.homedir(), '.codex');
-  removeDirectory(codexDir);
 }

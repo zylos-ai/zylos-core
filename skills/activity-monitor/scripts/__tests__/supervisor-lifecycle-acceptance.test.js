@@ -1,3 +1,4 @@
+import { loadRuntimeContexts } from '../../../../cli/lib/model-rotation-thresholds.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,11 +12,13 @@ import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
 import { groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
 import { renderStateSkeleton } from '../../../zylos-memory/scripts/state-format.js';
 
+const contexts = await loadRuntimeContexts();
+
 function localFixture(t, Class = SupervisorLifecycle, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lifecycle-acceptance-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const f = { root, now: 1792000000000, controls: [], markerCalls: [], events: [],
-    context: { configuration: { mode: 'multi' } }, marker: { held: false, stale: false, runId: null, expiresAt: null, reason: 'absent' },
+    context: { configuration: { contexts, mode: 'multi' } }, marker: { held: false, stale: false, runId: null, expiresAt: null, reason: 'absent' },
     transition: null, range: { count: 20, firstAt: 1791999990000 }, backlog: { total: 60, groups: [{ count: 60, firstAt: 1791999990000 }] } };
   f.scene = { sessionGroup: 'origin', runtime: 'claude', runId: 'old-run', sessionId: 's1',
     present: true, ready: true, processRunning: true, state: 'idle', idleSince: f.now - 10000,

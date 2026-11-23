@@ -1,0 +1,17 @@
+{
+  "artifactDirectoryPath": "/work/reviewer/.gemini/antigravity-cli/brain/82f11856-6315-498a-a24e-44564090ed66",
+  "continuationActive": false,
+  "conversationId": "82f11856-6315-498a-a24e-44564090ed66",
+  "cwd": "/work/reviewer/capture",
+  "error": "",
+  "executionNum": 0,
+  "fullyIdle": true,
+  "hookEventName": "Stop",
+  "lastUserInput": "System startup trigger, not a user message. Continue with startup context.",
+  "modelName": "gemini-3.1-pro-low",
+  "terminationReason": "NO_TOOL_CALL",
+  "transcriptPath": "/work/reviewer/.gemini/antigravity-cli/brain/82f11856-6315-498a-a24e-44564090ed66/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/work/reviewer/capture"
+  ]
+}

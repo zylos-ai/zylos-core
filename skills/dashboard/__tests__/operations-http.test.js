@@ -81,6 +81,7 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
     execFileSync: (_file, args) => { assert.deepEqual(args, ['--version']); return '1.0.0'; }, execFile,
   } });
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (['runtime/descriptors.js', 'runtime/index.js', 'runtime/contract.js'].includes(name)) return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
     if (name === 'config-store.js') return { readConfigStrict: () => ({ state: 'ok', config: { session_mode: mode, runtime: 'claude' } }) };
     if (name === 'config.js') return { readSessionMode: () => ({ mode, keyPresent: mode !== null }) };
     if (name === 'status-view.js') return { collectStatus: options => collectStatus({ ...options,
@@ -90,7 +91,7 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
     if (name === 'session-pool-config.js') return { readPoolCapacity: () => ({ k: 4 }) };
     if (name === 'session-hot-ttl.js') return { resolveSessionHotTtl: () => ({ seconds: 1800 }) };
     if (name === 'pm2.js') return { createPm2Helpers: () => ({}) };
-    if (name === 'model-rotation-thresholds.js') return { readDefaultModels: () => ({}), readCodexModelWindows: () => ({}), modelThreshold: () => 80, thresholdLimit: () => 100 };
+    if (name === 'model-rotation-thresholds.js') return { readDefaultModels: () => ({}), loadRuntimeContexts: async () => ({}), readModelWindows: () => ({}), modelThreshold: () => 80, thresholdLimit: () => 100 };
     if (name === 'session-usage-reader.js') return { usageModelFacts: () => ({}) };
     if (['config-lock.js', 'private-file.js'].includes(name)) return {};
     if (name === 'session-state-reader.js') return {

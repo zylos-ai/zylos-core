@@ -7,11 +7,15 @@ import Database from 'better-sqlite3';
 import { Store } from '../src/lib/store.js';
 import { CoreLogImporter, childTranscriptMapping } from '../src/lib/core-log-importer.js';
 import { UsageTranscripts, groupMainTranscript } from '../src/lib/collectors/usage-transcripts.js';
-import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
-import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
+import { ConversationCollector } from '../src/lib/runtime/claude/collector.js';
+import { CodexRolloutCollector } from '../src/lib/runtime/codex/collector.js';
 import { createHistoryScope } from '../src/lib/history/history-scope.js';
 import { costRows } from '../src/lib/workbench/cost-query.js';
 import { migrateDatabase } from '../src/lib/schema.js';
+import { getDashboardRuntime as getCollectorRuntime } from '../src/lib/runtime/index.js';
+
+const collectors = Object.fromEntries(await Promise.all(['claude', 'codex'].map(async id =>
+  [id, (await getCollectorRuntime(id)).collector])));
 
 const at = Date.parse('2026-11-17T08:00:00.000Z');
 const timestamp = new Date(at).toISOString();
@@ -31,7 +35,7 @@ function fixture(t) {
     },
   };
   const snapshot = async () => ({ listKnown: true, rows: [{ sessionGroup: 'g1', live: { runId: 'run-1' } }] });
-  const transcripts = new UsageTranscripts(store, config, { getSnapshot: snapshot, now: () => at });
+  const transcripts = new UsageTranscripts(store, config, { collectors, getSnapshot: snapshot, now: () => at });
   return {
     dir, store, importer, transcripts,
     claude: new ConversationCollector(store, config, { transcripts }),

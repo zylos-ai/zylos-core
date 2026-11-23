@@ -11,6 +11,11 @@ function fixture(t,runtime='claude') {
  const activity=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime,startedAt:100});t.after(()=>activity.close());
  const row=(event,more={})=>({v:1,run_id:'r',session_id:'s',runtime,ts:200,event,...more});return {root,activity,row};
 }
+test('unregistered runtimes cannot construct a session activity reader', () => {
+  assert.throws(() => new SessionActivity({
+    runDir: os.tmpdir(), runId: 'r', sessionId: 's', runtime: 'unknown',
+  }), { code: 'RUNTIME_UNSUPPORTED' });
+});
 test('current main-agent tools only; stop timestamp and late post preserve newer tools',t=>{
  const {activity,row}=fixture(t);activity.consume([row('pre_tool',{tool_use_id:'old',session_id:'old'}),row('pre_tool',{tool_use_id:'sub',agent_id:'a'}),row('pre_tool',{tool_use_id:'a'}),row('pre_tool',{tool_use_id:'b',ts:400}),row('stop',{ts:300}),row('post_tool',{tool_use_id:'a',ts:500})]);
  assert.deepEqual([...activity.tools.keys()],['b']);activity.consume([row('stop',{ts:600})]);assert.equal(activity.read(5000).state,'idle');
@@ -25,15 +30,15 @@ test('Codex does not pair rollout ids, stop closes unpaired tools',t=>{
  const {root,activity,row}=fixture(t,'codex');const transcript=path.join(root,'s.jsonl');fs.writeFileSync(transcript,JSON.stringify({content:[{type:'tool_result',tool_use_id:'a'}]})+'\n');
  activity.consume([row('session_start',{transcript_path:transcript}),row('pre_tool',{tool_use_id:'a'})]);activity.read();assert.equal(activity.tools.size,1);activity.consume([row('stop')]);assert.equal(activity.tools.size,0);
 });
-test('native status retained, single run writes origin with identity',t=>{
+test('native status retained, single run writes origin with identity',async t =>{
  const {root}=fixture(t);const env={ZYLOS_DIR:root,ZYLOS_RUN_ID:'r'};const original={session_id:'s',cost:{total_cost_usd:7},future:{x:true}};
- const sample=publishContextSample(original,{env,now:123});assert.deepEqual(sample,{...original,zylos:{v:1,runId:'r',sessionGroup:'origin',capturedAt:123}});
+ const sample=await publishContextSample(original,{env,now:123});assert.deepEqual(sample,{...original,zylos:{v:1,runId:'r',sessionGroup:'origin',capturedAt:123}});
  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root,'activity-monitor/session-groups/origin/statusline.json'))),sample);
  assert.equal(fs.existsSync(path.join(root,'activity-monitor/cost-log.jsonl')),false);
 });
-test('hook retains subagent facts and selected tool inputs without prompt/output',t=>{
+test('hook retains subagent facts and selected tool inputs without prompt/output',async t=>{
  const {root}=fixture(t);const env={ZYLOS_DIR:root,ZYLOS_RUN_ID:'r',ZYLOS_MODEL_CONFIG:'{"runtime":"codex"}'};
- const record=handleHookActivity({hook_event_name:'PreToolUse',session_id:'s',agent_id:'sub',tool_name:'Bash',tool_use_id:'t',tool_input:{command:'ls',secret:'omit'},prompt:'omit',tool_response:'omit'},{env,nowMs:123});
+ const record=await handleHookActivity({hook_event_name:'PreToolUse',session_id:'s',agent_id:'sub',tool_name:'Bash',tool_use_id:'t',tool_input:{command:'ls',secret:'omit'},prompt:'omit',tool_response:'omit'},{env,nowMs:123});
  assert.equal(record.runtime,'codex');assert.equal(record.agent_id,'sub');assert.deepEqual(record.tool_input,{command:'ls'});assert.equal(record.session_group,'origin');assert.equal('prompt' in record,false);
 });
 
@@ -180,18 +185,18 @@ test('B: supervisor/pool/router diagnostic mutation cannot provide activity or t
  assert.deepEqual(activity.read(10000).tools,original.tools);
 });
 
-test('grouped usage replaces native envelope and rejects missing run identity',t=>{
+test('grouped usage replaces native envelope and rejects missing run identity',async t =>{
  const {root}=fixture(t);const env={ZYLOS_DIR:root,ZYLOS_RUN_ID:'r',ZYLOS_SESSION_GROUP:'lark:x'};
- const sample=publishContextSample({session_id:'s',zylos:{v:99,runId:'foreign'}},{env,now:123});
+ const sample=await publishContextSample({session_id:'s',zylos:{v:99,runId:'foreign'}},{env,now:123});
  assert.deepEqual(sample.zylos,{v:1,runId:'r',sessionGroup:'lark:x',capturedAt:123});
  const file=path.join(root,'activity-monitor/session-groups/lark:x/statusline.json');
  assert.deepEqual(JSON.parse(fs.readFileSync(file)),sample);
- for(const runId of [undefined,'','   ']) assert.throws(()=>publishContextSample({session_id:'bad'},{env:{...env,ZYLOS_RUN_ID:runId}}),/Missing statusLine run identity/);
+ for(const runId of [undefined,'','   ']) await assert.rejects(publishContextSample({session_id:'bad'},{env:{...env,ZYLOS_RUN_ID:runId}}),/Missing statusLine run identity/);
  assert.deepEqual(JSON.parse(fs.readFileSync(file)),sample);
 });
-test('DM F14: legacy usage stays at legacy path without a fabricated run envelope',t=>{
+test('DM F14: legacy usage stays at legacy path without a fabricated run envelope',async t =>{
  const {root}=fixture(t);const original={session_id:'old',cost:{total_cost_usd:7},zylos:{v:1,runId:'forged'}};
- const sample=publishContextSample(original,{env:{ZYLOS_DIR:root},now:123});
+ const sample=await publishContextSample(original,{env:{ZYLOS_DIR:root},now:123});
  assert.deepEqual(sample,{session_id:'old',cost:{total_cost_usd:7}});
  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root,'activity-monitor/statusline.json'))),sample);
  assert.equal(original.zylos.runId,'forged');
@@ -798,7 +803,7 @@ test('AGY prompt resets both idle stability and the quiet-turn attempt',t=>{
  assert.equal(activity.claimQuietTurn(1000,1201000),true);
  activity.consume([row('stop',{ts:1201001}),row('prompt',{ts:1202000})]);
  const result=activity.read(1202000);
- assert.equal(activity.agyIdleSince,null);assert.equal(result.lastResponseAt,1202000);
+ assert.equal(activity.statuslineIdleSince,null);assert.equal(result.lastResponseAt,1202000);
  assert.equal(result.turnStartedAt,1202000);assert.equal(activity.quietTurnAttemptAt,null);
  assert.equal(result.quietTurnDue,false);
 });
@@ -888,9 +893,9 @@ test('AGY closed-turn task sample cannot exempt the next quiet turn',t=>{
  activity.consume([row('prompt',{ts:500})]);
  fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',
   subagents:[{id:'child',status:'running'}],zylos:{v:1,runId:'r',capturedAt:1000}}));
- assert.equal(activity.read(1000).state,'busy');assert.equal(activity.agyTasksRunning,true);
+ assert.equal(activity.read(1000).state,'busy');assert.equal(activity.statuslineTasksRunning,true);
  activity.consume([row('stop',{ts:2000})]);
- assert.equal(activity.read(2500).state,'idle');assert.equal(activity.agyTasksRunning,false);
+ assert.equal(activity.read(2500).state,'idle');assert.equal(activity.statuslineTasksRunning,false);
  activity.consume([row('prompt',{ts:3000})]);
  const result=activity.read(1203000);
  assert.equal(result.state,'busy');assert.equal(result.quietTurnDue,true);
@@ -900,12 +905,12 @@ test('AGY closed-turn task sample cannot exempt the next quiet turn',t=>{
 // Boundary: native StopFailure registration feeds the same terminal reducer as
 // Stop. Late hooks cannot start a turn; a currently running tool remains busy.
 // Run for Claude turn boundaries; private files, no runtime/tmux/database.
-test('Claude terminal hooks close one turn and late hooks do not start another',t=>{
+test('Claude terminal hooks close one turn and late hooks do not start another',async t=>{
  for(const hook_event_name of ['Stop','StopFailure']) {
   const {root,activity,row}=fixture(t);
   activity.consume([row('prompt'),row('prompt',{ts:300})]);
   assert.equal(activity.turnStartedAt,200,'input queued in the old turn is not a new start');
-  const terminal=handleHookActivity({hook_event_name,session_id:'s'},
+  const terminal=await handleHookActivity({hook_event_name,session_id:'s'},
    {env:{ZYLOS_DIR:root,ZYLOS_RUN_ID:'r',ZYLOS_MODEL_CONFIG:'{"runtime":"claude"}'},nowMs:500});
   assert.equal(terminal.event,'stop');
   activity.consume([terminal]);

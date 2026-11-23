@@ -7,14 +7,21 @@ import test from 'node:test';
 import * as childProcess from 'node:child_process';
 import { Store } from '../src/lib/store.js';
 import { UsageTranscripts } from '../src/lib/collectors/usage-transcripts.js';
-import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
-import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
+import { ConversationCollector } from '../src/lib/runtime/claude/collector.js';
+import { CodexRolloutCollector } from '../src/lib/runtime/codex/collector.js';
 import { ConversationCollector as LegacyConversationCollector } from './fixtures/legacy-conversation-collector.js';
-import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
+import { loadCoreModule as loadTranscriptCore } from '../src/lib/core-modules.js';
 import { StateEngine } from '../src/lib/state-engine.js';
 import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
 import { CoreState } from '../src/lib/core-state.js';
+import { getDashboardRuntime as getCollectorRuntime } from '../src/lib/runtime/index.js';
+
+const collectors = Object.fromEntries(await Promise.all(['claude', 'codex'].map(async id =>
+  [id, (await getCollectorRuntime(id)).collector])));
+
+const { getRuntime: getTranscriptRuntime } = await loadTranscriptCore('runtime/index.js');
+const { transcript: claudeTranscript } = (await getTranscriptRuntime('claude')).usage;
 
 const at = Date.parse('2026-11-06T12:00:00.000Z');
 const timestamp = new Date(at).toISOString();
@@ -35,7 +42,7 @@ function fixture(t, getSnapshot = async () => ({ listKnown: true, rows: [{ sessi
       codex: { priority: { 'gpt-5.3-codex': { input: 6, output: 24, cacheRead: 0.6, cacheCreation: 0 } } },
     },
   };
-  const transcripts = new UsageTranscripts(store, config, { getSnapshot, now: () => at });
+  const transcripts = new UsageTranscripts(store, config, { collectors, getSnapshot, now: () => at });
   const claude = new ConversationCollector(store, config, { transcripts });
   const codex = new CodexRolloutCollector(store, config, { transcripts });
   function add(runtime, group, sessionId, lines, runId = `${group}-run`) {
@@ -358,7 +365,7 @@ test('run-scoped Origin statusline reproduces the empty legacy collection and no
 test('legacy statusline fallback records the same usage as the frozen collector', async t => {
   const f = fixture(t);
   const sessionId = 'legacy-session';
-  const projectDir = path.join(f.dir, '.claude', 'projects', claudeProjectSlug(f.dir));
+  const projectDir = claudeTranscript.projectDir({ home: f.dir, zylosDir: f.dir });
   fs.mkdirSync(projectDir, { recursive: true });
   fs.mkdirSync(path.join(f.dir, 'activity-monitor'), { recursive: true });
   fs.writeFileSync(path.join(f.dir, 'activity-monitor', 'statusline.json'), JSON.stringify({ session_id: sessionId }));

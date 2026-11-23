@@ -1,4 +1,5 @@
 import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
+import { startCodexWrapper } from '../../../../test/helpers/codex-wrapper-ready.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -65,6 +66,24 @@ test('F3 malformed/mismatched is not READY; snapshots immutable', async t => {
   assert.equal((await observeSessionTarget({...options,readReady:async()=>({...await ready(),runId:'other'})})).ready,false);
   const good = await observeSessionTarget(options); assert.equal(good.ready,true);
   assert.throws(()=>{good.rawF2.ZYLOS_RUN_ID='evil';},TypeError); assert.throws(()=>{good.f3.startupControlIds.push(1);},TypeError);
+});
+test('single target accepts READY published by the native child of a Codex launcher pane', async t => {
+  let connection;
+  const { dir, socketPath, tmux } = isolatedTmux(t, {
+    prefix: 'codex-ready-', socketName: 'tmux.sock', tmuxArgs: ['-f', '/dev/null'],
+    beforeCleanup: () => connection?.close(),
+  });
+  const tmuxName = 'codex-wrapper';
+  const readyFile = path.join(dir, 'current-session.json');
+  const ready = await startCodexWrapper({ tmux, tmuxName, runId: 'single-wrapper-run', readyFile });
+  connection = await openTmuxConnection({ binary, socketPath, sessionName: tmuxName });
+  const target = await observeSessionTarget({
+    sessionGroup: 'single-wrapper', tmuxName, connection,
+    readReady: async () => JSON.parse(await fs.readFile(readyFile, 'utf8')),
+  });
+  assert.equal(target.runtime, 'codex');
+  assert.equal(target.ready, true);
+  assert.equal(target.runtimeSessionId, ready.sessionId);
 });
 test('configured observation reads identity and validated environment once', async t => {
   const {connection, options} = await fixture(t);

@@ -1,3 +1,4 @@
+import { resolveCoreDirectory } from './core-modules.js';
 import { projectApiTimestamps } from './wire-time.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,7 +30,7 @@ const FAILURE_STATUSES = new Map([
     'run_changed', 'other_fence', 'deletion_preview_stale', 'deletion_ownership_mismatch', 'draft_became_active']],
   [500, ['internal_error', 'db_write_failed', 'config_store_failed', 'credential_save_failed', 'set_failed']],
   [502, ['result_unknown', 'no_reply', 'scheduler_cli_failed', 'group_delete_result_unknown', 'instance_root_mismatch', 'upgrade_failed', 'wake_failed', 'restart_failed']],
-  [503, ['hooks_not_ready', 'connect_failed', 'service_discovery_unavailable', 'group_delete_supervisor_unavailable', 'unknown_model_capabilities', 'config_unreadable', 'requests_unreadable',
+  [503, ['instructions_unavailable', 'runtime_setup_incomplete', 'connect_failed', 'service_discovery_unavailable', 'group_delete_supervisor_unavailable', 'unknown_model_capabilities', 'config_unreadable', 'requests_unreadable',
     'identity_unavailable', 'dependency_unavailable', 'entry_not_open', 'not_ready', 'snapshot_unavailable', 'start_admission_closed', 'control_target_required']],
   [504, ['deadline_exceeded', 'timeout']],
 ].flatMap(([status, codes]) => codes.map(code => [code, status])));
@@ -177,6 +178,17 @@ export function serveStatic(req, res, rootDir) {
       const stat = fs.statSync(schema);
       if (!stat.isFile()) return false;
       sendStaticFile(req, res, schema, stat);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  if (pathname === '/_assets/runtime-descriptors.js') {
+    try {
+      const file = path.join(resolveCoreDirectory(), 'runtime/descriptors.js');
+      const stat = fs.statSync(file);
+      if (!stat.isFile()) return false;
+      sendStaticFile(req, res, file, stat);
       return true;
     } catch {
       return false;

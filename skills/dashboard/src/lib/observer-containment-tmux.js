@@ -11,6 +11,9 @@ import { fileURLToPath } from 'node:url';
 import { command, delay, digest, exists, failure, finalName, fixedLayout, identity, mkdirPrivate, outerArgs,
   privateEnvironment, privatePath, processSnapshot, readJson, readReceipt, removePrivateTree,
   observerSocketRoot, syncDirectory, targetArgs, validateState, writeAtomic, zellijArgs, tmuxConfigText, validRole } from './observer-tmux-state.js';
+import { loadCoreModule } from './core-modules.js';
+
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
 
 const workerPath = fileURLToPath(new URL('./observer-tmux-worker.js', import.meta.url));
 const defaultConfig = fileURLToPath(new URL('../../assets/observer/zellij-config.kdl', import.meta.url));
@@ -138,7 +141,7 @@ export class TmuxObserverContainment extends EventEmitter {
 
   async _publish({ generation, binaryPath, runtime, observerTarget: selected }) {
     await this.verifyHelpers();
-    if (!['codex', 'claude', 'agy'].includes(runtime)) throw failure('unsupported_runtime', 'Unsupported Observer runtime');
+    if (!SUPPORTED_RUNTIMES.includes(runtime)) throw failure('unsupported_runtime', 'Unsupported Observer runtime');
     if (!Number.isSafeInteger(generation) || generation < 0) throw failure('unsafe_runtime_state', 'Invalid generation');
     const { target, tmuxSocket, originRunId, observerTarget } = await this._resolveTarget(runtime, selected);
     binaryPath = path.resolve(binaryPath);

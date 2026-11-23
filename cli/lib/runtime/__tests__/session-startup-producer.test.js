@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { stringify } from 'smol-toml';
-import { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, ensureHooksFeature } from '../../codex-hooks.js';
+import { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, ensureHooksFeature } from '../../runtime/codex/hooks.js';
 
 const exec = promisify(execFile);
 const runtimeDir = fileURLToPath(new URL('../', import.meta.url));
@@ -103,12 +103,9 @@ else {
 `,{mode:0o700});
   await fs.writeFile(harness,`
 import fs from 'node:fs/promises';
-import {${runtime==='claude'?'ClaudeAdapter':'CodexAdapter'} as Adapter} from ${JSON.stringify(new URL(`../${runtime}.js`,import.meta.url).href)};
-const adapter=new Adapter({root:${JSON.stringify(root)},env:{...process.env,${runtime.toUpperCase()}_BIN:${JSON.stringify(command)}},tmux:{binary:${JSON.stringify(tmuxBinary)},socketPath:${JSON.stringify(socketPath)},configFile:'/dev/null'}});
-const launched=adapter.launch({sessionGroup:null,runId:'startup-producer-test',sessionMode:'single',launchConfig:{runtime:${JSON.stringify(runtime)},mode:'default'}});
-// Exact optional legacy guardian ordering: invoke after starting launch, before
-// awaiting its Promise. Restoring the old method must produce a recorded call.
-try { adapter.enqueueStartupPrompt?.(); } catch {}
+import { launchSession } from ${JSON.stringify(new URL('../launch-flow.js',import.meta.url).href)};
+const options={root:${JSON.stringify(root)},env:{...process.env,${runtime.toUpperCase()}_BIN:${JSON.stringify(command)}},tmux:{binary:${JSON.stringify(tmuxBinary)},socketPath:${JSON.stringify(socketPath)},configFile:'/dev/null'}};
+const launched=launchSession({runtime:${JSON.stringify(runtime)},sessionGroup:null,runId:'startup-producer-test',sessionMode:'single',launchConfig:{runtime:${JSON.stringify(runtime)},mode:'default'}}, options);
 await launched;
 for(let i=0;i<200;i++){try{await fs.access(${JSON.stringify(report)});break;}catch{}await new Promise(r=>setTimeout(r,10));}
 console.log(await fs.readFile(${JSON.stringify(report)},'utf8'));

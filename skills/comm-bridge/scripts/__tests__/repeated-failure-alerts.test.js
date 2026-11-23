@@ -82,9 +82,9 @@ test('inbound readiness clears continuation failures and launch diagnostics cont
   const f = routerFixture(t); f.put('origin');
   const row = f.add('a'); f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
   f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' });
-  const adapter = f.deps.getSessionAdapter;
+  const adapter = f.deps.session;
   let attempts = 0;
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async () => { attempts++; throw Object.assign(Error('private error'), { code: 'REFUSED' }); } });
+  f.deps.session = { ...adapter, launch: async () => { attempts++; throw Object.assign(Error('private error'), { code: 'REFUSED' }); } };
   await f.create().initialize(); await f.rounds(2);
   for (const delay of [5000,10000,20000,40000,60000]) { f.advance(delay); await f.rounds(4); }
   const alerts = () => f.calls.filter(row => row[0] === 'alert');
@@ -92,11 +92,11 @@ test('inbound readiness clears continuation failures and launch diagnostics cont
   assert.equal(attempts, 5);
   assert.deepEqual(alerts()[0][2].reason, { kind: 'launch_error', code: 'REFUSED' });
   assert.deepEqual(f.events.find(e => e.event === 'continuation_start_failed').reason, { kind: 'launch_error', code: 'REFUSED' });
-  f.deps.getSessionAdapter = adapter; f.add('a'); await f.rounds(6);
+  f.deps.session = adapter; f.add('a'); await f.rounds(6);
   assert.equal(f.router.state.activations.size, 0);
   const runId = f.scene.get('a').runId;
   f.scene.delete('a'); await f.rounds(2); f.db.recordRunEnd('a', { runId, reason: 'unexpected' });
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async () => { attempts++; throw Error('no code'); } });
+  f.deps.session = { ...adapter, launch: async () => { attempts++; throw Error('no code'); } };
   f.advance(1800000); await f.rounds(4);
   assert.equal(attempts, 6, 'post-recovery continuation actually failed once');
   assert.equal(alerts().length, 1);
@@ -118,13 +118,13 @@ test('continuation readiness restarts the failure count after five failed starts
   const f = routerFixture(t); f.put('origin');
   const row = f.add('a'); f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
   f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' });
-  const adapter = f.deps.getSessionAdapter;
+  const adapter = f.deps.session;
   let attempts = 0;
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+  f.deps.session = { ...adapter, launch: async input => {
     attempts++;
     if (attempts === 6) { f.put('a', { runId: input.runId, ready: false }); return; }
     throw Object.assign(Error('launch rejected'), { code: 'REFUSED' });
-  } });
+  } };
   await f.create().initialize(); await f.rounds(2);
   const alerts = () => f.calls.filter(call => call[0] === 'alert');
   for (const delay of [5000,10000,20000,40000,60000]) { f.advance(delay); await f.rounds(4); }
@@ -157,10 +157,10 @@ test('five readiness timeouts report floored elapsed seconds', async t => {
   const f = routerFixture(t, { readyTimeoutMs: 1000 }); f.put('origin');
   const row = f.add('a'); f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
   f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' });
-  const adapter = f.deps.getSessionAdapter;
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+  const adapter = f.deps.session;
+  f.deps.session = { ...adapter, launch: async input => {
     f.put('a', { runId: input.runId, ready: false });
-  } });
+  } };
   await f.create().initialize(); await f.rounds(2);
   for (const delay of [5000,10000,20000,40000,60000]) {
     f.advance(delay); await f.rounds(3); f.advance(2500); await f.rounds(3);
@@ -181,7 +181,7 @@ test('continuation name conflicts count as failures with their structured code',
   const row = f.add('a'); f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
   f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' });
   let attempts = 0;
-  f.deps.getSessionAdapter = () => ({ launch: async () => { attempts++; throw Object.assign(Error('private conflict'), { code: 'NAME_CONFLICT' }); } });
+  f.deps.session = { launch: async () => { attempts++; throw Object.assign(Error('private conflict'), { code: 'NAME_CONFLICT' }); } };
   await f.create().initialize(); await f.rounds(2);
   for (const delay of [5000,10000,20000,40000,60000]) { f.advance(delay); await f.rounds(4); }
   assert.equal(attempts, 5);
@@ -219,12 +219,12 @@ test('failed starts restore held state until exact expiry and then yield to inbo
   f.db.takeSlot('a', { runId: 'old', k: 1 });
   f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' });
   const held = f.db.listSlotOccupancy()[0];
-  const adapter = f.deps.getSessionAdapter;
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+  const adapter = f.deps.session;
+  f.deps.session = { ...adapter, launch: async input => {
     f.calls.push(['launch', input]);
     if (input.sessionGroup === 'a') throw Error('rejected');
     f.put(input.sessionGroup, { runId: input.runId });
-  } });
+  } };
   await f.create().initialize(); await f.rounds(2);
   for (const delay of [5000,10000,20000,40000]) {
     f.advance(delay); await f.rounds(4);

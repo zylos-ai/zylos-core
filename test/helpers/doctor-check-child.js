@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import dns from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
@@ -20,7 +19,7 @@ assert.equal(process.env.CLAUDE_BIN, path.join(root, 'bin', 'claude'));
 assert.equal(process.env.DOCTOR_TEST_TMUX_SOCKET, path.join(resolved.TMPDIR, 'tmux.sock'));
 assert.ok(Buffer.byteLength(process.env.DOCTOR_TEST_TMUX_SOCKET) < 100);
 const allowed = new Set(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'PATH', 'CLAUDE_BIN',
-  'DOCTOR_TEST_ROOT', 'DOCTOR_TEST_STATE', 'DOCTOR_TEST_NETWORK', 'DOCTOR_TEST_TMUX_SOCKET',
+  'DOCTOR_TEST_ROOT', 'DOCTOR_TEST_STATE', 'DOCTOR_TEST_AUTH_UNCERTAIN', 'DOCTOR_TEST_TMUX_SOCKET',
   'NO_COLOR', 'ZYLOS_GH_RETRY_DELAY_MS', 'DOCTOR_TEST_MODE', 'DOCTOR_TEST_ORIGIN', 'DOCTOR_TEST_RUNTIME', 'ZYLOS_SESSION_GROUP', 'DOCTOR_TEST_WEB']);
 // The repository guard adds its preload and an explicit test marker.
 const guardPreload = `--import=${JSON.stringify(new URL('../../scripts/test-child-preload.js', import.meta.url).href)}`;
@@ -37,18 +36,13 @@ for (const key of Object.keys(process.env)) {
 const blocked = () => { throw new Error('Unexpected live network access in doctor fixture'); };
 http.request = http.get = https.request = https.get = net.connect = net.createConnection = blocked;
 globalThis.fetch = blocked;
-dns.resolve4 = async () => {
-  if (process.env.DOCTOR_TEST_NETWORK === 'down') {
-    throw Object.assign(new Error('Fixture DNS unavailable'), { code: 'ENOTFOUND' });
-  }
-  return ['192.0.2.1'];
-};
-
 const config = await import('../../cli/lib/config.js');
 assert.equal(fs.realpathSync(config.ZYLOS_DIR), resolved.ZYLOS_DIR);
 assert.equal(config.CONFIG_DIR, path.join(resolved.ZYLOS_DIR, '.zylos'));
 assert.equal(config.SKILLS_DIR, path.join(resolved.ZYLOS_DIR, '.claude', 'skills'));
 assert.equal(config.COMPONENTS_FILE, path.join(resolved.ZYLOS_DIR, '.zylos', 'components.json'));
+// The allowlist excludes both proxy spellings; this case also starts without a dotenv file.
+if (process.env.DOCTOR_TEST_AUTH_UNCERTAIN === '1') assert.equal(fs.existsSync(config.ENV_FILE), false);
 console.error(`doctor isolation: ${JSON.stringify({ ...resolved,
   PATH: process.env.PATH, tmuxSocket: process.env.DOCTOR_TEST_TMUX_SOCKET,
   database: process.env.DOCTOR_TEST_MODE === 'multi' ? path.join(resolved.ZYLOS_DIR, 'comm-bridge', 'c4.db') : 'none', args: process.argv.slice(2) })}`);

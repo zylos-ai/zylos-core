@@ -1,3 +1,4 @@
+import { runtimeWithClaudeStatus } from './helpers/runtime-auth.js';
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import fs from 'node:fs';
@@ -52,7 +53,7 @@ describe('base URL support', () => {
 
     try {
       const envOnly = initModule.parseInitFlags([]);
-      initModule.resolveFromEnv(envOnly, { authenticated: () => false });
+      await initModule.resolveFromEnv(envOnly, { findRuntime: runtimeWithClaudeStatus(() => false) });
       assert.equal(envOnly.baseUrl, 'https://claude-env.example.com');
       assert.equal(envOnly.codexBaseUrl, 'https://codex-env.example.com/v1');
 
@@ -60,7 +61,7 @@ describe('base URL support', () => {
         '--base-url', 'https://claude-flag.example.com',
         '--codex-base-url', 'https://codex-flag.example.com/v1',
       ]);
-      initModule.resolveFromEnv(explicitFlags, { authenticated: () => false });
+      await initModule.resolveFromEnv(explicitFlags, { findRuntime: runtimeWithClaudeStatus(() => false) });
       assert.equal(explicitFlags.baseUrl, 'https://claude-flag.example.com');
       assert.equal(explicitFlags.codexBaseUrl, 'https://codex-flag.example.com/v1');
     } finally {
@@ -81,7 +82,7 @@ describe('base URL support', () => {
     process.env.OPENAI_BASE_URL = 'https://openai-proxy.example.com/v1';
 
     try {
-      const { writeCodexConfig } = await import('../runtime-setup.js');
+      const { writeCodexConfig } = await import('../runtime/codex/hooks.js');
 
       assert.equal(writeCodexConfig(path.join(tmpRoot, 'zylos-project')), true);
 
@@ -108,7 +109,7 @@ describe('base URL support', () => {
     delete process.env.OPENAI_BASE_URL;
 
     try {
-      const { writeCodexConfig } = await import('../runtime-setup.js');
+      const { writeCodexConfig } = await import('../runtime/codex/hooks.js');
 
       assert.equal(
         writeCodexConfig(path.join(tmpRoot, 'zylos-project'), { openaiBaseUrl: 'https://explicit-proxy.example.com/v1' }),
@@ -160,7 +161,7 @@ describe('fresh install new-session threshold default', () => {
     const { seedFreshInstallNewSessionThresholdDefault } = await import('../../commands/init.js');
     const updates = [];
 
-    const changed = seedFreshInstallNewSessionThresholdDefault({
+    const changed = await seedFreshInstallNewSessionThresholdDefault({
       config: { runtime: 'claude' },
       defaultModels: { claude: 'opus[1m]' },
       updateConfig: (update) => {
@@ -176,7 +177,7 @@ describe('fresh install new-session threshold default', () => {
   test('preserves an existing Claude threshold value', async () => {
     const { seedFreshInstallNewSessionThresholdDefault } = await import('../../commands/init.js');
 
-    const changed = seedFreshInstallNewSessionThresholdDefault({
+    const changed = await seedFreshInstallNewSessionThresholdDefault({
       config: { new_session_threshold: 70 },
       defaultModels: { claude: 'opus[1m]' },
       updateConfig: (update) => {

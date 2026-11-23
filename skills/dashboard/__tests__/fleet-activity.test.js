@@ -1,11 +1,20 @@
+import { registerHooks } from 'node:module';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { buildAgentFleetView as buildAgentFleetViewPage, defaultAgentFleetLabels, renderAgentFleetHtml as renderAgentFleetHtmlPage } from '../public/js/agent-fleet.js';
 import { fleetStateFromObjects, stateToFleetRecord } from '../src/lib/fleet-poller.js';
 import { fleetGroupSummary } from '../src/lib/workbench/fleet-summary.js';
 import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
 
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { buildAgentFleetView: buildAgentFleetViewPage, defaultAgentFleetLabels, renderAgentFleetHtml: renderAgentFleetHtmlPage } = await import('../public/js/agent-fleet.js');
 const buildAgentFleetView = (payload, options) => buildAgentFleetViewPage(fleetPageFixture(payload), options);
 const renderAgentFleetHtml = (payload, options) => renderAgentFleetHtmlPage(fleetPageFixture(payload), options);
 

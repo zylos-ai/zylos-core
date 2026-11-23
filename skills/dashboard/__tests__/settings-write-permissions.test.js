@@ -40,7 +40,10 @@ test('a model change tightens world-readable project settings', async t => {
   const result = await handleAction('switch-model', { runtime: 'claude', model: 'claude-fixture-existing' }, config);
   assert.equal(result.ok, true);
   assert.equal(mode(file), '600');
-  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).env.KEEP, 'unchanged');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {
+    model: 'claude-fixture-existing', env: { KEEP: 'unchanged' },
+  });
+  assert.deepEqual(fs.readdirSync(path.dirname(file)), ['settings.json']);
 });
 
 test('an effort change tightens world-readable project settings', async t => {
@@ -48,5 +51,50 @@ test('an effort change tightens world-readable project settings', async t => {
   const result = await handleAction('switch-effort', { runtime: 'claude', effort: 'low' }, config);
   assert.equal(result.ok, true);
   assert.equal(mode(file), '600');
-  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).effortLevel, 'low');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { model: 'opus', effortLevel: 'low' });
+  assert.deepEqual(fs.readdirSync(path.dirname(file)), ['settings.json']);
 });
+
+test('an effort change creates missing project settings owner-only', async t => {
+  const { file, config } = fixture(t);
+  const result = await handleAction('switch-effort', { effort: 'medium' }, config);
+  assert.equal(result.ok, true);
+  assert.equal(mode(file), '600');
+  assert.equal(fs.readFileSync(file, 'utf8'), '{\n  "effortLevel": "medium"\n}\n');
+});
+
+const template = JSON.parse(fs.readFileSync(new URL('../../../templates/.claude/settings.json', import.meta.url)));
+for (const [action, body, original, expected] of [
+  ['switch-model', { model: 'sonnet' }, '{坏', { model: 'sonnet' }],
+  ['switch-effort', { effort: 'high' }, '{坏', { effortLevel: 'high' }],
+  ['switch-model', { model: template.model }, '[]', { model: template.model }],
+]) {
+  test(`Claude ${action} repairs project settings (${original}) and reports a changed save`, async t => {
+    const { file, config } = fixture(t);
+    const bytes = Buffer.from(original);
+    fs.writeFileSync(file, bytes, { mode: 0o640 });
+    const originalInode = fs.statSync(file).ino;
+    const log = t.mock.method(console, 'log', () => {});
+
+    const result = await handleAction(action, body, config);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.requires_restart, true);
+    assert.equal(mode(file), '600');
+    const dir = path.dirname(file);
+    const backups = fs.readdirSync(dir).filter(name => name.startsWith('settings.json.corrupt.'));
+    assert.equal(backups.length, 1);
+    assert.match(backups[0], /^settings\.json\.corrupt\.\d+$/);
+    const backup = path.join(dir, backups[0]);
+    assert.deepEqual(fs.readFileSync(backup), bytes);
+    assert.equal(fs.statSync(backup).ino, originalInode);
+    assert.equal(mode(backup), '640');
+    const { hooks, ...settings } = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(settings, { ...template, ...expected });
+    const startup = hooks.SessionStart.find(group => group.matcher === 'startup');
+    assert.ok(startup.hooks.some(hook => hook.command.includes(path.join(config.zylosDir, '.claude', 'skills/activity-monitor/scripts/hook-health.js'))));
+    assert.deepEqual(log.mock.calls.map(call => call.arguments), [
+      [`Claude settings were not valid JSON; moved to ${backup} and rebuilt from the template`],
+    ]);
+  });
+}

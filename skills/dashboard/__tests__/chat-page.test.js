@@ -7,7 +7,10 @@ import { createDocument, visibleNodes as allNodes, visibleText, tick, deferred }
 // Resolve the browser's shared static-schema URL to the identical source module.
 const browserSchema = new URL('../public/chat-schema.js', import.meta.url).pathname;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
   if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserSchema) return next(sourceSchema, context);
   return next(specifier, context);
 } });
@@ -97,7 +100,6 @@ test('remote-disabled replaces the entire page with only its fallback title and 
   f.page.destroy();
 });
 
-
 test('draft receipt offers rename and send without history refresh actions', async testContext => {
   const f = fixture(testContext, { draft: true }); await f.page.open(); await f.select();
   assert.ok(f.button('create')); assert.ok(f.button('send'));
@@ -120,7 +122,6 @@ for (const status of [200, 502]) test(`unparseable send response ${status} prese
   assert.equal(f.calls.filter(call => call.path.endsWith('/send')).length, 1);
   f.page.destroy();
 });
-
 
 for (const operation of ['refresh', 'stream catchup', 'select', 'older history']) test(`remote closure during ${operation} removes previously loaded names and content`, async testContext => {
   const f = fixture(testContext, { rows: [{ id: 8, direction: 'out', status: 'delivered', content: 'Private body' }], secondGroup: true, olderCursor: operation === 'older history' ? 'older' : null });
@@ -149,7 +150,6 @@ for (const operation of ['refresh', 'stream catchup', 'select', 'older history']
   f.page.destroy();
 });
 
-
 test('late old successful message response cannot restore the remote-disabled DOM', async testContext => {
   const f = fixture(testContext, { rows: [{ id: 1, direction: 'out', status: 'delivered', content: 'Private body' }] });
   await f.page.open(); await f.select();
@@ -162,7 +162,6 @@ test('late old successful message response cannot restore the remote-disabled DO
   assert.equal(visibleText(f.root), 'Remote disabled');
   f.page.destroy();
 });
-
 
 test('reopened not-stored draft restores saved input and shows a readable error', async testContext => {
   const f = fixture(testContext, { draft: true, receipt: { stored: false, preserveInput: true, pendingContent: 'Saved message', error: 'chat_core_unavailable' } });

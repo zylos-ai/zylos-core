@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { SessionAdapter } from '../session-adapter.js';
+import { launchSession } from '../launch-flow.js';
+import { seedCodexTrustFixture } from '../../../../test/helpers/codex-trust.js';
 import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 
-// Exercises the real shared adapter, argv builder, launch script and tmux
+// Exercises the real shared launch flow, argv builder, launch script and tmux
 // settlement. Fake executors only capture their inherited environment/argv.
 // Run for launch environment changes; runtime-specific authentication can skip.
 // Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; each case owns
@@ -30,13 +31,13 @@ for (const runtime of ['claude','codex']) test(`${runtime} ${mode} launch preser
   const home = path.join(root,'home'); fs.mkdirSync(home);
   const executable = path.join(root,'executor');
   const output = path.join(root,'observed.json');
-  fs.writeFileSync(executable, `#!${process.execPath}\nimport fs from 'node:fs';\nfs.writeFileSync(${JSON.stringify(output)},JSON.stringify({group:process.env.ZYLOS_SESSION_GROUP ?? null,runId:process.env.ZYLOS_RUN_ID,args:process.argv.slice(2)}));\nsetInterval(()=>{},1000);\n`,{mode:0o700});
-  class Adapter extends SessionAdapter { get runtimeId() { return runtime; } }
-  const adapter = new Adapter({root,env:{HOME:home,PATH:process.env.PATH,ZYLOS_SESSION_GROUP:'inherited-wrong'},
+  if (runtime === 'codex') seedCodexTrustFixture({ root, home });
+  fs.writeFileSync(executable, `#!${process.execPath}\nimport fs from 'node:fs';\nif (process.argv[2] === '--version') { console.log('codex-fixture'); process.exit(0); }\nfs.writeFileSync(${JSON.stringify(output)},JSON.stringify({group:process.env.ZYLOS_SESSION_GROUP ?? null,runId:process.env.ZYLOS_RUN_ID,args:process.argv.slice(2)}));\nsetInterval(()=>{},1000);\n`,{mode:0o700});
+  const options = {root,env:{HOME:home,PATH:process.env.PATH,ZYLOS_SESSION_GROUP:'inherited-wrong'},
     runtimeExecutable:()=>executable, runtimeHelp:async()=>' --no-daemon ',
-    tmux:{binary:fixture.binary,socketPath:fixture.socketPath,configFile:'/dev/null'}});
+    tmux:{binary:fixture.binary,socketPath:fixture.socketPath,configFile:'/dev/null'}};
   console.info('launch isolation',JSON.stringify({root,home,pm2:process.env.PM2_HOME,tmp:process.env.TMPDIR,socket:fixture.socketPath,runtime,mode,group}));
-  const launched = await adapter.launch({sessionGroup:group,runId:'origin-test',sessionMode:mode,launchConfig:{runtime,mode:'default'}});
+  const launched = await launchSession({runtime,sessionGroup:group,runId:'origin-test',sessionMode:mode,launchConfig:{runtime,mode:'default'}},options);
   receiverPid = Number(fixture.tmux('display-message','-p','-t',`=${launched.tmuxName}`,'#{pane_pid}'));
   assert.equal(launched.tmuxName,'zylos-group-origin');
   const deadline = Date.now() + 2000;

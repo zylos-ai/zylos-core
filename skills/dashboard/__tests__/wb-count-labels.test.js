@@ -1,17 +1,29 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { renderAttention } from '../public/js/wb/attention-bar.js';
 import { waitText } from '../public/js/wb/view-mode.js';
-import { detailNumbers, renderOverview } from '../public/js/wb/detail-overview.js';
-import { renderDistribution } from '../public/js/wb/board.js';
-import { systemItems } from '../public/js/wb/instance-strip.js';
-import { createMemoryScope } from '../public/js/wb/memory-scope.js';
-import { memoryBacklogPage, parseBacklogQuery } from '../src/lib/workbench/memory-backlog.js';
-import { modelSaveConfirmation, renderDefaults, runtimeSaveConfirmation } from '../public/js/wb/settings-defaults.js';
-import { mountSchedule } from '../public/js/wb/schedule.js';
+
 import { createDocument, allNodes, tick } from './fixtures/workbench-dom.js';
 import { documentFixture } from './fixtures/settings-dom.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { renderAttention } = await import('../public/js/wb/attention-bar.js');
+const { detailNumbers, renderOverview } = await import('../public/js/wb/detail-overview.js');
+const { renderDistribution } = await import('../public/js/wb/board.js');
+const { systemItems } = await import('../public/js/wb/instance-strip.js');
+const { createMemoryScope } = await import('../public/js/wb/memory-scope.js');
+const { memoryBacklogPage, parseBacklogQuery } = await import('../src/lib/workbench/memory-backlog.js');
+const { modelSaveConfirmation, renderDefaults, runtimeSaveConfirmation } = await import('../public/js/wb/settings-defaults.js');
+const { mountSchedule } = await import('../public/js/wb/schedule.js');
+
 const en = JSON.parse(readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
 const t = (key, values = {}) => (en[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? `{${name}}`));
 const groups = count => Array.from({ length: count }, (_, n) => ({ sessionGroup: `telegram:dm-${n}`, presence: 'running', state: { kind: 'working' }, name: { displayName: `Group ${n}` }, target: { runtime: 'claude' } }));
@@ -37,14 +49,19 @@ for (const count of [1, 2]) {
     assert.ok(root.textContent.includes(`Memory: ${count} new conversation${noun} to save`));
     assert.ok(systemItems(document, { cpu_count: count, cpu_pct: 10, sampledAt: 100 }, { t, readAt: 100 }).some(item => item.title.includes(`${count} core${noun}`)));
   });
-  test(`Workbench defaults render English count ${count}`, () => {
+  test(`Workbench defaults render English count ${count}`, async () => {
     const document = documentFixture(), root = document.createElement('div');
     const page = { items: groups(count).map(row => ({ id: row.sessionGroup, displayName: row.name.displayName })), total: count, listKnown: true };
     const panel = renderDefaults(root, { document, t, instance: { default_runtime: 'claude' }, groupCounts: { followers: count, overrides: count, models: { claude: count } }, metadata: { claude: { runtime: 'claude', current_model: 'one', current_effort: 'high', models: [{ id: 'one' }], efforts_by_model: { one: ['high'] } } }, read: async () => ({}) });
+    const engine = root.querySelector('#settings-engine');
+    assert.equal(root.querySelector('.wb-set-split').hidden, true);
+    assert.ok(root.textContent.includes(`${count} running group${noun} ${count === 1 ? 'uses' : 'use'} these defaults`), root.textContent);
+    engine.value = 'codex';
+    await engine.dispatch('change');
+    assert.equal(root.querySelector('.wb-set-split').hidden, false);
     assert.ok(root.textContent.includes(`Switching interrupts ${count} running group${noun}`));
     assert.ok(root.textContent.includes(`${count} group${noun} ${count === 1 ? 'sets its' : 'set their'} own engine`));
     assert.ok(root.textContent.includes(count === 1 ? 'Show this group' : 'Show these 2 groups'));
-    assert.ok(root.textContent.includes(`${count} running group${noun} ${count === 1 ? 'uses' : 'use'} these defaults`), root.textContent);
     assert.ok(runtimeSaveConfirmation('claude', page, t).includes(`${count} running group${noun} that ${count === 1 ? 'follows' : 'follow'} the default`));
     const modelQuestion = modelSaveConfirmation([{ runtime: 'claude', action: 'switch-model', key: 'model', value: 'one' }],
       t, {}, { claude: page });

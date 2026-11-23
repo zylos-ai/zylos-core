@@ -1,3 +1,4 @@
+import { registerHooks } from 'node:module';
 import { AccountUsageCache } from '../src/lib/account-usage-cache.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -5,9 +6,17 @@ import fs from 'node:fs';
 import { CoreState, projectOrigin } from '../src/lib/core-state.js';
 import { describeOrigin } from '../../../cli/lib/origin-presence.js';
 import { stateMood } from '../public/js/fleet-status.js';
-import { buildAgentFleetView as buildAgentFleetViewPage, defaultAgentFleetLabels } from '../public/js/agent-fleet.js';
 import { fleetPageFixture } from './helpers/fleet-page-fixture.js';
 
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { buildAgentFleetView: buildAgentFleetViewPage, defaultAgentFleetLabels } = await import('../public/js/agent-fleet.js');
 const buildAgentFleetView = (payload, options) => buildAgentFleetViewPage(fleetPageFixture(payload), options);
 
 const absent = () => ({ identity: { present: false, ready: false, runtime: 'unknown' }, status: { valid: false, reason: 'not_running' }, usage: { valid: false } });
@@ -81,6 +90,7 @@ test('Core state reads Origin facts only for absence or authentication and reads
       ? { value: { fiveHour: { usedPercentage: 37 }, sevenDay: { usedPercentage: 61 } }, live: accountLive, recordedAt: 1000 } : null }; },
   };
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'runtime/index.js') return import('../../../cli/lib/runtime/index.js');
     if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
     if (name === 'session-group-paths.js') return { listGroupTmuxSessions: async () => [{ sessionGroup: 'other' }] };
     if (name === 'origin-presence.js') return { describeOrigin, readOriginFacts: async ({ zylosDir, nowSec }) => {
@@ -144,6 +154,7 @@ test('Core state ignores live sample timestamps and notifies recorded provenance
   let record = { value: { seven_day: { used_percentage: 21 } }, live: true, recordedAt: 1000 };
   let changes = 0;
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'runtime/index.js') return import('../../../cli/lib/runtime/index.js');
     if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
     if (name === 'session-group-paths.js') return {};
     assert.fail(`Unexpected core module ${name}`);
@@ -193,6 +204,7 @@ test('Origin states retain Fleet labels and reachability', () => {
 test('manual restart distinguishes wake requests and failed wake writes in configured modes', async t => {
   let mode = 'multi', reply = { kind: 'accepted', reply: { result: 'already_stopped' } }, submissions = 0;
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'runtime/descriptors.js') return import('../../../cli/lib/runtime/descriptors.js');
     if (name === 'config.js') return { readSessionMode: () => ({ mode, keyPresent: mode !== null }) };
     if (name === 'am-sock-client.js') return { submit: async () => { submissions++; return reply; }, lookupRestartRequest: async () => assert.fail('accepted result requires no lookup') };
     assert.fail(`Unexpected module ${name}`);
@@ -224,6 +236,7 @@ test('native single Origin sleeps and reports wake demand consistently with CLI 
   t.mock.method(Date, 'now', () => now);
   let need = { inbound: 0, controls: 0, continuation: false, oldestAt: null };
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'runtime/index.js') return import('../../../cli/lib/runtime/index.js');
     if (name === 'origin-presence.js') return { describeOrigin, readOriginFacts: async ({ sessionMode }) => { assert.equal(sessionMode, 'single'); return { originNeed: need, transitionOpen: false, fenced: false }; } };
     assert.fail(`Unexpected core module ${name}`);
   } } });

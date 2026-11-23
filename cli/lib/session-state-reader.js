@@ -1,3 +1,4 @@
+import { SUPPORTED_RUNTIMES } from './runtime/descriptors.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createSessionReader } from './session-state-reader-async.js';
@@ -6,10 +7,10 @@ import { safeHealthReason } from '../../skills/activity-monitor/scripts/health-e
 
 // Public readers retain one asynchronous tmux connection per observation.
 export const { readLiveIdentity, readSessionState, readLiveIdentities, readSessionStates, readSessionTargets, resolveTargetRuntime,
-  readCodexUsageSample, readAccountUsage, readAccountUsageSnapshot } = createSessionReader();
+  readAccountUsage, readAccountUsageSnapshot } = createSessionReader();
 
 export function readRuntimeHealth(runtime) {
-  if (!['claude','codex','agy'].includes(runtime)) throw new TypeError('Unknown runtime');
+  if (!SUPPORTED_RUNTIMES.includes(runtime)) throw new TypeError('Unknown runtime');
   let record;
   try { record = JSON.parse(fs.readFileSync(path.join(zylosRoot(), 'activity-monitor', 'runtime-health', `${runtime}.json`), 'utf8')); }
   catch (error) { return error.code === 'ENOENT' ? { missing: true } : { unreadable: true }; }

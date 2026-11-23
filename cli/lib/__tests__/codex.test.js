@@ -22,8 +22,6 @@ fs.writeFileSync(
 process.env.CODEX_BIN = fakeCodexPath;
 after(() => { try { fs.rmSync(fakeBinDir, { recursive: true, force: true }); } catch {} });
 
-const { CodexAdapter } = await import('../runtime/codex.js');
-
 afterEach(() => {
   while (tmpDirs.length > 0) {
     fs.rmSync(tmpDirs.pop(), { recursive: true, force: true });
@@ -56,6 +54,8 @@ afterEach(() => {
   delete process.env.FAKE_CODEX_EXIT;
 });
 
+const { checkAuth } = await import('../runtime/codex/auth.js');
+
 describe('Codex auth checks', () => {
   it('uses the configured custom base URL for API key auth checks', async () => {
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-auth-test-'));
@@ -80,8 +80,7 @@ describe('Codex auth checks', () => {
       return { status: 200 };
     };
 
-    const adapter = new CodexAdapter({});
-    const result = await adapter.checkAuth();
+    const result = await checkAuth();
 
     assert.equal(result.status, 'success');
     assert.equal(requestedUrl, 'https://proxy.example.com/v1/models');
@@ -101,8 +100,7 @@ describe('Codex auth checks', () => {
 
     global.fetch = async () => ({ status: 401 });
 
-    const adapter = new CodexAdapter({});
-    const result = await adapter.checkAuth();
+    const result = await checkAuth();
 
     assert.equal(result.status, 'failure');
     assert.equal(result.reason, 'http_probe_401');
@@ -120,13 +118,11 @@ describe('Codex auth checks', () => {
       'utf8'
     );
 
-    const adapter = new CodexAdapter({});
-
     global.fetch = async () => ({ status: 429 });
-    assert.equal((await adapter.checkAuth()).status, 'uncertain');
+    assert.equal((await checkAuth()).status, 'uncertain');
 
     global.fetch = async () => ({ status: 503 });
-    assert.equal((await adapter.checkAuth()).status, 'uncertain');
+    assert.equal((await checkAuth()).status, 'uncertain');
   });
 
   it('API key auth checks return uncertain on network errors', async () => {
@@ -145,8 +141,7 @@ describe('Codex auth checks', () => {
       throw new Error('network down');
     };
 
-    const adapter = new CodexAdapter({});
-    const result = await adapter.checkAuth();
+    const result = await checkAuth();
 
     assert.equal(result.status, 'uncertain');
     assert.equal(result.reason, 'http_probe_network_error');
@@ -177,7 +172,7 @@ describe('Codex auth checks', () => {
       return { status: 200 };
     };
 
-    const result = await new CodexAdapter({}).checkAuth();
+    const result = await checkAuth();
 
     assert.equal(result.status, 'success');
     assert.equal(result.reason, 'http_probe_200');
@@ -195,8 +190,7 @@ describe('Codex auth checks', () => {
     process.env.HOME = tmpHome; // no ~/.codex/auth.json → falls to login-status branch
     process.env.FAKE_CODEX_STATUS = 'Not logged in';
 
-    const adapter = new CodexAdapter({});
-    const result = await adapter.checkAuth();
+    const result = await checkAuth();
 
     assert.equal(result.status, 'failure');
     assert.equal(result.reason, 'not_logged_in');
@@ -208,8 +202,7 @@ describe('Codex auth checks', () => {
     process.env.HOME = tmpHome;
     process.env.FAKE_CODEX_STATUS = 'Logged in using ChatGPT';
 
-    const adapter = new CodexAdapter({});
-    const result = await adapter.checkAuth();
+    const result = await checkAuth();
 
     assert.equal(result.status, 'success');
     assert.equal(result.reason, 'codex_login_status');
@@ -221,8 +214,7 @@ describe('Codex auth checks', () => {
     process.env.HOME = tmpHome;
     process.env.FAKE_CODEX_STATUS = 'Unexpected status text';
 
-    const adapter = new CodexAdapter({});
-    const result = await adapter.checkAuth();
+    const result = await checkAuth();
 
     assert.equal(result.status, 'uncertain');
     assert.equal(result.reason, 'codex_login_status_uncertain');
@@ -234,8 +226,7 @@ describe('Codex auth checks', () => {
     process.env.HOME = tmpHome;
     process.env.FAKE_CODEX_EXIT = '127';
 
-    const adapter = new CodexAdapter({});
-    const result = await adapter.checkAuth();
+    const result = await checkAuth();
 
     assert.equal(result.status, 'uncertain');
     assert.equal(result.reason, 'codex_login_status_unavailable');

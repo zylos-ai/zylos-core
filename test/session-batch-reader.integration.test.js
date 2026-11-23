@@ -1,8 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { batchFixture } from './helpers/session-batch-fixture.js';
+import { startCodexWrapper } from './helpers/codex-wrapper-ready.js';
 
 const options = { freshnessMs: 60000 };
+
+// Boundary: batch observation accepts a READY file from the direct child of a real tmux launcher pane.
+// Run after batch READY, launcher identity, or process ownership changes; skip for UI-only changes.
+test('batch target accepts READY published by the native child of a Codex launcher pane', { timeout: 20000 }, async t => {
+  const { root, reader, tmux } = batchFixture(t);
+  const group = 'batch-wrapper';
+  const ready = await startCodexWrapper({
+    tmux, tmuxName: `zylos-group-${group}`, runId: 'batch-wrapper-run',
+    readyFile: path.join(root, 'activity-monitor', 'session-groups', group, 'current-session.json'),
+  });
+  const target = (await reader.readSessionTargets([group])).get(group);
+  assert.equal(target.runtime, 'codex');
+  assert.equal(target.ready, true);
+  assert.equal(target.runtimeSessionId, ready.sessionId);
+});
 
 // Boundary: real tmux environment/format decoding and local status/usage binding.
 // Run after reader, tmux observation/parser or session identity changes; skip for UI-only changes.

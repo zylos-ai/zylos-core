@@ -59,11 +59,11 @@ test('expired inbound is settled without waking Origin and fresh inbound stays p
   assert.deepEqual(calls(f, 'expired').map(row => row[1]), [expired.id]);
   assert.equal(calls(f, 'launch').length, 0);
   const fresh = f.add('system');
-  const adapter = f.deps.getSessionAdapter;
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+  const adapter = f.deps.session;
+  f.deps.session = { ...adapter, launch: async input => {
     assert.equal(f.row(fresh.id).status, 'pending');
-    return adapter(runtime).launch(input);
-  } });
+    return adapter.launch(input);
+  } };
   await f.rounds(1);
   assert.equal(calls(f, 'launch').length, 1);
   assert.equal(f.row(fresh.id).status, 'pending');
@@ -208,12 +208,12 @@ test('a surviving startup prompt wakes Origin and a replacement is delivered exa
   const f = routerFixture(t); await startIdle(f);
   const old = f.db.insertControl('Startup instructions', { sessionGroup: 'origin', appendAckSuffix: false });
   let replacement;
-  f.deps.getSessionAdapter = runtime => ({ launch: async input => {
+  f.deps.session = { launch: async input => {
     f.calls.push(['launch', input]);
     replacement = f.db.insertControl('Startup instructions', { sessionGroup: 'origin', appendAckSuffix: false });
-    const live = f.put('origin', { runId: input.runId, runtime, launchConfig: input.launchConfig });
+    const live = f.put('origin', { runId: input.runId, runtime: input.runtime, launchConfig: input.launchConfig });
     f.current.set('origin', { runId: live.runId, sessionId: live.sessionId, startupControlIds: [replacement.id], ts: f.now() });
-  }, stop: async () => assert.fail('ready Origin should not be stopped') });
+  }, stop: async () => assert.fail('ready Origin should not be stopped') };
   await f.rounds(5);
   assert.equal(calls(f, 'launch').length, 1);
   assert.equal(f.db.getControlById(old.id).status, 'superseded');

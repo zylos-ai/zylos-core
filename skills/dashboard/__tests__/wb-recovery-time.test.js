@@ -1,12 +1,24 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { recoveryTime } from '../public/js/wb/cooldown.js';
-import { instanceStrip } from '../public/js/wb/instance-strip.js';
-import { renderAttention } from '../public/js/wb/attention-bar.js';
+
 import { waitText } from '../public/js/wb/view-mode.js';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js';
 import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { instanceStrip } = await import('../public/js/wb/instance-strip.js');
+const { renderAttention } = await import('../public/js/wb/attention-bar.js');
+
 // Times are expected in the instance zone; INSTANCE_TEST_ZONE differs from the process zone (see the helper).
 const ZONE = INSTANCE_TEST_ZONE;
 setInstanceZone(ZONE);

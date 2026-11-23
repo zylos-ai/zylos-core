@@ -21,14 +21,14 @@ test('continuation-only group starts after preflight and receives only startup t
   const f = routerFixture(t); f.put('origin');
   const id = continuation(f);
   const old = f.db.insertControl('old-run command', { sessionGroup: 'a', appendAckSuffix: false });
-  const getAdapter = f.deps.getSessionAdapter;
+  const getAdapter = f.deps.session;
   let prompt;
-  f.deps.getSessionAdapter = runtime => ({ ...getAdapter(runtime), launch: async input => {
+  f.deps.session = { ...getAdapter, launch: async input => {
     f.calls.push(['launch', input]);
     f.put(input.sessionGroup, { runId: input.runId });
     prompt = f.db.insertControl('startup prompt', { sessionGroup: 'a', appendAckSuffix: false });
     f.current.get('a').startupControlIds = [prompt.id];
-  } });
+  } };
   await initialize(f);
   assert.equal(calls(f, 'launch').length, 0);
   await readyToStart(f);
@@ -70,11 +70,11 @@ for (const blocked of ['group_fence','global_fence','auth_failed','scene']) {
 test('authentication recovery launches a pending group and readiness clears its marker', async t => {
   const f = routerFixture(t); f.put('origin', { runtime: 'codex' }); continuation(f);
   f.health.set('claude', { health: 'auth_failed' });
-  const adapter = f.deps.getSessionAdapter;
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+  const adapter = f.deps.session;
+  f.deps.session = { ...adapter, launch: async input => {
     f.calls.push(['launch', input]);
     f.put(input.sessionGroup, { runId: input.runId, ready: false });
-  } });
+  } };
   await initialize(f); await readyToStart(f);
   assert.equal(calls(f, 'launch').length, 0);
   assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 1);
@@ -191,27 +191,27 @@ test('just-ready crashes back off while a stable runtime resets pacing', async t
 
 test('failed launches retain continuation and alert after five, then readiness clears the count', async t => {
   const f = routerFixture(t); f.put('origin'); const id = continuation(f);
-  const original = f.deps.getSessionAdapter;
-  f.deps.getSessionAdapter = runtime => ({ ...original(runtime), launch: async input => { f.calls.push(['launch', input]); throw Error('cannot launch'); } });
+  const original = f.deps.session;
+  f.deps.session = { ...original, launch: async input => { f.calls.push(['launch', input]); throw Error('cannot launch'); } };
   await initialize(f);
   for (const delay of [5000,10000,20000,40000,60000,60000]) { f.advance(delay); await f.rounds(3); }
   assert.equal(calls(f, 'launch').length, 6);
   assert.equal(calls(f, 'alert').filter(row => row[1] === 'continuation_start_failed').length, 1);
   assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'pending'); assert.equal(f.router.availableCapacity(), 2);
-  f.deps.getSessionAdapter = original; f.advance(60000); await f.rounds(5);
+  f.deps.session = original; f.advance(60000); await f.rounds(5);
   assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'done');
 });
 
 test('restart before launch and after launch preserves and clears a pending marker once', async t => {
   for (const launched of [false, true]) await t.test(String(launched), async t => {
     const f = routerFixture(t); f.put('origin'); const id = continuation(f);
-    const original = f.deps.getSessionAdapter;
-    if (launched) f.deps.getSessionAdapter = runtime => ({ ...original(runtime), launch: async input => { f.calls.push(['launch', input]); f.put('a', { runId: input.runId, ready: false }); } });
+    const original = f.deps.session;
+    if (launched) f.deps.session = { ...original, launch: async input => { f.calls.push(['launch', input]); f.put('a', { runId: input.runId, ready: false }); } };
     await initialize(f);
     if (launched) await readyToStart(f);
     await f.router.stop();
     if (launched) f.put('a', { runId: f.scene.get('a').runId, ready: true });
-    f.deps.getSessionAdapter = original;
+    f.deps.session = original;
     await initialize(f); await readyToStart(f);
     assert.deepEqual(calls(f, 'control'), []);
     assert.equal((f.db.listRunEndings([id])[0].continuationPending ? 'pending' : 'done'), 'done');
@@ -286,8 +286,8 @@ for (const changed of ['fence','scene','capacity','marker','inbound']) {
 
 test('continuation ready timeout releases confirmed absent launch and keeps its marker', async t => {
   const f = routerFixture(t, { readyTimeoutMs: 1000 }); f.put('origin'); const id = continuation(f);
-  const original = f.deps.getSessionAdapter;
-  f.deps.getSessionAdapter = runtime => ({ ...original(runtime), launch: async input => { f.calls.push(['launch', input]); f.put('a', { runId: input.runId, ready: false }); } });
+  const original = f.deps.session;
+  f.deps.session = { ...original, launch: async input => { f.calls.push(['launch', input]); f.put('a', { runId: input.runId, ready: false }); } };
   await initialize(f); await readyToStart(f);
   assert.equal(f.router.state.activations.size, 1);
   f.advance(1000); await f.rounds(2);
@@ -301,14 +301,14 @@ test('continuation ready timeout releases confirmed absent launch and keeps its 
 test('transient observation failure after continuation launch does not stop the new run', async t => {
   const f = routerFixture(t); f.put('origin'); const id = continuation(f);
   const read = f.deps.readLiveIdentities;
-  const adapter = f.deps.getSessionAdapter;
+  const adapter = f.deps.session;
   let failNextRead = false;
   let failures = 0;
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+  f.deps.session = { ...adapter, launch: async input => {
     f.calls.push(['launch', input]);
     f.put(input.sessionGroup, { runId: input.runId, ready: false });
     failNextRead = true;
-  } });
+  } };
   f.deps.readLiveIdentities = async groups => {
     if (groups.includes('a') && failNextRead) {
       failNextRead = false; failures++;
@@ -332,14 +332,14 @@ test('transient observation failure after continuation launch does not stop the 
 test('origin restarts with pending continuation and delivers only the startup prompt', async t => {
   const f = routerFixture(t);
   const id = continuation(f, 'origin');
-  const adapter = f.deps.getSessionAdapter;
+  const adapter = f.deps.session;
   let prompt;
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+  f.deps.session = { ...adapter, launch: async input => {
     f.calls.push(['launch', input]);
     f.put(input.sessionGroup, { runId: input.runId });
     prompt = f.db.insertControl('origin startup prompt', { sessionGroup: 'origin', priority: 2, appendAckSuffix: false });
     f.current.get('origin').startupControlIds = [prompt.id];
-  } });
+  } };
   await initialize(f); await readyToStart(f);
   assert.equal(calls(f, 'launch').length, 1);
   assert.equal(calls(f, 'launch')[0][1].sessionGroup, 'origin');
@@ -429,12 +429,12 @@ test('inbound continuation clears before startup and trigger without adding a co
   const f = routerFixture(t); f.put('origin'); continuation(f);
   const message = f.add('a'), sequence = [], clear = f.db.clearContinuation;
   f.db.clearContinuation = (...args) => { const result = clear(...args); if (result.cleared) sequence.push('clear'); return result; };
-  const adapter = f.deps.getSessionAdapter;
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+  const adapter = f.deps.session;
+  f.deps.session = { ...adapter, launch: async input => {
     f.calls.push(['launch', input]); f.put('a', { runId: input.runId });
     const prompt = f.db.insertControl('startup prompt', { sessionGroup: 'a', appendAckSuffix: false });
     f.current.get('a').startupControlIds = [prompt.id];
-  } });
+  } };
   const control = f.deps.deliverControl, conversation = f.deps.deliverConversation;
   f.deps.deliverControl = async (...args) => { sequence.push('startup'); return control(...args); };
   f.deps.deliverConversation = async (...args) => { sequence.push('trigger'); return conversation(...args); };

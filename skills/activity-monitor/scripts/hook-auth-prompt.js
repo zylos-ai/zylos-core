@@ -45,11 +45,22 @@ export async function approvePermission(hookData, {
   if (config.auto_approve_permission === false) return { skipped: true, reason: 'disabled' };
   scopeReader ??= (await import('./bootstrap-scope.js')).bootstrapScope;
   const scope = await scopeReader(env);
+  const { loadCoreModule } = await import('./core-modules.js');
+  const { SUPPORTED_RUNTIMES, DEFAULT_RUNTIME } = await loadCoreModule('runtime/descriptors.js');
+  let expected = DEFAULT_RUNTIME;
+  if (env.ZYLOS_MODEL_CONFIG) {
+    try {
+      const runtime = JSON.parse(env.ZYLOS_MODEL_CONFIG)?.runtime;
+      if (SUPPORTED_RUNTIMES.includes(runtime)) expected = runtime;
+    } catch {
+      // An unreadable model environment still targets the default runtime.
+    }
+  }
   exec('node', [
     controlPath, 'enqueue', '--content', '[KEYSTROKE]Enter', '--priority', '0',
     '--bypass-state', '--available-in', String(AUTO_APPROVE_AVAILABLE_IN_SEC), '--no-ack-suffix',
     ...(scope.sessionGroup ? ['--group', scope.sessionGroup] : []),
-    '--target-run', env.ZYLOS_RUN_ID, '--expected-runtime', 'claude',
+    '--target-run', env.ZYLOS_RUN_ID, '--expected-runtime', expected,
     '--expected-session', hookData.session_id,
   ], { stdio: 'pipe', timeout: 5000 });
   return { skipped: false };

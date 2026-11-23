@@ -2,75 +2,29 @@ import { handleCoreAction } from './core-actions.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import crypto from 'node:crypto';
-import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { getCodexModels, codexEffortsForModel } from './codex-models.js';
+import { getDashboardRuntime } from './runtime/index.js';
+import { UNSUPPORTED } from './runtime/contract.js';
 import { loadCoreModule } from './core-modules.js';
-const { modelThreshold, thresholdLimit, readDefaultModels, readCodexModelWindows, migrateModelThresholds, setModelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
+
+const { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES, findRuntime, getRuntime, runtimeDisplayName, runtimesWith } = await loadCoreModule('runtime/index.js');
+const { modelThreshold, thresholdLimit, loadRuntimeContexts, readModelWindows, migrateModelThresholds, setModelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
+// This module awaits both runtime factories at top level. Runtime implementations must not statically import it.
+const thresholdContexts = await loadRuntimeContexts();
 const { resolveSessionHotTtl, HOT_TTL_MIN_MINUTES, HOT_TTL_MAX_MINUTES } = await loadCoreModule('session-hot-ttl.js');
 const { readConfigStrict, configUnreadable } = await loadCoreModule('config-store.js');
 const { updateConfigWithLock } = await loadCoreModule('config-lock.js');
-const { writePrivateFile } = await loadCoreModule('private-file.js');
+const modelRuntimeIds = runtimesWith('modelOverride');
+const dashboardModelRuntimes = await Promise.all(modelRuntimeIds.map(id => getDashboardRuntime(id)));
+const coreModelRuntimes = await Promise.all(modelRuntimeIds.map(id => getRuntime(id)));
+const MODEL_RUNTIMES = new Map(coreModelRuntimes.map((runtime, index) => [
+  runtime.id, { config: runtime.launch.modelConfig, catalog: dashboardModelRuntimes[index].modelCatalog },
+]));
 
 const execFileAsync = promisify(execFile);
-
-function settingsPath(zylosDir) {
-  return path.join(zylosDir, '.claude', 'settings.json');
-}
-
-function codexHome() {
-  return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
-}
-
-function codexConfigPath() {
-  return path.join(codexHome(), 'config.toml');
-}
-
-function codexProjectConfigPath(zylosDir) {
-  return path.join(zylosDir || path.join(os.homedir(), 'zylos'), '.codex', 'config.toml');
-}
-
 const DEDUP_WINDOW_MS = 2000;
 const recentInvocations = new Map();
-
-function readSettings(zylosDir) {
-  try {
-    return JSON.parse(fs.readFileSync(settingsPath(zylosDir), 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-// Claude settings may carry credentials in env; keep them owner-only.
-function writeSettings(zylosDir, settings) {
-  writePrivateFile(settingsPath(zylosDir), JSON.stringify(settings, null, 2) + '\n');
-}
-
-export function readCodexRootString(key, zylosDir) {
-  try {
-    const text = fs.readFileSync(codexProjectConfigPath(zylosDir), 'utf8');
-    const match = text.match(new RegExp(`^\\s*${key}\\s*=\\s*"([^"]*)"\\s*$`, 'm'));
-    return match?.[1] || null;
-  } catch { /* fall through */ }
-  return null;
-}
-
-function writeCodexRootString(key, value, zylosDir) {
-  const configPath = codexProjectConfigPath(zylosDir);
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  let text = '';
-  try { text = fs.readFileSync(configPath, 'utf8'); } catch { /* create below */ }
-  if (!text) {
-    text = '# Zylos project-level Codex config.\n';
-  }
-  const line = `${key} = ${JSON.stringify(value)}`;
-  const pattern = new RegExp(`^\\s*${key}\\s*=\\s*"[^"]*"\\s*$`, 'm');
-  text = pattern.test(text)
-    ? text.replace(pattern, line)
-    : `${line}\n${text}`;
-  fs.writeFileSync(configPath, text.endsWith('\n') ? text : text + '\n', { mode: 0o600 });
-}
 
 function log(reqId, msg) {
   process.stderr.write(`[actions ${reqId}] ${msg}\n`);
@@ -102,9 +56,9 @@ export async function handleAction(action, body, config, { timezone } = {}) {
   const zylosDir = config.zylosDir || path.join(os.homedir(), 'zylos');
   log(reqId, `=> ${action} ${JSON.stringify(body || {})}`);
 
-  if (action === 'upgrade-cc' && !['claude', 'codex', 'agy'].includes(body?.runtime)) {
+  if (action === 'upgrade-cc' && !SUPPORTED_RUNTIMES.includes(body?.runtime)) {
     return { ok: false, error: 'runtime_unsupported',
-      message: 'Choose claude, codex or agy for the CLI upgrade.',
+      message: `Choose ${SUPPORTED_RUNTIMES.slice(0, -1).join(', ')} or ${SUPPORTED_RUNTIMES.at(-1)} for the CLI upgrade.`,
       messageKey: 'result.runtime_upgrade_unsupported' };
   }
 
@@ -136,7 +90,7 @@ export async function handleAction(action, body, config, { timezone } = {}) {
     result = { ok: false, error: 'internal_error', message: err.message, messageKey: 'result.internal_error', messageParams: { error: err.message } };
   }
 
-  if (action === 'switch-runtime' && !result.ok && ['AUTH_FAILED', 'AUTH_NOT_CONFIRMED', 'HOOKS_NOT_READY'].includes(result.error?.code)) {
+  if (action === 'switch-runtime' && !result.ok && ['AUTH_FAILED', 'AUTH_NOT_CONFIRMED', 'INSTRUCTIONS_UNAVAILABLE', 'RUNTIME_SETUP_INCOMPLETE'].includes(result.error?.code)) {
     result = { ...result, messageKey: null,
       message: [result.error.code, result.error.message].filter(Boolean).join(': ') };
   }
@@ -147,8 +101,16 @@ export async function handleAction(action, body, config, { timezone } = {}) {
   return result;
 }
 
+function resolveModelRuntime(body, config) {
+  const runtime = body?.runtime === undefined
+    ? config.runtime || process.env.ZYLOS_RUNTIME || DEFAULT_RUNTIME
+    : body.runtime;
+  const implementation = MODEL_RUNTIMES.get(runtime);
+  return implementation ? { runtime, ...implementation } : null;
+}
+
 async function switchModel(reqId, body, config, zylosDir) {
-  if (body?.runtime !== undefined && !['claude', 'codex'].includes(body.runtime)) {
+  if (body?.runtime !== undefined && !MODEL_RUNTIMES.has(body.runtime)) {
     return { ok: false, error: 'INVALID_RUNTIME' };
   }
   const model = body?.model;
@@ -156,14 +118,17 @@ async function switchModel(reqId, body, config, zylosDir) {
     return { ok: false, error: 'invalid_model', message: 'model is required', messageKey: 'result.invalid_model' };
   }
 
-  const runtime = body?.runtime ?? (config.runtime || process.env.ZYLOS_RUNTIME || 'claude');
-  const claude = runtime === 'claude';
-  const readModel = settings => claude ? settings.model : readCodexRootString('model', zylosDir);
-  const alreadySet = () => {
+  const resolved = resolveModelRuntime(body, config);
+  if (!resolved) return { ok: false, error: 'INVALID_RUNTIME' };
+  const { runtime, config: modelConfig } = resolved;
+  const alreadySet = () => ({
+    ok: false, error: 'already_set', message: `Model already set to ${model}`,
+    messageKey: 'result.already_set_model', messageParams: { value: model },
+  });
+  if (modelConfig.read(zylosDir).model === model) {
     log(reqId, `no-op: ${runtime} model already "${model}"`);
-    return { ok: false, error: 'already_set', message: `Model already set to ${model}`, messageKey: 'result.already_set_model', messageParams: { value: model } };
-  };
-  if (readModel(claude ? readSettings(zylosDir) : null) === model) return alreadySet();
+    return alreadySet();
+  }
 
   let observed, readSessionMode, mode, restartObservedGroups;
   if (body.runtime !== undefined) {
@@ -181,13 +146,13 @@ async function switchModel(reqId, body, config, zylosDir) {
     }
   }
   await migrateModelThresholds({ zylosDir });
-  // Discovery yields to other settings requests. Merge with the file as it stands at the write.
-  const settings = claude ? readSettings(zylosDir) : null;
-  const previous = readModel(settings);
-  if (previous === model) return alreadySet();
-  if (claude) writeSettings(zylosDir, { ...settings, model });
-  else writeCodexRootString('model', model, zylosDir);
-  log(reqId, `write ${runtime} model "${previous ?? '(unset)'}" → "${model}"`);
+  // Discovery yields to other writes. Core reads the current file at save time.
+  const { changed, previous, file, key } = await modelConfig.write(zylosDir, 'model', model);
+  if (!changed) {
+    log(reqId, `no-op: ${file}: ${key} already "${model}"`);
+    return alreadySet();
+  }
+  log(reqId, `write ${file}: ${key} "${previous ?? '(unset)'}" → "${model}"`);
   if (observed) {
     let modeChanged = true;
     try { modeChanged = readSessionMode().mode !== mode; } catch { /* The save succeeded; the run cannot be safely targeted. */ }
@@ -197,121 +162,70 @@ async function switchModel(reqId, body, config, zylosDir) {
     ...(observed && { data: observed }), messageKey: 'result.model_changed', messageParams: { value: model, runtime } };
 }
 
-function effortsForModel(model) {
-  if (/^(fable|claude-fable-|opus|claude-opus-5|claude-opus-4-[89]|claude-opus-4-[1-9]\d|claude-sonnet-5)/.test(model)) {
-    return ['low', 'medium', 'high', 'xhigh'];
-  }
-  if (/^(haiku|claude-haiku-)/.test(model)) {
-    return [];
-  }
-  return ['low', 'medium', 'high'];
-}
-
 async function switchEffort(reqId, body, config, zylosDir) {
-  if (body?.runtime !== undefined && !['claude', 'codex'].includes(body.runtime)) {
-    return { ok: false, error: 'INVALID_RUNTIME' };
-  }
+  const resolved = resolveModelRuntime(body, config);
+  if (!resolved) return { ok: false, error: 'INVALID_RUNTIME' };
+  const { runtime, config: modelConfig, catalog } = resolved;
   const effort = body?.effort;
-  const runtime = body?.runtime ?? (config.runtime || process.env.ZYLOS_RUNTIME || 'claude');
+  const valid = catalog.effortsFor(modelConfig.read(zylosDir).model ?? '');
 
-  if (runtime === 'claude') {
-    const settings = readSettings(zylosDir);
-    const valid = effortsForModel(settings.model || '');
-    if (!effort || !valid.includes(effort)) {
-      return { ok: false, error: 'invalid_effort', message: `effort must be one of: ${valid.join(', ')}`, messageKey: 'result.invalid_effort', messageParams: { values: valid.join(', ') } };
-    }
-
-    const prev = settings.effortLevel;
-    if (prev === effort) {
-      log(reqId, `no-op: settings.effortLevel already "${effort}"`);
-      return { ok: false, error: 'already_set', message: `Effort already set to ${effort}`, messageKey: 'result.already_set_effort', messageParams: { value: effort } };
-    }
-    settings.effortLevel = effort;
-    log(reqId, `write ${settingsPath(zylosDir)}: effortLevel "${prev ?? '(unset)'}" → "${effort}"`);
-    writeSettings(zylosDir, settings);
-
-    return { ok: true, message: `Effort changed to ${effort}.`, previous: prev, requires_restart: body.runtime === undefined, runtime, messageKey: 'result.effort_changed', messageParams: { value: effort, runtime } };
-  }
-
-  const currentModel = readCodexRootString('model', zylosDir);
-  const valid = codexEffortsForModel(currentModel);
-  if (!valid.length) {
+  if (valid === null) {
     return { ok: false, error: 'unknown_model_capabilities', message: 'Effort capabilities are unknown for the configured model.', messageKey: 'result.unknown_model_capabilities' };
   }
   if (!effort || !valid.includes(effort)) {
-    return { ok: false, error: 'invalid_effort', message: `effort must be one of: ${valid.join(', ')}`, messageKey: 'result.invalid_effort', messageParams: { values: valid.join(', ') } };
+    const values = valid.join(', ');
+    return { ok: false, error: 'invalid_effort', message: `effort must be one of: ${values}`, messageKey: 'result.invalid_effort', messageParams: { values } };
   }
 
-  const prev = readCodexRootString('model_reasoning_effort', zylosDir);
-  if (prev === effort) {
-    log(reqId, `no-op: codex model_reasoning_effort already "${effort}"`);
+  const { changed, previous, file, key } = await modelConfig.write(zylosDir, 'effort', effort);
+  if (!changed) {
+    log(reqId, `no-op: ${file}: ${key} already "${effort}"`);
     return { ok: false, error: 'already_set', message: `Effort already set to ${effort}`, messageKey: 'result.already_set_effort', messageParams: { value: effort } };
   }
-  writeCodexRootString('model_reasoning_effort', effort, zylosDir);
-  log(reqId, `write ${codexProjectConfigPath(zylosDir)}: model_reasoning_effort "${prev ?? '(unset)'}" → "${effort}"`);
-  return { ok: true, message: `Effort changed to ${effort}.`, previous: prev, requires_restart: body.runtime === undefined, runtime, messageKey: 'result.effort_changed', messageParams: { value: effort, runtime } };
+  log(reqId, `write ${file}: ${key} "${previous ?? '(unset)'}" → "${effort}"`);
+  return { ok: true, message: `Effort changed to ${effort}.`, previous, requires_restart: body.runtime === undefined, runtime, messageKey: 'result.effort_changed', messageParams: { value: effort, runtime } };
 }
 
 async function upgradeRuntimeCli(reqId, runtime, zylosDir) {
-  if (runtime === 'agy') {
-    log(reqId, 'exec: agy update');
-    try {
-      const { readLaunchDotenv } = await loadCoreModule('runtime/session-command.js');
-      const dotenvVars = readLaunchDotenv(zylosDir);
-      const env = { ...process.env, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' };
-      const proxy = Object.hasOwn(dotenvVars, 'HTTPS_PROXY') ? dotenvVars.HTTPS_PROXY : process.env.HTTPS_PROXY;
-      if (proxy) env.HTTPS_PROXY = proxy;
-      else delete env.HTTPS_PROXY;
-      const { stdout, stderr } = await execFileAsync('agy', ['update'], {
-        timeout: 300000, killSignal: 'SIGKILL', env,
-      });
-      log(reqId, `agy update done (${((stdout || '') + (stderr || '')).trim().slice(0, 200)})`);
-      return { ok: true, message: 'Antigravity updated. Restart session to apply.',
-        output: ((stdout || '') + (stderr || '')).trim(), requires_restart: true,
-        messageKey: 'result.agy_updated' };
-    } catch (err) {
-      log(reqId, `agy update failed: ${(err.stderr || err.stdout || err.message || '').slice(0, 200)}`);
-      if (err.killed || err.code === 'ETIMEDOUT') {
-        return { ok: false, error: 'deadline_exceeded', message: 'Antigravity upgrade did not complete within 5 minutes. Check the installed version before retrying.',
-          messageKey: 'result.agy_upgrade_incomplete' };
+  const rt = await findRuntime(runtime);
+  if (!rt || rt.install.upgradeCli === UNSUPPORTED) {
+    return { ok: false, error: 'runtime_unsupported', message: `CLI upgrade is not supported for runtime: ${runtime}`,
+      messageKey: 'result.runtime_upgrade_unsupported', messageParams: { runtime } };
+  }
+  const name = runtimeDisplayName(runtime);
+  log(reqId, `exec: ${runtime} update`);
+  let executionError;
+  const result = await rt.install.upgradeCli({
+    root: zylosDir,
+    execFile: async (...args) => {
+      try { return await execFileAsync(...args); }
+      catch (err) {
+        executionError = err.stderr || err.stdout || err.message;
+        throw err;
       }
-      const error = err.stderr || err.stdout || err.message;
-      return { ok: false, error: 'upgrade_failed', message: `Antigravity upgrade failed: ${error}`,
-        messageKey: 'result.agy_upgrade_failed', messageParams: { error } };
-    }
+    },
+  });
+  if (result.outcome === 'updated') {
+    log(reqId, `${runtime} update done (${result.output.slice(0, 200)})`);
+    return { ok: true, message: `${name} updated. Restart session to apply.`, output: result.output,
+      requires_restart: true, messageKey: 'result.runtime_updated', messageParams: { runtime: name } };
   }
-  if (runtime === 'codex') {
-    log(reqId, `exec: codex update`);
-    try {
-      const { stdout, stderr } = await execFileAsync('codex', ['update'], { timeout: 60000 });
-      const output = (stdout || '') + (stderr || '');
-      log(reqId, `codex update done (${output.trim().slice(0, 200)})`);
-      return { ok: true, message: 'Codex CLI updated. Restart session to apply.', output: output.trim(), requires_restart: true, messageKey: 'result.codex_updated' };
-    } catch (err) {
-      const fallbackMsg = err.stderr || err.stdout || err.message;
-      log(reqId, `codex update failed: ${(fallbackMsg || '').slice(0, 200)}`);
-      return { ok: false, error: 'upgrade_failed', message: fallbackMsg, messageKey: 'result.upgrade_failed', messageParams: { error: fallbackMsg } };
-    }
+  log(reqId, `${runtime} update failed: ${String(executionError || result.error || '').slice(0, 200)}`);
+  if (result.outcome === 'timeout') {
+    const minutes = result.timeoutMs / 60000;
+    return { ok: false, error: 'deadline_exceeded',
+      message: `${name} upgrade did not complete within ${minutes} minutes. Check the installed version before retrying.`,
+      messageKey: 'result.runtime_upgrade_incomplete', messageParams: { runtime: name, minutes } };
   }
-
-  log(reqId, `exec: claude update`);
-  try {
-    const { stdout, stderr } = await execFileAsync('claude', ['update'], { timeout: 60000 });
-    const output = (stdout || '') + (stderr || '');
-    log(reqId, `claude update done (${output.trim().slice(0, 200)})`);
-    return { ok: true, message: 'Claude Code updated. Restart session to apply.', output: output.trim(), requires_restart: true, messageKey: 'result.cc_updated' };
-  } catch (err) {
-    const fallbackMsg = err.stderr || err.stdout || err.message;
-    log(reqId, `claude update failed: ${(fallbackMsg || '').slice(0, 200)}`);
-    return { ok: false, error: 'upgrade_failed', message: fallbackMsg, messageKey: 'result.upgrade_failed', messageParams: { error: fallbackMsg } };
-  }
+  return { ok: false, error: 'upgrade_failed', message: result.error,
+    messageKey: 'result.upgrade_failed', messageParams: { error: result.error } };
 }
 
 async function setThreshold(reqId, body, config, zylosDir) {
-  if (!['claude', 'codex'].includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME' };
+  if (!SUPPORTED_RUNTIMES.includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME' };
   if (typeof body?.model !== 'string' || !body.model.trim()) return { ok: false, error: 'invalid_model', messageKey: 'result.invalid_model' };
   const value = typeof body.value === 'number' || (typeof body.value === 'string' && /^\d+$/.test(body.value.trim())) ? Number(body.value) : NaN;
-  const limit = thresholdLimit({ runtime: body.runtime, model: body.model, codexModels: readCodexModelWindows({}) });
+  const limit = thresholdLimit({ runtime: body.runtime, context: thresholdContexts[body.runtime] });
   if (body.value === '' || !Number.isInteger(value) || value < 10 || value > limit) {
     return { ok: false, error: 'invalid_value', message: `Threshold must be between 10 and ${limit}`, messageKey: 'result.invalid_threshold', messageParams: { max: limit } };
   }
@@ -352,65 +266,23 @@ async function setSessionHotTtl(reqId, body, zylosDir) {
 }
 
 export function getActionsMeta(config) {
-  const runtime = config.runtime || process.env.ZYLOS_RUNTIME || 'claude';
-  const codexModels = runtime === 'codex' ? getCodexModels() : [];
-
-  const claudeModels = [
-    { id: 'fable[1m]', display_name: 'Fable [1M] (latest)' },
-    { id: 'opus', display_name: 'Opus (latest)' },
-    { id: 'opus[1m]', display_name: 'Opus [1M] (latest)' },
-    { id: 'sonnet', display_name: 'Sonnet (latest)' },
-    { id: 'sonnet[1m]', display_name: 'Sonnet [1M] (latest)' },
-    { id: 'haiku', display_name: 'Haiku (latest)' },
-    { id: 'claude-fable-5-1[1m]' },
-    { id: 'claude-fable-5[1m]' },
-    { id: 'claude-opus-5-5' },
-    { id: 'claude-opus-5-5[1m]' },
-    { id: 'claude-opus-5' },
-    { id: 'claude-opus-5[1m]' },
-    { id: 'claude-sonnet-5' },
-    { id: 'claude-opus-4-8' },
-    { id: 'claude-opus-4-8[1m]' },
-    { id: 'claude-opus-4-7' },
-    { id: 'claude-opus-4-7[1m]' },
-    { id: 'claude-opus-4-6' },
-    { id: 'claude-opus-4-6[1m]' },
-    { id: 'claude-sonnet-4-6' },
-    { id: 'claude-haiku-4-5-20251001' },
-  ];
-
-  const models = runtime === 'claude'
-    ? claudeModels
-    : codexModels.map(m => ({ id: m.id, display_name: m.display_name }));
-
-  const efforts_by_model = runtime === 'claude'
-    ? Object.fromEntries([
-        ...claudeModels.map(m => [m.id, effortsForModel(m.id)]),
-        ['*', ['low', 'medium', 'high']]
-      ])
-    : Object.fromEntries(codexModels.map(m => [m.id, m.efforts]));
-
+  const runtime = config.runtime || process.env.ZYLOS_RUNTIME || DEFAULT_RUNTIME;
   const zylosDir = config.zylosDir || path.join(os.homedir(), 'zylos');
-  const settings = runtime === 'claude' ? readSettings(zylosDir) : {};
-  const nativeModels = readDefaultModels({ zylosDir });
-  const codexModel = runtime === 'codex' ? nativeModels.codex : null;
-  const codexEffort = runtime === 'codex' ? readCodexRootString('model_reasoning_effort', zylosDir) : null;
-  const currentCodexModel = runtime === 'codex'
-    ? codexModel || null
-    : null;
-  if (runtime === 'codex') {
-    for (const id of [codexModel]) {
-      if (id && !models.some(model => model.id === id)) {
-        models.push({ id, display_name: id });
-        efforts_by_model[id] = [];
-      }
-    }
+  const catalog = MODEL_RUNTIMES.get(runtime)?.catalog;
+  const { model, effort: currentEffort } = instanceDefaults(runtime, zylosDir);
+  const currentModel = model || null;
+  const models = catalog?.models() ?? [];
+  if (catalog?.strict && currentModel && !models.some(model => model.id === currentModel)) {
+    models.push({ id: currentModel, display_name: currentModel });
+  }
+  const efforts_by_model = Object.fromEntries(models.map(({ id }) => [id, catalog.effortsFor(id) ?? []]));
+  if (catalog && catalog.defaultEfforts !== UNSUPPORTED) {
+    efforts_by_model['*'] = [...catalog.defaultEfforts];
   }
 
-  const currentModel = runtime === 'claude' ? nativeModels.claude : currentCodexModel;
-  const windows = readCodexModelWindows({});
+  const windows = readModelWindows({ contexts: thresholdContexts });
   const thresholdModels = [...new Set([...models.map(item => item.id), currentModel, config.thresholdModel].filter(Boolean))];
-  const options = model => ({ runtime, model, defaultModel: currentModel, codexModels: windows });
+  const options = model => ({ runtime, context: thresholdContexts[runtime], model, defaultModel: currentModel, modelWindows: windows });
   const model_thresholds = Object.fromEntries(thresholdModels.map(model => [model, modelThreshold(config, options(model))]));
   const model_threshold_max = Object.fromEntries(thresholdModels.map(model => [model, thresholdLimit(options(model))]));
   const newSessionThreshold = modelThreshold(config, options(currentModel));
@@ -418,14 +290,17 @@ export function getActionsMeta(config) {
   return {
     runtime,
     current_model: currentModel,
-    current_effort: runtime === 'claude'
-      ? settings.effortLevel || null
-      : codexEffort || null,
+    current_effort: currentEffort,
     models,
     efforts_by_model,
     model_thresholds,
     model_threshold_max,
     new_session_threshold: newSessionThreshold,
     session_hot_ttl: resolveSessionHotTtl(config),
+    catalog_strict: catalog?.strict ?? null,
   };
+}
+
+export function instanceDefaults(runtime, zylosDir) {
+  return MODEL_RUNTIMES.get(runtime)?.config.read(zylosDir) ?? { model: null, effort: null };
 }

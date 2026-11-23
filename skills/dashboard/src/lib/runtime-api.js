@@ -1,12 +1,18 @@
 import { getActionsMeta } from './actions.js';
 import { sendJson } from './http.js';
 import { isNewerVersion } from './version-utils.js';
+import { loadCoreModule } from './core-modules.js';
 
-export const DASHBOARD_RUNTIMES = ['claude', 'codex', 'agy'];
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
 
-export function runtimeVersionRecord(runtime, { installed = {}, latest = {} } = {}) {
+export const DASHBOARD_RUNTIMES = SUPPORTED_RUNTIMES;
+
+export function runtimeVersionRecord(runtime, { installed = {}, latest = {}, unsupported = [] } = {}) {
   const current = installed[runtime] ?? null;
-  const available = latest[runtime === 'claude' ? 'cc' : runtime] ?? null;
+  if (unsupported.includes(runtime)) {
+    return { installed: current, latest: null, update: null, update_check: 'unsupported' };
+  }
+  const available = latest[runtime] ?? null;
   return { installed: current, latest: available,
     update: current && available && isNewerVersion(available, current) ? available : null };
 }

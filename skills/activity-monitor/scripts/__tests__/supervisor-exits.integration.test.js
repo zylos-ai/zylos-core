@@ -1,10 +1,11 @@
+import { createSessionOps } from '../../../../cli/lib/runtime/session-ops.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
 import { SupervisorScenes } from '../supervisor-scenes.js';
 import { SupervisorExits } from '../supervisor-exits.js';
-import { ClaudeAdapter } from '../../../../cli/lib/runtime/claude.js';
+
 function setup(t) {
  const f=readyTmuxTarget(t,{prefix:'supervisor-runtime-exit-',mode:'multi',runtimeProcess:true});
  const db=createStore(f.db,{readConfig:()=>({state:'ok',config:{runtime:'claude',session_mode:'multi'}})});
@@ -18,7 +19,7 @@ test('runtime SIGKILL removes only its exited managed session and records crash'
  const {f,scenes,exits,events,errors}=setup(t);
  f.tmux('new-session','-d','-s','fixture-manual','sleep','120');
  const before=await scenes.observe();assert.equal(before[0].processRunning,true);await exits.advance(before);
- const adapter=new ClaudeAdapter({tmux:{socketPath:f.socketPath,binary:f.binary},env:f.env});
+ const adapter=createSessionOps({tmux:{socketPath:f.socketPath,binary:f.binary},env:f.env});
  const panePid=Number(f.tmux('display-message','-p','-t',before[0].tmuxTarget.paneId,'#{pane_pid}'));
  assert.equal(before[0].runtimePid,panePid);
  assert.deepEqual(await adapter.isRunning({tmuxName:before[0].tmuxName}),{tmux:true,process:true});

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { getActionsMeta, handleAction } from '../src/lib/actions.js';
+import { getActionsMeta, handleAction, instanceDefaults } from '../src/lib/actions.js';
 
 async function withCodexHome(fn) {
   const prev = process.env.CODEX_HOME;
@@ -39,6 +39,7 @@ test('getActionsMeta exposes model and effort controls for Codex runtime', () =>
   const meta = getActionsMeta({ runtime: 'codex', codex_new_session_threshold: '75', zylosDir }, {});
 
   assert.equal(meta.runtime, 'codex');
+  assert.equal(meta.catalog_strict, true);
   assert.ok(meta.models.some(model => model.id === 'gpt-6.1-sol'));
   assert.ok(meta.models.some(model => model.id === 'gpt-5.4'));
   assert.deepEqual(meta.efforts_by_model['gpt-5.4'], []);
@@ -97,10 +98,11 @@ test('getActionsMeta keeps Claude model and effort controls for Claude runtime',
   );
 
   assert.equal(meta.runtime, 'claude');
+  assert.equal(meta.catalog_strict, false);
   assert.ok(meta.models.length > 0);
   assert.ok(Object.keys(meta.efforts_by_model).length > 0);
   assert.equal(meta.current_effort, null, 'session effort does not replace an unset configured default');
-  assert.equal(meta.new_session_threshold, 70, 'without a configured model the legacy value has no model identity');
+  assert.equal(meta.new_session_threshold, 75, 'without a configured model the legacy value has no model identity');
 });
 test('Claude model list includes defaults with display names and specific versions', () => {
   const meta = getActionsMeta(
@@ -194,7 +196,8 @@ test('handleAction upgrades Codex CLI under Codex runtime', async () => {
   try {
     const result = await handleAction('upgrade-cc', { runtime: 'codex' }, {});
     assert.equal(result.ok, true);
-    assert.equal(result.messageKey, 'result.codex_updated');
+    assert.equal(result.messageKey, 'result.runtime_updated');
+    assert.deepEqual(result.messageParams, { runtime: 'Codex' });
     assert.equal(fs.readFileSync(marker, 'utf8').trim(), 'updated');
   } finally {
     process.env.PATH = prevPath;
@@ -203,7 +206,7 @@ test('handleAction upgrades Codex CLI under Codex runtime', async () => {
 });
 
 
-test('metadata exposes per-model thresholds, 1M limits and requested custom models', () => withCodexHome(codexHome => {
+test('metadata exposes per-model thresholds and maxima for requested custom models', () => withCodexHome(codexHome => {
   const zylosDir = makeZylosDir();
   try {
     fs.writeFileSync(path.join(zylosDir, '.codex/config.toml'), 'model = "small"\n');
@@ -212,12 +215,12 @@ test('metadata exposes per-model thresholds, 1M limits and requested custom mode
     const meta = getActionsMeta({ runtime: 'codex', zylosDir, thresholdModel: 'custom-large', codex_new_session_threshold: 74,
       model_rotation_thresholds: { codex: { small: 62, 'custom-large': 35 } } }, {});
     assert.equal(meta.model_thresholds.small, 62); assert.equal(meta.new_session_threshold, 62);
-    assert.equal(meta.model_thresholds['custom-large'], 35); assert.equal(meta.model_threshold_max['custom-large'], 40);
+    assert.equal(meta.model_thresholds['custom-large'], 35); assert.equal(meta.model_threshold_max['custom-large'], 95);
     assert.equal(meta.model_threshold_max.small, 95);
   } finally { fs.rmSync(zylosDir, { recursive: true, force: true }); }
 }));
 
-test('threshold writes require a model and engine, preserve another model and reject values above its window limit', async () => {
+test('threshold writes require a model and engine, preserve another model and reject values above the maximum', async () => {
   const zylosDir = makeZylosDir();
   try {
     fs.mkdirSync(path.join(zylosDir, '.zylos')); fs.mkdirSync(path.join(zylosDir, '.claude'));
@@ -226,13 +229,13 @@ test('threshold writes require a model and engine, preserve another model and re
     const config = { zylosDir, runtime: 'codex' };
     assert.equal((await handleAction('set-threshold', { model: 'opus', value: 63 }, config)).error, 'INVALID_RUNTIME');
     assert.equal((await handleAction('set-threshold', { runtime: 'claude', value: 63 }, config)).error, 'invalid_model');
-    assert.equal((await handleAction('set-threshold', { runtime: 'claude', model: 'opus[1m]', value: 41 }, config)).error, 'invalid_value');
+    assert.equal((await handleAction('set-threshold', { runtime: 'claude', model: 'opus[1m]', value: 96 }, config)).error, 'invalid_value');
     assert.equal((await handleAction('set-threshold', { runtime: 'claude', model: 'opus[1m]', value: '35junk' }, config)).error, 'invalid_value');
     assert.equal((await handleAction('set-threshold', { runtime: 'claude', model: 'opus[1m]', value: true }, config)).error, 'invalid_value');
     for (const runtime of ['claude', 'codex']) {
       const rejected = await handleAction('set-threshold', { runtime, model: 'opus[1m]', value: 9 }, config);
       assert.equal(rejected.error, 'invalid_value');
-      assert.match(rejected.message, /between 10 and 40/);
+      assert.match(rejected.message, /between 10 and 95/);
       assert.equal((await handleAction('set-threshold', { runtime, model: 'opus[1m]', value: 10 }, config)).ok, true);
     }
     assert.equal((await handleAction('set-threshold', { runtime: 'claude', model: 'opus[1m]', value: 35 }, config)).ok, true);
@@ -243,15 +246,38 @@ test('threshold writes require a model and engine, preserve another model and re
   } finally { fs.rmSync(zylosDir, { recursive: true, force: true }); }
 });
 
+test('threshold writes accept Antigravity models and reject unregistered runtimes', async () => {
+  const zylosDir = makeZylosDir();
+  try {
+    fs.mkdirSync(path.join(zylosDir, '.zylos'));
+    const configFile = path.join(zylosDir, '.zylos/config.json');
+    fs.writeFileSync(configFile, '{}');
+    const config = { zylosDir };
+    const body = { runtime: 'agy', model: 'gemini-3', value: 50 };
+    const result = await handleAction('set-threshold', body, config);
+    assert.equal(result.ok, true);
+    assert.equal(result.value, 50);
+    const saved = fs.readFileSync(configFile, 'utf8');
+    const meta = getActionsMeta({ ...JSON.parse(saved), zylosDir, runtime: body.runtime, thresholdModel: body.model }, {});
+    assert.equal(meta.model_thresholds[body.model], 50);
+    assert.equal(meta.model_threshold_max[body.model], 95);
+    assert.equal((await handleAction('set-threshold', { ...body, value: 96 }, config)).error, 'invalid_value');
+    for (const runtime of ['foo', '']) {
+      assert.equal((await handleAction('set-threshold', { ...body, runtime }, config)).error, 'INVALID_RUNTIME');
+    }
+    assert.equal(fs.readFileSync(configFile, 'utf8'), saved);
+  } finally { fs.rmSync(zylosDir, { recursive: true, force: true }); }
+});
+
 test('metadata keeps a fixed Claude version separate from the default model alias', () => {
   const zylosDir = makeZylosDir();
   try {
     fs.mkdirSync(path.join(zylosDir, '.claude'));
     fs.writeFileSync(path.join(zylosDir, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
     const meta = getActionsMeta({ runtime: 'claude', zylosDir, thresholdModel: 'claude-opus-4-6[1m]',
-      model_rotation_thresholds: { claude: { 'opus[1m]': 30 } } }, {});
-    assert.equal(meta.model_thresholds['opus[1m]'], 30);
-    assert.equal(meta.model_thresholds['claude-opus-4-6[1m]'], 40);
+      model_rotation_thresholds: { claude: { 'opus[1m]': 25 } } }, {});
+    assert.equal(meta.model_thresholds['opus[1m]'], 25);
+    assert.equal(meta.model_thresholds['claude-opus-4-6[1m]'], 20);
   } finally { fs.rmSync(zylosDir, { recursive: true, force: true }); }
 });
 
@@ -264,7 +290,7 @@ test('changing the default model pins the legacy threshold before the model chan
     assert.equal((await handleAction('switch-model', { runtime: 'claude', model: 'sonnet' }, { zylosDir })).ok, true);
     const stored = JSON.parse(fs.readFileSync(path.join(zylosDir, '.zylos/config.json'), 'utf8'));
     const meta = getActionsMeta({ ...stored, zylosDir, runtime: 'claude' }, {});
-    assert.equal(meta.model_thresholds.opus, 64); assert.equal(meta.model_thresholds.sonnet, 70);
+    assert.equal(meta.model_thresholds.opus, 64); assert.equal(meta.model_thresholds.sonnet, 75);
   } finally { fs.rmSync(zylosDir, { recursive: true, force: true }); }
 });
 
@@ -390,4 +416,23 @@ test('native single can save idle reclaim minutes while pre-migration remains re
   fs.writeFileSync(file, JSON.stringify({ runtime: 'claude' }));
   assert.equal((await handleAction('set-session-hot-ttl', { minutes: 28 }, { zylosDir })).error, 'multi_session_required');
   assert.equal(getActionsMeta({ runtime: 'claude', zylosDir }).session_hot_ttl.read_only, true);
+});
+
+test('Claude effort validation uses the trimmed default model', async t => {
+  const zylosDir = makeZylosDir();
+  t.after(() => fs.rmSync(zylosDir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(zylosDir, '.claude'));
+  const file = path.join(zylosDir, '.claude/settings.json');
+  const original = '{"model": " claude-haiku-4-5 "}';
+  fs.writeFileSync(file, original);
+  const { handleAction: dispatch } = await import('../src/lib/actions.js?trimmed-default-model');
+  const config = { runtime: 'claude', zylosDir };
+  const result = await dispatch('switch-effort', { runtime: 'claude', effort: 'high' }, config);
+  assert.equal(result.error, 'invalid_effort');
+  assert.deepEqual(result.messageParams, { values: '' });
+  const meta = getActionsMeta(config);
+  assert.equal(meta.current_model, 'claude-haiku-4-5');
+  assert.ok(!meta.models.some(model => model.id === meta.current_model), 'the custom model stays outside the catalog');
+  assert.equal(instanceDefaults('claude', zylosDir).model, 'claude-haiku-4-5');
+  assert.equal(fs.readFileSync(file, 'utf8'), original);
 });

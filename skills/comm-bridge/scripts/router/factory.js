@@ -3,8 +3,10 @@ import * as database from '../c4-db.js';
 const { readSessionMode, readZylosConfigStrict } = await loadCoreModule('config.js');
 const { createSessionReader } = await loadCoreModule('session-state-reader-async.js');
 const { readRuntimeHealth } = await loadCoreModule('session-state-reader.js');
+const { findRuntime } = await loadCoreModule('runtime/index.js');
 const { readReadyIdentity } = await loadCoreModule('runtime/session-target.js');
-const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
+const { createSessionOps } = await loadCoreModule('runtime/session-ops.js');
+const { launchSession } = await loadCoreModule('runtime/launch-flow.js');
 const { listGroupTmuxSessions } = await loadCoreModule('session-group-paths.js');
 const { readPoolCapacity } = await loadCoreModule('session-pool-config.js');
 import { createRouter } from './scheduler.js';
@@ -70,7 +72,7 @@ export function createDispatcher(overrides = {}, options = {}) {
   const providers = {
     db, readSessionMode, ...reader, readCurrentSession: readReadyIdentity,
     listGroupTmuxSessions: () => listGroupTmuxSessions(tmux), readRuntimeHealth,
-    getSessionAdapter: runtime => getSessionAdapter(runtime, { tmux }), submit,
+    session: { ...createSessionOps({ tmux }), launch: input => launchSession(input, { tmux }) }, submit,
     ...lifecycle, diagnostic, log,
     alert, sendFailureAlert,
     maintainDiagnostics: diagnostics.maintain,
@@ -80,7 +82,9 @@ export function createDispatcher(overrides = {}, options = {}) {
   const handleExpired = overrides.handleExpired ?? createPendingExpiryHandler({ sendFailureAlert });
   let router;
   const delivery = createDelivery({ ...providers, getSessionMode: () => router.state.mode,
-    formatConversation: overrides.formatConversation ?? (row => formatConversation(row, {
+    findRuntime: overrides.findRuntime ?? findRuntime,
+    formatConversation: overrides.formatConversation ?? ((row, options) => formatConversation(row, {
+      ...options,
       lookupQuote: current => resolveDashboardQuote(current, db.getDb()),
     })),
     notifyDelivered: overrides.notifyDelivered ?? notifyDelivered,

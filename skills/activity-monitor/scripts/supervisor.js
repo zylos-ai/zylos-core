@@ -17,6 +17,8 @@ import { publishSessionStatus } from './status-writer.js';
 import { createSupervisorConnectionHandler } from './router-socket.js';
 import { PENDING_MAX_AGE_SECONDS } from '../../comm-bridge/scripts/c4-config.js';
 import { isTmuxDirectoryError } from '../../comm-bridge/scripts/tmux-client-args.js';
+
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
 const { nudgeSession } = await loadCoreModule('session-nudge.js');
 const { appendEvent, rotateEventLog } = await loadCoreModule('event-log.js');
 const { writeSessionModeAtCutover } = await loadCoreModule('config.js');
@@ -218,7 +220,7 @@ export function createSupervisor(deps) {
     startupAlert:deps.alert,
     restore:async()=>{
       try{admission.restore();restartRequestsReadable();}catch(error){if(error.code!=='requests_unreadable')throw error;await reportError(error,{phase:'restart-requests'});}
-      for(const runtime of ['claude','codex','agy']) {
+      for(const runtime of SUPPORTED_RUNTIMES) {
         if((await health.restore(runtime)).health==='auth_failed')startupAuthChecks.add(runtime);
       }
       router.clearLegacyCache(path.join(deps.zylosDir,'activity-monitor','message-router-probe-cache.json'));await deps.restoreTransition?.();
@@ -309,7 +311,7 @@ export function createSupervisor(deps) {
       if(now()-lastMaintenance>=60000) {
         const activeGroups=new Set([...current.map(scene=>scene.sessionGroup ?? 'origin'),
           ...pendingGroups.map(group=>group.sessionGroup),...continuationGroups.map(group=>group.sessionGroup)]);
-        for (const runtime of ['claude','codex','agy']) {
+        for (const runtime of SUPPORTED_RUNTIMES) {
           try {
             await health.serial(runtime,()=>health.store(runtime).pruneGroups({activeGroups,isDeleted:async group=>{
               try { await fs.stat(groupRunDir(group,deps.env));return false; }
@@ -336,7 +338,7 @@ export function createSupervisor(deps) {
         }
         lastMaintenance=now();
       }
-      for(const runtime of ['claude','codex','agy']) {
+      for(const runtime of SUPPORTED_RUNTIMES) {
         // Consume before checking: failure, exceptions or changed health must not retry while idle.
         const startupCheck=startupAuthChecks.delete(runtime);
         if(health.store(runtime).read().health!=='auth_failed')continue;
@@ -380,8 +382,8 @@ export function createSupervisor(deps) {
       if(notification.controlId===undefined){
         observer.notifyDelivered(delivered,{currentSessionTs:current?.currentSessionTs});
         lifecycle.messageDelivered(delivered);
-        if(notification.runtime==='claude')await health.serial('claude',()=>{
-          const store=health.store('claude'),state=store.read(delivered.sessionGroup),retry=state.failure_retry;
+        await health.serial(notification.runtime,()=>{
+          const store=health.store(notification.runtime),state=store.read(delivered.sessionGroup),retry=state.failure_retry;
           if(!retry || retry.runId!==delivered.runId || delivered.pastedAt<=retry.failedAt)return;
           if(retry.controlId)try{db.expireControlById(retry.controlId);}catch(error){if(error.code!=='CONTROL_NOT_ACTIVE')throw error;}
           delete state.failure_retry;delete state.pending_notice;store.write(state,delivered.sessionGroup);

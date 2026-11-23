@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { after, beforeEach, describe, it } from 'node:test';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-activity-test-'));
@@ -22,7 +24,7 @@ async function runHook(payload, nowMs = 1000) {
   process.env.HOOK_ACTIVITY_DISABLE_MAIN = '1';
   const modulePath = new URL('../hook-activity.js', import.meta.url);
   const { handleHookActivity } = await import(`${modulePath.href}?t=${Date.now()}-${Math.random()}`);
-  handleHookActivity(payload, { nowMs, claudePid: 4242 });
+  return handleHookActivity(payload, { nowMs, claudePid: 4242 });
 }
 
 function readEvents() {
@@ -96,8 +98,35 @@ describe('hook-activity', () => {
 
     const [event] = readEvents();
     assert.equal(event.event, 'prompt');
+    assert.equal(event.runtime, 'claude');
     assert.equal(event.session_id, 'session-2');
     assert.equal(Object.hasOwn(event, 'tool'), false);
+  });
+
+  it('does not write managed activity without runtime identity', async () => {
+    const { handleHookActivity } = await import('../hook-activity.js');
+    const payload = { hook_event_name: 'UserPromptSubmit', session_id: 'session' };
+    for (const scope of [{}, { ZYLOS_SESSION_GROUP: 'origin' }]) {
+      assert.equal(await handleHookActivity(payload, {
+        env: { ZYLOS_DIR: tmpDir, ZYLOS_RUN_ID: 'run', ...scope },
+      }), null);
+      assert.equal(fs.existsSync(monitorDir), false);
+    }
+  });
+
+  it('malformed stdin logs one error and exits successfully without recording activity', () => {
+    fs.mkdirSync(monitorDir, { recursive: true });
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL('../hook-activity.js', import.meta.url))], {
+      env: { ...process.env, ZYLOS_DIR: tmpDir, HOOK_ACTIVITY_DISABLE_MAIN: '0' },
+      input: '{', encoding: 'utf8', timeout: 3000,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+    assert.equal(fs.existsSync(eventsFile), false);
+    const errors = fs.readFileSync(path.join(monitorDir, 'hook-activity-errors.log'), 'utf8');
+    assert.equal(errors.trimEnd().split('\n').length, 1);
   });
 
   it('records PostToolUse as post_tool event', async () => {
@@ -142,7 +171,7 @@ describe('hook-activity', () => {
     process.env.HOOK_ACTIVITY_DISABLE_MAIN = '1';
     const modulePath = new URL('../hook-activity.js', import.meta.url);
     const { handleHookActivity } = await import(`${modulePath.href}?t=${Date.now()}-${Math.random()}`);
-    const result = handleHookActivity({
+    const result = await handleHookActivity({
       hook_event_name: 'PreToolUse',
       session_id: 'session-subagent',
       agent_id: 'agent-123',
@@ -176,7 +205,7 @@ describe('hook-activity', () => {
     process.env.HOOK_ACTIVITY_DISABLE_MAIN = '1';
     const modulePath = new URL('../hook-activity.js', import.meta.url);
     const { handleHookActivity } = await import(`${modulePath.href}?t=${Date.now()}-${Math.random()}`);
-    const result = handleHookActivity({ hook_event_name: 'UnknownEvent' }, { nowMs: 5000, claudePid: 4242 });
+    const result = await handleHookActivity({ hook_event_name: 'UnknownEvent' }, { nowMs: 5000, claudePid: 4242 });
     assert.equal(result, null);
   });
 
@@ -186,7 +215,7 @@ describe('hook-activity', () => {
     process.env.HOOK_ACTIVITY_DISABLE_MAIN = '1';
     const modulePath = new URL('../hook-activity.js', import.meta.url);
     const { handleHookActivity } = await import(`${modulePath.href}?t=${Date.now()}-${Math.random()}`);
-    const result = handleHookActivity({
+    const result = await handleHookActivity({
       hook_event_name: 'PreToolUse',
       tool_name: 'WebFetch',
       tool_input: { url: 'https://example.com' }

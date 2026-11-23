@@ -1,6 +1,8 @@
 import https from 'node:https';
 import { loadCoreModule } from './core-modules.js';
 
+const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
+
 async function checkCoreUpdate(current, { zylosDir, fetchZylosLatest }) {
   const major = current?.match(/^v?(\d+)\./)?.[1];
   if (major === undefined) return null;
@@ -62,36 +64,42 @@ export function fetchNpmLatest(pkg) {
 export class VersionChecker {
   constructor({
     onUpdate,
+    sources = {},
     readCoreVersion = () => null,
     zylosDir,
     fetchZylosLatest,
-    fetchCcLatest = () => fetchLatestTag('anthropics/claude-code'),
-    fetchCodexLatest = fetchNpmLatest,
+    fetchGithub = fetchLatestTag,
+    fetchNpm = fetchNpmLatest,
   } = {}) {
-    this._latest = { cc: null, codex: null };
-    this._onUpdate = onUpdate || null;
+    this._latest = {};
     this._readCoreVersion = readCoreVersion;
     this._checkCoreUpdate = () => checkCoreUpdate(readCoreVersion(), { zylosDir, fetchZylosLatest });
     this._coreUpdate = null;
-    this._fetchCcLatest = fetchCcLatest;
-    this._fetchCodexLatest = fetchCodexLatest;
+    this._checks = new Map();
+    this._unsupported = new Set();
+    for (const [id, source] of Object.entries(sources)) {
+      if (source === UNSUPPORTED || !['github', 'npm'].includes(source?.source)) {
+        this._unsupported.add(id);
+        continue;
+      }
+      this._latest[id] = null;
+      this._checks.set(id, source.source === 'github' ? () => fetchGithub(source.repo) : () => fetchNpm(source.package));
+    }
+    this._onUpdate = onUpdate || null;
     this._timer = null;
   }
 
   async check() {
-    const results = await Promise.allSettled([
+    const checks = [...this._checks];
+    const [core, ...results] = await Promise.allSettled([
       this._checkCoreUpdate(),
-      this._fetchCcLatest(),
-      this._fetchCodexLatest('@openai/codex'),
+      ...checks.map(async ([, fetch]) => fetch()),
     ]);
-    if (results[0].status === 'fulfilled' && results[0].value) {
-      this._coreUpdate = results[0].value;
-    }
-    if (results[1].status === 'fulfilled' && results[1].value) {
-      this._latest.cc = results[1].value;
-    }
-    if (results[2].status === 'fulfilled' && results[2].value) {
-      this._latest.codex = results[2].value;
+    if (core.status === 'fulfilled' && core.value) this._coreUpdate = core.value;
+    for (const [index, result] of results.entries()) {
+      if (result.status === 'fulfilled' && result.value) {
+        this._latest[checks[index][0]] = result.value;
+      }
     }
     if (this._onUpdate) this._onUpdate(this.getLatest());
   }
@@ -102,6 +110,10 @@ export class VersionChecker {
 
   getLatest() {
     return { zylos: this._coreUpdate?.latest ?? null, ...this._latest };
+  }
+
+  unsupportedIds() {
+    return [...this._unsupported];
   }
 
   start() {

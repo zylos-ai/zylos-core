@@ -34,7 +34,7 @@ Collectors write normalized historical samples to `dashboard.db`. Usage readers 
 
 ## Hook Boundaries
 
-The repository retains migration compatibility code and test fixtures such as `hook-installer.js` and `hook-ingest.cjs`, but the current production entry point does not instantiate the Dashboard hook installer. Core manages runtime hook installation, upgrades, and ownership; do not configure Dashboard as an independent hook owner.
+Core manages runtime hook installation, upgrades, and ownership. Dashboard does not install hooks. Core's upgrade removes hook entries left by Dashboard versions before the cutoff (`cli/lib/upgrade-post-cutoff.js`).
 
 ## Security Boundaries
 

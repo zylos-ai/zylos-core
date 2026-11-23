@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { runtimeWithClaudeStatus } from './helpers/runtime-auth.js';
 import { parseInitFlags, resolveFromEnv, startServicesWithDashboard, printInitHelp } from '../../commands/init.js';
 
 test('init rejects the removed browser password option before setup', () => {
@@ -16,7 +17,7 @@ test('init rejects the removed browser password option before setup', () => {
   assert.match(child.stdout + child.stderr, /Unknown init option: --web-password/);
 });
 
-test('init ignores former password environment inputs and removes them from help', t => {
+test('init ignores former password environment inputs and removes them from help', async t => {
   const previous = { ZYLOS_WEB_PASSWORD: process.env.ZYLOS_WEB_PASSWORD, WEB_CONSOLE_PASSWORD: process.env.WEB_CONSOLE_PASSWORD };
   t.after(() => {
     for (const [key, value] of Object.entries(previous)) {
@@ -26,7 +27,7 @@ test('init ignores former password environment inputs and removes them from help
   process.env.ZYLOS_WEB_PASSWORD = 'fixture-new-password';
   process.env.WEB_CONSOLE_PASSWORD = 'fixture-old-password';
   const opts = parseInitFlags([]);
-  resolveFromEnv(opts, { authenticated: () => true });
+  await resolveFromEnv(opts, { findRuntime: runtimeWithClaudeStatus(() => true) });
   assert.equal(Object.hasOwn(opts, 'webPassword'), false);
   const lines = [];
   t.mock.method(console, 'log', line => lines.push(line));
@@ -58,7 +59,7 @@ test('new installation templates generate Dashboard-only browser configuration',
   const init = new URL('../../commands/init.js', import.meta.url).href;
   const script = `import fs from 'node:fs'; import path from 'node:path';
     import { deployTemplates, generateCaddyfile } from ${JSON.stringify(init)};
-    deployTemplates({ freshInstall: true });
+    await deployTemplates({ freshInstall: true });
     generateCaddyfile('fixture.invalid', 'http', 8080);
     const root = process.env.ZYLOS_DIR;
     console.log(JSON.stringify({ env: fs.readFileSync(path.join(root,'.env'),'utf8'),

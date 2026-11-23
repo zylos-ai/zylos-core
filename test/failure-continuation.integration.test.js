@@ -1,3 +1,4 @@
+import { getRuntime } from '../cli/lib/runtime/index.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -14,6 +15,11 @@ import { appendEvent } from '../cli/lib/event-log.js';
 import { fixture } from '../skills/comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { SessionActivity } from '../skills/activity-monitor/scripts/session-activity.js';
 
+const hookHealth = (await getRuntime('claude')).health.hookHealth;
+const agyHookHealth = (await getRuntime('agy')).health.hookHealth;
+
+const hookHealthByRuntime = { claude: hookHealth, agy: agyHookHealth };
+
 function setup(t,runtime='claude') {
  const f=fixture(t), root=fs.mkdtempSync(path.join(os.tmpdir(),'failure-continue-'));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -29,10 +35,10 @@ function setup(t,runtime='claude') {
  const binding={expectedRunId:'r1',tmuxTarget:{serverGeneration:'g1',sessionId:'$1',paneId:'%1'}};
  const write=(event,error=null,extra={})=>{
   now+=100;
-  const row={v:1,type:'runtime_health',schema_version:1,source:'hook',...identity,event_id:randomUUID(),prompt_id:randomUUID(),event,error,received_at:now,ts:now,run_id:scene.runId,...extra};
+  const row={v:1,type:'runtime_health',schema_version:1,source:'hook',...identity,event_id:randomUUID(),prompt_id:runtime==='agy'?null:randomUUID(),event,error,received_at:now,ts:now,run_id:scene.runId,...extra};
   appendEvent(path.join(scene.runDir,'events.jsonl'),row);return row;
  };
- const consume=()=>reader.consumeScene(scene,identity);
+ const consume=()=>reader.consumeScene(scene,identity,{hookHealth:hookHealthByRuntime[runtime]});
  const process=options=>processFailureContinuation({store,scene,identity:async()=>scene,bindTarget:async()=>binding,insertControl:f.store.insertControl,getPending:f.store.getNextPending,getControl:id=>f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id),now:()=>now,expireControl:f.store.expireControlById,
    readNativeActivity:()=>({turnStartedAt:null}),...options});
  return {...f,c4:f.store,root,scene,identity,store,reader,coordinator,write,consume,process,group,now:()=>now,advance:ms=>now+=ms};
@@ -108,11 +114,40 @@ test('a confirmed new round cancels before or after enqueue while a prompt hook 
 
 // Boundary: Error/runtime selection → existing notice flow. Run for eligibility/health changes; skip otherwise.
 // Isolated temp run directory and in-memory database only; no runtime/tmux/network I/O.
-test('nonretryable Claude and every AGY failure preserve immediate notices',async t=>{
- for(const [runtime,error] of [['claude','rate_limit'],['agy','server_error']]) {
-  const f=setup(t,runtime);f.write('stop_failure',error);await f.consume();await f.process();
-  assert.equal(f.store.read(f.group).failure_retry,undefined,`${runtime}:${error}`);assert.ok(f.store.read(f.group).pending_notice);
+test('rate limits preserve immediate notices for both hook runtimes',async t=>{
+ for(const runtime of ['claude','agy']) {
+  const f=setup(t,runtime);f.write('stop_failure','rate_limit');await f.consume();await f.process();
+  assert.equal(f.store.read(f.group).failure_retry,undefined,runtime);assert.ok(f.store.read(f.group).pending_notice);
  }
+});
+
+test('agy retries server, overload and network failures before notifying', async t => {
+ const f=setup(t,'agy');
+ const cases=['server_error','overloaded','network_error','server_error'];
+ for(const [index,error] of cases.entries()) {
+  const failure=f.write('stop_failure',error);
+  await f.consume();
+  await f.process();
+  const state=f.store.read(f.group);
+  assert.equal(state.health,'ok');
+  if(index===3) {
+   assert.equal(state.failure_retry,undefined);
+   assert.equal(state.pending_notice.event_id,failure.event_id);
+   break;
+  }
+  assert.equal(state.pending_notice,undefined);
+  const retry=state.failure_retry;
+  assert.equal(retry.dueAt,failure.received_at+[30000,120000,300000][index]);
+  assert.equal(f.db.prepare('SELECT content FROM control_queue WHERE id=?').pluck().get(retry.controlId),'Continue');
+  f.advance(retry.dueAt-f.now());
+  f.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(retry.controlId);
+ }
+ const sent=[];
+ await processFirstFailureNotices({store:f.store,database:f.db,sessionGroup:f.group,
+  identity:()=>f.identity,now:f.now,reserve:(_channel,endpoint)=>({endpoint}),
+  send:(claim,message)=>{sent.push({claim,message});return {outcome:'sent'};}});
+ assert.equal(sent.length,1);
+ assert.match(sent[0].message,/The service reported a server error or overload/);
 });
 
 // Boundary: Fresh scene identity → intent invalidation. Run for identity/binding changes; skip otherwise.
@@ -299,7 +334,7 @@ test('a running continuation never blocks terminal hooks in another group',async
  const reader=new HealthEventReader({coordinator:reopened,zylosDir:f.root,now:f.now,quota:()=>null,
    getControl:id=>f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id)});
  t.after(()=>reader.close());
- const results=await reader.consumeScene(other,f.identity);
+ const results=await reader.consumeScene(other,f.identity,{hookHealth});
  assert.equal(results.length,1);assert.equal(results[0].status,'processed');
  assert.equal(reopened.store('claude').read(other.sessionGroup).failure_retry,undefined);
  assert.equal(reopened.store('claude').read(other.sessionGroup).last_processed.event_id,second.event_id);

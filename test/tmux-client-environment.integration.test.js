@@ -1,3 +1,4 @@
+import { launchSession } from '../cli/lib/runtime/launch-flow.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { isolatedTmux } from './helpers/isolated-tmux.js';
-import { SessionAdapter } from '../cli/lib/runtime/session-adapter.js';
+
 import { openTmuxConnection } from '../cli/lib/runtime/tmux-connection.js';
 import { observeSessionTargets } from '../cli/lib/runtime/session-batch-observation.js';
 import { observeSessionTarget } from '../cli/lib/runtime/session-target.js';
@@ -33,12 +34,11 @@ function fixture(t) {
     HOME: env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR, PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR,
     database: 'none; direct runtime observation does not open a database', startupEnv: 'all ZYLOS_* removed' }));
   const tmux = { socketPath: f.socketPath, binary: f.binary, configFile: '/dev/null' };
-  class Adapter extends SessionAdapter { get runtimeId() { return 'claude'; } }
-  const adapter = new Adapter({ root: f.dir, env, tmux,
+  const adapterOptions = { root: f.dir, env, tmux,
     runtimeExecutable: () => fileURLToPath(new URL('./helpers/tmux-runtime-recorder.js', import.meta.url)),
     paths: { tmuxNameForGroup: group => `zylos-group-${group}` },
-  });
-  const launch = (group, runId) => adapter.launch({ sessionGroup: group, sessionMode: 'multi', runId, launchConfig: config });
+  };
+  const launch = (group, runId) => launchSession({ runtime: 'claude', sessionGroup: group, sessionMode: 'multi', runId, launchConfig: config }, adapterOptions);
   const global = () => parseTmuxEnvironment(f.tmux('show-environment', '-gs'));
   async function observe() {
     const connection = await openTmuxConnection(tmux);
@@ -102,7 +102,7 @@ test('managed launch keeps identity session-local and avoids collision rereads',
       const identity = JSON.parse(fs.readFileSync(path.join(f.dir, `identity-${runId}.json`)));
       assert.deepEqual(identity, { ZYLOS_RUN_ID: runId, ZYLOS_MODEL_CONFIG: JSON.stringify(config), ZYLOS_SESSION_GROUP: group });
       const hookEnv = { ...f.env, ...identity, ZYLOS_DIR: f.dir };
-      const record = handleHookActivity({ hook_event_name: 'SessionStart', session_id: `native-${group}` }, { env: hookEnv });
+      const record = await handleHookActivity({ hook_event_name: 'SessionStart', session_id: `native-${group}` }, { env: hookEnv });
       assert.equal(record.runtime, 'claude');
       assert.equal(record.run_id, runId);
       const skillsDir = path.join(f.dir, `skills-${group}`);

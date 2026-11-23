@@ -1,6 +1,6 @@
-export function actionFailureMessage(action, runtime, error, t) {
-  return action === 'upgrade-cc' && runtime === 'agy'
-    ? t('result.agy_upgrade_unknown') : t('status.failed', { error: error.message });
+export function actionFailureMessage(action, runtimeLabel, error, t) {
+  return action === 'upgrade-cc'
+    ? t('result.runtime_upgrade_unknown', { runtime: runtimeLabel }) : t('status.failed', { error: error.message });
 }
 
 export function formatActionResult(result, t) {

@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process';
+import { loadCoreModule } from '../core-modules.js';
+
+const { DEFAULT_RUNTIME } = await loadCoreModule('runtime/descriptors.js');
 
 export class PM2Collector {
   constructor(store, config) {
@@ -15,7 +18,7 @@ export class PM2Collector {
       const processes = JSON.parse(raw);
       const now = new Date().toISOString();
       const collectedAt = Date.now();
-      const runtime = this.config.runtime || 'claude';
+      const runtime = this.config.runtime || DEFAULT_RUNTIME;
       const summary = {
         process_count: processes.length,
         total_memory_mb: 0,

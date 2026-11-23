@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { submit } from './am-sock-client.js';
 import { listGroupTmuxSessions } from './session-group-paths.js';
-import { readLiveIdentity } from './session-state-reader.js';
+
+const readLiveIdentity = async sessionGroup => (await import('./session-state-reader.js')).readLiveIdentity(sessionGroup);
 
 async function configurationOverrides(groups, modelRuntime) {
   const store = await import('../../skills/comm-bridge/scripts/c4-db.js');

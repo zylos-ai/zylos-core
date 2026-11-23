@@ -1,7 +1,15 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { executeRuntimeSwitch, runtimeCommand } from '../../commands/runtime.js';
 import { observeRuntimeGroups } from '../config-restart.js';
+
+import { runtimeAuthFixture } from './helpers/runtime-auth.js';
+
+for (const name of ['CLAUDE.md', 'AGENTS.md']) {
+  fs.writeFileSync(path.join(process.env.ZYLOS_DIR, name), 'Legacy fixture instructions\n');
+}
 
 const old = { present: true, runtime: 'claude', launchConfig: { runtime: 'claude', mode: 'default' } };
 
@@ -15,8 +23,7 @@ test('runtime saves the baseline without observing a pre-migration session', asy
   try {
     const result = await runtimeCommand(['codex', '--json'], {
       execute: (target, flags) => executeRuntimeSwitch(target, flags, {
-        read: () => ({ state: 'ok', config: before }), exists: () => true,
-        adapter: () => ({ checkAuth: async () => ({ status: 'success' }) }),
+        read: () => ({ state: 'ok', config: before }), runtimeFor: runtimeAuthFixture,
         hooksReady: () => ({ ready: true }),
         write: update => {
           writes++;

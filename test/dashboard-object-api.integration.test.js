@@ -16,7 +16,9 @@ import { loadCoreModule as originalLoadCoreModule } from '../skills/dashboard/sr
 import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
 import { populateSchedulePagination } from '../skills/dashboard/__tests__/fixtures/schedule-pagination.js';
 import { SseHub } from '../skills/dashboard/src/lib/sse.js';
-import { claudeProjectSlug } from '../skills/dashboard/src/lib/claude-project-path.js';
+import { loadCoreModule as loadTranscriptCore } from '../skills/dashboard/src/lib/core-modules.js';
+const { getRuntime: getTranscriptRuntime } = await loadTranscriptCore('runtime/index.js');
+const { transcript: claudeTranscript } = (await getTranscriptRuntime('claude')).usage;
 
 // Real HTTP, auth, SQLite, group projection and usage boundary. Run when these
 // object routes or authorization rules change; skip unrelated presentation work.
@@ -35,11 +37,15 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   const configFile = path.join(root, '.zylos/config.json');
   let usageVersion = '1.0.0', usageModel = 'fixture-model', usageEffort = 'high', modeStatusReadable = true, originRun = 'fixture-run';
   let mode = 'single', clock = Date.now(), server, seedStore, catalogReadable = true, groupListReadable = true;
-  let originRuntime = 'claude', originReady = true, pinWorking = false, overrideFixture = [];
+  let originRuntime = 'claude', originReady = true, pinWorking = false, workingRuntime = 'claude', overrideFixture = [];
   const isOrigin = key => key === null || key === 'origin';
   const actionCalls = [], cliCalls = [], runtimeCalls = [], records = [];
   let checker, installedCore = '1.4.0', tags = ['v1.5.2', 'v2.0.0', 'v1.6.0-beta.1'];
   const savedRoot = process.env.ZYLOS_DIR;
+  const savedCodexBin = process.env.CODEX_BIN;
+  const codexBin = path.join(root, 'codex-fixture');
+  fs.writeFileSync(codexBin, '#!/bin/sh\nexit 1\n', { mode: 0o700 });
+  process.env.CODEX_BIN = codexBin;
   process.env.ZYLOS_DIR = root;
   const writeMode = next => { mode = next; clock += 3000; fs.writeFileSync(configFile, JSON.stringify({ session_mode: mode, runtime: 'claude' })); };
   writeMode('single');
@@ -64,6 +70,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     if (server) { await server.closeAttachments?.(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
     seedStore?.close();
     if (savedRoot === undefined) delete process.env.ZYLOS_DIR; else process.env.ZYLOS_DIR = savedRoot;
+    if (savedCodexBin === undefined) delete process.env.CODEX_BIN; else process.env.CODEX_BIN = savedCodexBin;
     fs.rmSync(root, { recursive: true, force: true });
   });
   assert.ok(root.startsWith(process.env.TMPDIR + path.sep));
@@ -85,7 +92,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     return { ok: true, data: args[0] === 'groups' ? args.includes('--raw') ? catalog().filter(row => row.sessionGroup === args[2]) : args.includes('--active-since') ? { groups: catalog(), hasOlder: false } : catalog()
       : args[0] === 'unsummarized' ? { count: 0, firstAt: null } : { groups: [{ sessionGroup: 'telegram:working', pending: { count: 3, oldestAt: clock - 1000, head: { id: 1, priority: 0 } }, running: { count: 0 } }], globalFence: null } };
   }, readOverrides: async () => ({ ok: true, data: { baseline: { runtime: JSON.parse(fs.readFileSync(configFile)).runtime },
-    runtime: pinWorking ? [{ sessionGroup: 'telegram:working', runtime: 'claude' }] : overrideFixture, model: [] } }) };
+    runtime: pinWorking ? [{ sessionGroup: 'telegram:working', runtime: workingRuntime }] : overrideFixture, model: [] } }) };
   const fakeExecute = (file, args, options, callback) => {
     if (typeof options === 'function') callback = options;
     cliCalls.push([String(file), ...args]);
@@ -96,7 +103,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
         : callback(new Error('fixture tags unavailable'), '', ''));
       return { stdin: Object.assign(new EventEmitter(), { end() {} }) };
     }
-    if (file === 'codex' && args[0] === 'update') {
+    if (file === codexBin && args[0] === 'update') {
       callback(null, 'fixture CLI updated', '');
       return new EventEmitter();
     }
@@ -147,12 +154,20 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       actionCalls.push({ deletion: target, preview: options.preview }); return { ok: true, preview: options.preview, operationId: 'fixture-operation', cutoffId: 1 };
     } }),
   } });
-  const reader = { readSessionState: async key => ({ identity: { present: isOrigin(key) || ['telegram:working', 'telegram:child'].includes(key),
-    ready: isOrigin(key) ? originReady : true, runtime: isOrigin(key) ? originRuntime : 'claude',
-    runId: isOrigin(key) ? originRun : 'fixture-run', sessionId: 'fixture-session', createdAt: clock / 1000 - 10,
-    launchConfig: { runtime: isOrigin(key) ? originRuntime : 'claude', mode: 'default' } },
-    status: { valid: true, sampledAt: clock, value: { state: key === 'telegram:working' ? 'busy' : 'idle' } },
-    usage: { valid: true, value: { version: usageVersion, effort: { level: usageEffort }, model: { id: usageModel }, context_window: { used_percentage: 25 } } } }),
+  const reader = { readSessionState: async key => {
+    const runtime = isOrigin(key) ? originRuntime : key === 'telegram:working' ? workingRuntime : 'claude';
+    const usage = key === 'telegram:working' && runtime === 'codex'
+      ? { model: usageModel }
+      : { version: usageVersion, effort: { level: usageEffort }, model: { id: usageModel }, context_window: { used_percentage: 25 } };
+    return {
+      identity: { present: isOrigin(key) || ['telegram:working', 'telegram:child'].includes(key),
+        ready: isOrigin(key) ? originReady : true, runtime,
+        runId: isOrigin(key) ? originRun : 'fixture-run', sessionId: 'fixture-session', createdAt: clock / 1000 - 10,
+        launchConfig: { runtime, mode: 'default' } },
+      status: { valid: true, sampledAt: clock, value: { state: key === 'telegram:working' ? 'busy' : 'idle' } },
+      usage: { valid: true, value: usage },
+    };
+  },
     readLiveIdentity: async key => ({ ...(await reader.readSessionState(key)).identity, tmuxName: 'zylos-group-origin' }),
     readRuntimeHealth: async () => ({ missing: true }), readAccountUsage: async () => null };
   reader.readSessionStates = async (groups, { includeAllLive }) => {
@@ -281,7 +296,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     await request('/api/instance/actions/upgrade', { method: 'POST', identity: 'cookie', expected: 404 });
     for (const body of [undefined, { runtime: 'foo' }, undefined]) {
       const invalid = await request(upgrade, { method: 'POST', identity: 'admin', body, expected: 400 });
-      assert.equal(invalid.error.code, 'runtime_unsupported');
+      assert.deepEqual(invalid.error, { code: 'runtime_unsupported', message: 'Choose claude, codex or agy for the CLI upgrade.' });
     }
     assert.equal(cliCalls.slice(before).filter(([, arg]) => arg === 'update' || arg === 'upgrade').length, 0);
 
@@ -298,8 +313,10 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
 
     installedCore = '1.5.2';
     const result = await request(upgrade, { method: 'POST', identity: 'admin', body: { runtime: 'codex' } });
-    assert.equal(result.messageKey, 'result.codex_updated');
-    assert.deepEqual(cliCalls.slice(before).filter(([, arg]) => arg === 'update'), [['codex', 'update']]);
+    assert.equal(result.messageKey, 'result.runtime_updated');
+    assert.deepEqual(result.messageParams, { runtime: 'Codex' });
+    assert.equal(result.requires_restart, true);
+    assert.deepEqual(cliCalls.slice(before).filter(([, arg]) => arg === 'update'), [[codexBin, 'update']]);
     tags = ['v2.0.0', 'v1.5.2'];
     await checker.check();
     const equal = await request(coreUpdate);
@@ -316,7 +333,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     t.mock.method(ObserverCoordinator.prototype, 'historyStatus', async () => ({ state: 'installed', desired: { enabled: true } }));
     writeMode('multi');
     const sessionId = 'offline-history-session';
-    const project = path.join(os.homedir(), '.claude', 'projects', claudeProjectSlug(root));
+    const project = claudeTranscript.projectDir({ home: os.homedir(), zylosDir: root });
     const transcript = path.join(project, `${sessionId}.jsonl`);
     assert.ok(project.startsWith(process.env.HOME + path.sep));
     console.log('History composition fixture:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: root,
@@ -733,6 +750,24 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     value = await request('/api/groups/telegram%3Aoffline-0'); assert.equal(value.runtimeInfo.pendingRestart, false);
     usageVersion = null; usageModel = null; usageEffort = null; clock += 3000;
     value = await request('/api/groups/origin?include='); assert.equal(value.runtimeInfo.runningVersion, null); assert.equal(value.runtimeInfo.pendingRestart, false);
+    const codexDir = path.join(root, '.codex');
+    fs.mkdirSync(codexDir, { recursive: true });
+    fs.writeFileSync(path.join(codexDir, 'config.toml'), 'model = "gpt-6.2-sol"\n');
+    pinWorking = true;
+    workingRuntime = 'codex';
+    usageModel = 'gpt-6.2-sol';
+    clock += 3000;
+    try {
+      const group = await request('/api/groups/telegram%3Aworking');
+      assert.equal(group.runtimeInfo.runtime, 'codex');
+      assert.equal(group.runtimeInfo.model, 'gpt-6.2-sol');
+      assert.equal(group.runtimeInfo.pendingRestart, false, 'the Codex group matches its own default on a Claude instance');
+    } finally {
+      pinWorking = false;
+      workingRuntime = 'claude';
+      usageModel = null;
+      clock += 3000;
+    }
     const instance = await request('/api/instance'); assert.equal(Object.hasOwn(instance, 'runtime_info'), false);
   });
   await t.test('no-response uses the existing reminder and main-response history and ends with the run', async () => {

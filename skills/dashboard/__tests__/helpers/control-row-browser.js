@@ -19,7 +19,6 @@ export function measureControlRows(controlSelector = null) {
   // can agree with itself while drifting to the wrong size tier.
   const contract = el => {
     const mobile = innerWidth <= 760;
-    if (el.matches('.wb-seg-engine') || (!mobile && el.matches('#settings-save-runtime,#settings-undo-runtime'))) return { heightException: 'natural two-line engine row' };
     if (el.matches('.conversation-running')) return { expectedHeight: mobile ? 22 : 30, heightException: mobile ? 'activity visible 22px / transparent hit target 44px' : undefined };
     if (el.closest('.conversation-compose-box')) return { heightException: 'composer retains its dedicated input/attachment/send dimensions' };
     if (el.closest('.chat-question')) return { heightException: 'question family has dedicated fields, chips and multiline options; question browser gate covers it' };
@@ -29,6 +28,7 @@ export function measureControlRows(controlSelector = null) {
     if (el.matches('.wb-name-editor :is(input,select,button),.wb-cfg-controls :is(input,select,button)')) return { expectedHeight: mobile ? 36 : 26 };
     if (el.matches('.wb-group-head .wb-d-acts > *')) return { expectedHeight: mobile ? 36 : 30 };
     if (el.matches('.conversation-rename :is(input,button),.wb-timezone-controls :is(select,button),.wb-timezone-pending button')) return { expectedHeight: mobile ? 36 : 30 };
+    if (el.matches('#settings-current-runtime .wb-note-act .wb-btn-sm')) return { expectedHeight: mobile ? 36 : 26 };
     if (el.matches('.wb-d-title-wrap > .wb-icon-btn-sm,.wb-set-body :is(.wb-btn,.wb-input,.wb-select),.wb-memory-search')) return { expectedHeight: mobile ? 36 : 30 };
     if (el.matches('.wb-btn-sm,.wb-icon-btn-sm,.wb-chip,.wb-seg-sm,#wb-auto-name') || el.matches('.wb-search:not(.wb-sched-filters .wb-search)')) return { expectedHeight: mobile ? 36 : 26 };
     if (el.matches('.wb-row,.wb-sched-dot,.wb-sched-select,.wb-sched-target,.conversation-list-item,.conversation-delete,.memory-file,.wb-memory-group-h,.wb-memory-dir-h,.wb-memory-picker-item,.wb-attention-item')) return { heightException: 'named content selection target retains its content or graphic geometry' };
@@ -200,9 +200,8 @@ export async function runControlRows(t, sandbox) {
         await page.goto(fixture.base + '/settings');
         // The default engine card is in the AI settings section; settings opens on the account section.
         await page.locator('[data-settings-section="defaults"]').click();
-        await page.locator('#settings-use-codex').click(); await settle();
-        await checkRow(page, 'default engine', width === 390 ? '#settings-save-runtime, #settings-undo-runtime' : '.wb-seg-engine, #settings-save-runtime, #settings-undo-runtime', width === 390 ? { expectedHeight: 36 } : {});
-        assert.ok(await page.locator('.wb-seg-engine').evaluate(el => el.getBoundingClientRect().height) > 36, 'engine retains its natural two-line height');
+        await page.locator('#settings-engine').selectOption('codex'); await settle();
+        await checkRow(page, 'default engine', '#settings-engine, #settings-set-default', { separateRows: width === 390, expectedGroups: width === 390 ? [1, 1] : [2], expectedHeight: width === 390 ? 36 : 30 });
         await capture('settings-runtime-draft');
         for (const scene of ['idle', 'running']) {
           fixture.setScene(scene); await page.goto(fixture.base + '/chat');
@@ -236,7 +235,7 @@ export async function runControlRows(t, sandbox) {
               // their existing table geometry and are outside this icon check.
               await capture('settings-pricing-custom-icon', '#settings-price-rows .settings-remove-btn');
             }
-            if (section === 'defaults') { await page.locator('#settings-use-codex').click(); await page.locator('#settings-save-runtime').waitFor(); await capture('settings-runtime-draft'); }
+            if (section === 'defaults') { await page.locator('#settings-engine').selectOption('codex'); await page.locator('#settings-set-default').waitFor(); await capture('settings-runtime-draft'); }
           }
         }
         if (width === 390) { await openMobileMore(page); await capture('mobile-more'); }

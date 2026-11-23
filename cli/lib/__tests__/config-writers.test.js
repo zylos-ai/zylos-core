@@ -43,13 +43,13 @@ describe('production config writers', () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(configFile)), { custom: 'value' });
   });
 
-  it('migrates only the explicitly supplied target and preserves falsey keys', () => {
+  it('migrates only the explicitly supplied target and preserves falsey keys', async () => {
     nativeModels();
     const other = path.join(root, 'other');
     const targetFile = path.join(root, '.zylos', 'config.json');
     fs.mkdirSync(path.dirname(targetFile), { recursive: true });
     fs.writeFileSync(targetFile, JSON.stringify({ new_session_threshold: 0, codex_new_session_threshold: 75, unknown: false }));
-    assert.equal(migrateNewSessionThresholdDefaults({ zylosDir: root }), true);
+    assert.equal(await migrateNewSessionThresholdDefaults({ zylosDir: root }), true);
     assert.deepEqual(JSON.parse(fs.readFileSync(targetFile)), {
       new_session_threshold: 0,
       codex_new_session_threshold: 75,
@@ -59,11 +59,11 @@ describe('production config writers', () => {
     assert.equal(fs.existsSync(path.join(other, '.zylos', 'config.json')), false);
   });
 
-  it('refuses to overwrite malformed F1 during migration', () => {
+  it('refuses to overwrite malformed F1 during migration', async () => {
     const configFile = path.join(root, '.zylos', 'config.json');
     fs.mkdirSync(path.dirname(configFile), { recursive: true });
     fs.writeFileSync(configFile, '{');
-    assert.throws(() => migrateNewSessionThresholdDefaults({ zylosDir: root }), error => error.code === 'CONFIG_UNREADABLE');
+    await assert.rejects(migrateNewSessionThresholdDefaults({ zylosDir: root }), error => error.code === 'CONFIG_UNREADABLE');
     assert.equal(fs.readFileSync(configFile, 'utf8'), '{');
   });
 
@@ -94,19 +94,19 @@ describe('production config writers', () => {
     const configUrl = pathToFileURL(path.join(rootDir, 'cli', 'lib', 'config.js')).href;
     const initUrl = pathToFileURL(path.join(rootDir, 'cli', 'commands', 'init.js')).href;
     const migrateUrl = pathToFileURL(path.join(rootDir, 'cli', 'lib', 'migrate.js')).href;
-    const syncUrl = pathToFileURL(path.join(rootDir, 'cli', 'lib', 'sync-runtime-hooks.js')).href;
+    const syncUrl = pathToFileURL(path.join(rootDir, 'cli', 'lib', 'runtime', 'claude', 'hooks.js')).href;
     const script = `
       const config = await import(${JSON.stringify(configUrl)});
       const init = await import(${JSON.stringify(initUrl)});
       const migrate = await import(${JSON.stringify(migrateUrl)});
       const sync = await import(${JSON.stringify(syncUrl)});
       config.updateZylosConfigLocked({ set: { runtime: 'claude', unknown: false } });
-      init.seedFreshInstallNewSessionThresholdDefault();
+      await init.seedFreshInstallNewSessionThresholdDefault();
       config.updateZylosConfigLocked({ setIfAbsent: { session_mode: 'multi' } });
-      migrate.migrateNewSessionThresholdDefaults({ zylosDir: process.env.ZYLOS_DIR });
-      sync.syncModelCoupledNewSessionThreshold({ modelBackfilled: true, log: () => {} });
+      await migrate.migrateNewSessionThresholdDefaults({ zylosDir: process.env.ZYLOS_DIR });
+      await sync.syncModelCoupledNewSessionThreshold({ modelBackfilled: true, log: () => {} });
       config.updateZylosConfigLocked({ set: { runtime: 'codex' } });
-      migrate.migrateNewSessionThresholdDefaults({ zylosDir: process.env.ZYLOS_DIR });
+      await migrate.migrateNewSessionThresholdDefaults({ zylosDir: process.env.ZYLOS_DIR });
     `;
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
       env: { ...process.env, ZYLOS_DIR: root },
@@ -126,6 +126,7 @@ describe('production config writers', () => {
       'cli/commands/config.js',
       'cli/commands/init.js',
       'cli/lib/sync-runtime-hooks.js',
+      'cli/lib/runtime/claude/hooks.js',
       'cli/lib/migrate.js',
       'skills/http/scripts/setup-caddy.js',
     ];

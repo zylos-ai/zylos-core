@@ -26,7 +26,6 @@ const TMUX_SOCKET = path.join(SANDBOX_TMPDIR, 'tmux.sock');
 const TMUX_BIN = process.env.TEST_TMUX_BIN || 'tmux';
 const RUN_ID = 'acceptance-run';
 const SESSION_ID = 'acceptance-session';
-const HOOK_SCRIPT = path.resolve(new URL('../src/lib/hook-ingest.cjs', import.meta.url).pathname);
 const SERVER_ENTRY = path.resolve(new URL('../src/index.js', import.meta.url).pathname);
 const SERVER_PRELOAD = path.resolve(new URL('./fixtures/acceptance-server.js', import.meta.url).pathname);
 const PACKAGE_ROOT = path.resolve(new URL('../../..', import.meta.url).pathname);
@@ -173,63 +172,6 @@ function api(endpoint, authenticated = true) {
   return JSON.parse(execFileSync('curl', ['-sf', ...(authenticated ? ['-H', 'Cookie: ' + cookie] : []), BASE + endpoint], { encoding: 'utf8', timeout: 5000 }));
 }
 
-function injectRawStdin(raw) {
-  const child = spawn('node', [HOOK_SCRIPT], {
-    env: { ...process.env, HOME: SANDBOX_HOME, ZYLOS_DIR: SANDBOX_ZYLOS_DIR, PM2_HOME: SANDBOX_PM2_HOME, TMPDIR: SANDBOX_TMPDIR, TMUX_TMPDIR: SANDBOX_TMPDIR, TMUX: `${TMUX_SOCKET},0,0` },
-    stdio: ['pipe', 'pipe', 'pipe']
-  });
-  if (raw !== '') child.stdin.write(raw);
-  child.stdin.end();
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => child.kill('SIGKILL'), 3000);
-    child.on('close', code => { clearTimeout(timeout); resolve(code); });
-  });
-}
-
-function injectHookEvent(payload) {
-  return injectRawStdin(JSON.stringify(payload));
-}
-
-// --- Hook latency + exit behavior ---
-
-test('hook-ingest.cjs always exits 0', async (t) => {
-  for (const payload of [
-    { hook_event_name: 'PreToolUse', session_id: 'test-ac5', tool_name: 'Bash', tool_use_id: 'toolu_ac5_01' },
-    { hook_event_name: 'PostToolUse', session_id: 'test-ac5', tool_name: 'Bash', tool_use_id: 'toolu_ac5_01' },
-    { hook_event_name: 'Stop', session_id: 'test-ac5' },
-    { not_a_real_field: true },
-    {}
-  ]) {
-    const code = await injectHookEvent(payload);
-    assert.equal(code, 0, `hook exited ${code} for ${JSON.stringify(payload)}`);
-  }
-
-  await t.test('empty stdin', async () => {
-    assert.equal(await injectRawStdin(''), 0);
-  });
-
-  await t.test('invalid JSON', async () => {
-    assert.equal(await injectRawStdin('not json at all{{{'), 0);
-  });
-});
-
-test('hook-ingest.cjs latency under 50ms (p95)', async () => {
-  const times = [];
-  for (let i = 0; i < 20; i++) {
-    const start = performance.now();
-    await injectHookEvent({
-      hook_event_name: 'PreToolUse',
-      session_id: 'test-latency',
-      tool_name: 'Bash',
-      tool_use_id: `toolu_lat_${i}`
-    });
-    times.push(performance.now() - start);
-  }
-  times.sort((a, b) => a - b);
-  const p95 = times[Math.floor(times.length * 0.95)];
-  assert.ok(p95 < 500, `p95 latency ${p95.toFixed(0)}ms exceeds 500ms`);
-});
-
 // --- Ingest dedup ---
 
 test('no duplicate ingest_ids', async () => {
@@ -338,17 +280,6 @@ test('Frontend: CSS files accessible', () => {
 // --- Deployed instance (read-only checks ONLY — never write to the live box) ---
 
 const REAL_SETTINGS_PATH = path.join(os.homedir(), 'zylos', '.claude', 'settings.json');
-
-test('Deployed: settings.json has dashboard hooks', (t) => {
-  if (!fs.existsSync(REAL_SETTINGS_PATH)) return t.skip('no deployed settings.json on this box');
-  const settings = JSON.parse(fs.readFileSync(REAL_SETTINGS_PATH, 'utf8'));
-  for (const event of ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'PermissionRequest']) {
-    const has = settings.hooks[event]?.some(g =>
-      g.hooks?.some(h => h.command?.includes('hook-ingest.cjs'))
-    );
-    assert.ok(has, `dashboard hook missing for ${event}`);
-  }
-});
 
 test('Deployed: existing hooks preserved', (t) => {
   if (!fs.existsSync(REAL_SETTINGS_PATH)) return t.skip('no deployed settings.json on this box');

@@ -16,13 +16,14 @@ function setup(t) {
   fs.symlinkSync(process.execPath, path.join(dir, 'bin', 'node'));
   fs.writeFileSync(path.join(dir, '.zylos', 'config.json'), '{"runtime":"claude","session_mode":"multi"}');
   const installed = path.join(dir, '.claude/skills/comm-bridge');
-  fs.mkdirSync(path.join(installed, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(installed, 'scripts/router'), { recursive: true });
   fs.copyFileSync(path.join(scripts, '../package.json'), path.join(installed, 'package.json'));
   fs.copyFileSync(path.join(scripts, '../init-db.sql'), path.join(installed, 'init-db.sql'));
   fs.symlinkSync(path.resolve(scripts, '../node_modules'), path.join(installed, 'node_modules'));
   for (const file of fs.readdirSync(scripts).filter(name => name.endsWith('.js'))) {
     fs.copyFileSync(path.join(scripts, file), path.join(installed, 'scripts', file));
   }
+  fs.copyFileSync(path.join(scripts, 'router/core-modules.js'), path.join(installed, 'scripts/router/core-modules.js'));
   return { dir, installed, cli: path.join(installed, 'scripts/c4-send.js'),
     env: { HOME: path.join(dir, 'home'), ZYLOS_DIR: dir, PM2_HOME: path.join(dir, 'pm2'),
       TMPDIR: path.join(dir, 'tmp'), TMUX_TMPDIR: path.join(dir, 'tmp'), PATH: path.join(dir, 'bin'),

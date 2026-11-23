@@ -1,0 +1,122 @@
+[
+  {
+    "file": "cli/commands/config.js",
+    "text": "const runtime = key === 'new_session_threshold' ? 'claude' : 'codex';",
+    "reason": "legacy: Reads one of the two fixed pre-group threshold keys."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "if (diag.runtime !== 'claude') return false;",
+    "reason": "tool-use: The repair command invokes Claude as a tool."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "const proc = spawn('claude', ['-p', prompt, ...permArgs], {",
+    "reason": "tool-use: The repair command invokes Claude as a tool."
+  },
+  {
+    "file": "cli/lib/claude-eval.js",
+    "text": "const child = spawn('claude', ['--print', '--output-format', 'text'], {",
+    "reason": "tool-use: Runs a one-shot Claude evaluation."
+  },
+  {
+    "file": "cli/lib/model-rotation-thresholds.js",
+    "text": "const LEGACY_KEYS = { claude: 'new_session_threshold', codex: 'codex_new_session_threshold' };",
+    "reason": "legacy: Reads the fixed pre-group threshold settings."
+  },
+  {
+    "file": "cli/lib/model-rotation-thresholds.js",
+    "text": "for (const runtime of ['claude', 'codex']) {",
+    "reason": "legacy: Reads the fixed pre-group threshold settings."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/agy-hooks.js",
+    "text": "agyRuntime = await getRuntime('agy');",
+    "reason": "hook-entry: Resolves the implementation for this fixed native hook entrypoint."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/agy-tool-guard.js",
+    "text": "return getRuntime('agy');",
+    "reason": "hook-entry: Resolves the implementation for this fixed native hook entrypoint."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/hook-activity.js",
+    "text": "const runtime = env.ZYLOS_MODEL_CONFIG ? JSON.parse(env.ZYLOS_MODEL_CONFIG).runtime : 'claude';",
+    "reason": "legacy: Only Claude produced hook events for the pre-run single-session location."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/supervisor-legacy-status.js",
+    "text": "if(foreground.runtime==='claude')this.activity.transcriptPath=path.join(this.env.HOME,'.claude','projects',",
+    "reason": "legacy: Resolves the fixed pre-group Claude transcript location."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/router/lifecycle.js",
+    "text": "if (!['claude', 'codex'].includes(live.runtime)) throw tmuxError('RUNTIME_UNSUPPORTED', 'Legacy runtime is unknown');",
+    "reason": "legacy: Only accepts fixed pre-group session identities."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/router/resident.js",
+    "text": "const closeNow = finished && (live.runtime === 'codex' || live.runtime === 'claude' && !entry.exitSent);",
+    "reason": "legacy: Handles the fixed pre-group resident session set."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/router/resident.js",
+    "text": "if (live.runtime === 'claude' && await sendExitWhenIdle(entry, live)) return;",
+    "reason": "legacy: Handles the fixed pre-group resident session set."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/router/resident.js",
+    "text": "if (!['claude', 'codex'].includes(live.runtime)) {",
+    "reason": "legacy: Handles the fixed pre-group resident session set."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/runtime-delivery.js",
+    "text": "return readZylosConfigOrThrow().runtime === 'codex' ? 'codex-main' : 'claude-main';",
+    "reason": "legacy: Reads fixed single-session names and identity fields from legacy data."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/runtime-delivery.js",
+    "text": "return { runtime:'claude', session_id:foreground.session_id, claude_pid:foreground.claude_pid };",
+    "reason": "legacy: Reads fixed single-session names and identity fields from legacy data."
+  },
+  {
+    "file": "skills/dashboard/src/lib/observer-containment-tmux.js",
+    "text": "const target = origin ? origin.tmuxName : runtime === 'codex' ? 'codex-main' : runtime === 'claude' ? 'claude-main' : null;",
+    "reason": "legacy: Resolves fixed pre-group tmux session names."
+  },
+  {
+    "file": "skills/dashboard/src/lib/schema.js",
+    "text": "runtime TEXT NOT NULL DEFAULT 'claude',",
+    "reason": "sql-check: Preserves the released SQLite column default or constraint."
+  },
+  {
+    "file": "skills/dashboard/src/lib/schema.js",
+    "text": "runtime TEXT NOT NULL DEFAULT 'claude',",
+    "reason": "sql-check: Preserves the released SQLite column default or constraint."
+  },
+  {
+    "file": "skills/dashboard/src/lib/schema.js",
+    "text": "runtime TEXT NOT NULL DEFAULT 'claude',",
+    "reason": "sql-check: Preserves the released SQLite column default or constraint."
+  },
+  {
+    "file": "skills/dashboard/src/lib/schema.js",
+    "text": "runtime TEXT NOT NULL CHECK (runtime IN ('claude','codex')),",
+    "reason": "sql-check: Preserves the released SQLite column default or constraint."
+  },
+  {
+    "file": "skills/dashboard/src/lib/store.js",
+    "text": "AND (@runtime IS NULL OR COALESCE(NULLIF(runtime, ''), 'claude') = @runtime)",
+    "reason": "legacy: Interprets empty runtime fields written by legacy Dashboard versions."
+  },
+  {
+    "file": "skills/dashboard/public/js/agent-fleet.js",
+    "text": "const runtimes = tile.self.runtimes ?? ['claude', 'codex'].filter(runtime => accounts[runtime] != null);",
+    "reason": "legacy: Reconstructs quota runtimes for older peers that do not report the runtimes field."
+  },
+  {
+    "file": "skills/dashboard/public/js/runtime-ui.js",
+    "text": "return meta.catalog_strict ?? (meta.runtime === 'codex');",
+    "reason": "legacy: Preserves strict catalog behavior for older fleet peers that do not return catalog_strict."
+  }
+]

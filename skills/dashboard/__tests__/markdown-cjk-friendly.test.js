@@ -9,7 +9,10 @@ import { createDocument } from './helpers/conversation-dom.js';
 // Resolve the shared schema at the same URL served by the Dashboard; import
 // the real conversation renderer without starting the HTTP service.
 const shared = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
 const schemaResolution = registerHooks({ resolve(specifier, context, next) {
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
   if (context.parentURL && new URL(specifier, context.parentURL).pathname.endsWith('/public/chat-schema.js')) return next(shared, context);
   return next(specifier, context);
 } });

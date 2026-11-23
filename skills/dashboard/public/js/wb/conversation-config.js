@@ -1,8 +1,10 @@
+import { SUPPORTED_RUNTIMES } from '../../runtime-descriptors.js';
 import { createGroupDetail } from './detail.js';
 import { configText } from './detail-overview.js';
 import { reconcileChildren } from './detail-update.js';
 import { fetchJson, renderGroupConfig } from './group-config.js';
 import { element, icon } from './plain-text.js';
+import { runtimeNotFound } from './settings-defaults.js';
 
 export function createConversationConfig({ document, t, request, identity, writable, detail, onConfigSaved }) {
   const anchor = element(document, 'div', undefined, 'conversation-config-anchor');
@@ -28,7 +30,8 @@ export function createConversationConfig({ document, t, request, identity, writa
   anchor.append(button, scrim, panel);
   anchor.hidden = panel.hidden = scrim.hidden = true;
   const phone = document.defaultView?.matchMedia?.('(max-width: 760px)');
-  let key = null, owner, current, defaultRuntime, confirming = false, opening = 0;
+  let key = null, owner, current, instance, confirming = false, opening = 0;
+  let recheckError = null;
   const controller = createGroupDetail({
     root: panel, document, t, fetch: request, identity, writable, onConfigSaved,
     configView(value) { current = value; draw(); },
@@ -49,8 +52,29 @@ export function createConversationConfig({ document, t, request, identity, writa
     const controls = 'select, input, button';
     const focused = [...editor.querySelectorAll(controls)].indexOf(document.activeElement);
     const desired = element(document, 'div');
+    const defaultRuntime = instance?.default_runtime;
+    const notFound = SUPPORTED_RUNTIMES.filter(id => runtimeNotFound({ instance }, id));
     renderGroupConfig(desired, config, {
-      document, t, writable: writable(), defaultRuntime, rotationThreshold: row.rotationThreshold,
+      document, t, writable: writable(), defaultRuntime, notFound, rotationThreshold: row.rotationThreshold,
+      async onRecheck() {
+        const selected = opening;
+        try {
+          await fetchJson(request, '/api/instance/actions/recheck-runtime-cli', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+          });
+          if (selected !== opening) return;
+          const updated = await fetchJson(request, '/api/instance');
+          if (selected !== opening) return;
+          instance = updated;
+          if (config.state.error === recheckError) config.state.error = null;
+          recheckError = null;
+        } catch (error) {
+          if (selected !== opening || error.name === 'AbortError') return;
+          recheckError = config.state.error = t('status.failed', { error: error.message });
+        }
+        // The detail controller publishes a revision so a still-blocked form gets a fresh button.
+        config.redraw();
+      },
       async onSave(changes) {
         if (confirming || !writable()) return;
         confirming = true;
@@ -65,7 +89,7 @@ export function createConversationConfig({ document, t, request, identity, writa
       },
       onCancel: () => close(),
     });
-    desired.firstElementChild.dataset.updateKey = [revision, writable(), defaultRuntime, row.rotationThreshold,
+    desired.firstElementChild.dataset.updateKey = [revision, writable(), defaultRuntime, row.rotationThreshold, notFound,
       document.documentElement.lang].join(':');
     reconcileChildren(editor, desired);
     if (focused >= 0 && !panel.contains(document.activeElement)) {
@@ -97,11 +121,11 @@ export function createConversationConfig({ document, t, request, identity, writa
     button.setAttribute('aria-expanded', 'true');
     draw();
     panel.focus({ preventScroll: true });
-    const [instance] = await Promise.allSettled([
+    const [result] = await Promise.allSettled([
       fetchJson(request, '/api/instance'), controller.reloadConfig(true),
     ]);
-    if (selected !== opening || instance.status !== 'fulfilled') return;
-    defaultRuntime = instance.value.default_runtime;
+    if (selected !== opening || result.status !== 'fulfilled') return;
+    instance = result.value;
     draw();
   });
   function outside(event) {
@@ -133,7 +157,8 @@ export function createConversationConfig({ document, t, request, identity, writa
       close({ focus: false, force: true });
       controller.close();
       current = null;
-      defaultRuntime = undefined;
+      instance = undefined;
+      recheckError = null;
       key = nextKey;
       owner = nextOwner;
       anchor.hidden = !key;

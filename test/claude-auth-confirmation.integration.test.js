@@ -27,7 +27,7 @@ async function finishRound(round) {
 // isolated Node runner with private HOME, ZYLOS_DIR, PM2_HOME and short TMPDIR,
 // a private AM socket and an in-memory C4 database. No tmux, model CLI or
 // channel process runs. Reclaims the socket, supervisor and files on failure.
-test('Claude StopFailure confirmation leaves the supervisor free to publish other sessions', { timeout: 15000 }, async t => {
+test('StopFailure confirmation leaves the supervisor free to publish other sessions', { timeout: 15000 }, async t => {
   const noticeFixtures = new Map();
   t.mock.module('../skills/comm-bridge/scripts/first-failure-notice.js', {
     namedExports: {
@@ -49,8 +49,13 @@ test('Claude StopFailure confirmation leaves the supervisor free to publish othe
   });
   const { startSupervisor } = await import('../skills/activity-monitor/scripts/supervisor-main.js');
 
-  for (const scenario of ['success', 'failure', 'timeout', 'model access', 'replaced run', 'no initial target', 'invalidated target']) {
-    await t.test(scenario, async t => {
+  const cases = [
+    ...['success', 'failure', 'timeout', 'model access', 'replaced run', 'no initial target', 'invalidated target']
+      .map(scenario => ['claude', scenario]),
+    ...['success', 'failure', 'timeout'].map(scenario => ['agy', scenario]),
+  ];
+  for (const [runtime, scenario] of cases) {
+    await t.test(runtime === 'claude' ? scenario : `agy ${scenario}`, async t => {
       const { db, store: c4 } = fixture(t);
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-'));
       const env = { ...process.env, ZYLOS_DIR: root };
@@ -62,8 +67,8 @@ test('Claude StopFailure confirmation leaves the supervisor free to publish othe
       const groups = ['first', 'second', 'healthy'].map(endpoint => {
         const sessionGroup = 'telegram:' + endpoint;
         return { endpoint, sessionGroup, runDir: groupRunDir(sessionGroup, env), runId: randomUUID(),
-          sessionId: randomUUID(), runtime: 'claude', runtimePid: 123, present: true, ready: true,
-          processRunning: true, createdAt: now - 1000, launchConfig: { runtime: 'claude', mode: 'default' } };
+          sessionId: randomUUID(), runtime, runtimePid: 123, present: true, ready: true,
+          processRunning: true, createdAt: now - 1000, launchConfig: { runtime, mode: 'default' } };
       });
       const current = [];
       const readIdentity = group => current.find(scene => scene.sessionGroup === group) ?? { present: false };
@@ -83,9 +88,9 @@ test('Claude StopFailure confirmation leaves the supervisor free to publish othe
       if (scenario !== 'failure') scenes.readIdentities = async groups => new Map(groups.map(group => [group, readIdentity(group)]));
       const collect = (scene, errorDetails) => collectHealthHook({
         hook_event_name: errorDetails === undefined ? 'Stop' : 'StopFailure',
-        session_id: scene.sessionId, prompt_id: 'p', error: 'authentication_failed', error_details: errorDetails,
+        session_id: scene.sessionId, prompt_id: runtime === 'claude' ? 'p' : null, error: 'authentication_failed', error_details: errorDetails,
       }, { zylosDir: root, nowMs: now, pid: scene.runtimePid,
-        env: { ...env, ZYLOS_SESSION_GROUP: scene.sessionGroup, ZYLOS_RUN_ID: scene.runId } });
+        env: { ...env, ZYLOS_MODEL_CONFIG: JSON.stringify({ runtime }), ZYLOS_SESSION_GROUP: scene.sessionGroup, ZYLOS_RUN_ID: scene.runId } });
       const endpoint = name => notices.sent.find(notice => notice.endpoint === name);
       const receive = (scene, replyEndpoint, delivered = true) => {
         const { id, session_group } = c4.insertConversation('in', 'telegram', replyEndpoint, 'work', { groupName: scene.endpoint });
@@ -99,18 +104,18 @@ test('Claude StopFailure confirmation leaves the supervisor free to publish othe
       try {
         const errors = [];
         service = await startSupervisor({
-          env, db: { ...c4, getDb: () => db, resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) }, scenes,
-          now: () => now, checkAuth: () => { calls++; return probe; }, log: value => {
+          env, db: { ...c4, getDb: () => db, resolveSessionLaunchConfig: () => ({ runtime, mode: 'default' }) }, scenes,
+          now: () => now, checkAuth: id => { assert.equal(id, runtime); calls++; return probe; }, log: value => {
             if (value?.error && errors.length === 0) errors.push(value);
           },
-          readMode: () => ({ mode: 'multi' }), readConfig: () => ({ session_mode: 'multi', runtime: 'claude' }),
-          resolveTargetRuntime: () => 'claude', legacyPresent: () => false,
+          readMode: () => ({ mode: 'multi' }), readConfig: () => ({ session_mode: 'multi', runtime }),
+          resolveTargetRuntime: () => runtime, legacyPresent: () => false,
           readMemoryInputs: () => ({ source: 'host', limitBytes: 8 * 1024 ** 3, usedBytes: 2 * 1024 ** 3 }),
           legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
           loopOptions: { schedule: () => 1, cancel() {} }, afterRound: () => { rounds++; },
         });
         const { supervisor } = service;
-        const store = supervisor.health.store('claude');
+        const store = supervisor.health.store(runtime);
         const [first, second, healthy] = groups;
         current.push(...groups);
         const noTarget = scenario === 'no initial target';
@@ -120,9 +125,9 @@ test('Claude StopFailure confirmation leaves the supervisor free to publish othe
         receive(healthy, healthy.endpoint);
         const modelAccess = scenario === 'model access';
         const failed = scenario === 'failure';
-        const failure = collect(first, modelAccess ? 'Your model policy only allows Sonnet.' : 'API Error: 403 Forbidden');
-        const healthyStop = collect(healthy);
-        if (scenario === 'timeout') collect(second, 'API Error: 403 Forbidden');
+        const failure = await collect(first, modelAccess ? 'Your model policy only allows Sonnet.' : 'API Error: 403 Forbidden');
+        const healthyStop = await collect(healthy);
+        if (scenario === 'timeout') await collect(second, 'API Error: 403 Forbidden');
         if (!modelAccess) supervisor.observer.notifyDelivered({ ...first, pastedAt: now - 6000 });
         const before = rounds;
         await finishRound(supervisor.loop.tick());
@@ -149,7 +154,7 @@ test('Claude StopFailure confirmation leaves the supervisor free to publish othe
           }
           held.resolve({ status: answer });
           await setImmediate();
-          const replacementStop = scenario === 'replaced run' ? collect(current[0]) : null;
+          const replacementStop = scenario === 'replaced run' ? await collect(current[0]) : null;
           await finishRound(supervisor.loop.tick());
           await Promise.all(notices.work.splice(0));
           assert.equal(calls, 1);
@@ -184,13 +189,13 @@ test('Claude StopFailure confirmation leaves the supervisor free to publish othe
           noReply: false, receivedAt: now, channel: 'telegram', endpoint: healthy.endpoint,
           componentName: 'telegram', sessionGroup: healthy.sessionGroup });
         assert.equal(route.decision, failed ? 'auth_rejected' : 'pending');
-        assert.equal(supervisor.health.authTargets('claude').length, 0);
+        assert.equal(supervisor.health.authTargets(runtime).length, 0);
         assert.equal(c4.listDrainFences().length, 0);
         assert.equal(db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 0);
         if (failed) {
           probe = Promise.resolve({ status: 'success' });
-          await supervisor.router.notifyAuthCompleted({ version: 1, type: 'auth_completed', requestId: 'login', runtime: 'claude' });
-          assert.equal(supervisor.health.authTargets('claude').length, groups.length);
+          await supervisor.router.notifyAuthCompleted({ version: 1, type: 'auth_completed', requestId: 'login', runtime });
+          assert.equal(supervisor.health.authTargets(runtime).length, groups.length);
         }
         assert.equal(errors.length, 0, JSON.stringify(errors[0]));
       } finally {

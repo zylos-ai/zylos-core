@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { SupervisorLifecycle } from '../../supervisor-lifecycle.js';
 import { createStore } from '../../../../comm-bridge/scripts/c4-v2-store.js';
-import { getSessionAdapter } from '../../../../../cli/lib/runtime/index.js';
+import { createSessionOps } from '../../../../../cli/lib/runtime/session-ops.js';
 import { openTmuxConnection } from '../../../../../cli/lib/runtime/tmux-connection.js';
 import { observeSessionTarget } from '../../../../../cli/lib/runtime/session-target.js';
 const Database = createRequire(new URL('../../../../comm-bridge/package.json', import.meta.url))('better-sqlite3');
@@ -9,7 +9,7 @@ const [filename, socketPath, binary, pause] = process.argv.slice(2);
 const database = new Database(filename);
 const db = createStore(database, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
 const options = { socketPath, binary };
-const adapter = getSessionAdapter('claude', { tmux: options });
+const adapter = createSessionOps({ tmux: options });
 async function barrier(name) {
   if (pause === name) { process.send({ barrier: name }); await new Promise(() => {}); }
 }

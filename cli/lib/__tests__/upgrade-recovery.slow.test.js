@@ -644,7 +644,7 @@ for(const legacy of ['group-writable','backup-alias'])test(`completed upgrade pe
  for(const item of CORE_DATABASES.filter(item=>item.owner!=='web-console'))fs.cpSync(path.resolve('skills',item.owner,'scripts'),path.join(f.j.skillsDir,item.owner,'scripts'),{recursive:true});
  const monitor=path.join(f.j.skillsDir,'activity-monitor');fs.mkdirSync(path.join(monitor,'scripts'),{recursive:true});
  fs.writeFileSync(path.join(monitor,'package.json'),'{"type":"module"}');
- for(const script of ['shard-registry.js','bootstrap-identity.js','bootstrap-scope.js']) {
+ for(const script of ['shard-registry.js','bootstrap-identity.js','bootstrap-scope.js','core-modules.js']) {
   fs.copyFileSync(path.resolve('skills/activity-monitor/scripts',script),path.join(monitor,'scripts',script));
  }
  if(legacy==='group-writable') {

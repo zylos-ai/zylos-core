@@ -1,3 +1,4 @@
+import { createSessionOps } from '../session-ops.js';
 import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -5,7 +6,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { openTmuxConnection } from '../tmux-connection.js';
 import { resolveSessionTarget, revalidateSessionTarget } from '../session-target.js';
-import { SessionAdapter } from '../session-adapter.js';
 
 const binary = process.env.TEST_TMUX_BIN || 'tmux';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -39,7 +39,7 @@ async function fixture(t) {
   connection = await openTmuxConnection({ socketPath, binary });
   const target = await resolveSessionTarget({ connection, tmuxName: 'fixture', readReady: async () => null });
   let replacements = 0;
-  const adapter = new SessionAdapter({ dependencies: {
+  const adapter = createSessionOps({ dependencies: {
     revalidateSessionTarget: async options => {
       // Complete the real Node-side checks, then replace the server before the
       // adapter can issue its paste/send-keys. Only the server guard can stop it.
@@ -62,7 +62,7 @@ for (const method of ['sendText', 'sendKeys']) {
   test(`${method} rejects same-socket replacement after revalidation and before guarded action`, async t => {
     const f = await fixture(t);
     let error;
-    try { await f.adapter[method]({ connection: f.connection, target: f.target, text: 'old-message', keys: ['X'] }); }
+    try { await f.adapter[method]({ runtime: 'claude', connection: f.connection, target: f.target, text: 'old-message', keys: ['X'] }); }
     catch (caught) { error = caught; }
     assert.equal(f.replacements(), 1, 'The real revalidation completed before replacement');
     await delay(100);

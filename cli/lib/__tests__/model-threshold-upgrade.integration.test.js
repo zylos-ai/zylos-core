@@ -40,7 +40,7 @@ test('old configuration upgrade exposes the same model threshold in settings, mo
   const config=JSON.parse(fs.readFileSync(file,'utf8'));
   assert.equal(config.model_rotation_thresholds.claude.opus,62);
   assert.equal(config.model_rotation_thresholds.codex['private-codex'],75);
-  const policy=readThresholdPolicy(root);
+  const policy=await readThresholdPolicy(root);
   for(const [runtime,model,usage] of [
     ['claude','opus',{model:{id:'claude-opus-4-6'},context_window:{context_window_size:200000}}],
     ['codex','private-codex',{model:'private-codex',contextUsage:{used:0,ceiling:258400}}],
@@ -48,7 +48,7 @@ test('old configuration upgrade exposes the same model threshold in settings, mo
     const meta=getActionsMeta({...config,zylosDir:root,runtime},null);
     const actual=runtime==='claude'?usage.model.id:usage.model;
     const launchConfig={runtime,mode:'default'};
-    const threshold=sceneRotationThreshold({runtime,model:actual,contextWindow:runtime==='claude'?200000:258400,launchConfig},{rotationPolicy:config,defaultModels:policy.defaultModels,codexModels:policy.codexModels});
+    const threshold=sceneRotationThreshold({runtime,model:actual,contextWindow:runtime==='claude'?200000:258400,launchConfig},{rotationPolicy:config,defaultModels:policy.defaultModels,contexts:policy.contexts,modelWindows:policy.modelWindows});
     assert.equal(meta.model_thresholds[model],threshold);
     assert.equal(sessionThreshold(policy,{runtime,usage,launchConfig}),threshold);
     console.log('Upgraded model agreement:',JSON.stringify({runtime,model,settings:meta.model_thresholds[model],monitor:threshold,fleet:sessionThreshold(policy,{runtime,usage,launchConfig})}));

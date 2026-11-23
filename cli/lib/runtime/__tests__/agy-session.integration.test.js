@@ -1,12 +1,16 @@
+import { launchSession } from '../launch-flow.js';
+import { createSessionOps } from '../session-ops.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
-import { AgyAdapter } from '../agy.js';
+
 import { openTmuxConnection } from '../tmux-connection.js';
 import { resolveSessionTarget } from '../session-target.js';
-import { agyConfigurationPaths, isAgyConfigReady } from '../../agy-setup.js';
+import { groupRunDir } from '../../session-group-paths.js';
+import { readPaneProcess } from '../pane-process.js';
+import { agyConfigurationPaths, isAgyConfigReady } from '../../runtime/agy/hooks.js';
 
 // Integration boundary: real agy adapter launch, environment, identity and paste
 // through a private tmux socket, using a synthetic CLI and no model/API calls.
@@ -27,8 +31,9 @@ for (const sessionGroup of [null, 'telegram:agy']) test(`agy session launches wi
   await fs.writeFile(path.join(f.dir, 'AGENTS.md'), '# Isolated test instructions\n');
   for (const file of Object.values(agyConfigurationPaths(f.dir))) await assert.rejects(fs.stat(file), { code: 'ENOENT' });
   const tmuxName = 'isolated-agy';
-  const adapter = new AgyAdapter({ root: f.dir, env, tmux: { binary: f.binary, socketPath: f.socketPath, configFile: '/dev/null' }, paths: { tmuxNameForGroup: () => tmuxName } });
-  const launched = await adapter.launch({ sessionGroup, runId: 'agy-test-run', launchConfig: { runtime: 'agy', mode: 'default' }, sessionMode: sessionGroup === null ? 'single' : 'multi' });
+  const adapterOptions = { root: f.dir, env, tmux: { binary: f.binary, socketPath: f.socketPath, configFile: '/dev/null' }, paths: { tmuxNameForGroup: () => tmuxName } };
+  const adapter = createSessionOps(adapterOptions);
+  const launched = await launchSession({ runtime: 'agy', sessionGroup, runId: 'agy-test-run', launchConfig: { runtime: 'agy', mode: 'default' }, sessionMode: sessionGroup === null ? 'single' : 'multi' }, adapterOptions);
   assert.equal(launched.tmuxName, tmuxName);
   assert.equal(isAgyConfigReady({ zylosDir: f.dir, home: f.dir }), true);
   assert.equal(await fs.readFile(path.join(f.dir, 'AGENTS.md'), 'utf8'), '# Isolated test instructions\n');
@@ -50,8 +55,12 @@ for (const sessionGroup of [null, 'telegram:agy']) test(`agy session launches wi
   connection = await openTmuxConnection({ binary: f.binary, socketPath: f.socketPath });
   const target = await resolveSessionTarget({ connection, tmuxName, readReady: async () => null });
   assert.equal(target.runtime, 'agy');
+  const record = readPaneProcess(groupRunDir(sessionGroup ?? 'origin', env));
+  assert.equal(record?.runtime, 'agy');
+  assert.equal(record.runId, 'agy-test-run');
+  assert.equal(record.panePid, target.panePid);
   const text = 'first line\nsecond line\nthird line';
-  await adapter.sendText({ target, connection, text, bracketedPaste: false });
+  await adapter.sendText({ runtime: 'agy', target, connection, text, bracketedPaste: false });
   await adapter.sendKeys({ target, connection, keys: ['Enter'] });
   let received = '';
   const inputDeadline = performance.now() + 2000;
