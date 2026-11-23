@@ -49,7 +49,7 @@ export function renderEngineVersion(root, info, { upgrade, document = root.owner
   const installed = version?.installed ? 'v' + version.installed : t('wb.unknown');
   const updateNote = unsupported ? ` · ${t('wb.settings.updateCheckUnsupported')}` : '';
   root.replaceChildren(element(document, 'p', `${name} · ${installed}${updateNote}`, 'wb-version-line'));
-  if (!upgrade || (latest && !update)) return;
+  if (!upgrade || (version?.installed && latest && !update)) return;
 
   const label = upgrade.querySelector('#action-cli-label');
   if (label) label.textContent = t('actions.upgrade_runtime', { runtime: name }) + (update ? ' v' + update : '');

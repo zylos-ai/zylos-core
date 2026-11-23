@@ -800,10 +800,16 @@ test('the engine version shows the installed version and puts the target on the 
 
 test('the engine version hides an existing upgrade control when the latest version is installed', () => {
   const document = documentFixture(), root = node(document, 'div'), upgrade = node(document, 'button');
+  upgrade.append(node(document, 'span', 'action-cli-label'));
   root.append(upgrade);
   renderEngineVersion(root, { claude: { installed: '2.1.330', latest: '2.1.330', update: null } }, { document, upgrade, t, runtime: 'claude' });
   assert.equal(root.textContent, 'Claude · v2.1.330');
   assert.equal(root.querySelector('button'), null);
+
+  renderEngineVersion(root, { claude: { installed: null, latest: '2.1.330', update: null } }, { document, upgrade, t, runtime: 'claude' });
+  assert.equal(root.querySelector('p').textContent, 'Claude · wb.unknown');
+  assert.equal(root.querySelector('button'), upgrade);
+  assert.equal(upgrade.textContent, t('actions.upgrade_runtime', { runtime: 'Claude' }));
 });
 
 test('theme and language are segmented choices that forward the pressed value', async () => {
