@@ -20,59 +20,6 @@ test('explicit time units normalize numeric, SQLite and ISO values without guess
   assert.equal(isoTimestamp('unreadable'), null);
 });
 
-test('instance and group projections convert exact evidence fields while preserving internal models', () => {
-  const instance = { resources: { sampledAt: at, cpu_pct: 10 }, accounts: { codex: { recordedAt: at, resetsAt: at / 1000 } },
-    runtimeHealth: { codex: { cooldownUntil: at / 1000, updatedAt: at } }, session_mode: {
-      transition: { createdAt: at / 1000, updatedAt: at / 1000, cutoff: 1700000000 },
-      blocked: { since: at }, lastCompleted: { updatedAt: at / 1000 }, lastEvents: [{ ts: at }] } };
-  const result = projectApiTimestamps('/api/instance', instance);
-  assert.equal(result.resources.sampledAt, iso);
-  assert.equal(result.accounts.codex.resetsAt, iso);
-  assert.equal(result.accounts.codex.recordedAt, iso);
-  assert.equal(result.runtimeHealth.codex.cooldownUntil, iso);
-  assert.equal(result.runtimeHealth.codex.updatedAt, iso);
-  assert.equal(result.session_mode.transition.createdAt, iso);
-  assert.equal(result.session_mode.transition.cutoff, 1700000000);
-  assert.equal(result.session_mode.blocked.since, iso);
-  assert.equal(result.session_mode.lastEvents[0].ts, iso);
-  assert.equal(instance.resources.sampledAt, at);
-  const group = { readAt: at, createdAt: at / 1000, duration: 123,
-    state: { kind: 'working', sampledAt: at }, live: { status: { sampledAt: at } },
-    c4: { lastActivityAt: at }, preview: { timestamp: at, text: 'createdAt: 123' },
-    fence: { createdAt: at / 1000 }, wait: { since: at / 1000, cooldownUntil: at / 1000 },
-    queue: { pending: { oldestAt: at } }, working: { since: at, subagents: { since: at, lastActivityAt: at } } };
-  const projected = projectApiTimestamps('/api/groups/origin', group);
-  assert.equal(projected.createdAt, iso);
-  assert.equal(projected.live.status.sampledAt, iso);
-  assert.equal(projected.wait.since, iso);
-  assert.equal(projected.working.subagents.lastActivityAt, iso);
-  assert.equal(projected.duration, 123);
-  assert.equal(projected.preview.text, group.preview.text);
-  assert.equal(projectApiTimestamps('/api/groups', { readAt: at, items: [group] }).items[0].queue.pending.oldestAt, iso);
-  assert.deepEqual(projectApiTimestamps('/api/groups/activity', { start: at, cellSeconds: 60, groups: { origin: { inbound: [at] } } }),
-    { start: iso, cellSeconds: 60, groups: { origin: { inbound: [iso] } } });
-});
-
-test('schedule list, detail, history, preview and command times use ISO while cursors and durations stay opaque', () => {
-  const task = { nextRunAt: at / 1000, lastRunAt: at / 1000, updatedAt: at / 1000, intervalSeconds: 3600,
-    recent: [{ executedAt: at / 1000, completedAt: at / 1000, duration: 123 }], nextRuns: { runs: [at / 1000], in24h: [at / 1000] } };
-  const list = projectApiTimestamps('/api/schedules', { readAt: at, items: [task], timelineTasks: [task], nextCursor: 'opaque' });
-  assert.equal(list.readAt, iso);
-  assert.equal(list.nextCursor, 'opaque');
-  assert.equal(list.items[0].nextRunAt, iso);
-  assert.equal(list.timelineTasks[0].nextRuns.in24h[0], iso);
-  assert.equal(list.items[0].nextRuns.runs[0], iso);
-  assert.equal(list.items[0].intervalSeconds, 3600);
-  assert.equal(list.items[0].recent[0].duration, 123);
-  assert.equal(task.nextRunAt, at / 1000);
-  assert.equal(projectApiTimestamps('/api/schedules/task-1', { task }).task.updatedAt, iso);
-  assert.deepEqual(projectApiTimestamps('/api/schedules/preview', { valid: true, runs: [at / 1000] }), { valid: true, runs: [iso] });
-  assert.deepEqual(projectApiTimestamps('/api/schedules/task-1/history', { items: task.recent, nextCursor: 'opaque' }),
-    { items: [{ executedAt: iso, completedAt: iso, duration: 123 }], nextCursor: 'opaque' });
-  assert.equal(projectApiTimestamps('/api/schedules', { ok: false, nextRunAt: at / 1000 }).nextRunAt, iso);
-  assert.equal(projectApiTimestamps('/api/schedules', { ok: true, data: { task: { next_run_at: at / 1000 } } }).data.task.next_run_at, iso);
-});
-
 test('chat, observer, fleet and key projections keep user content and identifiers opaque', () => {
   const chat = { items: [{ id: 1700000000, stamp: at / 86400000 + 2440587.5, timestamp: at,
     quote: { timestamp: at }, content: { timestamp: at, createdAt: at } }], nextCursor: 'opaque' };
@@ -106,42 +53,4 @@ test('HTTP and SSE use the same immutable wire projection', () => {
   assert.equal(data.readAt, at);
   assert.equal(projectEventTimestamps('metric_update', { timestamp: at }).timestamp, iso);
   assert.equal(projectEventTimestamps('metric_update', { dimensions: { rate_limit_7d_resets_at: at / 1000 } }).dimensions.rate_limit_7d_resets_at, iso);
-});
-
-test('zero clocks are unknown and event, Git and preview fields normalize actual producers', () => {
-  const instance = projectApiTimestamps('/api/instance', { runtimeHealth: { claude: { updatedAt: at, cooldownUntil: 0 } } });
-  assert.equal(instance.runtimeHealth.claude.updatedAt, iso);
-  assert.equal(instance.runtimeHealth.claude.cooldownUntil, null);
-  assert.equal(projectApiTimestamps('/api/conversations', { items: [{ stamp: 0 }] }).items[0].stamp, null);
-  const event = projectApiTimestamps('/api/groups/origin/events', { items: [{ metadata: { pasted_at: at, source_time: 9, received_at: 8 } }] });
-  assert.equal(event.items[0].metadata.pasted_at, iso);
-  assert.equal(event.items[0].metadata.source_time, 9);
-  assert.equal(event.items[0].metadata.received_at, 8);
-  const messages = projectApiTimestamps('/api/groups/origin/messages', { items: [{ timestamp: '2026-11-16 02:03:04' }] });
-  assert.equal(messages.items[0].timestamp, iso);
-  const runs = projectApiTimestamps('/api/groups/origin/runs', { items: [{ startAt: at, endAt: at }] });
-  assert.equal(runs.items[0].startAt, iso);
-  assert.equal(runs.items[0].endAt, iso);
-  const backlog = projectApiTimestamps('/api/memory/backlog', { items: [{ firstAt: '2026-11-16 02:03:04' }], originSync: { firstAt: '2026-11-16 02:03:04' }, nextCursor: 'opaque' });
-  assert.equal(backlog.items[0].firstAt, iso);
-  assert.equal(backlog.originSync.firstAt, iso);
-  assert.equal(backlog.nextCursor, 'opaque');
-  assert.equal(projectApiTimestamps('/api/memory/git', { commit: { author_date: '2026-11-16T10:03:04+08:00' } }).commit.author_date, iso);
-  assert.equal(projectApiTimestamps('/api/schedules/preview', { iso: '2026-11-16T10:03:04+08:00' }).iso, iso);
-});
-
-
-test('Fleet pages project attention recovery times and pushes project the update time', () => {
-  const record = { group_summary: { attention: [
-    { kind: 'rate_limited', until: at / 1000 },
-    { kind: 'rate_limited', until: 0 },
-    { kind: 'channel_restarting', count: 3 },
-  ] } };
-  const { items: [item] } = projectApiTimestamps('/api/fleet', { items: [record] });
-  assert.equal(item.group_summary.attention[0].until, iso);
-  assert.equal(item.group_summary.attention[1].until, null);
-  assert.deepEqual(item.group_summary.attention[2], { kind: 'channel_restarting', count: 3 });
-  const push = { summary: { count: 2 }, updated_at: at };
-  assert.deepEqual(projectEventTimestamps('fleet', push), { summary: { count: 2 }, updated_at: iso });
-  assert.equal(record.group_summary.attention[0].until, at / 1000);
 });

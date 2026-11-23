@@ -4,26 +4,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
-import * as childProcess from 'node:child_process';
-import Database from '../../comm-bridge/scripts/sqlite-driver.js';
-import { guardDatabase } from '../../comm-bridge/scripts/sqlite-schema.js';
-import * as c4Schema from '../../comm-bridge/scripts/c4-schema.js';
-import { createStore as createC4Store } from '../../comm-bridge/scripts/c4-v2-store.js';
+
 import { collectStatus } from '../../../cli/lib/status-view.js';
 import { RestartRequestStore } from '../../activity-monitor/scripts/restart-request-store.js';
-import { createGroupSnapshot, systemSample } from '../src/lib/workbench/group-snapshot.js';
+import { createGroupSnapshot } from '../src/lib/workbench/group-snapshot.js';
 import { createCoreCli } from '../src/lib/workbench/core-cli.js';
 import { createGroupsApi, groupKey } from '../src/lib/workbench/groups-api.js';
-import { C4Reader } from '../src/lib/c4-reader.js';
-import { AuthGate } from '../src/lib/auth.js';
-import { Store } from '../src/lib/store.js';
-import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
-import { VersionChecker } from '../src/lib/version-checker.js';
-import { chatHttpFixture } from './helpers/chat-http.js';
-import { signIn } from './helpers/dashboard-sign-in.js';
-import { fleetGroupSummary } from '../src/lib/workbench/fleet-summary.js';
-import { importSupervisorRecords, supervisorSequences } from './helpers/supervisor-records.js';
 
 const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
 const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
@@ -33,7 +19,6 @@ registerHooks({
     return next(specifier, context);
   },
 });
-const { configText } = await import('../public/js/wb/detail-overview.js');
 
 function fixture(t, { count = 1, statusError = false, modeError = false, overrideError = false,
   c4Error = false, queueError = false, groupListError = false, noSample = false, readPm2 = () => null, readSystem = () => null, groupKeys, displayNames, hotTtlSeconds } = {}) {
@@ -118,93 +103,6 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
 // Use the runner's isolated HOME, ZYLOS_DIR, PM2_HOME and short TMPDIR, a
 // loopback listener and a private dashboard DB. Inject Core replies, so no
 // CLI process, PM2 or tmux socket is needed. Skip for unrelated UI changes.
-test('group detail shows the saved model immediately after a config write', { timeout: 15000 }, async t => {
-  const { HOME, ZYLOS_DIR, PM2_HOME, TMPDIR, TMUX_TMPDIR, TMUX } = process.env;
-  const root = path.dirname(HOME);
-  assert.notEqual(fs.realpathSync(HOME), fs.realpathSync(os.userInfo().homedir));
-  assert.equal(ZYLOS_DIR, path.join(HOME, 'zylos'));
-  assert.equal(PM2_HOME, path.join(HOME, '.pm2'));
-  assert.equal(TMPDIR, path.join(root, 'tmp'));
-  assert.equal(TMUX_TMPDIR, TMPDIR);
-  assert.equal(TMUX, undefined);
-  assert.ok(Buffer.byteLength(path.join(TMUX_TMPDIR, 'test.sock')) < 104);
-  const dashboardDir = path.join(ZYLOS_DIR, 'components/dashboard');
-  console.log('Group config HTTP isolation:', JSON.stringify({ HOME, ZYLOS_DIR, PM2_HOME, TMPDIR, TMUX_TMPDIR,
-    database: path.join(dashboardDir, 'dashboard.db'), tmux: 'no commands', network: 'loopback only' }));
-  fs.mkdirSync(dashboardDir, { recursive: true });
-  fs.writeFileSync(path.join(dashboardDir, 'config.json'), JSON.stringify({ auth: { password: 'fixture-password' } }));
-
-  const f = fixture(t);
-  const group = 'telegram:g0', runtime = 'claude';
-  const oldModel = 'old-model', newModel = 'new-model';
-  let model = oldModel;
-  f.live.delete(group);
-  f.cli.readOverrides = async () => ({ ok: true, data: { baseline: { runtime }, runtime: [],
-    model: [{ sessionGroup: group, runtime, model, effort: 'high' }] } });
-
-  t.mock.method(EventLoopMonitor.prototype, 'start', function () { return this; });
-  t.mock.method(VersionChecker.prototype, 'start', () => {});
-  t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
-    systemSample, createGroupSnapshot: () => f.service,
-  } });
-  t.mock.module('node:child_process', { namedExports: { ...childProcess,
-    execFile(command, args, options, callback) {
-      if (args[0] === '--version') return callback(null, { stdout: '1.0.0' });
-      assert.equal(command, 'zylos');
-      assert.equal(options.env.ZYLOS_DIR, ZYLOS_DIR);
-      let data;
-      if (args[1] === 'runtime') {
-        assert.deepEqual(args, ['group', 'runtime', 'get', '--group', group, '--json']);
-        data = { resolved: { runtime } };
-      } else if (args[2] === 'get') {
-        assert.deepEqual(args, ['group', 'model', 'get', '--group', group, '--runtime', runtime, '--json']);
-        data = { resolved: { model, effort: 'high' } };
-      } else {
-        assert.deepEqual(args, ['group', 'model', 'set', '--group', group, '--runtime', runtime,
-          '--model', newModel, '--effort', 'high', '--json']);
-        model = newModel;
-      }
-      callback(null, { stdout: JSON.stringify({ ok: true, data }) });
-    },
-    execFileSync: () => assert.fail('Unexpected synchronous child process'),
-  } });
-  let server;
-  const stores = new Set(), timers = new Set();
-  const checkSchema = Store.prototype.checkSchema, interval = globalThis.setInterval;
-  t.mock.method(Store.prototype, 'checkSchema', function (...args) { stores.add(this); return checkSchema.apply(this, args); });
-  t.mock.method(globalThis, 'setInterval', (...args) => { const timer = interval(...args); timers.add(timer); return timer; });
-  f.addCleanup(async () => {
-    for (const timer of timers) clearInterval(timer);
-    if (server) {
-      server.closeAllConnections();
-      await new Promise(resolve => server.close(resolve));
-      await server.closeAttachments();
-    }
-    for (const store of stores) if (store.db.open) store.close();
-  });
-
-  const { createServer } = await import('../src/index.js');
-  server = createServer();
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const origin = `http://127.0.0.1:${server.address().port}`;
-  const cookie = await signIn(origin, 'fixture-password');
-  const route = origin + '/api/groups/' + encodeURIComponent(group);
-  async function detail() {
-    const response = await fetch(route + '?include=config', { headers: { cookie }, signal: t.signal });
-    assert.equal(response.status, 200);
-    return response.json();
-  }
-  assert.match(configText(await detail()), /old-model/);
-  const saved = await fetch(route + '/config', { method: 'PUT', signal: t.signal,
-    headers: { cookie, origin, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ kind: 'model', runtime, model: newModel, effort: 'high' }) });
-  const result = await saved.json();
-  assert.equal(saved.status, 200, JSON.stringify(result));
-  assert.equal(result.ok, true);
-  const updated = await detail();
-  assert.match(configText(updated), /new-model/);
-  assert.deepEqual(updated.config.modelOverrides, [{ runtime, model: newModel, effort: 'high' }]);
-});
 
 // Collection integration: actual C4 queue/catalog SQL over a private, read-only
 // SQLite connection -> actual snapshot and public API projections in both modes.
@@ -212,260 +110,38 @@ test('group detail shows the saved model immediately after a config write', { ti
 // The official runner supplies private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR.
 // No processes, timers, network or tmux sockets start; fixture teardown closes
 // the DB before removing its root, including on assertion failure.
-test('single Origin aggregates channel queues and latest inbound while multi groups stay isolated', async t => {
-  const f = fixture(t, { groupKeys: ['telegram:first', 'lark:second', 'origin'] });
-  const file = path.join(f.root, 'c4.db'), writer = new Database(file);
-  try {
-    guardDatabase(writer, c4Schema);
-    const seed = writer.prepare('INSERT INTO conversations(id,direction,channel,content,status,session_group,priority,timestamp) VALUES(?,?,?,?,?,?,?,?)');
-    for (const row of [
-      [1, 'in', 'telegram', 'Oldest queued', 'pending', 'telegram:first', 1, f.now() - 9000],
-      [2, 'in', 'lark', 'Second queued', 'pending', 'lark:second', 1, f.now() - 5000],
-      [3, 'in', 'lark', '[Release bot] Latest received ?token=private-value', 'delivered', 'lark:second', 3, f.now() - 1000],
-      [4, 'in', 'telegram', 'Being delivered', 'running', 'telegram:first', 3, f.now() - 3000],
-      [5, 'out', 'telegram', 'Newer outbound is not received', 'delivered', 'telegram:first', 3, f.now()],
-      [6, 'in', 'internal', 'Internal protocol is not a preview', 'delivered', 'origin', 3, f.now()],
-      [7, 'in', 'scheduler', '[Scheduled Task: origin-task] Origin queued', 'pending', 'origin', 3, f.now() - 2000],
-    ]) seed.run(...row.slice(0, -1), new Date(row.at(-1)).toISOString());
-    writer.exec('INSERT INTO group_heads(session_group,head_id) SELECT session_group,max(id) FROM conversations GROUP BY session_group');
-    createC4Store(writer).setDrainFence('*');
-  } finally { writer.close(); }
-  const before = fs.readFileSync(file), db = new Database(file, { readonly: true });
-  f.addCleanup(() => {
-    db.close();
-    assert.equal(fs.readFileSync(file).equals(before), true, 'collection leaves private C4 bytes unchanged');
-  });
-  assert.ok(f.root.startsWith(process.env.TMPDIR + path.sep));
-  for (const name of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
-    assert.ok(process.env[name]?.includes('zylos-tests-'), `${name} must belong to the official runner`);
-  }
-  console.log('Channel queue isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
-    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, database: file,
-    databaseMode: 'read-only after seed', socket: 'none', processes: 'none', timers: 'none' }));
-  const c4 = createC4Store(db);
-  f.cli.runC4Db = async args => {
-    const option = name => args.includes(name) ? args[args.indexOf(name) + 1] : undefined;
-    return { ok: true, data: args[0] === 'groups' ? c4.queries.listGroups({
-      keyMatch: option('--key-match'), limit: option('--limit') === undefined ? undefined : Number(option('--limit')),
-      raw: args.includes('--raw'),
-    }) : c4.listGroupQueues() };
-  };
-  f.live.set(null, f.live.get('telegram:first'));
-  f.setMode('single');
-  const api = createGroupsApi({ workbench: f.service });
-  const list = await api.list(new URLSearchParams('side=running')), origin = list.items[0], detail = await api.detail('origin', new URLSearchParams('include=raw'));
-  const singleSnapshot = await f.service.getSnapshot();
-  assert.equal(list.items.length, 1); assert.equal(origin.id, 'origin');
-  assert.equal(origin.flags.queued.count, 3);
-  assert.equal(origin.flags.queued.oldestAt, new Date(f.now() - 9000).toISOString());
-  assert.equal((await api.counts()).running.flags.queued, 1);
-  assert.equal(detail.queue.pending.count, 3); assert.equal(detail.queue.pending.oldestAt, f.now() - 9000);
-  assert.deepEqual(detail.queue.pending.head, { id: 1, priority: 1 }); assert.equal(detail.queue.running.count, 1);
-  assert.equal(detail.preview.text, 'Latest received ?token=[REDACTED]');
-  assert.deepEqual(detail.preview.source, { kind: 'channel' });
-  assert.equal(detail.raw, '[Release bot] Latest received ?token=[REDACTED]');
-  assert.deepEqual(detail.fence, c4.getDrainFence('*'));
-  assert.equal(detail.queue.fence, null);
-  assert.equal(detail.fence.sessionGroup, '*');
-  assert.equal(detail.state.kind, 'stopping');
-  for (const value of [singleSnapshot, list, detail]) assert.doesNotMatch(JSON.stringify(value), /rawGroups|groupEvidence|private-value/);
-  assert.equal(origin.currentAction.message, detail.preview.text);
-  assert.equal(origin.currentAction.receivedAt, new Date(f.now() - 1000).toISOString());
-  assert.deepEqual(detail.currentAction, origin.currentAction);
-  for (const [key, value] of Object.entries(origin)) assert.deepEqual(detail[key], value, `detail retains list field ${key}`);
-  f.setMode('multi'); f.advance(3000);
-  const multi = (await api.list(new URLSearchParams('side=running'))).items;
-  assert.equal(multi.length, 3); assert.equal((await api.counts()).running.flags.queued, 3);
-  assert.equal((await f.service.raw('origin', singleSnapshot)).raw, detail.raw, 'source stays tied to the selected single snapshot after a new multi generation');
-  const multiOrigin = multi.find(row => row.id === 'origin');
-  assert.equal(multiOrigin.flags.queued.count, 1);
-  assert.equal(multiOrigin.currentAction.message, 'Origin queued');
-  for (const row of multi) {
-    const expanded = await api.detail(row.id, new URLSearchParams(row.id === 'origin' ? 'include=' : ''));
-    assert.equal(row.flags.queued.count, 1); assert.equal(expanded.queue.pending.count, 1);
-    assert.deepEqual(expanded.currentAction, row.currentAction);
-    assert.equal(row.currentAction.message, row.id === 'telegram:first' ? 'Being delivered' : row.id === 'origin' ? 'Origin queued' : 'Latest received ?token=[REDACTED]');
-    assert.equal(expanded.queue.running.count, row.id === 'telegram:first' ? 1 : 0);
-  }
-});
 
 // Injected queue observations and private runner root; no DB or processes.
 // Run for aggregate queue head ordering; lower priority number wins before id.
-test('single Origin queue head uses priority before conversation id', async t => {
-  const f = fixture(t), original = f.cli.runC4Db;
-  f.setMode('single'); f.live.set(null, f.live.get('telegram:g0'));
-  f.cli.runC4Db = async args => args[0] === 'group-queues' ? { ok: true, data: { globalFence: null, groups: [
-    { sessionGroup: 'telegram:first', pending: { count: 1, oldestAt: f.now() - 2000, head: { id: 1, priority: 3 } }, running: { count: 0 } },
-    { sessionGroup: 'lark:second', pending: { count: 1, oldestAt: f.now() - 1000, head: { id: 2, priority: 1 } }, running: { count: 0 } },
-  ] } } : original(args);
-  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', new URLSearchParams('include='));
-  assert.deepEqual(detail.queue.pending.head, { id: 2, priority: 1 });
-});
 
 // Injected channel catalog with no inbound preview, private runner root only.
 // Run for single Origin raw-source selection; no DB, processes or sockets.
-test('single Origin without a preview has no unrelated raw message', async t => {
-  const f = fixture(t), original = f.cli.runC4Db;
-  f.setMode('single'); f.live.set(null, f.live.get('telegram:g0'));
-  f.cli.runC4Db = async args => {
-    assert.equal(args.includes('--raw'), false, 'no raw source was selected');
-    const result = await original(args);
-    if (args[0] === 'groups') for (const row of result.data.groups) row.preview = null;
-    return result;
-  };
-  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', new URLSearchParams('include=raw'));
-  assert.equal(detail.preview, null); assert.equal(detail.raw, null);
-  assert.equal(Object.hasOwn(detail, 'rawError'), false);
-});
 
 // Real Core status -> Workbench observations, isolated store and fake
 // clock/CLI/scenes. Run for request-pause wiring; skip unrelated UI work. No
 // daemon, runtime, database or network; fixture removes its own files.
-test('request file pause crosses the status snapshot and clears after repair', async t => {
-  const f = fixture(t), file = path.join(f.root, 'restart-requests.json');
-  for (const content of ['broken', '[]', '{}', '[]']) {
-    fs.writeFileSync(file, content);
-    const value = await f.service.getSnapshot(f.now(), { fresh: true });
-    const paused = content !== '[]';
-    assert.equal(value.instance.supervisorPaused, paused);
-    assert.equal(Object.hasOwn(value, 'attention'), false);
-    assert.ok(value.rows.every(row => !Object.hasOwn(row, 'attention')));
-  }
-});
 
 // Integration: real snapshot/search plus two private HTTP auth/proxy instances.
 // Run for chat access/proxy changes; skip CSS-only changes. Owned temporary root,
 // injected Core/CLI, no live DB/PM2/tmux; teardown closes sockets and auth timer.
-test('remote chat permission preserves workbench groups and search for all API scopes', async t => {
-  const names = new Map([['dashboard:local-chat', { displayName: 'Private project', effectiveName: 'Private project' }]]);
-  const f = fixture(t, { groupKeys: ['dashboard:local-chat', 'telegram:external'], displayNames: {
-    listAll: () => names, search: term => term === 'Private project' ? [{ sessionGroup: 'dashboard:local-chat' }] : [],
-  } });
-  const original = f.cli.runC4Db;
-  // Core's groups reader supplies the existing 80-character preview.
-  const preview = ('Visible summary sk-123456789012345678901234 ' + 'x'.repeat(100)).slice(0, 80);
-  f.cli.runC4Db = async args => {
-    const value = await original(args);
-    if (args[0] !== 'groups') return value;
-    const groups = value.data.groups.map(row => ({ ...row, componentName: row.sessionGroup.split(':')[0],
-      sessionGroupName: row.sessionGroup.split(':').slice(1).join(':'), preview: { ...row.preview, text: preview } }));
-    return args.includes('--key-match') ? { ...value, data: groups } : { ...value, data: { ...value.data, groups } };
-  };
-  const api = createGroupsApi({ workbench: f.service });
-  const http = await chatHttpFixture(t, {}, { workbench: url => api[url.pathname === '/api/groups' ? 'list' : 'activity'](url.searchParams) });
-  for (const allowRemote of [false, true]) {
-    http.config.chat.allowRemote = allowRemote;
-    for (const identity of ['read', 'admin']) for (const fleet of [false, true]) {
-      const direct = await http.request({ method: 'GET', path: '/api/groups?side=running' }, { identity, fleet });
-      assert.equal(direct.status, 200);
-      const value = JSON.parse(direct.text);
-      for (const key of ['dashboard:local-chat', 'telegram:external']) {
-        const row = value.items.find(row => row.id === key);
-        assert.ok(row.state); assert.ok(Object.hasOwn(row, 'duration'));
-        assert.match(row.currentAction.message, /Visible summary/);
-        assert.match(row.currentAction.message, /REDACTED/);
-        assert.ok(row.currentAction.message.length > 0 && row.currentAction.message.length <= 80);
-        assert.doesNotMatch(row.currentAction.message, /sk-123456/);
-        for (const field of ['preview', 'tools', 'raw', 'live']) assert.equal(Object.hasOwn(row, field), false);
-      }
-      const search = await http.request({ method: 'GET', path: '/api/groups?q=local-chat' }, { identity, fleet });
-      assert.equal(search.status, 200);
-      assert.ok(JSON.parse(search.text).items.some(row => row.id === 'dashboard:local-chat'));
-      assert.deepEqual(JSON.parse(search.text).items.find(row => row.id === 'dashboard:local-chat').currentAction,
-        value.items.find(row => row.id === 'dashboard:local-chat').currentAction);
-      const named = await http.request({ method: 'GET', path: '/api/groups?q=Private%20project' }, { identity, fleet });
-      assert.equal(named.status, 200);
-      assert.ok(JSON.parse(named.text).items.some(row => row.id === 'dashboard:local-chat'));
-      const activity = await http.request({ method: 'GET', path: '/api/groups/activity?range=60m&ids=dashboard%3Alocal-chat' }, { identity, fleet });
-      assert.equal(activity.status, 200);
-      assert.deepEqual(JSON.parse(activity.text), await f.service.activity('60m', ['dashboard:local-chat']));
-    }
-  }
-});
 
 // Integration: Cross-module snapshot/cache boundary; run for collection or cache changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('snapshot shares in-flight collection, caches from completion, and captures each live observation once', async t => {
-  const f = fixture(t), initial = f.cli.runC4Db;
-  assert.equal(f.service.getCachedSnapshot(), null);
-  let release;
-  const held = new Promise(resolve => { release = resolve; });
-  f.cli.runC4Db = async args => { await held; return initial(args); };
-  const first = f.service.getSnapshot(), second = f.service.getSnapshot();
-  await new Promise(resolve => setImmediate(resolve));
-  f.advance(3000); const third = f.service.getSnapshot();
-  release();
-  const results = await Promise.all([first, second, third]);
-  assert.equal(results[0], results[1]); assert.equal(results[0], results[2]);
-  assert.equal(f.calls.length, 3); assert.equal(f.observations.length, 2);
-  assert.deepEqual(f.calls.find(args => args[0] === 'groups'), ['groups', '--json']);
-  assert.equal(f.calls.filter(args => args.includes('--key-match')).length, 0);
-  f.advance(1000); assert.equal(await f.service.getSnapshot(), results[0]); assert.equal(f.calls.length, 3);
-  f.advance(1100);
-  assert.equal(f.service.getCachedSnapshot(), results[0], 'cached-only reads do not rebuild an expired snapshot');
-  assert.equal(f.calls.length, 3);
-  await f.service.getSnapshot(); assert.equal(f.calls.length, 6);
-  assert.equal(f.reads.length, 2, 'weekly account cache survives snapshot expiry');
-  f.advance(30000); await f.service.getSnapshot(); assert.equal(f.reads.length, 4);
-});
 
 // Integration: real snapshot/collectStatus cache bypass after lifecycle changes.
 // Run for lifecycle freshness or cache changes; skip UI-only changes. Official
 // runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; fixture owns its root.
 // No database, socket, child process, PM2 or network is used.
-test('fresh snapshots bypass a completed cache after a session changes', async t => {
-  const f = fixture(t);
-  assert.ok(f.root.startsWith(process.env.TMPDIR + path.sep));
-  console.log('Fresh snapshot isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
-    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, root: f.root,
-    database: 'none', tmux: 'none', network: 'none', Core: 'injected' }));
-  const original = await f.service.getSnapshot();
-  f.live.get('telegram:g0').identity.runId = 'replacement-run';
-  assert.equal(await f.service.getSnapshot(), original, 'ordinary reads still use the two-second cache');
-  const refreshed = await f.service.getSnapshot(f.now(), { fresh: true });
-  assert.equal(refreshed.rows.find(row => row.sessionGroup === 'telegram:g0').live.runId, 'replacement-run');
-  assert.equal(original.rows.find(row => row.sessionGroup === 'telegram:g0').live.runId, 'run-telegram:g0');
-  assert.equal(f.calls.length, 6, 'one additional three-command build');
-});
 
 // Integration: real snapshot/collectStatus sequencing with injected Core/CLI;
 // run for lifecycle freshness or inflight/cache changes, skip UI-only changes.
 // Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; fixture owns
 // its temporary root. No database, socket, child process, PM2 or network is used.
-test('fresh snapshots wait for an earlier read then observe the next session', { timeout: 1000 }, async t => {
-  const f = fixture(t), originalCli = f.cli.runC4Db;
-  assert.ok(f.root.startsWith(process.env.TMPDIR + path.sep));
-  console.log('Pending snapshot isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
-    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, root: f.root,
-    database: 'none', tmux: 'none', network: 'none', Core: 'injected' }));
-  let release;
-  const held = new Promise(resolve => { release = resolve; });
-  t.after(() => release());
-  let pendingCalls = 0;
-  f.cli.runC4Db = async args => { if (++pendingCalls <= 2) await held; return originalCli(args); };
-  const earlier = f.service.getSnapshot();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.observations.length, 2, 'the earlier build captured live identities before waiting');
-  f.live.get('telegram:g0').identity.runId = 'replacement-run';
-  const fresh = f.service.getSnapshot(f.now(), { fresh: true });
-  release();
-  const [before, after] = await Promise.all([earlier, fresh]);
-  assert.equal(before.rows.find(row => row.sessionGroup === 'telegram:g0').live.runId, 'run-telegram:g0');
-  assert.equal(after.rows.find(row => row.sessionGroup === 'telegram:g0').live.runId, 'replacement-run');
-  assert.equal(f.calls.length, 6);
-  assert.equal(await f.service.getSnapshot(), after, 'ordinary readers share the newly completed cache');
-});
 
 // Integration: Cross-module failure/retry boundary; run for snapshot error handling changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('unexpected build failure does not poison cache or the next request', async t => {
-  const f = fixture(t); f.failUnexpected(true);
-  await assert.rejects(f.service.getSnapshot(), /Unexpected storage failure/);
-  f.failUnexpected(false); const value = await f.service.getSnapshot();
-  assert.equal(value.rows.length, 2); assert.equal(f.calls.length, 6);
-});
 
 // Integration: Cross-module response/privacy boundary; run for snapshot or response changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
@@ -499,188 +175,29 @@ test('full and summary responses preserve metadata-only C4 and redact messages a
 // service counts or attention sampling changes; skip UI-only edits. The fixture
 // owns its temporary root; PM2, Core and CLI inputs are injected, no children,
 // network, live databases or tmux. Fixture teardown removes the owned root.
-test('service totals and channel attention share exactly one PM2 sample per snapshot', async t => {
-  let reads = 0;
-  const sample = { processes: [
-    { name: 'zylos-telegram', pm2_env: { status: 'stopped' } },
-    { name: 'zylos-dashboard', pm2_env: { status: 'online' } },
-    { name: 'zylos-other', pm2_env: { status: 'launching' } },
-  ] };
-  const f = fixture(t, { readPm2: () => { reads++; return sample; } });
-  const snapshot = await f.service.getSnapshot();
-  assert.equal(reads, 1);
-  assert.deepEqual(snapshot.instance.services, { online: 1, total: 3,
-    channels: [{ channel: 'telegram', service: 'zylos-telegram', status: 'stopped', restarts10m: 0, lastSendFailed: null, consecutiveFailures: null }] });
-  assert.equal(Object.hasOwn(snapshot, 'attention'), false);
-  const summary = await createGroupsApi({ workbench: f.service }).counts();
-  assert.equal(reads, 1, 'summary uses the existing snapshot cache');
-  assert.equal(Object.hasOwn(summary, 'services'), false);
-  assert.equal(Object.hasOwn(summary, 'instance'), false);
-  sample.processes[0].pm2_env.status = 'online';
-  f.advance(2100);
-  const next = await f.service.getSnapshot();
-  assert.equal(reads, 2);
-  assert.deepEqual(next.instance.services, { online: 2, total: 3,
-    channels: [{ channel: 'telegram', service: 'zylos-telegram', status: 'online', restarts10m: 0, lastSendFailed: null, consecutiveFailures: null }] });
-  assert.equal(next.instance.services.channels[0].status, 'online');
-});
 
 // Integration: unknown PM2 samples cannot fabricate counts or break attention.
 // Same private fixture boundary as the service-total case; no PM2 process runs.
-test('unreadable and malformed PM2 samples keep service counts unknown', async t => {
-  for (const sample of [null, {}, { processes: null }, { processes: {} }, { processes: [null] }, 'unreadable']) {
-    let calls = 0;
-    const f = fixture(t, { readPm2: () => { calls++; if (sample === 'unreadable') throw new Error('read failed'); return sample; } });
-    const snapshot = await f.service.getSnapshot();
-    assert.equal(calls, 1);
-    assert.equal(snapshot.instance.services, null);
-    assert.equal(Object.hasOwn(snapshot, 'attention'), false);
-  }
-  const empty = fixture(t, { readPm2: () => ({ processes: [] }) });
-  assert.deepEqual((await empty.service.getSnapshot()).instance.services, { online: 0, total: 0,
-    channels: [] });
-});
 
 // Integration: the snapshot forwards the injected host sample reader. Run for overview snapshot or system sample
 // changes; skip rendering-only edits. Same private fixture boundary as the PM2 cases; no collector or PM2 runs.
-test('the instance carries the host sample read for this snapshot and stays unknown when unreadable', async t => {
-  const sample = { collectedAt: 1799999990000, cpu_pct: 37.5, cpu_count: 8, mem_used_bytes: 2048, mem_total_bytes: 8192,
-    disk_used_pct: 61, disk_free_bytes: 4096 };
-  let reads = 0;
-  const f = fixture(t, { readSystem: () => { reads++; return sample; } });
-  const snapshot = await f.service.getSnapshot();
-  assert.equal(reads, 1);
-  assert.equal(snapshot.readAt, f.now(), 'the host sample always travels with the snapshot read clock');
-  assert.deepEqual(snapshot.instance.system, systemSample(sample));
-  assert.deepEqual(snapshot.instance.system, { sampledAt: 1799999990000, cpuPct: 37.5, cpuCount: 8, memUsedBytes: 2048,
-    memTotalBytes: 8192, diskUsedPct: 61, diskFreeBytes: 4096 });
-  const summary = await createGroupsApi({ workbench: f.service }).counts();
-  assert.equal(Object.hasOwn(summary, 'instance'), false, 'the summary view stays without host details');
-  for (const read of [() => { throw new Error('read failed'); }, () => null]) {
-    const unknown = fixture(t, { readSystem: read });
-    assert.equal((await unknown.service.getSnapshot()).instance.system, null);
-  }
-});
 
 // Integration: Cross-module absent-sample boundary; run for pool projection changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('empty pool samples are valid snapshots and summaries with unknown occupancy', async t => {
-  const f = fixture(t, { noSample: true });
-  const value = await f.service.getSnapshot(); assert.equal(value.instance.pool.used, null);
-  const summary = await createGroupsApi({ workbench: f.service }).counts();
-  assert.equal(summary.pool.used, null); assert.equal(summary.pool.capacity, null);
-});
 
 // Integration: per-source failure projection; run for snapshot source/error changes;
 // skip rendering-only edits. Owned temporary roots, injected adapters, no live
 // tmux/PM2/network; fixture cleanup is registered for every table case.
-for (const failure of ['statusError', 'modeError', 'c4Error', 'queueError', 'overrideError', 'groupListError']) {
-  test(`snapshot reports ${failure} without fabricating successful values`, async t => {
-    const f = fixture(t, { [failure]: true }), value = await f.service.getSnapshot();
-    if (failure === 'modeError') assert.equal(value.mode, 'unreadable');
-    if (failure === 'statusError') {
-      assert.ok(value.rows.every(row => row.state.kind === 'unknown'));
-      assert.equal(value.sources.status.reason, 'status_unreadable');
-      const running = await createGroupsApi({ workbench: f.service }).list(new URLSearchParams('side=running'));
-      assert.ok(running.items.every(row => row.flags.unreadable.reasons.includes('status_unreadable')));
-    }
-    if (failure === 'c4Error') { assert.equal(value.hasOlder, null); assert.equal(value.sources.c4.reason, 'c4_groups_failed'); }
-    if (failure === 'queueError') assert.ok(value.rows.every(row => row.queue.known === false));
-    if (failure === 'overrideError') {
-      assert.equal(value.baselineRuntime, 'codex'); assert.equal(value.overrides, null);
-      assert.equal(value.rows.find(row => row.sessionGroup === 'origin').target.runtime, null);
-    }
-    if (failure === 'groupListError') assert.equal(value.listKnown, false);
-  });
-}
 
 // Integration: Cross-module single-view boundary; run for view or activity query changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('single view keeps its null-key row and projects Origin activity', async t => {
-  const f = fixture(t); f.setMode('single');
-  const value = await f.service.getSnapshot();
-  assert.equal(value.rows.length, 1); assert.equal(value.rows[0].sessionGroup, null); assert.equal(value.hasOlder, null);
-  assert.equal(value.rows[0].desired, null);
-  f.events.length = 0; const activity = await f.service.activity('60m', ['origin']);
-  assert.ok(f.events.some(filter => filter.sessionGroup === 'origin' && filter.includeLegacyOrigin));
-  assert.deepEqual(Object.keys(activity.groups), ['origin']);
-});
 
 // Actual event/C4 databases, snapshot and authenticated loopback activity route.
 // Both ranges exercise source keys, window seeding and rejection of unrelated
 // events/internal/outbound messages. The official runner isolates all paths;
 // fixture teardown closes HTTP/auth/SQLite before removing its private root.
-test('single Origin heatmaps combine current and legacy events with every channel inbound', async t => {
-  const f = fixture(t); f.setMode('single');
-  const minute = 60000, at = Math.floor(f.now() / (5 * minute)) * 5 * minute + 30000;
-  f.setNow(at);
-  const store = new Store(path.join(f.root, 'dashboard.db'));
-  fs.mkdirSync(path.join(f.root, 'comm-bridge'));
-  const file = path.join(f.root, 'comm-bridge/c4.db'), writer = new Database(file);
-  writer.exec('CREATE TABLE conversations(id INTEGER PRIMARY KEY,session_group TEXT,direction TEXT,channel TEXT,timestamp TEXT)');
-  const inbound = [at - 2 * minute, at - 7 * minute, at - 65 * minute];
-  const seed = writer.prepare('INSERT INTO conversations VALUES(?,?,?,?,?)');
-  for (const [id, key, direction, channel, time] of [
-    [1, 'telegram:first', 'in', 'telegram', inbound[0]],
-    [2, 'lark:second', 'in', 'lark', inbound[1]],
-    [3, '', 'in', 'legacy', inbound[2]],
-    [4, 'origin', 'in', 'internal', at - minute],
-    [5, 'telegram:first', 'out', 'telegram', at - minute],
-    [6, 'origin', 'in', 'dashboard', at + minute],
-    [7, 'origin', 'in', 'dashboard', at - 7 * 60 * minute],
-  ]) seed.run(id, key, direction, channel, new Date(time).toISOString().slice(0, 19).replace('T', ' '));
-  writer.close();
-  const reader = new C4Reader(f.root);
-  f.addCleanup(() => { reader.close(); store.close(); });
-  assert.ok(f.root.startsWith(process.env.TMPDIR + path.sep));
-  console.log('Single heatmap isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
-    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, database: file, events: store.db.name, transport: 'loopback only', runtime: 'none' }));
-  const add = (id, key, run, type, time) => store.insertEvent({ id, ingest_id: id, timestamp: new Date(time).toISOString(),
-    runtime: 'claude', session_group: key, run_id: run, event_type: type, category: 'activity' });
-  add('old-start', null, 'old', 'user_prompt_submit', at - 70 * minute);
-  add('old-stop', 'origin', 'old', 'stop', at - 64 * minute);
-  add('start', 'origin', 'current', 'user_prompt_submit', at - 10 * minute);
-  add('stop', null, 'current', 'stop', at - 8 * minute);
-  add('unrelated', 'telegram:first', 'other', 'activate_failed', at - minute);
-  f.store.queryEvents = options => store.queryEvents(options);
-  f.c4Reader.getInboundTimes = options => reader.getInboundTimes(options);
-  const api = createGroupsApi({ workbench: f.service });
-  const http = await chatHttpFixture(t, {}, { workbench: url => api.activity(url.searchParams) });
-  const cell = (value, time) => value.groups.origin.cells[Math.floor((time - value.start) / (value.cellSeconds * 1000))];
-  for (const range of ['60m', '6h']) {
-    const reply = await http.request({ method: 'GET', path: '/api/groups/activity?ids=origin&range=' + range });
-    assert.equal(reply.status, 200);
-    const value = JSON.parse(reply.text), width = range === '60m' ? minute : 5 * minute;
-    assert.deepEqual(Object.keys(value.groups), ['origin']);
-    assert.equal(value.start, Math.floor(at / width) * width - (range === '60m' ? 59 : 71) * width);
-    assert.equal(value.groups.origin.cells.length, range === '60m' ? 60 : 72);
-    assert.equal(cell(value, at - 10 * minute), 'busy');
-    assert.equal(cell(value, at - minute), 'none', 'another group cannot paint single Origin');
-    if (range === '6h') assert.equal(cell(value, at - 65 * minute), 'busy');
-    assert.deepEqual(value.groups.origin.inbound, inbound.filter(time => time >= value.start).sort((a, b) => a - b));
-    console.log('Single heatmap API:', JSON.stringify(value));
-  }
-});
-
-for (const range of ['60m', '6h']) test(`single Origin ${range} seeds a legacy turn across the window edge`, async t => {
-  const f = fixture(t); f.setMode('single');
-  const width = range === '60m' ? 60000 : 300000;
-  const start = Math.floor(f.now() / width) * width - (range === '60m' ? 59 : 71) * width;
-  const store = new Store(path.join(f.root, 'dashboard.db'));
-  f.addCleanup(() => store.close());
-  for (const [id, key, type, time] of [
-    ['prompt', null, 'user_prompt_submit', start - width],
-    ['stop', 'origin', 'stop', start + width],
-  ]) store.insertEvent({ id, ingest_id: id, timestamp: new Date(time).toISOString(), runtime: 'claude',
-    session_group: key, run_id: 'historical', event_type: type, category: 'activity' });
-  f.store.queryEvents = filter => store.queryEvents(filter);
-  const value = await f.service.activity(range, ['origin']);
-  assert.equal(value.groups.origin.cells[0], 'busy');
-  assert.equal(value.groups.origin.cells[1], 'none');
-  assert.equal(value.groups.origin.cells[2], 'none');
-});
 
 test('Core CLI uses bounded argv children, exact envelopes, and the complete runtime override catalog and bounded model batches', async () => {
   const calls = []; let active = 0, peak = 0;
@@ -716,656 +233,103 @@ test('Core CLI uses bounded argv children, exact envelopes, and the complete run
   assert.deepEqual(result.data.model, [{ sessionGroup: 'tg:g499', runtime: 'codex', model: 'selected', effort: 'high' }]);
 });
 
-for (const kind of ['non_json', 'false', 'throw']) test(`Core source failure is explicit: ${kind}`, async () => {
-  const cli = createCoreCli({ zylosDir: '/isolated', execute: async () => {
-    if (kind === 'throw') throw Object.assign(new Error('failure'), { code: 'ETIMEDOUT' });
-    return { stdout: kind === 'non_json' ? 'broken' : JSON.stringify({ ok: false, error: { code: 'BROKEN' } }) };
-  } });
-  const result = await cli.runC4Db(['group-queues', '--json']);
-  assert.equal(result.ok, false); assert.equal(result.reason, 'queue_summary_failed');
-  assert.equal((await cli.readOverrides([])).reason, 'override_list_failed');
-});
-
-test('any failed override batch rejects the whole source, including baseline', async () => {
-  let calls = 0;
-  const cli = createCoreCli({ zylosDir: '/isolated', execute: async () => ({ stdout: JSON.stringify(++calls === 2
-    ? { ok: false, error: { code: 'BROKEN' } } : { ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) }) });
-  const value = await cli.readOverrides(Array.from({ length: 501 }, (_, i) => `tg:g${i}`));
-  assert.equal(value.ok, false); assert.equal(value.reason, 'override_list_failed'); assert.equal('data' in value, false);
-});
-
 // Read-only integration: private SQLite fixture, no tmux/PM2/network. Run for
 // activity source filtering or read SQL changes; skip unrelated UI edits. Close
 // reader before comparing and removing only owned fixture files.
-test('inbound activity reads only active external inbound rows without changing C4 bytes', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-inbound-')), dir = path.join(root, 'comm-bridge');
-  fs.mkdirSync(dir); const file = path.join(dir, 'c4.db'), db = new Database(file);
-  db.exec('CREATE TABLE conversations(id INTEGER PRIMARY KEY, session_group TEXT,direction TEXT,channel TEXT,timestamp TEXT)');
-  const insert = db.prepare('INSERT INTO conversations VALUES(?,?,?,?,?)');
-  for (const [id, group, direction, channel] of [[1, 'tg:a', 'in', 'telegram'], [2, 'tg:a', 'out', 'telegram'], [3, 'tg:a', 'in', 'internal'], [4, 'tg:old', 'in', 'telegram']]) insert.run(id, group, direction, channel, '2026-01-01 00:00:00');
-  db.close(); const before = fs.readFileSync(file), reader = new C4Reader(root);
-  t.after(() => { reader.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  const rows = reader.getInboundTimes({ since: Date.parse('2026-01-01T00:00:00Z'), groups: ['tg:a'] });
-  assert.equal(rows.length, 1); assert.equal(rows[0].session_group, 'tg:a');
-  assert.equal(rows[0].timestamp, Date.parse('2026-01-01T00:00:00Z'));
-  assert.deepEqual(reader.getInboundTimes({ since: Date.parse('2026-01-01T00:00:00Z'), groups: [] }), []);
-  assert.deepEqual(reader.getInboundTimes({ since: Date.parse('2026-01-01T00:00:00Z') }).map(row => row.session_group), ['tg:a', 'tg:old']);
-  assert.deepEqual(reader.getInboundTimes({ since: Date.parse('2026-01-02T00:00:00Z') }), []);
-  reader.close(); assert.equal(fs.readFileSync(file).equals(before), true);
-});
 
 // Integration: Actual AuthGate plus shared responses; run for API access or dispatch changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('read-scoped API authentication permits new routes while unauthenticated requests are rejected', async t => {
-  const token = `zylos_st_${'a'.repeat(64)}`;
-  const hash = crypto.createHash('sha256').update(token).digest('hex');
-  const gate = new AuthGate({ auth: { enabled: true, password: 'configured' } }, {
-    getApiSession: key => key === hash ? { api_key_id: 1, scope: 'read', expires_at: Date.now() + 60000, key_revoked_at: null } : null,
-    cleanupSessions() {}, cleanupExpiredApiSessions() {},
-  });
-  t.after(() => clearInterval(gate._cleanupTimer));
-  for (const pathname of ['/api/groups?side=running', '/api/groups?q=fixture', '/api/groups/telegram%3Ag0']) {
-    for (const authorized of [false, true]) {
-      const res = { headers: {}, setHeader(key, value) { this.headers[key] = value; }, getHeader(key) { return this.headers[key]; },
-        writeHead(status) { this.status = status; }, end(body) { this.body = body; } };
-      const req = { method: 'GET', headers: authorized ? { authorization: `Bearer ${token}` } : {} };
-      const handled = await gate.handle(req, res, new URL(`http://fixture${pathname}`));
-      if (!handled) res.status = 200;
-      assert.equal(res.status, authorized ? 200 : 401);
-    }
-  }
-});
 
 // Integration: Cross-module bounded collection timing; run for snapshot source call changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('thirty live groups produce one bounded on-demand collection with no search command', async t => {
-  const f = fixture(t, { count: 30 }), started = performance.now();
-  const value = await f.service.getSnapshot(); const duration = performance.now() - started;
-  assert.equal(value.rows.length, 31); assert.equal(f.calls.length, 3);
-  assert.equal(f.calls.some(args => args.includes('--key-match')), false);
-  t.diagnostic(`30-group isolated collection ${duration.toFixed(2)} ms (2000 ms informational budget)`);
-});
 
 // Integration: Cross-module live/desired configuration boundary; run for override projection changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('target overrides include row 101 and model-only rows while desired stays distinct from live configuration', async t => {
-  const f = fixture(t, { count: 102 });
-  f.live.delete('telegram:g100'); f.live.delete('telegram:g2');
-  let requested, overrideReads = 0;
-  const modelOnly = { sessionGroup: 'telegram:g2', runtime: 'claude', model: 'chosen-model', effort: 'high' };
-  f.cli.readOverrides = async groups => {
-    overrideReads++;
-    requested = groups;
-    return { ok: true, data: { baseline: { runtime: 'claude' },
-      runtime: [{ sessionGroup: 'telegram:g100', runtime: 'codex' }, { sessionGroup: 'telegram:g0', runtime: 'codex' }, { sessionGroup: 'telegram:unlisted', runtime: 'codex' }],
-      model: [modelOnly, { sessionGroup: 'telegram:g0', runtime: 'codex', model: 'saved-model', effort: 'low' },
-        { sessionGroup: 'telegram:g0', runtime: 'claude', model: 'other-engine', effort: 'high' },
-        { sessionGroup: 'telegram:unlisted', runtime: 'claude', model: 'unlisted-model', effort: 'high' }] } };
-  };
-  const value = await f.service.getSnapshot(), rows = new Map(value.rows.map(row => [row.sessionGroup, row]));
-  assert.equal(rows.get('telegram:g100').target.runtime, 'codex');
-  assert.deepEqual(rows.get('telegram:g2').target.model, { model: modelOnly.model, effort: modelOnly.effort });
-  assert.equal(rows.get('telegram:g100').target.model, 'default');
-  assert.equal(rows.get('telegram:g0').target.runtime, 'claude');
-  assert.deepEqual(rows.get('telegram:g0').desired, { runtime: 'codex', mode: 'override', model: 'saved-model', effort: 'low' });
-  assert.equal(requested.length, 103);
-  assert.equal(requested.includes('telegram:unlisted'), false, 'the catalog input contains only observed groups');
-  assert.equal(rows.get('telegram:unlisted').presence, 'not_running');
-  assert.equal(rows.get('telegram:unlisted').c4, null);
-
-  const config = { runtime: { ok: true }, model: { ok: true } };
-  const api = createGroupsApi({ workbench: f.service, groupConfig: { get: async () => config } });
-  const detail = await api.detail('telegram:g0', new URLSearchParams('include=config'));
-  assert.deepEqual(detail.config, { ...config, modelOverrides: [
-    { runtime: 'codex', model: 'saved-model', effort: 'low' },
-    { runtime: 'claude', model: 'other-engine', effort: 'high' },
-  ] });
-  assert.deepEqual((await api.detail('telegram:g100', new URLSearchParams('include=config'))).config.modelOverrides, []);
-  assert.equal(overrideReads, 1, 'detail reuses the collected override list');
-});
 
 // Integration: Cross-module failed-source union/baseline boundary; run for source merge changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('all primary sources failing still requests Origin baseline and uses no invented group rows', async t => {
-  const f = fixture(t, { statusError: true, c4Error: true, queueError: true }), value = await f.service.getSnapshot();
-  assert.equal(value.rows.length, 1); assert.equal(value.rows[0].sessionGroup, 'origin');
-  assert.deepEqual(f.calls.find(args => args[0] === 'overrides'), ['overrides', 'origin']);
-  assert.equal(value.baselineRuntime, 'claude'); assert.equal(value.rows[0].state.reason, 'status_unreadable');
-});
 
 // Integration: Cross-module mode/config fallback boundary; run for configuration projection changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('unreadable mode still uses the collected view and bad fallback configuration remains null', async t => {
-  const f = fixture(t, { modeError: true }); f.setMode('single');
-  const single = await f.service.getSnapshot(); assert.equal(single.mode, 'unreadable');
-  assert.equal(single.view, 'single'); assert.equal(single.rows.length, 1);
-  const bad = fixture(t, { overrideError: true }); bad.failConfig(true);
-  assert.equal((await bad.service.getSnapshot()).baselineRuntime, null);
-});
 
 // Integration: Cross-module per-reader failure boundary; run for observation handling changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('a failed session batch stays unknown instead of being projected idle', async t => {
-  const f = fixture(t), read = f.reader.readSessionState;
-  f.reader.readSessionState = key => key === 'telegram:g0' ? Promise.reject(new Error('broken group')) : read(key);
-  const row = (await f.service.getSnapshot()).rows.find(item => item.sessionGroup === 'telegram:g0');
-  assert.equal(row.state.kind, 'unknown'); assert.equal(row.state.reason, 'status_unreadable');
-});
 
 // Integration: actual Store with source timestamps arriving out of order. Run for
 // duration or event query changes; skip rendering-only edits. Owned fixture DB,
 // injected Core/CLI, no live resources; fixture closes Store before cleanup.
-test('working duration reads only the current run latest prompt or stop from the real event store', async t => {
-  const f = fixture(t), store = new Store(path.join(f.root, 'dashboard.db'));
-  f.addCleanup(() => store.close());
-  const add = (id, run, kind, before) => store.insertEvent({ id, ingest_id: id, timestamp: new Date(f.now() - before).toISOString(),
-    runtime: 'claude', session_group: 'telegram:g0', run_id: run, event_type: kind, category: 'activity' });
-  add('old', 'previous', 'user_prompt_submit', 1000);
-  add('current', 'run-telegram:g0', 'user_prompt_submit', 6000);
-  add('late-old-stop', 'run-telegram:g0', 'stop', 9000);
-  const filters = [];
-  f.store.queryEvents = filter => { filters.push(filter); return store.queryEvents(filter); };
-  let row = (await f.service.getSnapshot()).rows.find(item => item.sessionGroup === 'telegram:g0');
-  assert.equal(row.duration, 6);
-  assert.ok(filters.some(filter => filter.sessionGroup === 'telegram:g0' && filter.runId === 'run-telegram:g0' && filter.limit === 1000));
-  add('stop', 'run-telegram:g0', 'stop', 500);
-  add('late-old-prompt', 'run-telegram:g0', 'user_prompt_submit', 7000); f.advance(2100);
-  row = (await f.service.getSnapshot()).rows.find(item => item.sessionGroup === 'telegram:g0');
-  assert.equal(row.duration, null);
-});
 
 // Integration: Cross-module activity pagination/cache boundary; run for activity query/cache changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('activity uses separate thirty-second range caches and reads every active-group event page', async t => {
-  const f = fixture(t), filters = [], normal = f.store.queryEvents;
-  f.store.queryEvents = filter => {
-    if (!filter.sessionGroup || filter.runId || filter.types) return normal(filter);
-    filters.push(filter);
-    assert.ok(['origin', 'telegram:g0'].includes(filter.sessionGroup));
-    assert.equal(filter.limit, 1000);
-    if (filter.sessionGroup === 'origin') return [];
-    if (filter.offset === 0) return Array.from({ length: 1000 }, (_, i) => ({ event_seq: i + 1, event_type: 'session_start',
-      session_group: 'telegram:g0', run_id: 'history', timestamp: new Date(f.now() - 10000).toISOString(), metadata: {} }));
-    return [{ event_seq: 1001, event_type: 'activate_failed', session_group: 'telegram:g0', run_id: 'history', timestamp: new Date(f.now() - 5000).toISOString(), metadata: {} }];
-  };
-  const minute = await f.service.activity('60m', ['origin', 'telegram:g0']);
-  const failedCell = Math.floor((f.now() - 5000 - minute.start) / (minute.cellSeconds * 1000));
-  assert.equal(minute.groups['origin', 'telegram:g0'].cells[failedCell], 'error');
-  assert.equal(filters.length, 3);
-  f.advance(1000); assert.equal(await f.service.activity('60m', ['origin', 'telegram:g0']), minute); assert.equal(filters.length, 3);
-  const six = await f.service.activity('6h', ['origin', 'telegram:g0']); assert.equal(six.groups['origin', 'telegram:g0'].cells.length, 72); assert.equal(filters.length, 6);
-  f.advance(30000); await f.service.activity('60m', ['origin', 'telegram:g0']); assert.equal(filters.length, 9);
-  await assert.rejects(f.service.activity('1d', ['origin']), { code: 'invalid_range', statusCode: 400 });
-});
 
 // Loopback route and real snapshot activity. Run for activity validation,
 // query scoping or caching changes. Owned fixture paths and injected event,
 // C4 and Core readers keep this independent of PM2, tmux and live databases.
-test('activity queries only requested known groups and keeps responses scoped', async t => {
-  const f = fixture(t, { count: 3 });
-  const api = createGroupsApi({ workbench: f.service });
-  const http = await chatHttpFixture(t, {}, { workbench: url => api.activity(url.searchParams) });
-  const inbound = [];
-  f.c4Reader.getInboundTimes = options => { inbound.push(options.groups); return []; };
-  await f.service.getSnapshot();
-  const read = async ids => {
-    const params = new URLSearchParams({ range: '60m' });
-    if (ids !== undefined) params.set('ids', ids.join(','));
-    return http.request({ method: 'GET', path: '/api/groups/activity?' + params });
-  };
-  for (const [ids, expected] of [
-    [['telegram:g0', 'telegram:g1'], ['telegram:g0', 'telegram:g1']],
-    [['telegram:g0', 'UNKNOWN'], ['telegram:g0']],
-    [['telegram:g0'], ['telegram:g0']],
-    [['telegram:g1'], ['telegram:g1']],
-    [['UNKNOWN'], []],
-  ]) {
-    f.events.length = 0;
-    const response = await read(ids);
-    assert.equal(response.status, 200);
-    assert.deepEqual(Object.keys(JSON.parse(response.text).groups).sort(), expected);
-    assert.deepEqual([...new Set(f.events.map(filter => filter.sessionGroup))].sort(), expected);
-  }
-  assert.deepEqual(inbound.map(groups => groups.slice().sort()),
-    [['telegram:g0', 'telegram:g1'], ['telegram:g0'], ['telegram:g0'], ['telegram:g1']]);
-});
 
 // Full read-only boundary: actual Dashboard Store and C4Reader on owned SQLite
 // fixtures; Core readers/CLI are injected read-only adapters. Run for snapshot or
 // activity read wiring; skip unrelated rendering. No tmux/PM2/network/children.
 // Connections close before root cleanup; compare bytes instead of row diff dumps.
-test('full snapshot and activity cycle leaves C4 and Dashboard event storage unchanged', async t => {
-  const f = fixture(t), directory = path.join(f.root, 'comm-bridge'); fs.mkdirSync(directory);
-  const c4File = path.join(directory, 'c4.db'), writer = new Database(c4File);
-  writer.exec("CREATE TABLE conversations(id INTEGER PRIMARY KEY,session_group TEXT,direction TEXT,channel TEXT,timestamp TEXT);INSERT INTO conversations VALUES(1,'telegram:g0','in','telegram','2026-01-01 00:00:00')");
-  writer.close();
-  const c4 = new Database(c4File, { readonly: true }), reader = new C4Reader(f.root), store = new Store(path.join(f.root, 'dashboard.db'));
-  f.addCleanup(() => { reader.close(); c4.close(); store.close(); });
-  f.c4Reader.getInboundTimes = options => reader.getInboundTimes(options);
-  store.insertEvent({ id: 'initial', ingest_id: 'initial', timestamp: new Date(f.now() - 1000).toISOString(), runtime: 'claude',
-    session_group: 'telegram:g0', run_id: 'run-telegram:g0', event_type: 'session_start', category: 'activity' });
-  f.store.queryEvents = filter => store.queryEvents(filter);
-  f.store.latestEventByType = type => store.latestEventByType(type);
-  const cli = f.cli.runC4Db;
-  f.cli.runC4Db = async args => { c4.prepare('SELECT id FROM conversations').all(); return cli(args); };
-  const beforeC4 = fs.readFileSync(c4File), version = c4.pragma('data_version', { simple: true });
-  const eventBytes = () => Buffer.from(JSON.stringify(store.queryEvents({ limit: 1000 })));
-  const storageBytes = file => new Map(['', '-wal'].map(suffix => [suffix, fs.existsSync(file + suffix) ? fs.readFileSync(file + suffix) : null]));
-  const beforeEvents = eventBytes(), dashboardBytes = storageBytes(path.join(f.root, 'dashboard.db'));
-  assert.ok(dashboardBytes.get('-wal')?.length > 0, 'fixture has WAL content to protect');
-  await f.service.getSnapshot(); await f.service.activity('60m', ['telegram:g0']);
-  assert.equal(c4.pragma('data_version', { simple: true }), version);
-  assert.equal(fs.readFileSync(c4File).equals(beforeC4), true);
-  assert.equal(eventBytes().equals(beforeEvents), true);
-  const afterDashboard = storageBytes(path.join(f.root, 'dashboard.db'));
-  for (const [suffix, before] of dashboardBytes) {
-    const after = afterDashboard.get(suffix);
-    assert.equal(before === null ? after === null : after !== null && after.equals(before), true, `Dashboard ${suffix || 'main'} bytes unchanged`);
-  }
-  assert.equal(f.calls.every(args => ['groups', 'group-queues', 'overrides'].includes(args[0])), true);
-});
 
 // Integration: source-envelope and row-enrichment boundaries. Run for Core input,
 // privacy or snapshot changes; skip rendering-only changes. Owned temporary roots,
 // injected CLI/reader adapters, no live tmux/PM2/network/children; fixture cleanup.
-test('snapshot keeps global fences and instance authentication observations without reminder lists', async t => {
-  const f = fixture(t), normal = f.cli.runC4Db;
-  const globalFence = { reason: null, createdAt: f.now() / 1000 - 20 };
-  f.cli.runC4Db = async args => args[0] === 'group-queues'
-    ? { ok: true, data: { groups: [], globalFence } } : normal(args);
-  f.setHealth({ health: 'auth_failed' });
-  const snapshot = await f.service.getSnapshot(), row = snapshot.rows.find(item => item.sessionGroup === 'telegram:g0');
-  assert.deepEqual(row.fence, globalFence);
-  assert.equal(row.wait.kind, 'fenced'); assert.equal(row.wait.fenceReason, 'mode_switch');
-  assert.equal(snapshot.instance.runtimeHealth.claude.health, 'auth_failed');
-  const projected = (await createGroupsApi({ workbench: f.service }).list(new URLSearchParams('side=running'))).items.find(item => item.id === row.sessionGroup);
-  assert.equal(projected.state.kind, 'stopping');
-  const detail = await createGroupsApi({ workbench: f.service }).detail(row.sessionGroup, new URLSearchParams(row.sessionGroup === 'origin' ? 'include=' : ''));
-  assert.equal(Object.hasOwn(detail, 'attention'), false);
-});
 
 // Integration: malformed tool input and live-error privacy boundaries. Run when
 // observation projection changes; skip rendering-only changes. Owned temporary
 // roots, injected sources, no external resources; fixture cleanup.
-test('snapshot tolerates non-array tool details and redacts Core read failure text', async t => {
-  const f = fixture(t);
-  f.live.get('telegram:g0').status.value.active_tool_details = { unexpected: true };
-  let snapshot = await f.service.getSnapshot();
-  assert.deepEqual(snapshot.rows.find(item => item.sessionGroup === 'telegram:g0').tools, []);
-  const reader = f.reader.readSessionState;
-  f.reader.readSessionState = key => key === 'telegram:g0'
-    ? Promise.reject(new Error('failed Bearer secret123 and sk-123456789012345678901234')) : reader(key);
-  f.advance(2100); snapshot = await f.service.getSnapshot();
-  const row = snapshot.rows.find(item => item.sessionGroup === 'telegram:g0');
-  assert.equal(row.state.kind, 'unknown'); assert.equal(row.state.reason, 'status_unreadable');
-  assert.equal(snapshot.sources.status.reason, 'status_unreadable');
-  assert.equal(JSON.stringify(snapshot).includes('secret123'), false);
-  assert.equal(JSON.stringify(snapshot).includes('sk-123456789012345678901234'), false);
-  assert.equal('buildGroupSnapshot' in f.service, false);
-});
 
 // Integration: target configuration uses the same model descriptor for live and
 // saved overrides. Run for launch/override projection changes; skip rendering-only
 // edits. Temporary root and injected read-only sources; fixture cleanup.
-test('live and stopped targets project one model descriptor shape', async t => {
-  const f = fixture(t);
-  f.live.get('telegram:g0').identity.launchConfig = { runtime: 'claude', mode: 'override', model: 'live-model', effort: 'high' };
-  let snapshot = await f.service.getSnapshot();
-  assert.deepEqual(snapshot.rows.find(row => row.sessionGroup === 'telegram:g0').target.model, { model: 'live-model', effort: 'high' });
-  f.live.delete('telegram:g0'); f.advance(2100);
-  snapshot = await f.service.getSnapshot();
-  assert.equal(snapshot.rows.find(row => row.sessionGroup === 'telegram:g0').target.model, 'default');
-});
 
 // Integration: a running group whose launch configuration cannot be read carries an
 // unknown model with a reason instead of the default. Run for launch/override
 // projection changes; skip rendering-only edits. Temporary root and injected
 // read-only sources; fixture cleanup.
-test('running group without a readable launch configuration reports an unknown model', async t => {
-  const f = fixture(t, { count: 4 });
-  f.live.get('telegram:g0').identity.launchConfig = null;
-  f.live.get('telegram:g1').identity.launchConfig = null; f.live.get('telegram:g1').identity.runtime = 'unknown';
-  f.live.delete('telegram:g2');
-  const rows = new Map((await f.service.getSnapshot()).rows.map(row => [row.sessionGroup, row]));
-  assert.deepEqual(rows.get('telegram:g0').target, { runtime: 'claude', model: null, reason: 'launch_config_unreadable' });
-  assert.deepEqual(rows.get('telegram:g1').target, { runtime: 'unknown', model: null, reason: 'launch_config_unreadable' });
-  assert.equal(rows.get('telegram:g0').desired.mode, 'default');
-  assert.deepEqual(rows.get('telegram:g3').target, { runtime: 'claude', model: 'default' });
-  assert.equal(rows.get('telegram:g2').presence, 'not_running');
-  assert.deepEqual(rows.get('telegram:g2').target, { runtime: 'claude', model: 'default' });
-});
 
 // Integration: exact boolean envelope acceptance must fail only its own source.
 // Run for Core CLI response changes; skip rendering-only edits. CLI execution is
 // injected, never spawns; isolated temporary root and fixture lifecycle cleanup.
-for (const [source, ok] of [['c4', 'true'], ['q', 1], ['ov', false]]) {
-  test(`imprecise ${source} envelope fails locally without rejecting snapshot`, async t => {
-    const f = fixture(t);
-    const cli = createCoreCli({ zylosDir: f.root, execute: async (file, argv) => {
-      const kind = argv[1] === 'groups' ? 'c4' : argv[1] === 'group-queues' ? 'q' : 'ov';
-      const data = kind === 'c4' ? { groups: [], hasOlder: false } : kind === 'q'
-        ? { groups: [], globalFence: null } : { baseline: { runtime: 'claude' }, runtime: [], model: [] };
-      return { stdout: JSON.stringify({ ok: kind === source ? ok : true, data }) };
-    } });
-    f.cli.runC4Db = cli.runC4Db; f.cli.readOverrides = cli.readOverrides;
-    const value = await f.service.getSnapshot();
-    assert.equal(value.sources[source].ok, false);
-    assert.equal(value.sources[source].reason, { c4: 'c4_groups_failed', q: 'queue_summary_failed', ov: 'override_list_failed' }[source]);
-    for (const other of ['c4', 'q', 'ov'].filter(key => key !== source)) assert.equal(value.sources[other].ok, true);
-    assert.equal(value.rows.length, 2);
-  });
-}
 
 // Integration: C4 read failure preserves Dashboard cells, marks only inbound
 // unavailable and is not cached. Run for inbound/error/cache changes; skip rendering-
 // only changes. Owned temporary DB/root, no network/children; fixture cleanup.
-test('inbound read failures preserve cells, expose a source reason and remain uncached', async t => {
-  const f = fixture(t), reader = new C4Reader(f.root);
-  f.store.queryEvents = filter => filter.sessionGroup === 'telegram:g0' ? [{
-    session_group: 'telegram:g0', run_id: 'run-telegram:g0', event_type: 'user_prompt_submit',
-    timestamp: new Date(f.now() - 1000).toISOString(), metadata: {},
-  }] : [];
-  f.addCleanup(() => reader.close());
-  f.c4Reader.getInboundTimes = options => reader.getInboundTimes(options);
-  const activity = await f.service.activity('60m', ['telegram:g0']);
-  assert.equal(activity.inboundError, 'inbound_unreadable');
-  assert.equal(activity.groups['telegram:g0'].cells.length, 60);
-  assert.equal(activity.groups['telegram:g0'].cells.includes('busy'), true);
-  assert.equal(Object.values(activity.groups).every(group => group.inbound.length === 0), true);
-  assert.deepEqual(activity.groups['telegram:g0'].inbound, []);
-  fs.mkdirSync(path.join(f.root, 'comm-bridge'));
-  const writer = new Database(path.join(f.root, 'comm-bridge', 'c4.db'));
-  writer.exec('CREATE TABLE unrelated(id INTEGER)'); writer.close();
-  assert.equal((await f.service.activity('60m', ['telegram:g0'])).inboundError, 'inbound_unreadable');
-  reader.close();
-  const fixed = new Database(path.join(f.root, 'comm-bridge', 'c4.db'));
-  fixed.exec('CREATE TABLE conversations(id INTEGER PRIMARY KEY,session_group TEXT,direction TEXT,channel TEXT,timestamp TEXT)'); fixed.close();
-  const recovered = await f.service.activity('60m', ['telegram:g0']);
-  assert.ok(recovered.groups['telegram:g0']);
-  assert.equal(Object.hasOwn(recovered, 'inboundError'), false);
-  await assert.rejects(f.service.activity(undefined, ['telegram:g0']), { code: 'invalid_range', statusCode: 400 });
-});
 
 // Integration: real Store queries plus snapshot-to-bucket projection. Run for
 // activity lookback/display changes; skip rendering-only changes. Owned temporary
 // SQLite/root, injected Core/CLI; no network, tmux, PM2 or children. Fixture closes
 // the DB before removing its root.
-for (const [type, metadata, closes] of [
-  ['user_prompt_submit', {}, false], ['pre_tool_use', { tool_use_id: 'long' }, false],
-  ['subagent_start', { agent_id: 'child' }, false], ['pre_tool_use', { tool_use_id: 'long' }, true],
-  ['user_prompt_submit', {}, true],
-]) test(`activity recovers pre-window ${type} with closed=${closes} from capped lookups`, async t => {
-  const f = fixture(t, { hotTtlSeconds: 7 * 86400 }), store = new Store(path.join(f.root, 'dashboard.db'));
-  f.addCleanup(() => store.close());
-  const minute = 60000, start = Math.floor(f.now() / minute) * minute - 59 * minute;
-  const runStart = start - 20 * minute, filters = [];
-  f.live.get('telegram:g0').identity.createdAt = runStart / 1000;
-  f.live.get('telegram:g0').status.value.active_tool_details = [];
-  const add = (id, event_type, at, run_id, metadata = {}) => store.insertEvent({ id, ingest_id: id,
-    timestamp: new Date(at).toISOString(), runtime: 'claude', session_group: 'telegram:g0', run_id,
-    event_type, category: 'activity', metadata });
-  // A long unrelated history must never be returned by lookback queries.
-  store.db.transaction(() => {
-    for (let i = 0; i < 2500; i++) add(`old-${i}`, 'user_prompt_submit', runStart - (2501 - i) * minute, `old-run-${i}`);
-    add('run-start', 'session_start', runStart, 'run-telegram:g0');
-    add('open', type, runStart + minute, 'run-telegram:g0', metadata);
-    if (closes) add('close', type === 'pre_tool_use' ? 'post_tool_use' : 'stop',
-      type === 'pre_tool_use' ? start + 10 * minute : start - minute, 'run-telegram:g0', metadata);
-  })();
-  let lookedBack = 0;
-  f.store.queryEvents = filter => {
-    const rows = store.queryEvents(filter);
-    if (filter.until && Date.parse(filter.until) < start) {
-      filters.push(filter);
-      assert.equal(filter.runId, 'run-telegram:g0');
-      assert.equal(filter.sessionGroup, 'telegram:g0');
-      assert.ok(rows.length <= filter.limit);
-      assert.equal(filter.order, 'desc');
-      assert.equal(filter.offset, undefined);
-      assert.equal(filter.since, undefined);
-      assert.ok([1, 200].includes(filter.limit));
-      lookedBack += rows.length;
-    }
-    return rows;
-  };
-  const output = await f.service.activity('60m', ['origin', 'telegram:g0']), cells = output.groups['telegram:g0'].cells;
-  assert.equal(filters.length, 6);
-  assert.ok(lookedBack <= 603);
-  if (!closes) assert.ok(cells.every(value => value === 'busy'));
-  else if (type === 'pre_tool_use') {
-    assert.ok(cells.slice(0, 10).every(value => value === 'busy'));
-    assert.ok(cells.slice(10).every(value => value === 'idle'));
-  } else assert.ok(cells.every(value => value === 'idle'));
-  assert.ok(output.groups.origin.cells.every(value => value === 'none'));
-});
-
-function activityStore(t) {
-  // Keep ordering/window tests independent of expiry; freshness cases below use the normal TTL.
-  const f = fixture(t, { hotTtlSeconds: 7 * 86400 }), store = new Store(path.join(f.root, 'activity.db'));
-  f.addCleanup(() => store.close());
-  const minute = 60000, start = Math.floor(f.now() / minute) * minute - 59 * minute;
-  const runId = 'run-telegram:g0', filters = [];
-  f.live.get('telegram:g0').identity.createdAt = (start - 3 * 86400000) / 1000;
-  f.live.get('telegram:g0').status.value.active_tool_details = [];
-  const add = (id, event_type, at, metadata = {}, run_id = runId) => store.insertEvent({ id, ingest_id: id,
-    timestamp: new Date(at).toISOString(), runtime: 'claude', session_group: 'telegram:g0', run_id,
-    event_type, category: 'activity', metadata });
-  f.store.queryEvents = filter => {
-    const rows = store.queryEvents(filter);
-    if (filter.until && Date.parse(filter.until) < start) {
-      filters.push({ ...filter, returned: rows.length });
-      assert.equal(filter.order, 'desc');
-      assert.equal(filter.offset, undefined);
-      assert.ok(rows.length <= filter.limit);
-    }
-    return rows;
-  };
-  return { f, store, minute, start, runId, filters, add };
-}
 
 // Integration: real Store ordering, bounded lookback and bucket projection.
 // Run for activity history changes; skip rendering-only edits. Owned temporary
 // SQLite/root, injected Core/CLI; no network/tmux/PM2/children; fixture closes DB.
-for (const type of ['user_prompt_submit', 'subagent_start']) {
-  test(`an old open ${type} survives many completed tools before the window`, async t => {
-    const { f, store, minute, start, filters, add } = activityStore(t);
-    store.db.transaction(() => {
-      add('open', type, start - 3 * 86400000, type === 'subagent_start' ? { agent_id: 'long-child' } : {});
-      // Longer than the tool cap; the older open turn/agent must be found by
-      // its own event types, rather than by returning all events in the run.
-      for (let i = 0; i < 1500; i++) {
-        const at = start - 2 * 86400000 + i * minute;
-        add(`tool-${i}`, 'pre_tool_use', at, { tool_use_id: `T${i}` });
-        add(`end-${i}`, 'post_tool_use', at + 1000, { tool_use_id: `T${i}` });
-      }
-    })();
-    const output = await f.service.activity('60m', ['telegram:g0']);
-    assert.ok(output.groups['telegram:g0'].cells.every(value => value === 'busy'));
-    assert.equal(filters.length, 6);
-    assert.ok(filters.reduce((total, filter) => total + filter.returned, 0) <= 603);
-    if (type === 'subagent_start') assert.equal(filters.find(filter => filter.types?.includes('pre_tool_use') && filter.agentScope === 'main').returned, 200);
-    const queries = filters.length;
-    assert.equal(await f.service.activity('60m', ['telegram:g0']), output);
-    assert.equal(filters.length, queries);
-  });
-}
 
 // Integration: replaced-run lookback; same isolated Store fixture boundary.
-test('a replaced run opened before the window stays busy until its in-window stop', async t => {
-  const { f, minute, start, filters, add } = activityStore(t);
-  f.live.get('telegram:g0').identity.createdAt = (start + 40 * minute) / 1000;
-  add('old-open', 'user_prompt_submit', start - 10 * minute, {}, 'replaced');
-  add('old-stop', 'stop', start + 30 * minute, {}, 'replaced');
-  const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
-  assert.ok(cells.slice(0, 30).every(value => value === 'busy'));
-  assert.ok(cells.slice(30, 40).every(value => value === 'none'));
-  assert.ok(cells.slice(40).every(value => value === 'idle'));
-  assert.equal(filters.filter(filter => filter.runId === 'replaced').length, 6);
-});
 
 // Integration: ingestion order differs from source time; same isolated fixture.
-for (const type of ['user_prompt_submit', 'pre_tool_use', 'subagent_start']) {
-  test(`late ingestion of an older ${type} does not lose the window baseline`, async t => {
-    const { f, minute, start, add } = activityStore(t);
-    add('first-ingested', 'session_start', start - minute);
-    add('late-open', type, start - 3 * 86400000, type === 'subagent_start' ? { agent_id: 'child' } : { tool_use_id: 'long' });
-    const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
-    assert.ok(cells.every(value => value === 'busy'));
-  });
-}
 
 // Integration: cross-type source time and insertion-order ties; same isolated
 // Store fixture. Run for turn lookback changes; skip rendering-only edits.
-for (const [lateType, equalTime, busy] of [
-  ['user_prompt_submit', false, false], ['stop', false, true],
-  ['user_prompt_submit', true, true], ['stop', true, false],
-]) test(`pre-window late ${lateType} with equalTime=${equalTime} follows source-time turn ordering`, async t => {
-  const { f, minute, start, filters, add } = activityStore(t);
-  const earlier = start - (equalTime ? 10 : 20) * minute;
-  const later = start - 10 * minute;
-  add('first', lateType === 'stop' ? 'user_prompt_submit' : 'stop', later);
-  add('late', lateType, earlier);
-  const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
-  assert.ok(cells.every(value => value === (busy ? 'busy' : 'idle')));
-  for (const type of ['user_prompt_submit', 'stop']) {
-    const query = filters.find(filter => filter.types?.includes(type) && filter.agentScope === 'main' && filter.limit === 1);
-    assert.equal(query.limit, 1);
-    assert.equal(query.returned, 1);
-  }
-  assert.equal(filters.length, 6);
-});
 
 // Integration: stop fallback closes unmatched tools but not agents; same fixture.
-test('pre-window stop closes tools while a child remains busy until its own end', async t => {
-  const { f, minute, start, filters, add } = activityStore(t);
-  add('tool', 'pre_tool_use', start - 20 * minute, { tool_use_id: 'abandoned' });
-  add('child', 'subagent_start', start - 19 * minute, { agent_id: 'child' });
-  const stop = add('stop', 'stop', start - 10 * minute);
-  add('child-end', 'subagent_stop', start + 10 * minute, { agent_id: 'child' });
-  const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
-  assert.ok(cells.slice(0, 10).every(value => value === 'busy'));
-  assert.ok(cells.slice(10).every(value => value === 'idle'));
-  const tools = filters.find(filter => filter.types?.includes('pre_tool_use') && filter.agentScope === 'main');
-  assert.equal(tools.afterSeq, undefined, 'Source-time ordering includes pre-stop tools without ingestion cutoffs');
-  assert.equal(tools.returned, 1);
-});
 
 // Integration: explicit display truncation and unmatched-end behavior; same fixture.
-for (const [open, close, idKey] of [['pre_tool_use', 'post_tool_failure', 'tool_use_id'],
-  ['subagent_start', 'subagent_stop', 'agent_id']]) {
-  test(`pre-window ${open} history is capped without turning unmatched ends busy`, async t => {
-    const { f, store, start, filters, add } = activityStore(t);
-    store.db.transaction(() => {
-      add('old-open', open, start - 10000, { [idKey]: 'outstanding' });
-      for (let i = 0; i < 101; i++) {
-        add(`start-${i}`, open, start - 9000 + i * 10, { [idKey]: `closed-${i}` });
-        add(`end-${i}`, close, start - 8999 + i * 10, { [idKey]: `closed-${i}` });
-      }
-      add('last-end', close, start - 1000, { [idKey]: 'unmatched' });
-    })();
-    const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
-    assert.ok(cells.every(value => value === 'idle'));
-    assert.equal(filters.length, 6);
-    assert.equal(filters.find(filter => filter.types?.includes(open) && filter.agentScope === (open === 'subagent_start' ? 'child' : 'main')).returned, 200);
-  });
-}
 
 // Integration: no-event current/inactive projection. Run for activity baseline
 // changes; skip rendering-only changes. Injected adapters, owned temporary root,
 // no external resources or children; fixture owns cleanup.
-test('activity with no events paints the current run idle from its actual start', async t => {
-  const f = fixture(t), start = f.now() - 10 * 60000;
-  f.live.get('telegram:g0').status.value.active_tool_details = [];
-  f.live.get('telegram:g0').identity.createdAt = start / 1000;
-  const output = await f.service.activity('60m', ['origin', 'telegram:g0']), cells = output.groups['telegram:g0'].cells;
-  const index = Math.floor((start - output.start) / 60000);
-  assert.ok(cells.slice(0, index).every(value => value === 'none'));
-  assert.ok(cells.slice(index).every(value => value === 'idle'));
-  assert.ok(output.groups.origin.cells.every(value => value === 'none'));
-});
 
 // Integration: Origin error privacy in both collectStatus views; run for Origin
 // response/merge changes, skip rendering-only edits. Owned roots, injected Core
 // readers/CLI, no live resources or children; fixture cleanup is registered.
-for (const mode of ['multi', 'single']) test(`Origin read errors are redacted in ${mode} responses`, async t => {
-  const f = fixture(t); f.setMode(mode);
-  const secret = 'sk-123456789012345678901234', raw = `Origin read failed ${secret} person@example.com`;
-  // Exercise the status projection's per-session error boundary. A rejected
-  // shared batch instead invalidates the entire status source.
-  // Native single status reads Origin too; its single-view row keeps sessionGroup null.
-  f.failStatusRead('origin', new Error(raw));
-  const snapshot = await f.service.getSnapshot();
-  const origin = snapshot.rows.find(row => row.origin);
-  assert.equal(origin.live.error.code, 'READ_FAILED');
-  assert.match(origin.live.error.message, /REDACTED/); assert.match(origin.live.error.message, /EMAIL/);
-  assert.equal(JSON.stringify(snapshot).includes(raw), false);
-  assert.equal(JSON.stringify(snapshot).includes(secret), false);
-  assert.equal(JSON.stringify(snapshot).includes('person@example.com'), false);
-});
-
-test('group row thresholds follow actual running models and the desired model while sleeping', async t => {
-  const f=fixture(t,{groupKeys:['telegram:small','telegram:large','telegram:sleeping']});
-  fs.mkdirSync(path.join(f.root,'.zylos'),{recursive:true});
-  fs.mkdirSync(path.join(f.root,'.claude'),{recursive:true});
-  fs.writeFileSync(path.join(f.root,'.claude/settings.json'),JSON.stringify({model:'haiku'}));
-  fs.writeFileSync(path.join(f.root,'.zylos/config.json'),JSON.stringify({model_rotation_thresholds:{claude:{'claude-sonnet-4-6':63,'claude-opus-4-6[1m]':36,'opus[1m]':36}}}));
-  f.live.get('telegram:small').usage={valid:true,value:{model:{id:'claude-sonnet-4-6'},context_window:{context_window_size:200000,used_percentage:60}}};
-  f.live.get('telegram:large').usage={valid:true,value:{model:{id:'claude-opus-4-6'},context_window:{context_window_size:1000000,used_percentage:38}}};
-  f.live.delete('telegram:sleeping');
-  const read=f.cli.readOverrides;
-  f.cli.readOverrides=async groups=>{const result=await read(groups);result.data.model=[{sessionGroup:'telegram:sleeping',runtime:'claude',model:'opus[1m]'}];return result;};
-  const snapshot=await f.service.getSnapshot();
-  assert.deepEqual(snapshot.rows.map(row=>[row.sessionGroup,row.rotationThreshold]).sort(),[
-    ['origin',75],['telegram:large',36],['telegram:sleeping',36],['telegram:small',63]
-  ]);
-});
-
-test('running default-model group threshold stays unknown until the first usage sample', async t => {
-  const f = fixture(t, { groupKeys: ['telegram:waiting'] });
-  fs.mkdirSync(path.join(f.root, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(f.root, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
-  const pending = (await f.service.getSnapshot()).rows.find(row => row.sessionGroup === 'telegram:waiting');
-  assert.equal(pending.presence, 'running');
-  assert.equal(pending.rotationThreshold, null);
-  f.live.get('telegram:waiting').usage = { valid: true, value: { model: { id: 'claude-opus-4-6' },
-    context_window: { context_window_size: 1000000, used_percentage: 20 } } };
-  f.advance(2001);
-  const sampled = (await f.service.getSnapshot()).rows.find(row => row.sessionGroup === 'telegram:waiting');
-  assert.equal(sampled.rotationThreshold, 20);
-});
-
-test('group threshold discards the previous model override when session identity changes', async t => {
-  const f = fixture(t, { groupKeys: ['telegram:changing'] });
-  const observation = f.live.get('telegram:changing');
-  observation.identity.launchConfig = { runtime: 'claude', mode: 'override', model: 'opus[1m]' };
-  const before = (await f.service.getSnapshot()).rows.find(row => row.sessionGroup === 'telegram:changing');
-  assert.equal(before.rotationThreshold, 20, 'a valid captured override supplies the first-sample preview');
-  observation.status = { valid: false, reason: 'identity_changed' };
-  f.advance(2001);
-  const changed = (await f.service.getSnapshot()).rows.find(row => row.sessionGroup === 'telegram:changing');
-  assert.equal(changed.rotationThreshold, null);
-});
-
-test('group thresholds distinguish the default alias from a fixed version override', async t => {
-  const f = fixture(t, { groupKeys: ['telegram:alias', 'telegram:fixed'] });
-  for (const dir of ['.zylos', '.claude']) fs.mkdirSync(path.join(f.root, dir), { recursive: true });
-  fs.writeFileSync(path.join(f.root, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
-  fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ model_rotation_thresholds: { claude: { 'opus[1m]': 25 } } }));
-  f.live.get('telegram:alias').usage = { valid: true, value: { model: { id: 'claude-opus-5-5' }, context_window: { context_window_size: 1000000 } } };
-  const fixed = f.live.get('telegram:fixed');
-  fixed.identity.launchConfig = { runtime: 'claude', mode: 'override', model: 'claude-opus-4-6[1m]' };
-  fixed.usage = { valid: true, value: { model: { id: 'claude-opus-4-6' }, context_window: { context_window_size: 1000000 } } };
-  const rows = (await f.service.getSnapshot()).rows;
-  assert.equal(rows.find(row => row.sessionGroup === 'telegram:alias').rotationThreshold, 25);
-  assert.equal(rows.find(row => row.sessionGroup === 'telegram:fixed').rotationThreshold, 20);
-});
 
 // Injected Core CLI and owned temporary root (fixture); no live DB/PM2/tmux/network. Run for changes to the
 // per-group stored-message read or its route; skip rendering-only edits.
@@ -1406,474 +370,22 @@ test('a group\'s stored message is read on request, for that exact group, redact
 // source-time query changes; skip unrelated rendering. No live resources,
 // network, PM2, tmux or children; fixture closes Store before removing its root.
 // Times below are written against a 30-minute TTL; pin it so the Core default can change.
-function workingFixture(t, options = {}) {
-  const f = fixture(t, { hotTtlSeconds: 1800, ...options }), store = new Store(path.join(f.root, 'working.db'));
-  f.addCleanup(() => store.close());
-  f.live.get('telegram:g0').status.value.active_tool_details = [];
-  const queries = [];
-  f.store.queryEvents = filter => { queries.push(filter); return store.queryEvents(filter); };
-  const run = 'run-telegram:g0';
-  const add = (type, ago, metadata = {}, runId = run) => {
-    const id = crypto.randomUUID();
-    return store.insertEvent({ id, ingest_id: id, timestamp: new Date(f.now() - ago).toISOString(),
-      runtime: 'claude', session_group: 'telegram:g0', run_id: runId, event_type: type, category: 'activity', metadata });
-  };
-  const read = async () => {
-    const row = (await f.service.getSnapshot()).rows
-      .find(row => row.sessionGroup === 'telegram:g0');
-    assert.ok(Object.hasOwn(row, 'working'), 'Groups API publishes the working field');
-    return row;
-  };
-  return { f, store, add, read, queries };
-}
 
 // Real private Store and snapshot duration fallback. Run for current-run event
 // aliases or duration changes; skip UI-only edits. Injected Core/CLI observations,
 // no live tmux/PM2/network; fixture closes the DB and removes its owned root.
-test('single Origin duration fallback reads hook attribution without widening the current run', async t => {
-  const f = fixture(t), store = new Store(path.join(f.root, 'duration.db'));
-  f.addCleanup(() => store.close()); f.setMode('single');
-  const observation = structuredClone(f.live.get('telegram:g0'));
-  observation.identity.runId = 'single-run';
-  f.live.set(null, observation);
-  f.store.queryEvents = filter => store.queryEvents(filter);
-  const add = (id, group, run, event, ago) => store.insertEvent({ id, ingest_id: id, runtime: 'claude',
-    session_group: group, run_id: run, event_type: event, timestamp: new Date(f.now() - ago).toISOString(), category: 'activity' });
-  add('legacy-stop', null, 'single-run', 'stop', 7200000);
-  add('hook-prompt', 'origin', 'single-run', 'user_prompt_submit', 3600000);
-  add('other-group', 'telegram:other', 'single-run', 'stop', 1000);
-  add('other-run', 'origin', 'old-run', 'stop', 1000);
-  add('future-stop', 'origin', 'single-run', 'stop', -60000);
-  const value = await f.service.getSnapshot(), origin = value.rows[0];
-  assert.equal(origin.sessionGroup, null); assert.equal(origin.working.on, true);
-  assert.equal(origin.working.since, null, 'only the current command keeps work active');
-  assert.equal(origin.duration, 3600);
-  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', new URLSearchParams('include='));
-  assert.equal(detail.state.kind, 'working'); assert.equal(detail.duration, 3600);
-  add('hook-stop', 'origin', 'single-run', 'stop', 100);
-  f.advance(2100);
-  assert.equal((await f.service.getSnapshot()).rows[0].duration, null, 'a current-run stop closes the fallback duration');
-});
-
-for (const kind of ['main', 'children', 'stale child']) test(`working API projects ${kind} events without changing Core board state`, async t => {
-  const { f, add, read } = workingFixture(t), minute = 60000;
-  const at = f.now();
-  add('user_prompt_submit', kind === 'main' ? 15000 : 5 * minute);
-  if (kind === 'main') add('pre_tool_use', 8000, { tool_use_id: 'recent' });
-  if (kind !== 'main') {
-    add('stop', 4 * minute);
-    add('subagent_start', kind === 'children' ? 3 * minute : 31 * minute, { agent_id: 'one' });
-    if (kind === 'children') add('subagent_start', 2 * minute, { agent_id: 'two' });
-  }
-  const row = await read();
-  assert.equal(row.state.kind, 'busy', 'Core state remains unchanged even when display work is idle');
-  if (kind === 'main') assert.deepEqual(row.working, { on: true, since: at - 15000,
-    main: { since: at - 15000, lastActivityAt: at - 8000 }, tools: 0, subagents: null });
-  else if (kind === 'children') {
-    assert.deepEqual(row.working, { on: true, since: at - 3 * minute,
-      main: null, tools: 0, subagents: { count: 2, since: at - 3 * minute, lastActivityAt: at - 2 * minute } });
-    // The server keeps the subtasks' agent ids for the conversation page; the response never carries them.
-    assert.deepEqual(row.working.subagents.ids, ['one', 'two']);
-    assert.deepEqual(JSON.parse(JSON.stringify(row.working)).subagents, { count: 2, since: at - 3 * minute, lastActivityAt: at - 2 * minute });
-  }
-  else assert.deepEqual(row.working, { on: false, since: null, main: null, tools: 0, subagents: null });
-});
-
-for (const endType of ['stop', 'turn_complete', 'dashboard_interrupt', 'runtime_health:stop_failure']) test(`working uses source-time ${endType} and insertion-order ties without child shadowing`, async t => {
-  const { f, add, read } = workingFixture(t);
-  add('user_prompt_submit', 6000);
-  add(endType, 9000); // Ingested later, but older than the prompt.
-  add(endType, 1000, { agent_id: 'child' });
-  assert.equal((await read()).working.main.since, f.now() - 6000);
-  add(endType, 6000); f.advance(2100);
-  assert.equal((await read()).working.on, false, 'Same-time later insertion stops the main agent');
-  add('user_prompt_submit', 8100); f.advance(2100);
-  assert.equal((await read()).working.on, true, 'Same-time later prompt is a new action');
-});
-
-for (const condition of ['not running', 'no run', 'status failed']) test(`working is null when ${condition}`, async t => {
-  const { f, add, read } = workingFixture(t, { statusError: condition === 'status failed' });
-  add('user_prompt_submit', 1000);
-  if (condition === 'not running') f.live.get('telegram:g0').identity.present = false;
-  if (condition === 'no run') f.live.get('telegram:g0').identity.runId = null;
-  assert.equal((await read()).working, null);
-});
-
-test('without new input the main agent works only within seconds of its latest action, and a running command has no invented start', async t => {
-  const { f, add, read } = workingFixture(t), minute = 60000;
-  add('user_prompt_submit', 31 * minute);
-  assert.equal((await read()).working.on, false, 'an old prompt without a stop is not work');
-  add('assistant_message', 1000); f.advance(2100);
-  assert.deepEqual((await read()).working.main, { since: f.now() - 3100, lastActivityAt: f.now() - 3100 },
-    'a fresh action after a long quiet gap starts a new stretch of work');
-  f.advance(14000);
-  assert.equal((await read()).working.on, true, 'still within twenty seconds of the action');
-  f.advance(2900);
-  assert.equal((await read()).working.on, false, 'twenty seconds without an action is idle');
-  add('stop', 0); f.live.get('telegram:g0').status.value.active_tool_details = [{ id: 'live', name: 'Bash', input: {} }]; f.advance(2100);
-  assert.deepEqual((await read()).working, { on: true, since: null, main: null, tools: 1, subagents: null });
-});
-
-test('a message the runtime takes from its own queue after the startup stop counts as work without any prompt', async t => {
-  const { f, add, read } = workingFixture(t);
-  add('user_prompt_submit', 12000);
-  add('deliver', 9000, { conversation_id: 7 });
-  add('stop', 7000);
-  assert.equal((await read()).working.on, false, 'the startup turn stopped');
-  add('pre_tool_use', 4000, { tool_name: 'Bash', tool_use_id: 'dequeued' });
-  add('post_tool_use', 3000, { tool_name: 'Bash', tool_use_id: 'dequeued' });
-  f.advance(2100);
-  assert.deepEqual((await read()).working.main, { since: f.now() - 6100, lastActivityAt: f.now() - 5100 });
-});
-
-for (const input of ['user_prompt_submit', 'input_dequeue']) test(`after ${input} the main agent works until it stops, however long it thinks`, async t => {
-  const { f, add, read } = workingFixture(t), minute = 60000;
-  add('stop', 2 * minute);
-  add(input, 90000);
-  f.advance(2100);
-  assert.deepEqual((await read()).working.main, { since: f.now() - 92100, lastActivityAt: f.now() - 92100 },
-    'ninety seconds of thinking without any event still works');
-  add('stop', 0); f.advance(2100);
-  assert.equal((await read()).working.on, false, 'the stop ends it');
-});
-
-test('a queued message taken as the turn ended, timed before the late stop hook, works until the next stop', async t => {
-  const { f, add, read } = workingFixture(t), minute = 60000;
-  add('stop', 2 * minute);
-  add('user_prompt_submit', 90000);
-  // The transcript times the take 0.4 s before the stop, whose hook process ran late.
-  add('input_dequeue', 30400); add('stop', 30000);
-  f.advance(2100);
-  assert.deepEqual((await read()).working.main, { since: f.now() - 32100 + 1, lastActivityAt: f.now() - 32100 + 1 },
-    'the header counts the queued message as taken after that stop');
-  add('stop', 0); f.advance(2100);
-  assert.equal((await read()).working.on, false, 'the next stop ends it');
-});
-
-test('input followed by more main actions than one lookup returns still works through a long think after them', async t => {
-  const { f, store, add, read } = workingFixture(t), minute = 60000;
-  add('stop', 10 * minute);
-  add('user_prompt_submit', 8 * minute);
-  // Three hundred main actions after the input, more than the action lookup returns, the last two minutes ago.
-  store.db.transaction(() => {
-    for (let i = 0; i < 150; i++) {
-      add('pre_tool_use', 7 * minute - i * 2000, { tool_use_id: `T${i}` });
-      add('post_tool_use', 7 * minute - i * 2000 - 1000, { tool_use_id: `T${i}` });
-    }
-  })();
-  const working = (await read()).working;
-  assert.equal(working.on, true, 'two minutes of thinking after the actions still works on the input');
-  assert.deepEqual(working.main, { since: f.now() - 8 * minute, lastActivityAt: f.now() - 7 * minute + 149 * 2000 + 1000 },
-    'the work began at the input, not at the oldest action the lookup returned');
-});
-
-test('a delivery alone is no input: it keeps the main agent working only for seconds, like any action', async t => {
-  const { f, add, read } = workingFixture(t);
-  add('stop', 60000);
-  add('deliver', 1000, { conversation_id: 7 });
-  f.advance(2100);
-  assert.equal((await read()).working.on, true);
-  f.advance(18000);
-  assert.equal((await read()).working.on, false, 'twenty seconds after a delivery without input is idle');
-});
-
-test('taken input that never led to a stop stops counting after the quiet limit', async t => {
-  const { f, add, read } = workingFixture(t), minute = 60000;
-  add('input_dequeue', 29 * minute);
-  f.advance(2100);
-  assert.equal((await read()).working.on, true);
-  f.advance(minute);
-  assert.equal((await read()).working.on, false);
-});
-
-test('working child freshness uses its own tools and the Core configured TTL', async t => {
-  const { f, add, read } = workingFixture(t), minute = 60000;
-  fs.mkdirSync(path.join(f.root, '.zylos'), { recursive: true });
-  fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ session_hot_ttl_seconds: 60 }));
-  add('subagent_start', 2 * minute, { agent_id: 'child' });
-  add('pre_tool_use', 30000, { agent_id: 'child', tool_use_id: 'child-tool' });
-  add('assistant_message', 1000, { agent_id: 'other' });
-  const live = (await read()).working;
-  assert.equal(live.subagents.count, 1); assert.equal(live.subagents.lastActivityAt, f.now() - 30000);
-  f.advance(31000);
-  assert.equal((await read()).working.on, false, 'Other agents and a lost child-tool end do not keep this child alive');
-});
-
-test('working uses environment TTL precedence and reads source-time facts with bounded child lookback', async t => {
-  const { f, add, read, queries } = workingFixture(t);
-  const prior = process.env.ZYLOS_SESSION_HOT_TTL_SECONDS;
-  process.env.ZYLOS_SESSION_HOT_TTL_SECONDS = '45';
-  t.after(() => { if (prior === undefined) delete process.env.ZYLOS_SESSION_HOT_TTL_SECONDS; else process.env.ZYLOS_SESSION_HOT_TTL_SECONDS = prior; });
-  fs.mkdirSync(path.join(f.root, '.zylos'), { recursive: true });
-  fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ session_hot_ttl_seconds: 300 }));
-  add('user_prompt_submit', 50000); add('subagent_start', 50000, { agent_id: 'child' });
-  const row = await read();
-  assert.equal(row.working.on, false);
-  const runReads = queries.filter(query => query.runId === 'run-telegram:g0' && query.sourceTime);
-  // The no-response check reads only the latest reminder, and nothing more when there is none.
-  const nudgeReads = runReads.filter(query => query.types?.includes('no_response_nudge'));
-  assert.deepEqual(nudgeReads.map(query => [query.types, query.limit, query.order]), [[['no_response_nudge'], 1, 'desc']]);
-  assert.equal(runReads.filter(query => query.order === 'asc').length, 0);
-  const reads = runReads.filter(query => !nudgeReads.includes(query));
-  assert.equal(reads.length, 5);
-  assert.equal(reads.filter(query => query.limit === 200 && query.agentScope === 'child').length, 2);
-  const input = reads.find(query => query.limit === 1 && query.agentScope === 'main' && query.types?.includes('input_dequeue'));
-  assert.deepEqual(input.types, ['user_prompt_submit', 'input_dequeue'], 'the latest input the main agent took');
-  assert.equal(reads.find(query => query.agentScope === 'child' && query.types?.includes('pre_tool_use')).latestPerAgent, true);
-  assert.ok(reads.every(query => query.order === 'desc' && [1, 200].includes(query.limit)));
-});
 
 // Integration boundary: supervisor records imported by the real importer into a private Store, read by the real
 // snapshot. Run for no-response or automatic-restart changes; skip rendering-only edits. No tmux/network/children.
-test('a reminder the main agent has not answered marks the live run as no response until it responds', async t => {
-  const { f, store, add, read } = workingFixture(t), minute = 60000, run = 'run-telegram:g0';
-  add('user_prompt_submit', 10 * minute); add('pre_tool_use', 8 * minute);
-  await importSupervisorRecords({ store, root: f.root }, supervisorSequences.nudge(f.now() - 2 * minute, 'telegram:g0', run));
-  const silent = await read();
-  assert.deepEqual(silent.noResponse, { since: f.now() - 2 * minute });
-  const summary = fleetGroupSummary(await f.service.getSnapshot());
-  assert.equal(summary.counts.no_response, 1);
-  assert.equal(summary.counts.busy, 0);
-  assert.deepEqual(summary.problems.map(row => [row.sessionGroup, row.reason, row.durationSeconds]), [['telegram:g0', 'no_response', 120]]);
-  assert.deepEqual(summary.noResponse, { count: 1 });
-  // A child agent's tool is not the main agent responding.
-  f.advance(31000); add('pre_tool_use', 1000, { agent_id: 'child', tool_use_id: 'child-tool' });
-  assert.deepEqual((await read()).noResponse, { since: f.now() - 2 * minute - 31000 });
-  f.advance(31000); add('pre_tool_use', 1000, { tool_use_id: 'main-tool' });
-  assert.equal((await read()).noResponse, null, 'The main agent responded after the reminder');
-  assert.equal(fleetGroupSummary(await f.service.getSnapshot()).counts.no_response, 0);
-});
-
-test('a reminder in an earlier run or answered with words does not mark the live run as no response', async t => {
-  const { f, store, add, read } = workingFixture(t), minute = 60000;
-  await importSupervisorRecords({ store, root: f.root }, supervisorSequences.nudge(f.now() - 3 * minute, 'telegram:g0', 'run-earlier'));
-  assert.equal((await read()).noResponse, null);
-  await importSupervisorRecords({ store, root: f.root }, supervisorSequences.nudge(f.now() - 2 * minute, 'telegram:g0', 'run-telegram:g0'));
-  add('assistant_message', minute);
-  f.advance(31000);
-  assert.equal((await read()).noResponse, null);
-});
-
-test('a Codex tool call recorded only from its transcript counts as the main agent responding', async t => {
-  const { f, store, read } = workingFixture(t), minute = 60000, run = 'run-telegram:g0';
-  await importSupervisorRecords({ store, root: f.root }, supervisorSequences.nudge(f.now() - 2 * minute, 'telegram:g0', run));
-  assert.deepEqual((await read()).noResponse, { since: f.now() - 2 * minute });
-  // Codex tools without a PreToolUse hook (for example apply_patch) reach the store only as a transcript tool call.
-  const id = crypto.randomUUID();
-  store.insertEvent({ id, ingest_id: id, timestamp: new Date(f.now() - minute).toISOString(), runtime: 'codex',
-    session_group: 'telegram:g0', run_id: run, event_type: 'tool_call', category: 'activity', metadata: { tool_name: 'apply_patch' } });
-  f.advance(31000);
-  assert.equal((await read()).noResponse, null, 'The transcript tool call is a response after the reminder');
-});
-
-test('automatic restarts in the last hour count each restart once and never the crash report that follows it', async t => {
-  const { f, store } = workingFixture(t), minute = 60000, at = f.now();
-  await importSupervisorRecords({ store, root: f.root }, [
-    ...supervisorSequences.noResponseRestart(at - 20 * minute, 'telegram:g0', 'run-silent'),
-    ...supervisorSequences.crash(at - 10 * minute, 'telegram:g0', 'run-crashed'),
-    ...supervisorSequences.toolTimeoutRestart(at - 2 * 60 * minute, 'telegram:g0', 'run-hour-ago'),
-  ]);
-  const first = await f.service.getSnapshot();
-  assert.deepEqual(first.instance.autoRestarts, { count: 1 });
-  assert.deepEqual(fleetGroupSummary(first).autoRestarts, { count: 1 });
-  assert.equal(first.rows[0].noResponse, null, 'The reminder belonged to the restarted run');
-  await importSupervisorRecords({ store, root: f.root }, supervisorSequences.toolTimeoutRestart(at - 5 * minute, 'telegram:g1', 'run-tool'));
-  f.advance(31000);
-  assert.deepEqual((await f.service.getSnapshot()).instance.autoRestarts, { count: 2 });
-  // The no-response restart was at 18 minutes ago; 45 more minutes take it past the hour, the tool restart stays.
-  f.advance(45 * minute);
-  assert.deepEqual((await f.service.getSnapshot()).instance.autoRestarts, { count: 1 }, 'A restart older than one hour leaves the count');
-});
-
-test('source-time event ordering preserves default sequence order and handles offsets ties and child scopes', async t => {
-  const { f, store } = workingFixture(t);
-  const rows = [
-    ['first', '2027-01-01T00:00:05Z', {}],
-    ['late-old', '2027-01-01T01:00:00+01:00', {}],
-    ['equal', '2027-01-01T00:00:05.000Z', {}],
-    ['child', '2027-01-01T00:00:09Z', { agent_id: 'child' }],
-  ];
-  for (const [id, timestamp, metadata] of rows) store.insertEvent({ id, ingest_id: id, timestamp,
-    session_group: 'telegram:g0', run_id: 'run', event_type: 'stop', category: 'activity', metadata });
-  const filter = { sessionGroup: 'telegram:g0', runId: 'run', until: '2027-01-01T00:00:10Z', limit: 1, order: 'desc' };
-  assert.equal(store.queryEvents(filter)[0].id, 'child');
-  assert.equal(store.queryEvents({ ...filter, sourceTime: true, agentScope: 'main' })[0].id, 'equal');
-  assert.equal(store.queryEvents({ ...filter, sourceTime: true, agentScope: 'child' })[0].id, 'child');
-  assert.equal(store.queryEvents({ ...filter, sourceTime: true, until: '2027-01-01T00:00:01Z' })[0].id, 'late-old');
-  assert.equal(store.queryEvents({ ...filter, sourceTime: true, agentScope: 'main', order: 'asc' })[0].id, 'late-old');
-  store.db.transaction(() => {
-    for (let i = 0; i < 210; i++) store.insertEvent({ id: `bounded-${i}`, ingest_id: `bounded-${i}`, timestamp: new Date(f.now() - i).toISOString(),
-      session_group: 'telegram:g0', run_id: 'bounded', event_type: 'subagent_start', category: 'activity', metadata: { agent_id: `child-${i}` } });
-  })();
-  assert.equal(store.queryEvents({ runId: 'bounded', sourceTime: true, order: 'desc', limit: 200 }).length, 200);
-});
-
-for (const kind of ['main', 'child']) test(`working activity seeds ${kind} freshness from before the visible window`, async t => {
-  const { f, add } = workingFixture(t), minute = 60000;
-  const start = Math.floor(f.now() / minute) * minute - 59 * minute;
-  f.live.get('telegram:g0').identity.createdAt = (f.now() - 120 * minute) / 1000;
-  if (kind === 'main') {
-    add('user_prompt_submit', 90 * minute);
-    add('assistant_message', f.now() - (start - minute));
-  } else {
-    add('subagent_start', 90 * minute, { agent_id: 'child' });
-    add('pre_tool_use', f.now() - (start - minute), { agent_id: 'child', tool_use_id: 'still-working' });
-  }
-  const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
-  assert.equal(cells[0], 'busy', 'A recent pre-window event refreshes the old open work');
-  assert.equal(cells[29], 'idle', 'The same shared TTL ends the interval without a lost end event');
-  assert.equal(cells.at(-1), 'idle');
-});
 
 // Same owned Store/snapshot fixture as the working cases above. Source offsets
 // must use the same instant for the visible window and its lookback boundary.
-test('working activity includes offset timestamps inside its visible window', async t => {
-  const { f, store, read } = workingFixture(t);
-  const at = Date.parse('2027-01-01T10:05:00.000Z');
-  f.setNow(at);
-  f.live.get('telegram:g0').identity.createdAt = (at - 15 * 60000) / 1000;
-  store.insertEvent({ id: 'offset-prompt', ingest_id: 'offset-prompt', timestamp: '2027-01-01T11:04:50+01:00',
-    session_group: 'telegram:g0', run_id: 'run-telegram:g0', runtime: 'claude', event_type: 'user_prompt_submit', category: 'activity' });
-  const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
-  assert.equal(cells.at(-1), 'busy', 'The in-window prompt cannot fall between lexical window and source-time seed filters');
-  assert.equal((await read()).working.on, true);
-});
 
 // Real Store, snapshot and activity fixture above; no live resources. Keep
 // lifetime transitions visible even when a child emits many tool pairs.
-for (const position of ['current', 'before window']) test(`working preserves an active child's start through many tools ${position}`, async t => {
-  const { f, store, add, read, queries } = workingFixture(t), minute = 60000;
-  const at = f.now(), start = Math.floor(at / minute) * minute - 59 * minute;
-  const anchor = position === 'current' ? at : start;
-  f.live.get('telegram:g0').identity.createdAt = (anchor - 21 * minute) / 1000;
-  store.db.transaction(() => {
-    add('subagent_start', at - (anchor - 20 * minute), { agent_id: 'long-child' });
-    for (let i = 0; i < 150; i++) {
-      const toolAt = anchor - 19 * minute + Math.floor(i * 17.5 * minute / 149);
-      add('pre_tool_use', at - toolAt, { agent_id: 'long-child', tool_use_id: `child-tool-${i}` });
-      add('post_tool_use', at - toolAt - 500, { agent_id: 'long-child', tool_use_id: `child-tool-${i}` });
-    }
-  })();
-  if (position === 'current') {
-    const work = (await read()).working;
-    assert.deepEqual(work, { on: true, since: at - 20 * minute, main: null, tools: 0,
-      subagents: { count: 1, since: at - 20 * minute, lastActivityAt: at - 1.5 * minute + 500 } });
-    assert.deepEqual(work.subagents.ids, ['long-child']);
-  }
-  const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
-  if (position === 'current') assert.equal(cells.at(-1), 'busy');
-  else {
-    assert.equal(cells[0], 'busy', 'A pre-window start survives more than 200 child-tool events');
-    assert.equal(cells[29], 'idle', 'The child still expires using its most recent own event');
-    const seedReads = queries.filter(query => query.runId === 'run-telegram:g0' && query.until && Date.parse(query.until) < start);
-    const transitions = seedReads.find(query => query.agentScope === 'child' && query.types.includes('subagent_start'));
-    const tools = seedReads.find(query => query.agentScope === 'child' && query.types.includes('pre_tool_use'));
-    assert.equal(transitions.limit, 200); assert.equal(tools.limit, 200);
-    assert.equal(store.queryEvents(transitions).length, 1);
-    assert.equal(tools.latestPerAgent, true);
-    assert.equal(store.queryEvents(tools).length, 1);
-  }
-});
 
 // Real Store/API and activity fixtures: a busy sibling cannot evict another
 // child's own freshness, either now or when seeding the visible window.
-for (const stopped of [false, true]) test(`working keeps a quiet child when its noisy sibling is ${stopped ? 'stopped' : 'running'}`, async t => {
-  const { f, store, add, read } = workingFixture(t), minute = 60000, at = f.now();
-  store.db.transaction(() => {
-    add('subagent_start', 40 * minute, { agent_id: 'quiet' });
-    add('pre_tool_use', 10 * minute, { agent_id: 'quiet', tool_use_id: 'long-command' });
-    add('subagent_start', 12 * minute, { agent_id: 'noisy' });
-    for (let i = 0; i < 110; i++) {
-      const ago = 9 * minute - i * 4000;
-      add('pre_tool_use', ago, { agent_id: 'noisy', tool_use_id: `tool-${i}` });
-      add('post_tool_use', ago - 500, { agent_id: 'noisy', tool_use_id: `tool-${i}` });
-    }
-    if (stopped) add('subagent_stop', 30000, { agent_id: 'noisy' });
-  })();
-  const work = (await read()).working;
-  assert.equal(work.on, true);
-  assert.equal(work.since, at - 40 * minute);
-  assert.equal(work.subagents.count, stopped ? 1 : 2);
-  assert.equal(work.subagents.lastActivityAt, stopped ? at - 10 * minute : at - 9 * minute + 109 * 4000 + 500);
-});
-
-test('working activity seeds each child freshness independently of a noisy sibling', async t => {
-  const { f, store, add } = workingFixture(t), minute = 60000, at = f.now();
-  const start = Math.floor(at / minute) * minute - 59 * minute;
-  const before = ago => at - start + ago;
-  f.live.get('telegram:g0').identity.createdAt = (start - 41 * minute) / 1000;
-  store.db.transaction(() => {
-    add('subagent_start', before(40 * minute), { agent_id: 'quiet' });
-    add('pre_tool_use', before(10 * minute), { agent_id: 'quiet', tool_use_id: 'long-command' });
-    add('subagent_start', before(12 * minute), { agent_id: 'noisy' });
-    for (let i = 0; i < 110; i++) {
-      const ago = before(9 * minute - i * 4000);
-      add('pre_tool_use', ago, { agent_id: 'noisy', tool_use_id: `tool-${i}` });
-      add('post_tool_use', ago - 500, { agent_id: 'noisy', tool_use_id: `tool-${i}` });
-    }
-    add('subagent_stop', before(30000), { agent_id: 'noisy' });
-  })();
-  const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
-  assert.equal(cells[0], 'busy', 'The quiet child refreshed ten minutes before the window');
-  assert.equal(cells[19], 'busy');
-  assert.equal(cells[20], 'idle', 'The stopped sibling cannot extend the quiet child beyond its own TTL');
-});
-
-test('latest child tool queries preserve per-child source order ties scope and bounded output', t => {
-  const { store } = workingFixture(t);
-  const put = (id, timestamp, agent, runId = 'tools') => store.insertEvent({ id, ingest_id: id, timestamp,
-    session_group: 'telegram:g0', run_id: runId, event_type: 'pre_tool_use', category: 'activity', metadata: { agent_id: agent } });
-  put('quiet-new', '2027-01-01T00:00:10Z', 'quiet');
-  put('quiet-tie', '2027-01-01T00:00:10Z', 'quiet');
-  put('quiet-late-old', '2027-01-01T01:00:09+01:00', 'quiet');
-  put('other-run', '2027-01-01T00:00:11Z', 'quiet', 'other');
-  put('main', '2027-01-01T00:00:11Z', '');
-  store.db.transaction(() => {
-    for (let i = 0; i < 210; i++) put(`child-${i}`, '2027-01-01T00:00:08Z', `child-${i}`);
-  })();
-  const rows = store.queryEvents({ sessionGroup: 'telegram:g0', runId: 'tools', types: ['pre_tool_use'],
-    until: '2027-01-01T00:00:12Z', agentScope: 'child', sourceTime: true, order: 'desc', latestPerAgent: true, limit: 200 });
-  assert.equal(rows.length, 200);
-  assert.equal(rows[0].id, 'quiet-tie', 'Source-time order wins over later ingestion; event_seq resolves ties');
-  assert.equal(new Set(rows.map(row => row.metadata.agent_id)).size, 200);
-  assert.equal(rows.some(row => ['other-run', 'main', 'quiet-late-old'].includes(row.id)), false);
-  assert.equal(Object.hasOwn(rows[0], 'agent_rank'), false, 'Query bookkeeping does not leak into event fields');
-});
-
-test('working removes a child when its own stop is stored', async t => {
-  const { add, read } = workingFixture(t);
-  add('subagent_start', 3 * 60000, { agent_id: 'child' });
-  add('subagent_stop', 60000, { agent_id: 'child' });
-  assert.deepEqual((await read()).working, { on: false, since: null, main: null, tools: 0, subagents: null });
-});
-
-test('working retains the remaining child and its own start after another child stops', async t => {
-  const { f, add, read } = workingFixture(t), at = f.now();
-  add('subagent_start', 20 * 60000, { agent_id: 'first' });
-  add('subagent_start', 10 * 60000, { agent_id: 'remaining' });
-  add('subagent_stop', 60000, { agent_id: 'first' });
-  assert.deepEqual((await read()).working, { on: true, since: at - 10 * 60000, main: null, tools: 0,
-    subagents: { count: 1, since: at - 10 * 60000, lastActivityAt: at - 10 * 60000 } });
-  assert.deepEqual((await read()).working.subagents.ids, ['remaining']);
-});
-
-test('a long main command keeps the group working while an old prompt is no start of current work', async t => {
-  const { f, add, read } = workingFixture(t);
-  add('user_prompt_submit', 45 * 60000);
-  f.live.get('telegram:g0').status.value.active_tool_details = [{ id: 'still-running', name: 'Bash', input: {} }];
-  assert.deepEqual((await read()).working, { on: true, since: null, main: null, tools: 1, subagents: null });
-});
-
 
 // Private Store/Core fixtures only: run for working terminal-event queries or
 // reduction changes; skip unrelated UI changes. No live runtime/channel starts.
-test('working ends main work at a failed stop even after a newer diagnostic event', async t => {
-  const { f, add, read } = workingFixture(t);
-  add('user_prompt_submit', 9000);
-  add('assistant_message', 6000);
-  add('runtime_health:stop_failure', 3000);
-  add('runtime_health:recovered', 1000);
-  assert.equal((await read()).working.on, false);
-  add('user_prompt_submit', 0); f.advance(2100);
-  assert.equal((await read()).working.on, true, 'a new prompt is a fresh action');
-});

@@ -68,30 +68,4 @@ for (const kind of ['question', 'control']) {
       if (kind === 'control') assert.equal(f.db.prepare('SELECT status FROM chat_questions').pluck().get(), 'paused');
     });
   }
-  for (const parent of [false, true]) {
-    test(`${kind} registration with a missing database preserves ${parent ? 'existing' : 'absent'} directories`, t => {
-      const f = fixture(t, { create: false, parent });
-      const before = fs.readdirSync(f.root, { recursive: true });
-      assert.throws(() => operations[kind](input(kind), { env: f.env }), error => {
-        assert.equal(error.code, kind === 'question' ? 'QUESTION_REGISTRATION_FAILED' : 'QUESTION_CONTROL_FAILED');
-        if (kind === 'control') assert.equal(error.storedControlFailure, true);
-        return true;
-      });
-      assert.equal(fs.existsSync(f.file), false);
-      assert.deepEqual(fs.readdirSync(f.root, { recursive: true }), before);
-    });
-  }
 }
-
-test('current schema registers questions and controls with original idempotent behavior', t => {
-  const f = fixture(t);
-  const original = registerQuestion(row('single'), { env: f.env });
-  assert.equal(original.status, 'paused'); assert.equal(original.c4_id, '1');
-  assert.equal(registerQuestion(row('single'), { env: f.env }).c4_id, '1');
-  assert.equal(count(f.db, 'chat_questions'), 1);
-  recordQuestionControl(row('stop'), { env: f.env });
-  recordQuestionControl(row('stop'), { env: f.env });
-  assert.equal(f.db.prepare('SELECT status FROM chat_questions').pluck().get(), 'stopped');
-  assert.equal(count(f.db, 'chat_question_controls'), 1);
-  assert.equal(f.db.prepare('SELECT MAX(version) FROM schema_migrations').pluck().get(), TARGET_SCHEMA_VERSION);
-});

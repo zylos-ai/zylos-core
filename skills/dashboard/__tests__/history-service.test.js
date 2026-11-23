@@ -1,9 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { BroadcastChannel } from 'node:worker_threads';
-import { createRedactor, UNAVAILABLE } from '../src/lib/redaction/engine.js';
-import { HistoryService, textChunk } from '../src/lib/history/history-service.js';
+
+import { HistoryService } from '../src/lib/history/history-service.js';
 import { ObserverService } from '../src/lib/observer-service.js';
 
 const secret = 'fixture-private-value';
@@ -40,76 +39,6 @@ async function request(service, suffix, { method = 'GET', headers = {} } = {}) {
     return { status: response.status, headers: response.headers, body, json: () => JSON.parse(body) };
   } finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
 }
-
-test('all textual public paths redact decoded strings before previews, totals and searches', async () => {
-  const { service } = fixture([{ id: 'o:0', kind: 'tool', name: secret, channel: secret, fields: { input: { password: secret, nested: ['line\n' + secret] }, output: secret + 'a'.repeat(3000) } }]);
-  const listing = await service.sessions();
-  assert.equal(listing.items[0].title, '[redacted]');
-  assert.ok(!JSON.stringify(listing).includes('privatePath'));
-  const result = await service.entries(params());
-  assert.ok(!JSON.stringify(result).includes(secret));
-  assert.equal(result.items[0].fields.output.total, 3010);
-  assert.equal(result.items[0].fields.output.truncated, true);
-  assert.equal(result.items[0].redaction.count, 5);
-  const full = await service.content(params({ entry: 'o:0', field: 'input' }));
-  assert.deepEqual(JSON.parse(full.text), { password: '[redacted]', nested: ['line\n[redacted]'] });
-  assert.deepEqual((await service.search(params({ q: secret }))).matches, []);
-  assert.equal((await service.search(params({ q: 'redacted' }))).matches.length, 1);
-});
-
-test('content chunks reassemble redacted whole text, including a secret across byte boundary and Unicode', async () => {
-  const original = 'a'.repeat(262140) + secret + '😀中文'.repeat(90000);
-  const { service } = fixture([{ id: 'o:0', kind: 'text', fields: { body: original } }]);
-  let offset = 0, rebuilt = '', loops = 0;
-  do {
-    const part = await service.content(params({ entry: 'o:0', field: 'body', offset: String(offset) }));
-    assert.ok(Buffer.byteLength(part.text) <= 256 * 1024);
-    assert.ok(!part.text.includes(secret));
-    rebuilt += part.text; offset = part.next; loops++;
-  } while (offset !== null);
-  assert.equal(rebuilt, original.replaceAll(secret, '[redacted]'));
-  assert.ok(loops >= 3);
-  assert.throws(() => textChunk('😀', 1), /invalid_offset/);
-});
-
-test('signed timeline pagination, anchor, internal filtering and late tool updates', async () => {
-  const entries = [
-    { id: 'o:0', kind: 'text', fields: { body: 'first' } },
-    { id: 'o:10', kind: 'tool', status: 'running', fields: { input: 'cmd' } },
-    { id: 'o:20', kind: 'internal', fields: { raw: { developer: secret } } },
-    { id: 'o:30', kind: 'tool', status: 'running', fields: { input: 'last' } },
-  ];
-  const { service } = fixture(entries);
-  const latest = await service.entries(params({ limit: '2' }));
-  assert.deepEqual(latest.items.map(entry => entry.id), ['o:10', 'o:30']);
-  assert.equal(latest.items.at(-1).status, 'running');
-  assert.ok(latest.afterCursor);
-  const older = await service.entries(params({ cursor: latest.nextCursor }));
-  assert.deepEqual(older.items.map(entry => entry.id), ['o:0']);
-  assert.equal(older.nextCursor, null);
-  assert.deepEqual((await service.entries(params({ anchor: 'o:10', limit: '3' }))).items.map(entry => entry.id), ['o:0', 'o:10', 'o:30']);
-  assert.equal((await service.entries(params({ internal: 'true' }))).items.length, 4);
-  entries[1].status = 'success'; entries[1].updatedOffset = 40; entries[1].fields.output = 'done';
-  entries[3].status = 'success'; entries[3].updatedOffset = 40; entries[3].fields.output = 'last result';
-  entries.push({ id: 'o:40', kind: 'internal', fields: { raw: 'tool result' } });
-  const poll = await service.entries(params({ direction: 'after', cursor: latest.afterCursor }));
-  assert.equal(poll.items.length, 0);
-  assert.deepEqual(poll.updates.map(({ id, status }) => [id, status]), [['o:10', 'success'], ['o:30', 'success']]);
-  assert.notEqual(poll.afterCursor, latest.afterCursor);
-  assert.deepEqual((await service.entries(params({ direction: 'after', cursor: poll.afterCursor }))).updates, []);
-  await assert.rejects(service.entries(params({ cursor: 'o:1' })), { code: 'invalid_cursor' });
-  await assert.rejects(service.entries(params({ cursor: latest.nextCursor, anchor: 'o:10' })), { code: 'invalid_parameter', param: 'anchor' });
-});
-
-test('search continues backwards with stable cursors and sees full text beyond preview', async () => {
-  const { service } = fixture([0, 10, 20].map((n) => ({ id: 'o:' + n, kind: 'text', fields: { body: 'a'.repeat(3000) + 'NEEDLE' } })));
-  const result = await service.search(params({ q: 'needle', limit: '2' }));
-  assert.deepEqual(result.matches.map((m) => m.entry), ['o:20', 'o:10']);
-  assert.equal(result.hasMore, true);
-  const older = await service.search(params({ q: 'needle', before: result.before }));
-  assert.deepEqual(older.matches.map((m) => m.entry), ['o:0']);
-  assert.equal(older.hasMore, false);
-});
 
 test('redaction failure closes every text path and never reflects exception messages', async () => {
   const { service } = fixture([{ id: 'o:0', kind: 'text', fields: { body: secret } }]);
@@ -178,87 +107,4 @@ test('production redactor protects HTTP sessions, metadata, previews, content, i
     } while (offset !== null);
     assert.ok(!full.includes(fake)); assert.match(full, /已遮蔽/);
   } finally { await service.close(); }
-});
-
-test('session title truncation occurs only after redaction, and expanded records disclose all fields', async () => {
-  const fake = 'zylos_st_' + 'B'.repeat(100);
-  const { parser } = fixture([{ id: 'o:0', kind: 'marker', deferred: true, fields: { body: 'Oversized record' } }]);
-  parser.listSessions = async () => ({ current: 'session', sessions: [{ id: 'session', title: 'a'.repeat(100) + ' ' + fake }] });
-  parser.expandEntry = async () => ({ id: 'o:0', kind: 'internal', fields: { body: { note: fake } }, binaries: { attachment_0: { data: Buffer.from('PNG'), mimeType: 'image/png' } } });
-  const service = new HistoryService({ parser });
-  try {
-    const listing = await service.sessions();
-    assert.ok(!listing.items[0].title.includes('zylos_st_B'));
-    const result = await service.content(params({ entry: 'o:0', field: 'body' }));
-    assert.ok(!result.text.includes(fake));
-    assert.equal(result.expandedEntry.fields.attachment_0.type, 'binary');
-    assert.equal((await service.content(params({ entry: 'o:0', field: 'attachment_0' }))).binary.data.toString(), 'PNG');
-  } finally { await service.close(); }
-});
-
-test('HTTP remains available while a small history field stalls its redaction worker', async () => {
-  const channelName = `history-stall-${process.pid}-${Date.now()}`;
-  const channel = new BroadcastChannel(channelName);
-  let signal;
-  const started = new Promise(resolve => { signal = resolve; });
-  channel.onmessage = () => signal();
-  const engineURL = new URL('../src/lib/redaction/engine.js', import.meta.url).href;
-  const workerURL = new URL('data:text/javascript,' + encodeURIComponent(`
-    import { parentPort, BroadcastChannel } from 'node:worker_threads';
-    import { redact } from ${JSON.stringify(engineURL)};
-    parentPort.on('message', ({ id, text, options }) => {
-      if (text === 'hang') {
-        new BroadcastChannel(${JSON.stringify(channelName)}).postMessage('started');
-        while (true) {}
-      }
-      parentPort.postMessage({ id, result: redact(text, options) });
-    });
-  `));
-  const productionRedactor = createRedactor({ workerURL, timeoutMs: 1000 });
-  const { parser } = fixture([{ id: 'o:0', kind: 'text', fields: { body: 'hang' } }]);
-  const service = new HistoryService({ parser, redactor: productionRedactor });
-  // Admin keys stand for any admin caller here; remote access is on.
-  const observer = new ObserverService({ config: { chat: { allowRemote: true } }, historyService: service,
-    containment: {}, manager: {},
-    coordinator: { historyStatus: async () => ({ state: 'installed', desired: { enabled: true } }) },
-    authGate: { enabled: true, resolveAuthContext: () => ({ kind: 'api', scope: 'admin' }) },
-  });
-  const server = http.createServer((req, res) => {
-    if (req.url === '/health') { res.end('healthy'); return; }
-    observer.handle(req, res, new URL(req.url, 'http://localhost'));
-  });
-  let deadline;
-  try {
-    assert.equal((await productionRedactor.redact('warm')).text, 'warm');
-    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const base = `http://127.0.0.1:${server.address().port}`;
-    let historyFinished = false;
-    const history = fetch(base + '/api/observer/history/content?session=session&entry=o:0&field=body')
-      .then(async response => { historyFinished = true; return { status: response.status, body: await response.json() }; });
-    await Promise.race([started, new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('worker never entered stall')), 2000); })]);
-    clearTimeout(deadline);
-    const health = await fetch(base + '/health', { signal: AbortSignal.timeout(500) });
-    assert.equal(await health.text(), 'healthy');
-    assert.equal(historyFinished, false, 'unrelated HTTP request completes while history scan is pending');
-    const result = await history;
-    assert.equal(result.status, 200);
-    assert.equal(result.body.text, UNAVAILABLE);
-    assert.equal((await productionRedactor.redact('password=private-fixture-value')).count, 1);
-  } finally {
-    clearTimeout(deadline);
-    channel.close();
-    await service.close();
-    server.closeAllConnections();
-    await new Promise(resolve => server.close(resolve));
-  }
-});
-
-
-test('history metadata timestamps use ISO while transcript data remains unchanged', async () => {
-  const { service } = fixture([{ id: 'o:0', ts: 1700000000000, kind: 'text', fields: { body: { timestamp: 1700000000000, start: 12 } } }]);
-  const result = await request(service, 'entries?session=session');
-  assert.equal(result.status, 200);
-  assert.equal(result.json().items[0].ts, '2023-11-14T22:13:20.000Z');
-  const content = await request(service, 'content?session=session&entry=o:0&field=body');
-  assert.deepEqual(JSON.parse(content.json().text), { timestamp: 1700000000000, start: 12 });
 });

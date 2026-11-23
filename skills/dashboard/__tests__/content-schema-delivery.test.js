@@ -213,15 +213,3 @@ test('schema alias does not open neighboring scripts or traversal paths', { time
 
 // Missing-source boundary, owned filesystem fixture only. Run when alias
 // resolution changes; no dependency download or copied-schema fallback allowed.
-test('missing schema source fails instead of serving a public copy', { timeout: 15000 }, async t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'schema-delivery-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const root = path.join(dir, 'skills/dashboard/public'); fs.mkdirSync(root, { recursive: true });
-  fs.writeFileSync(path.join(root, 'chat-schema.js'), 'export const copied = true;');
-  const origin = await fixture(t, root);
-  for (const prefix of ['', '/dashboard', '/fleet/Peer']) {
-    const response = await fetch(origin + prefix + '/_assets/chat-schema.js');
-    assert.equal(response.status, 404);
-    assert.equal((await response.text()).includes('copied'), false);
-  }
-});

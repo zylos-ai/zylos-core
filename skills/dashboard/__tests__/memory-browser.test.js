@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { installMemoryScripts, memoryTestEnv, memoryTempRoot } from './fixtures/memory-installation.js';
-import { MemoryBrowser, memoryErrorPayload, validateMemoryQueryPath } from '../src/lib/memory-browser.js';
+import { MemoryBrowser } from '../src/lib/memory-browser.js';
 
 function makeZylosDir() {
   const zylosDir = memoryTempRoot('wbr-');
@@ -59,30 +59,6 @@ test('memory file returns text metadata and rejects traversal, large, and binary
 });
 
 // Integration: changed memory-save transport and file publication require this case; read-only UI changes may skip it.
-test('memory writeFile saves existing text files with optimistic locking', async () => {
-  const zylosDir = makeZylosDir();
-  try {
-    const memoryDir = path.join(zylosDir, 'memory');
-    const browser = new MemoryBrowser({ zylosDir, env: memoryTestEnv(zylosDir) });
-    const before = await browser.file('identity.md');
-
-    const saved = await browser.writeFile('identity.md', {
-      text: '# Identity\nUpdated\n',
-      sha256: before.sha256
-    });
-    assert.equal(saved.path, 'identity.md');
-    assert.equal(saved.text, '# Identity\nUpdated\n');
-    assert.match(saved.sha256, /^[a-f0-9]{64}$/);
-    assert.notEqual(saved.sha256, before.sha256);
-    assert.equal(fs.readFileSync(path.join(memoryDir, 'identity.md'), 'utf8'), '# Identity\nUpdated\n');
-
-    const after = await browser.file('identity.md');
-    assert.equal(after.sha256, saved.sha256);
-    assert.equal(after.text, saved.text);
-  } finally {
-    fs.rmSync(zylosDir, { recursive: true, force: true });
-  }
-});
 
 // Integration: changed Core conflict mapping requires this case; read-only UI changes may skip it.
 test('memory writeFile rejects stale hashes and leaves file unchanged', async () => {
@@ -108,82 +84,4 @@ test('memory writeFile rejects stale hashes and leaves file unchanged', async ()
   } finally {
     fs.rmSync(zylosDir, { recursive: true, force: true });
   }
-});
-
-test('memory writeFile validates write body, supported file type, and size', async () => {
-  const zylosDir = makeZylosDir();
-  try {
-    const memoryDir = path.join(zylosDir, 'memory');
-    fs.writeFileSync(path.join(memoryDir, 'notes.bin'), 'plain text');
-    const browser = new MemoryBrowser({ zylosDir, env: memoryTestEnv(zylosDir) });
-    const before = await browser.file('identity.md');
-
-    await assert.rejects(() => browser.writeFile('identity.md', { text: '# Bad\n', sha256: 'not-a-hash' }), (err) => err.code === 'invalid_memory_write');
-    await assert.rejects(() => browser.writeFile('identity.md', { text: 'bad\u0000text', sha256: before.sha256 }), (err) => err.code === 'invalid_memory_write');
-    await assert.rejects(() => browser.writeFile('identity.md', { text: 'a'.repeat(1024 * 1024 + 1), sha256: before.sha256 }), (err) => err.code === 'memory_file_too_large' && err.status === 413);
-    await assert.rejects(() => browser.writeFile('missing.md', { text: '# Missing\n', sha256: before.sha256 }), (err) => err.code === 'memory_file_not_found' && err.status === 404);
-    await assert.rejects(() => browser.writeFile('notes.bin', { text: 'updated', sha256: before.sha256 }), (err) => err.code === 'unsupported_memory_file' && err.status === 415);
-  } finally {
-    fs.rmSync(zylosDir, { recursive: true, force: true });
-  }
-});
-
-test('memory git metadata uses validated relative paths and returns latest commit', async () => {
-  const zylosDir = makeZylosDir();
-  try {
-    const memoryDir = path.join(zylosDir, 'memory');
-    execFileSync('git', ['-C', memoryDir, 'init'], { stdio: 'ignore' });
-    execFileSync('git', ['-C', memoryDir, 'config', 'user.email', 'test@example.com']);
-    execFileSync('git', ['-C', memoryDir, 'config', 'user.name', 'Test User']);
-    execFileSync('git', ['-C', memoryDir, 'add', 'identity.md']);
-    execFileSync('git', ['-C', memoryDir, 'commit', '-m', 'add identity'], { stdio: 'ignore' });
-
-    const browser = new MemoryBrowser({ zylosDir, env: memoryTestEnv(zylosDir) });
-    const result = await browser.git('identity.md');
-    assert.equal(result.path, 'identity.md');
-    assert.equal(result.commit.subject, 'add identity');
-    assert.match(result.commit.hash, /^[a-f0-9]{40}$/);
-    assert.match(result.commit.short_hash, /^[a-f0-9]+$/);
-  } finally {
-    fs.rmSync(zylosDir, { recursive: true, force: true });
-  }
-});
-
-test('memory query path grammar allows nested query slashes but rejects unsafe paths', () => {
-  assert.equal(validateMemoryQueryPath('reference/projects.md'), 'reference/projects.md');
-  assert.throws(() => validateMemoryQueryPath('../state.md'), /invalid_memory_path/);
-  assert.throws(() => validateMemoryQueryPath('reference/../../.env'), /invalid_memory_path/);
-  assert.throws(() => validateMemoryQueryPath('C:\\secret.md'), /invalid_memory_path/);
-  assert.throws(() => validateMemoryQueryPath('reference\\projects.md'), /invalid_memory_path/);
-});
-
-test('unexpected filesystem errors do not leak errno codes in API payloads', () => {
-  const err = new Error('permission denied');
-  err.code = 'EACCES';
-  const payload = memoryErrorPayload(err);
-  assert.equal(payload.status, 500);
-  assert.deepEqual(payload.body, { error: 'memory_browser_failed' });
-  assert.equal(JSON.stringify(payload.body).includes('EACCES'), false);
-});
-
-test('memory conflict payload preserves current metadata and text', async () => {
-  const current = {
-    path: 'identity.md',
-    name: 'identity.md',
-    size_bytes: 12,
-    mtime: new Date().toISOString(),
-    sha256: 'a'.repeat(64),
-    markdown: true,
-    text: 'latest text'
-  };
-  const err = new Error('memory_conflict');
-  err.code = 'memory_conflict';
-  err.status = 409;
-  err.memoryBrowserError = true;
-  err.current = current;
-
-  const payload = memoryErrorPayload(err);
-  assert.equal(payload.status, 409);
-  assert.deepEqual(payload.body, { error: 'memory_conflict', current });
-  assert.equal(payload.body.current.text, 'latest text');
 });

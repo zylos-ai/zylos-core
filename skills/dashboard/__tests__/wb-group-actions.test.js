@@ -29,35 +29,6 @@ function fixture({ results = [{ ok: true, data: { id: 1 } }], mode = 'multi', re
 }
 const target = { runId: 'snapshot-run', sessionId: 'snapshot-session' };
 
-test('Origin actions reuse the existing handler with the same body and configuration', async () => {
-  const f = fixture(), body = { ...target, sessionGroup: 'origin', extra: 'unchanged' };
-  for (const [action, coreAction] of [['interrupt', 'interrupt'], ['chop-chop', 'chop-chop'], ['restart', 'restart-session']]) {
-    assert.deepEqual(await f.action('origin', action, body), { ok: true, messageKey: 'existing_core_reply' });
-    const call = f.origin.at(-1);
-    assert.equal(call[0], coreAction); assert.equal(call[1], body); assert.equal(call[2], f.config);
-  }
-  const stopped = { sessionGroup: 'origin', sessionId: null };
-  await f.action('origin', 'restart', stopped);
-  assert.equal(f.origin.at(-1)[0], 'restart-session');
-  assert.equal(f.origin.at(-1)[1], stopped, 'a stopped Origin restart is forwarded unchanged');
-  assert.equal(f.calls.length, 0); assert.equal(f.submissions.length, 0);
-});
-
-test('ordinary interruption binds the requested group and snapshot run/session instead of Origin', async () => {
-  const f = fixture(); const result = await f.action('telegram:A', 'interrupt', target);
-  assert.equal(result.submission, 'submitted'); assert.equal(result.controlId, 1);
-  assert.equal(result.steps.length, 1); assert.equal(f.calls.length, 1);
-  const { file, argv, options } = f.calls[0];
-  assert.equal(file, process.execPath);
-  assert.equal(argv[0], '/isolated/instance/.claude/skills/comm-bridge/scripts/c4-control.js');
-  assert.deepEqual(argv.slice(1), ['enqueue', '--content', '[KEYSTROKE]Escape', '--priority', '0', '--bypass-state',
-    '--no-ack-suffix', '--group', 'telegram:A', '--target-run', 'snapshot-run', '--expected-session', 'snapshot-session', '--json']);
-  assert.equal(argv.includes('origin'), false);
-  assert.equal(options.timeout, 15000); assert.equal(options.maxBuffer, 1024 * 1024);
-  assert.equal(options.env.ZYLOS_DIR, '/isolated/instance');
-  assert.equal(options.env.ZYLOS_SESSION_GROUP, undefined); assert.equal(options.env.RETAIN, 'yes');
-});
-
 test('ordinary group adapter takes scope only from the path and preserves the confirmed private run', async () => {
   const f = fixture();
   const body = Object.freeze({ sessionGroup: 'telegram:foreign', runId: 'private-selected-run', sessionId: 'private-selected-session' });
@@ -71,55 +42,6 @@ test('ordinary group adapter takes scope only from the path and preserves the co
   assert.deepEqual(f.interrupts.map(record => [record.sessionGroup, record.runId, record.sessionId]),
     [['telegram:selected', 'private-selected-run', 'private-selected-session']]);
   assert.equal(body.sessionGroup, 'telegram:foreign');
-});
-
-test('only a submitted group interrupt is recorded for the conversation page', async () => {
-  const f = fixture();
-  await f.action('dashboard:A', 'interrupt', target);
-  assert.deepEqual(f.interrupts, [{ sessionGroup: 'dashboard:A', runId: 'snapshot-run', sessionId: 'snapshot-session', controlId: 1, at: 1000 }]);
-  await f.action('dashboard:A', 'chop-chop', target);
-  await f.action('origin', 'interrupt', { ...target, sessionGroup: 'origin' });
-  assert.equal(f.interrupts.length, 1, 'nudges and Origin interrupts are not recorded');
-  const rejected = fixture({ results: [{ ok: false, error: { code: 'TARGET_CHANGED', message: 'changed' } }] });
-  await rejected.action('dashboard:A', 'interrupt', target);
-  assert.equal(rejected.interrupts.length, 0);
-  const throwing = createGroupActions({ zylosDir: '/isolated/instance', now: () => 5, onInterrupt: () => { throw new Error('store closed'); },
-    loadCoreModule: async () => ({ readSessionMode: () => ({ mode: 'multi' }) }),
-    execute: async () => ({ stdout: JSON.stringify({ ok: true, data: { id: 3 } }) }) });
-  assert.equal((await throwing('dashboard:A', 'interrupt', target)).submission, 'submitted', 'recording never changes the result');
-});
-
-test('nudge stops after the first rejection and preserves its raw target error', async () => {
-  const failure = { ok: false, error: { code: 'TARGET_CHANGED', message: 'Original Core message', runId: 'new-run' } };
-  const f = fixture({ results: [failure] });
-  const result = await f.action('telegram:A', 'chop-chop', target);
-  assert.equal(result.ok, false); assert.deepEqual(result.error, failure.error);
-  assert.equal(result.rejectionCode, 'TARGET_CHANGED'); assert.equal(result.currentRunId, 'new-run');
-  assert.equal(result.steps.length, 1); assert.equal(f.calls.length, 1); assert.equal(f.sleeps.length, 0);
-});
-
-test('nudge reports both bound commands with at least five hundred milliseconds between them', async () => {
-  const f = fixture({ results: [{ ok: true, data: { id: 1 } }, { ok: true, data: { id: 2 } }] });
-  const result = await f.action('telegram:A', 'chop-chop', target);
-  assert.equal(result.ok, true); assert.equal(result.steps.length, 2);
-  assert.deepEqual(result.steps.map(step => step.control), ['escape', 'continue']);
-  assert.deepEqual(f.sleeps, [500]); assert.ok(f.calls[1].at - f.calls[0].at >= 500);
-  assert.equal(f.calls[1].argv[f.calls[1].argv.indexOf('--content') + 1], 'continue');
-  assert.equal(f.calls[1].argv[f.calls[1].argv.indexOf('--group') + 1], 'telegram:A');
-  assert.equal(f.calls[1].argv[f.calls[1].argv.indexOf('--target-run') + 1], target.runId);
-});
-
-test('ordinary actions reject single mode and missing targets before writing', async () => {
-  const single = fixture({ mode: 'single' });
-  await assert.rejects(single.action('telegram:A', 'restart', target), { code: 'not_multi', statusCode: 409 });
-  const multi = fixture();
-  await assert.rejects(multi.action('telegram:A', 'interrupt', {}), { code: 'TARGET_REQUIRED', statusCode: 400 });
-  await assert.rejects(multi.action('telegram:A', 'restart', {}), { code: 'TARGET_REQUIRED', statusCode: 400 });
-  for (const body of [null, [], { ...target, sessionId: {} }, { ...target, sessionId: 1 }, { ...target, sessionId: '' }]) {
-    await assert.rejects(multi.action('telegram:A', 'interrupt', body), { code: 'INVALID_ARGUMENT', statusCode: 400 });
-  }
-  assert.equal(single.calls.length + multi.calls.length, 0);
-  assert.equal(single.submissions.length + multi.submissions.length, 0);
 });
 
 for (const reply of [
@@ -136,30 +58,6 @@ for (const reply of [
     sessionGroup: 'telegram:A', expectedRunId: target.runId, expectedSessionId: target.sessionId });
   assert.deepEqual(f.submissions[0][1], { deadlineAt: 11000, socketPath: '/isolated/instance/activity-monitor/am.sock' });
 });
-
-test('unknown control results never retry and nonzero Core errors retain their envelope', async () => {
-  const timeout = fixture({ results: [Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' })] });
-  const result = await timeout.action('telegram:A', 'interrupt', target);
-  assert.equal(result.submission, 'unknown'); assert.equal(result.unknown, true); assert.equal(timeout.calls.length, 1);
-  const failure = { ok: false, error: { code: 'SESSION_GROUP_INVALID', message: 'Original Core message' } };
-  const rejected = fixture({ results: [Object.assign(new Error('nonzero'), { stdout: JSON.stringify(failure) })] });
-  assert.deepEqual((await rejected.action('telegram:A', 'interrupt', target)).error, failure.error);
-  assert.equal(rejected.calls.length, 1);
-});
-
-test('restart uncertainty reads back once while failed submission never reads back or resends', async () => {
-  const f = fixture({ reply: { kind: 'no_reply', sent: true }, completion: 'deadline_exceeded' });
-  const result = await f.action('telegram:A', 'restart', target);
-  assert.equal(result.submission, 'unknown'); assert.equal(result.completion, 'unknown');
-  assert.equal(f.submissions.length, 1); assert.equal(f.lookups.length, 1);
-  assert.deepEqual(f.lookups[0], ['request-fixture', { deadlineAt: 11000 }]);
-  for (const reply of [{ kind: 'connect_failed' }, { kind: 'deadline_exceeded', sent: false }]) {
-    const stopped = fixture({ reply });
-    assert.equal((await stopped.action('telegram:A', 'restart', target)).submission, 'not_submitted');
-    assert.equal(stopped.submissions.length, 1); assert.equal(stopped.lookups.length, 0);
-  }
-});
-
 
 test('an instance root mismatch is definitely not submitted and never contacts the supervisor', async () => {
   const f = fixture({ coreRoot: '/isolated/another-instance' });

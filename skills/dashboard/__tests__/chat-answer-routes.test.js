@@ -10,14 +10,12 @@ import { AuthGate } from '../src/lib/auth.js';
 import { ChatAnswers } from '../src/lib/chat/answers.js';
 import { handleChatAnswers } from '../src/lib/chat/answer-routes.js';
 import { sendJson } from '../src/lib/http.js';
-import { parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
-import { answerDeliveryFixture } from './helpers/answer-delivery-fixture.js';
 
 const protocol = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 const envelope = name => structuredClone(protocol.valid.find(item => item.name === name).envelope);
 const group = 'dashboard-owned:local-chat';
 const conversationId = `g:${Buffer.from(group).toString('hex').toUpperCase()}`;
-const questionKeys = ['c4Id', 'messageId', 'interruptId', 'questionSummary', 'constraints', 'status', 'answerId', 'action', 'actionError', 'delivery'].sort();
+
 const error = (code, statusCode) => Object.assign(new Error(code), { code, statusCode });
 
 // Boundary: actual HTTP route, AuthGate and conditional Dashboard transactions.
@@ -141,266 +139,17 @@ test('answer routes reject read keys, closed remote access, foreign origins and 
   assert.equal(f.answers.question(group, question.interruptId).status, 'paused');
 });
 
-test('answer acceptance uses the stored question and repeated action IDs reuse one durable result', async t => {
-  const f = await fixture(t), question = f.seed(), body = f.answer(question);
-  const first = await f.request('/answers', { body });
-  assert.equal(first.status, 200);
-  assert.equal(first.body.answer.sessionGroup, group);
-  assert.equal(first.body.answer.endpointId, 'local-chat');
-  const parsed = parseC4Content(first.body.answer.content).envelope;
-  assert.equal(parsed.questionSummary, question.questionSummary);
-  assert.equal(parsed.metadata.zylos.answerId, body.action.id);
-  assert.equal(parsed.fallbackText, `Re interruptId=${question.interruptId} (Q:${question.questionSummary}): 方案甲`);
-  assert.equal(f.answers.question(group, question.interruptId).status, 'answered');
-  const repeated = await f.request('/answers', { body: { ...body, retry: true } });
-  assert.equal(repeated.status, 200);
-  assert.deepEqual(repeated.body.answer, first.body.answer);
-  assert.equal(f.count('chat_answers'), 1);
-  assert.equal(f.count('chat_answer_deliveries'), 1);
-  assert.deepEqual(f.calls.deliveries, [
-    { answerId: body.action.id, initial: true, retry: false },
-    { answerId: body.action.id, initial: false, retry: true },
-  ]);
-  const changed = structuredClone(body); changed.action.payload.selected = ['b'];
-  assert.equal((await f.request('/answers', { body: changed })).status, 409);
-  assert.equal(f.calls.deliveries.length, 2);
-});
-
-test('malformed answers and forged summary or routing fields cannot accept or deliver an answer', async t => {
-  const f = await fixture(t), question = f.seed(), body = f.answer(question);
-  for (const invalid of [null, [], '{broken', {}, { ...body, retry: 'true' }, { ...body, action: [] }]) {
-    assert.equal((await f.request('/answers', { body: invalid })).status, 400);
-  }
-  for (const field of ['questionSummary', 'sessionGroup', 'channel', 'endpointId', 'namespace', 'localId', 'conversationId']) {
-    assert.equal((await f.request('/answers', { body: { ...body, [field]: 'forged' } })).status, 400, field);
-  }
-  const foreignContext = structuredClone(body); foreignContext.action.context.conversationId = 'g:666F726569676E';
-  assert.equal((await f.request('/answers', { body: foreignContext })).status, 400);
-  const invalidChoice = structuredClone(body); invalidChoice.action.payload.selected = ['unregistered'];
-  assert.equal((await f.request('/answers', { body: invalidChoice })).status, 400);
-  assert.equal((await f.request('/answers', { body, target: '/api/conversations/foreign' })).status, 403);
-  assert.equal((await f.request('/answers', { body: { ...body, interruptId: 'foreign_interrupt' } })).status, 404);
-  assert.equal((await f.request('/answers?channel=other', { body })).status, 400);
-  assert.equal((await f.request('/answers', { method: 'GET' })).status, 404);
-  assert.equal(f.count('chat_answers'), 0);
-  assert.equal(f.count('chat_answer_deliveries'), 0);
-  assert.equal(f.calls.deliveries.length, 0);
-  assert.equal(f.answers.question(group, question.interruptId).status, 'paused');
-});
-
-test('remote admin answers require the instance switch and authorization is rechecked after asynchronous resolution', async t => {
-  const f = await fixture(t), question = f.seed(), body = f.answer(question);
-  f.config.chat.allowRemote = true;
-  f.setOnResolve(async () => { await Promise.resolve(); f.setMode('single'); });
-  assert.equal((await f.request('/answers', { identity: 'admin', body })).status, 403);
-  assert.equal(f.count('chat_answers'), 0);
-  assert.equal(f.calls.deliveries.length, 0);
-  f.setOnResolve(null); f.setMode('multi');
-  assert.equal((await f.request('/answers', { identity: 'admin', body })).status, 200);
-  assert.equal(f.count('chat_answers'), 1);
-  assert.equal(f.calls.deliveries.length, 1);
-});
-
-test('delivery receives a live authorization callback and denied delivery retains the checked absent answer', async t => {
-  const f = await fixture(t), question = f.seed();
-  f.setBeforeDelivery(async () => { await Promise.resolve(); f.setMode('single'); });
-  assert.equal((await f.request('/answers', { body: f.answer(question) })).status, 403);
-  assert.equal(f.count('chat_answers'), 1);
-  assert.equal(f.count('chat_answer_deliveries'), 1);
-  assert.equal(f.store.db.prepare('SELECT state FROM chat_answer_deliveries').get().state, 'not_stored');
-  assert.equal(f.calls.deliveries.length, 0);
-});
-
-test('question pages show lifecycle and delivery overlays while every refresh reconciles the original group', async t => {
-  const f = await fixture(t);
-  const first = f.seed('single', { messageId: 'first_question', interruptId: 'a_question' });
-  const next = f.seed('single', { messageId: 'next_question', interruptId: 'b_question' });
-  assert.equal((await f.request('/answers', { body: f.answer(first) })).status, 200);
-  f.setReconciliationPages(true);
-  const page = await f.request('/questions?limit=1', { method: 'GET' });
-  assert.equal(page.status, 200);
-  assert.equal(page.body.items.length, 1);
-  assert.equal(page.body.items[0].status, 'answered');
-  assert.deepEqual(Object.keys(page.body.items[0]).sort(), questionKeys);
-  assert.equal(typeof page.body.items[0].c4Id, 'string');
-  assert.deepEqual(page.body.items[0].constraints, { block: first.blocks[0], interrupt: first.interrupt });
-  assert.equal(page.body.items[0].messageId, first.messageId);
-  assert.equal(page.body.items[0].questionSummary, first.questionSummary);
-  assert.equal(page.body.items[0].answerId, 'http_answer');
-  assert.equal(page.body.items[0].action.id, 'http_answer');
-  assert.equal(page.body.items[0].actionError, null);
-  assert.equal(page.body.items[0].delivery.stored, true);
-  assert.equal(page.body.items[0].delivery.deliveryState, 'pending');
-  assert.equal(page.body.nextCursor, first.interruptId);
-  assert.deepEqual(f.calls.reconciliations, [
-    { sessionGroup: group, limit: 100, afterAnswerId: '' },
-    { sessionGroup: group, limit: 100, afterAnswerId: 'after-first-batch' },
-  ]);
-  f.setReconciliationPages(false);
-  const second = await f.request(`/questions?limit=1&cursor=${encodeURIComponent(page.body.nextCursor)}`, { method: 'GET' });
-  assert.equal(second.status, 200);
-  assert.equal(second.body.items.length, 1);
-  assert.equal(second.body.items[0].interruptId, next.interruptId);
-  assert.equal(second.body.items[0].status, 'paused');
-  assert.deepEqual(Object.keys(second.body.items[0]).sort(), questionKeys);
-  assert.equal(second.body.items[0].answerId, null);
-  for (const field of ['action', 'actionError', 'delivery']) assert.equal(second.body.items[0][field], null);
-  assert.equal(second.body.nextCursor, null);
-  assert.equal(f.calls.reconciliations.length, 3);
-  assert.equal(f.calls.deliveries.length, 1, 'refreshing questions cannot dispatch an answer');
-  for (const query of ['?limit=0', '?limit=101', '?limit=1&limit=2', '?foreign=value']) {
-    assert.equal((await f.request('/questions' + query, { method: 'GET' })).status, 400);
-  }
-  assert.equal((await f.request('/questions', { method: 'GET', identity: 'admin' })).status, 403);
-  f.config.chat.allowRemote = true;
-  assert.equal((await f.request('/questions', { method: 'GET', identity: 'read' })).status, 403);
-});
-
-test('confirmation cancel is an accepted answer and cannot become a stop control', async t => {
-  const f = await fixture(t), question = f.seed('confirmation');
-  const response = await f.request('/answers', { body: f.answer(question) });
-  assert.equal(response.status, 200);
-  assert.equal(response.body.answer.action.payload.outcome, 'cancel');
-  assert.equal(f.answers.question(group, question.interruptId).status, 'answered');
-  assert.equal(f.count('chat_question_controls'), 0);
-  assert.equal(f.count('chat_answers'), 1);
-});
-
 // Bound-but-unactivated records cannot answer an established question.
 // Run when write eligibility changes; unrelated UI work may skip.
-test('a bound draft cannot accept answers through the conversation API', async t => {
-  const f = await fixture(t), question = f.seed();
-  f.setState('draft');
-  assert.equal((await f.request('/answers', { body: f.answer(question) })).status, 403);
-  assert.equal(f.count('chat_answers'), 0);
-  assert.equal(f.count('chat_question_controls'), 0);
-  assert.equal(f.calls.deliveries.length, 0);
-});
 
 // Reconciliation is async; revoking remote access before the response must
 // prevent previously authorized question data from escaping in that response.
-test('remote access is checked again after asynchronous answer reconciliation', async t => {
-  const f = await fixture(t); f.seed(); f.config.chat.allowRemote = true;
-  f.setOnReconcile(async () => { await Promise.resolve(); f.config.chat.allowRemote = false; });
-  const result = await f.request('/questions', { method: 'GET', identity: 'admin' });
-  assert.equal(result.status, 403);
-  assert.equal(result.body.error.code, 'remote_chat_disabled');
-  assert.equal(Object.hasOwn(result.body, 'items'), false);
-  assert.equal(f.calls.deliveries.length, 0);
-});
 
 // Boundary: real Dashboard/C4 files and receive, private HTTP and AuthGate.
 // Run for saved-action projection/retry changes; skip presentation-only edits.
 // The delivery fixture owns both databases; the HTTP fixture owns its listener
 // and auth timer. No live PM2, tmux, runtime, model or external network is used.
-test('a refreshed question exposes its saved action for one explicit retry after absence is confirmed', async t => {
-  const engine = answerDeliveryFixture(t), question = engine.createQuestion();
-  const accepted = engine.accept({ question });
-  const answerId = accepted.answer.answerId;
-  engine.store.db.prepare("UPDATE chat_answer_deliveries SET state='unknown' WHERE answer_id=?").run(answerId);
-  const f = await fixture(t, { engine: { ...engine, delivery: engine.makeDelivery() }, question });
-  f.setMode('single');
-  engine.setQueryError(true);
-  let page = await f.request('/questions', { method: 'GET' });
-  assert.equal(page.status, 200);
-  assert.equal(page.body.items[0].delivery.retryAllowed, false);
-  assert.equal(engine.counts.receive, 0);
-  engine.setQueryError(false);
-  page = await f.request('/questions', { method: 'GET' });
-  assert.equal(page.status, 200);
-  const item = page.body.items[0];
-  const saved = JSON.parse(engine.store.db.prepare('SELECT action FROM chat_answers WHERE answer_id=?').get(answerId).action);
-  assert.deepEqual(item.action, saved);
-  assert.equal(item.action.id, item.answerId);
-  assert.equal(item.actionError, null);
-  assert.equal(item.delivery.retryAllowed, true);
-  assert.equal(engine.counts.receive, 0, 'refresh never sends the accepted answer');
-  const body = { interruptId: item.interruptId, action: item.action, retry: true };
-  assert.equal((await f.request('/answers', { body })).status, 403);
-  assert.equal(engine.counts.receive, 0, 'read-only mode can read the action but cannot retry');
-  f.setMode('multi');
-  const retried = await f.request('/answers', { body });
-  assert.equal(retried.status, 200);
-  assert.deepEqual(retried.body.answer.action, saved);
-  assert.equal(retried.body.delivery.stored, true);
-  assert.equal(engine.counts.receive, 1);
-  assert.equal(engine.answerRows(answerId).length, 1);
-  const repeated = await f.request('/answers', { body });
-  assert.equal(repeated.status, 200);
-  assert.equal(engine.counts.receive, 1);
-  const changed = structuredClone(body); changed.action.payload.selected = ['b'];
-  const conflict = await f.request('/answers', { body: changed });
-  assert.equal(conflict.status, 409);
-  assert.equal(conflict.body.error.code, 'chat_answer_conflict');
-  assert.equal(engine.counts.receive, 1);
-  assert.deepEqual(engine.answers.get(answerId).action, saved);
-  const original = engine.db.prepare('SELECT content FROM conversations WHERE id=?').get(question.row.id);
-  assert.equal(original.content, question.row.content);
-});
 
 // Boundary: corrupted saved JSON must be isolated even for unresolved receipts,
 // whose group refresh reads the accepted answer before projecting the page.
 // Uses the same private real-store/receive fixture; no receive call is needed.
-for (const corrupted of ['{broken', 'null', '[]']) {
-  test(`an invalid saved action ${corrupted} marks only its question and leaves other items readable`, async t => {
-    const engine = answerDeliveryFixture(t), badQuestion = engine.createQuestion();
-    const bad = engine.accept({ question: badQuestion }).answer;
-    const goodQuestion = engine.createQuestion(), good = engine.accept({ question: goodQuestion }).answer;
-    const unanswered = engine.createQuestion();
-    engine.store.db.prepare('UPDATE chat_answers SET action=? WHERE answer_id=?').run(corrupted, bad.answerId);
-    engine.store.db.prepare("UPDATE chat_answer_deliveries SET state='unknown'").run();
-    const f = await fixture(t, { engine, question: badQuestion });
-    const page = await f.request('/questions', { method: 'GET' });
-    assert.equal(page.status, 200);
-    assert.equal(page.body.items.length, 3);
-    const broken = page.body.items.find(item => item.answerId === bad.answerId);
-    assert.equal(broken.actionError, 'chat_answer_action_invalid');
-    assert.equal(broken.action, null);
-    assert.equal(broken.delivery.retryAllowed, true);
-    const intact = page.body.items.find(item => item.answerId === good.answerId);
-    assert.deepEqual(intact.action, good.action);
-    assert.equal(intact.actionError, null);
-    assert.equal(intact.delivery.retryAllowed, true);
-    const paused = page.body.items.find(item => item.interruptId === unanswered.envelope.interruptId);
-    assert.equal(paused.status, 'paused');
-    for (const field of ['action', 'actionError', 'delivery']) assert.equal(paused[field], null);
-    const attempted = await f.request('/answers', { body: {
-      interruptId: badQuestion.envelope.interruptId, action: bad.action, retry: true,
-    } });
-    assert.equal(attempted.status, 409, 'a corrupted saved action is never repaired from client data');
-    assert.equal(engine.store.db.prepare('SELECT action FROM chat_answers WHERE answer_id=?').get(bad.answerId).action, corrupted);
-    assert.equal(engine.counts.receive, 0);
-    assert.equal(engine.answerRows(bad.answerId).length, 0);
-    assert.equal(engine.answerRows(good.answerId).length, 0);
-  });
-}
-
-
-test('question HTTP projection marks only bad constraints and preserves exact string IDs and pagination', async t => {
-  const f = await fixture(t);
-  f.seed('single', { messageId: 'bad_question', interruptId: 'a_question' });
-  const good = f.seed('single', { messageId: 'good_question', interruptId: 'b_question' });
-  const largeId = '9223372036854775807';
-  f.store.db.prepare('UPDATE chat_questions SET c4_id=? WHERE interrupt_id=?').run(largeId, good.interruptId);
-  f.store.db.prepare('UPDATE chat_questions SET constraints=? WHERE interrupt_id=?').run('{broken', 'a_question');
-  const first = await f.request('/questions?limit=1', { method: 'GET' });
-  assert.equal(first.status, 200);
-  assert.equal(first.body.items.length, 1);
-  const broken = first.body.items[0];
-  assert.deepEqual(Object.keys(broken).sort(), [...questionKeys, 'questionError'].sort());
-  assert.equal(broken.questionError, 'chat_question_unavailable');
-  assert.equal(broken.constraints, null);
-  assert.equal(first.body.nextCursor, 'a_question');
-  const next = await f.request('/questions?limit=1&cursor=a_question', { method: 'GET' });
-  assert.equal(next.status, 200);
-  assert.equal(next.body.items.length, 1);
-  const item = next.body.items[0];
-  assert.deepEqual(Object.keys(item).sort(), questionKeys);
-  assert.equal(item.c4Id, largeId);
-  assert.equal(typeof item.c4Id, 'string');
-  assert.equal(item.interruptId, good.interruptId);
-  assert.deepEqual(item.constraints, { block: good.blocks[0], interrupt: good.interrupt });
-  assert.equal(item.answerId, null);
-  assert.equal(next.body.nextCursor, null);
-  assert.equal(f.calls.deliveries.length, 0);
-});

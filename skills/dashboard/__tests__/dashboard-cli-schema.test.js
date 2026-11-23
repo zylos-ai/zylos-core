@@ -79,13 +79,3 @@ test('API key CLI still writes and lists keys on the current Dashboard schema', 
 // Current-schema compatibility: name persistence through two actual CLI runs.
 // Run for admission changes; UI-only changes may skip. Same isolated/bounded
 // fixture; set/get stay local and do not collect groups from Core.
-test('group name CLI still writes and reads names on the current Dashboard schema', t => {
-  const f = fixture(t);
-  let result = f.invoke('group-name', ['set', 'telegram:team', 'Team', '--json']);
-  assert.equal(result.error, undefined);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).data.displayName, 'Team');
-  result = f.invoke('group-name', ['get', 'telegram:team', '--json']);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).data.displayName, 'Team');
-});

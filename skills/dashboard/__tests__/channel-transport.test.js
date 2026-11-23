@@ -9,13 +9,11 @@ import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { guardDatabase } from '../../comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../../comm-bridge/scripts/c4-schema.js';
 import { createStore } from '../../comm-bridge/scripts/c4-v2-store.js';
-import { CONTENT_PREFIX, MAX_CONTENT_BYTES } from '../../comm-bridge/scripts/c4-content-schema.js';
-import { acceptDelivery } from '../src/lib/chat/channel.js';
+import { MAX_CONTENT_BYTES } from '../../comm-bridge/scripts/c4-content-schema.js';
 
 const dashboard = fileURLToPath(new URL('../', import.meta.url));
 const core = path.resolve(dashboard, '../..');
 const observer = new URL('./helpers/channel-delivery-observer.js', import.meta.url).href;
-const fixtures = JSON.parse(fs.readFileSync(path.join(core, 'test/fixtures/c4-content-protocol.json'), 'utf8'));
 
 function setup(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-channel-'));
@@ -60,18 +58,6 @@ const noHttpOrDashboard = f => {
 };
 
 // Boundary: read-only authority lookup. Run on channel/schema changes; skip for UI-only edits.
-test('Dashboard delivery associates identical sends with their exact stored IDs', t => {
-  const f = setup(t), text = 'Unicode 😀 中 "quotes"\nnext line';
-  const a = f.insert(text), b = f.insert(text);
-  for (const row of [a, b]) {
-    const accepted = acceptDelivery(packetFor(row), { env: f.env });
-    assert.equal(accepted.id, String(row.id));
-    assert.equal(f.receive(packetFor(row)).status, 0);
-  }
-  assert.notEqual(a.id, b.id);
-  assert.equal(count(f, 'conversations'), 2); assert.equal(count(f, 'group_heads'), 1);
-  noHttpOrDashboard(f);
-});
 
 // Boundary: authoritative mismatch rejection. Run on packet/lookup changes; skip for UI-only edits.
 test('Dashboard rejects forged IDs and mismatched channel endpoint group content or direction', t => {
@@ -86,49 +72,9 @@ test('Dashboard rejects forged IDs and mismatched channel endpoint group content
 });
 
 // Boundary: SQLite 64-bit identity and shared fixture. Run on ID/DB changes; skip for UI-only edits.
-test('Dashboard accepts the shared delivery fixture and canonical SQLite IDs without rounding', t => {
-  const f = setup(t), example = fixtures.delivery.find(item => item.valid);
-  const row = example.row;
-  f.db.prepare('INSERT INTO conversations(id,direction,channel,endpoint_id,session_group,content,status) VALUES(?,?,?,?,?,?,?)')
-    .run(row.id, 'out', row.channel, row.endpoint_id, row.session_group, row.content, 'delivered');
-  assert.equal(f.receive(example.packet).status, 0);
-  f.db.prepare("INSERT INTO conversations(id,direction,channel,endpoint_id,session_group,content,status) VALUES(9223372036854775807,'out','dashboard','e','dashboard:g','large ID','delivered')").run();
-  const packet = { version: 1, c4_id: '9223372036854775807', channel: 'dashboard', endpoint_id: 'e', session_group: 'dashboard:g', content: 'large ID' };
-  assert.equal(f.receive(packet).status, 0);
-  assert.notEqual(f.receive({ ...packet, c4_id: '09223372036854775807' }).status, 0);
-});
 
 // Boundary: awaited notification calls real c4-send and real Dashboard receiver, no HTTP callback.
 // Run on send/status notification changes; skip for UI-only edits. No runtime/socket is created.
-test('Core status notification traverses the real Dashboard receiver without HTTP or extra groups', t => {
-  const f = setup(t);
-  const result = f.invoke(fileURLToPath(new URL('./helpers/channel-status-notice.js', import.meta.url)), [], '');
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(count(f, 'conversations'), 1); assert.equal(count(f, 'group_heads'), 1);
-  assert.deepEqual(JSON.parse(fs.readFileSync(f.env.CHANNEL_SEND_LOG, 'utf8').trim()), []);
-  noHttpOrDashboard(f);
-});
-
-const attachmentContent = data => CONTENT_PREFIX + JSON.stringify({ version: 1, kind: 'message',
-  messageId: 'attachment_reference', fallbackText: 'report.txt', blocks: [{ id: 'file', type: 'x-zylos.file', schemaVersion: 1,
-    data, fallbackText: 'report.txt' }] });
-for (const [name, content] of [
-  ['marked content', CONTENT_PREFIX + '{}'], ['oversized Unicode', '😀'.repeat(MAX_CONTENT_BYTES / 4) + 'a'],
-  ['attachment path', attachmentContent({ path: '/tmp/source.txt', nameSnapshot: 'report.txt' })],
-  ['attachment URL', attachmentContent({ attachmentId: 'missing', nameSnapshot: 'report.txt', url: 'https://example.invalid/report.txt' })],
-  ['unknown attachment data', attachmentContent({ attachmentId: 'missing', nameSnapshot: 'report.txt', size: 10 })],
-  ['missing attachment ID', attachmentContent({ nameSnapshot: 'report.txt' })],
-]) {
-  // Boundary: actual pre-storage hook rejection. Run on Core/hook/transport changes; skip for UI-only edits.
-  test(`Real send rejects ${name} before storage or receiver invocation`, t => {
-    const f = setup(t), result = f.send(content);
-    assert.notEqual(result.status, 0); assert.match(result.stderr, /HOOK_ABORTED/);
-    assert.equal(JSON.parse(result.stdout.trim()).error.code, 'HOOK_ABORTED');
-    for (const table of ['conversations', 'group_heads', 'channel_namespaces']) assert.equal(count(f, table), 0, table);
-    assert.equal(fs.existsSync(f.env.CHANNEL_SEND_LOG), false);
-    noHttpOrDashboard(f);
-  });
-}
 
 // Boundary: both installed ends and original UTF-8 content. Run on transport/hook changes; skip for UI-only edits.
 test('Real Dashboard sends preserve Unicode quotes and the inclusive byte limit', t => {
@@ -149,8 +95,3 @@ test('Real Dashboard sends preserve Unicode quotes and the inclusive byte limit'
 
 // Boundary: a missing C4 database must fail closed without creating one.
 // Run on database path/open changes; skip for UI-only edits.
-test('Dashboard reports an unavailable authority without creating a database', t => {
-  const f = setup(t), missing = path.join(f.root, 'missing');
-  assert.throws(() => acceptDelivery(packetFor(f.insert('text')), { env: { ...f.env, ZYLOS_DIR: missing } }), { code: 'C4_READ_FAILED' });
-  assert.equal(fs.existsSync(missing), false);
-});

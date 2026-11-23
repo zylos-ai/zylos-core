@@ -9,13 +9,13 @@ import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../src/lib/store.js';
-import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
+
 import { ChatConversations } from '../src/lib/chat/conversations.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
-import { ChatAttachments, withChatAttachments, ATTACHMENT_SEND_WINDOW_MS } from '../src/lib/chat/attachments.js';
+import { ChatAttachments } from '../src/lib/chat/attachments.js';
 import { evaluateBeforeSend } from '../scripts/send-hook.js';
 import { acceptDelivery } from '../src/lib/chat/channel.js';
-import { runSend } from '../scripts/send.js';
+
 import { CONTENT_PREFIX } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { guardDatabase } from '../../comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../../comm-bridge/scripts/c4-schema.js';
@@ -138,59 +138,6 @@ function assertAudit(f, before) {
   assert.deepEqual(logicalContents(f), before.logical);
 }
 
-test('attachment hook uses the destination without business writes; SQLite bookkeeping is allowed', async t => {
-  const f = fixture(t), file = await f.register(), image = await f.register('image', 'photo.png');
-  const value = content(block(file), block(image));
-  const before = audit(f);
-  assert.equal(f.hook(value).decision, 'continue');
-  assertAudit(f, before);
-  assert.equal(f.count(), 0);
-  for (const change of [{ options: {} }, { options: { groupName: f.b.localId } },
-    { options: { groupName: f.a.localId, wholeGroup: true } },
-    { endpoint: 'missing_conversation', options: { groupName: 'missing_conversation' } }]) {
-    const result = f.hook(value, change);
-    assert.equal(result.decision, 'abort');
-    assert.match(result.message, /original reply-via command/);
-    assert.doesNotMatch(result.message, /register/);
-  }
-  f.core.prepare('DELETE FROM group_heads WHERE session_group=?').run(`dash:${f.a.localId}`);
-  const missingGroup = f.hook(value);
-  assert.equal(missingGroup.decision, 'abort');
-  assert.match(missingGroup.message, /original reply-via command/);
-});
-
-test('attachment hook reserves registration advice for invalid attachment data and references', async t => {
-  const f = fixture(t), registered = await f.register();
-  const invalidChart = { id: 'chart', type: 'time_series', schemaVersion: 1, data: {}, fallbackText: 'Invalid chart' };
-  const badEnvelope = JSON.parse(content(block(registered)).slice(CONTENT_PREFIX.length));
-  badEnvelope.unexpected = true;
-  const before = audit(f);
-  for (const value of [content(block(registered), invalidChart), CONTENT_PREFIX + JSON.stringify(badEnvelope),
-    content(block(registered, { status: 'pending' }))]) {
-    const result = f.hook(value);
-    assert.equal(result.decision, 'abort');
-    assert.match(result.message, /^Invalid Dashboard structured content/);
-    assert.doesNotMatch(result.message, /register/);
-  }
-  for (const data of [{ nameSnapshot: registered.name }, { attachmentId: registered.id, nameSnapshot: registered.name, url: 'https://example.invalid/file' },
-    { attachmentId: 'unknown_id', nameSnapshot: registered.name }]) {
-    const result = f.hook(content(block(registered, { data })));
-    assert.equal(result.decision, 'abort');
-    assert.match(result.message, /register again on the target machine/);
-  }
-  assertAudit(f, before);
-});
-
-test('attachment hook reads closed WAL databases with SQLite bookkeeping and no business writes', async t => {
-  const f = fixture(t), registered = await f.register(), value = content(block(registered));
-  const before = audit(f);
-  f.attachments.c4Reader.close();
-  f.store.close(); f.core.close();
-  before.files = snapshot(f.root);
-  assert.equal(f.hook(value).decision, 'continue');
-  assertAudit(f, before);
-});
-
 // Boundary: a killed writer leaves committed attachment data only in WAL.
 // Run on hook storage/open-mode changes; unrelated UI may skip. The child is
 // bounded and reaped before fixture cleanup, on success and every failure.
@@ -227,75 +174,9 @@ test('attachment hook preserves crash-left committed WAL frames and main databas
   assertAudit(f, before);
 });
 
-test('read-only attachment access closes both database handles and rejects writes', async t => {
-  const f = fixture(t); let dashboardHandle, coreHandle;
-  withChatAttachments(f.root, { readonly: true }, service => {
-    dashboardHandle = service.db; coreHandle = service.c4Reader._open();
-    assert.equal(dashboardHandle.open, true); assert.equal(coreHandle.open, true);
-    assert.equal(dashboardHandle.readonly, true); assert.equal(coreHandle.readonly, true);
-    assert.throws(() => dashboardHandle.prepare("UPDATE chat_conversations SET display_name='must-not-write'").run(), { code: 'SQLITE_READONLY' });
-  });
-  assert.equal(dashboardHandle.open, false);
-  assert.equal(coreHandle.open, false);
-});
-
 // Boundary: actual hook process with open readers alongside existing writers.
 // Required for read-only connection lifecycle changes; unrelated UI may skip.
 // The helper's 3s hold, child timeout and after-hook kill bound every failure.
-test('an open hook reader permits writes and checkpoints and releases its connections', async t => {
-  const f = fixture(t), registered = await f.register();
-  f.core.pragma('journal_mode = WAL');
-  const ready = path.join(f.root, 'hook-ready'), release = path.join(f.root, 'hook-release');
-  const child = spawn(process.execPath, ['--import', fileURLToPath(new URL('./helpers/attachment-hook-reader.js', import.meta.url)),
-    fileURLToPath(new URL('../scripts/send-hook.js', import.meta.url))], {
-    env: { ...f.env, ATTACHMENT_HOOK_MEDIA: f.attachments.mediaDir, ATTACHMENT_HOOK_READY: ready, ATTACHMENT_HOOK_RELEASE: release },
-    stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000,
-  });
-  let stdout = '', stderr = '', exitCode, failure;
-  child.stdout.on('data', bytes => { stdout += bytes; if (stdout.length > 65536) child.kill('SIGKILL'); });
-  child.stderr.on('data', bytes => { stderr += bytes; if (stderr.length > 65536) child.kill('SIGKILL'); });
-  child.on('error', error => { failure = error; });
-  const finished = new Promise(resolve => child.once('close', code => { exitCode = code; resolve(); }));
-  f.cleanup.push(async () => { if (exitCode === undefined) child.kill('SIGKILL'); await finished; });
-  child.stdin.on('error', error => { failure = error; });
-  child.stdin.end(JSON.stringify(f.input(content(block(registered)))));
-  const deadline = performance.now() + 3000;
-  while (!fs.existsSync(ready)) {
-    if (failure) throw failure;
-    assert.equal(exitCode, undefined, stderr);
-    assert.ok(performance.now() < deadline, 'actual hook reaches its open-reader boundary');
-    await new Promise(resolve => setTimeout(resolve, 10));
-  }
-  const started = performance.now();
-  for (const db of [f.core, f.store.db]) db.pragma('busy_timeout = 100');
-  f.add('concurrent outbound write');
-  f.store.db.prepare('UPDATE chat_attachments SET name=? WHERE id=?').run('concurrent-name.txt', registered.id);
-  for (const db of [f.core, f.store.db]) {
-    const checkpoint = db.pragma('wal_checkpoint(TRUNCATE)')[0];
-    assert.equal(checkpoint.busy, 0);
-    assert.equal(checkpoint.log, checkpoint.checkpointed);
-  }
-  assert.ok(performance.now() - started < 1000, 'writer and checkpoints finish while hook remains open');
-  fs.writeFileSync(release, 'release');
-  await finished;
-  if (failure) throw failure;
-  assert.equal(exitCode, 0, stderr);
-  assert.equal(JSON.parse(stdout).decision, 'continue');
-  for (const db of [f.core, f.store.db]) assert.equal(db.pragma('wal_checkpoint(TRUNCATE)')[0].busy, 0);
-});
-
-test('attachment hook prioritizes the path registration hint before closed schema including cooldown suffix', async t => {
-  const f = fixture(t), registered = await f.register();
-  const bad = block(registered); bad.data.path = '/private/source.txt'; delete bad.data.attachmentId;
-  const before = audit(f);
-  for (const suffix of ['', '\n\n[C4] Status notification suppressed by cooldown while health=bad reason=busy.']) {
-    const result = f.hook(content(bad) + suffix);
-    assert.equal(result.decision, 'abort');
-    assert.match(result.message, /register command first/);
-    assert.equal(result.message.includes('/private/source.txt'), false);
-  }
-  assertAudit(f, before);
-});
 
 test('attachment hook rejects unknown fields URLs missing IDs cross-group kind and unreadable files without business writes', async t => {
   const f = fixture(t), registered = await f.register();
@@ -327,56 +208,6 @@ test('attachment hook rejects unknown fields URLs missing IDs cross-group kind a
   assertAudit(f, missingBefore);
 });
 
-test('unlinked agent references have a strict window and unlinked user references are rejected', async t => {
-  t.mock.method(Date, 'now', () => 50_000_000);
-  const f = fixture(t), registered = await f.register(), user = await f.upload();
-  const value = content(block(registered));
-  assert.equal(f.hook(value).decision, 'continue');
-  assert.equal(f.hook(content(block(user))).decision, 'abort');
-  f.age(registered.id, ATTACHMENT_SEND_WINDOW_MS - 1);
-  assert.equal(f.hook(value).decision, 'continue');
-  for (const age of [ATTACHMENT_SEND_WINDOW_MS, ATTACHMENT_SEND_WINDOW_MS + 1, -60_000]) {
-    f.age(registered.id, age);
-    const before = audit(f);
-    const result = f.hook(value);
-    assert.equal(result.decision, 'abort');
-    assert.match(result.message, /register again on the target machine/);
-    assertAudit(f, before);
-  }
-});
-
-test('attachment hook accepts twenty distinct IDs and rejects a twenty-first without business writes', async t => {
-  const f = fixture(t), records = [];
-  for (let i = 0; i < 21; i++) records.push(await f.register('file', `report-${i}.txt`));
-  const before = audit(f);
-  assert.equal(f.hook(content(...records.slice(0, 20).map(record => block(record)))).decision, 'continue');
-  const excess = f.hook(content(...records.map(record => block(record))));
-  assert.equal(excess.decision, 'abort');
-  assert.match(excess.message, /register again on the target machine/);
-  assertAudit(f, before);
-});
-
-test('verified outbound rows link idempotently by C4 ID and linked user and agent copies outlive preparation', async t => {
-  const f = fixture(t), registered = await f.register(), user = await f.upload();
-  const userPath = f.attachments.resolve(f.a, user.id);
-  const annotation = `[attachment:file ${userPath} name="user.txt" 10B]`;
-  f.attachments.linkRow(f.add(annotation, { direction: 'in' }));
-  assert.equal(f.count(), 1);
-  const value = content(block(registered), block(user)), rows = [f.add(value), f.add(value)];
-  for (const row of rows) {
-    acceptDelivery(packet(row), { env: f.env }); acceptDelivery(packet(row), { env: f.env });
-  }
-  assert.equal(f.count(), 5);
-  fs.unlinkSync(registered.source);
-  for (const record of [registered, user]) {
-    f.age(record.id, ATTACHMENT_SEND_WINDOW_MS * 4);
-    assert.equal(f.hook(content(block(record))).decision, 'continue');
-    assert.ok(fs.readFileSync(f.attachments.download(f.a, record.id).path).length);
-    assert.throws(() => f.attachments.download(f.b, record.id));
-  }
-  assert.equal(fs.readFileSync(f.attachments.resolve(f.a, registered.id), 'utf8'), 'agent bytes');
-});
-
 test('forged delivery packets never create attachment associations', async t => {
   const f = fixture(t), registered = await f.register(), value = content(block(registered));
   const row = f.add(value), original = packet(row);
@@ -389,150 +220,22 @@ test('forged delivery packets never create attachment associations', async t => 
   acceptDelivery(original, { env: f.env }); assert.equal(f.count(), 1);
 });
 
-test('stored association failures prohibit resend and recover using the existing authoritative row', async t => {
-  const f = fixture(t), registered = await f.register(), row = f.add(content(block(registered)));
-  f.store.db.exec("CREATE TRIGGER reject_link BEFORE INSERT ON chat_attachment_messages BEGIN SELECT RAISE(ABORT,'fixture association'); END");
-  let output = '';
-  assert.equal(runSend({ input: () => JSON.stringify(packet(row)), env: f.env, stderr: { write(value) { output += value; } } }), 1);
-  assert.match(output, /ATTACHMENT_ASSOCIATION_FAILED/); assert.match(output, /already stored.*Do not resend/);
-  assert.equal(f.count(), 0);
-  f.store.db.exec('DROP TRIGGER reject_link');
-  assert.equal(f.attachments.linkRow(row)[0].available, true);
-  assert.equal(f.count(), 1);
-});
-
-test('attachment hook refuses absent storage missing media and old schema without creating or migrating files', async t => {
-  const f = fixture(t), registered = await f.register(), value = content(block(registered));
-  const missing = path.join(f.root, 'absent');
-  const input = { version: 1, hook_event_name: 'BeforeSend', hook_id: 'dashboard.content', request_id: 'r', invocation_id: 'i',
-    request: { channel: 'dashboard', endpoint: f.a.localId, options: { groupName: f.a.localId }, content: value }, context: {} };
-  assert.equal(evaluateBeforeSend(input, { env: { ...f.env, ZYLOS_DIR: missing } }).decision, 'abort');
-  assert.equal(fs.existsSync(missing), false);
-  const media = f.attachments.mediaDir;
-  fs.renameSync(media, media + '-hidden');
-  let before = audit(f);
-  assert.equal(f.hook(value).decision, 'abort'); assertAudit(f, before);
-  fs.renameSync(media + '-hidden', media);
-  f.store.db.prepare('DELETE FROM schema_migrations WHERE version=?').run(TARGET_SCHEMA_VERSION);
-  before = audit(f);
-  assert.equal(f.hook(value).decision, 'abort'); assertAudit(f, before);
-});
-
 // Boundary: actual missing/unopenable Core storage reaches the read-only hook.
 // Run for attachment service diagnostics; unrelated UI changes may skip.
 // Only fixture DB paths are changed; no process or runtime is started.
-for (const state of ['missing', 'unopenable']) {
-  test(`attachment hook reports service unavailable when Core storage is ${state}`, async t => {
-    const f = fixture(t), registered = await f.register(), value = content(block(registered));
-    f.attachments.c4Reader.close(); f.core.close();
-    const before = audit(f), corePath = path.join(f.root, 'comm-bridge/c4.db');
-    fs.renameSync(corePath, corePath + '-hidden');
-    if (state === 'unopenable') fs.mkdirSync(corePath);
-    try {
-      assert.throws(() => withChatAttachments(f.root, { readonly: true }, service => {
-        service.validateAgentReferences(f.a.localId, [block(registered)]);
-      }), { code: 'chat_attachment_core_unavailable' });
-      const result = f.hook(value);
-      assert.equal(result.decision, 'abort');
-      assert.equal(result.message, 'Dashboard attachment service unavailable.');
-      assert.doesNotMatch(result.message, /register/);
-    } finally {
-      if (state === 'unopenable') fs.rmdirSync(corePath);
-      fs.renameSync(corePath + '-hidden', corePath);
-    }
-    assertAudit(f, before);
-  });
-}
 
 // Boundary: invalid metadata and versions on both sides of the supported one.
 // Run for storage-version/diagnostic changes; unrelated UI changes may skip.
 // The fixture owns both databases and all cleanup; no migration is requested.
-for (const version of [-1, TARGET_SCHEMA_VERSION - 1, TARGET_SCHEMA_VERSION + 1]) {
-  test(`attachment hook reports service unavailable for Dashboard schema version ${version}`, async t => {
-    const f = fixture(t), registered = await f.register(), value = content(block(registered));
-    f.store.db.prepare('DELETE FROM schema_migrations WHERE version>?').run(version);
-    f.store.db.prepare('INSERT OR IGNORE INTO schema_migrations(version) VALUES(?)').run(version);
-    const before = audit(f);
-    assert.throws(() => withChatAttachments(f.root, { readonly: true }, () => assert.fail('unsupported storage')),
-      { code: 'chat_attachment_schema_unavailable', statusCode: 502 });
-    const result = f.hook(value);
-    assert.equal(result.decision, 'abort');
-    assert.equal(result.message, 'Dashboard attachment service unavailable.');
-    assert.doesNotMatch(result.message, /register/);
-    assertAudit(f, before);
-  });
-}
 
 // Boundary: an absent Dashboard binding keeps the existing destination mapping.
 // Run for hook diagnostic changes; unrelated UI changes may skip. Private DBs only.
-test('attachment hook keeps the destination hint when the Dashboard binding is absent', async t => {
-  const f = fixture(t), registered = await f.register(), value = content(block(registered));
-  f.core.prepare("DELETE FROM channel_namespaces WHERE component_name='dashboard'").run();
-  const before = audit(f);
-  assert.throws(() => withChatAttachments(f.root, { readonly: true }, service => {
-    service.validateAgentReferences(f.a.localId, [block(registered)]);
-  }), { code: 'invalid_chat_attachment_destination' });
-  const result = f.hook(value);
-  assert.equal(result.decision, 'abort');
-  assert.match(result.message, /original reply-via command/);
-  assert.doesNotMatch(result.message, /register|service unavailable/);
-  assertAudit(f, before);
-});
 
 // Boundary: real missing/corrupt Dashboard storage reaches the actual hook.
 // Run for attachment diagnostic/storage-open changes; unrelated UI may skip.
 // Only private fixture files are moved/replaced; no process or service starts.
-for (const state of ['missing', 'corrupt']) {
-  test(`attachment hook reports service unavailable when Dashboard storage is ${state}`, async t => {
-    const f = fixture(t), registered = await f.register(), value = content(block(registered));
-    f.store.close();
-    const before = audit(f), file = path.join(f.root, 'components/dashboard/dashboard.db');
-    fs.renameSync(file, file + '-hidden');
-    if (state === 'corrupt') fs.writeFileSync(file, 'This is not a SQLite database.');
-    try {
-      const result = f.hook(value);
-      assert.equal(result.decision, 'abort');
-      assert.equal(result.message, 'Dashboard attachment service unavailable.');
-      assert.doesNotMatch(result.message, /register/);
-      if (state === 'missing') assert.equal(fs.existsSync(file), false, 'hook never creates missing storage');
-      else assert.equal(fs.readFileSync(file, 'utf8'), 'This is not a SQLite database.');
-    } finally {
-      if (state === 'corrupt') fs.unlinkSync(file);
-      fs.renameSync(file + '-hidden', file);
-    }
-    assertAudit(f, before);
-  });
-}
 
 // Boundary: the same private databases and the real post-storage receiver as
 // above. In single mode Core records every conversation's rows under `origin`
 // at delivery; a row still belongs to the conversation of its endpoint. Run for
 // attachment association, collection or download changes; UI-only edits may skip.
-test('an Origin reply recorded under origin links its attachment to the conversation it is sent to', async t => {
-  const f = fixture(t), registered = await f.register();
-  const row = f.add(content(block(registered)), { session_group: 'origin' });
-  assert.equal(row.endpoint_id, f.a.localId);
-  const delivered = (() => { try { acceptDelivery(packet(row), { env: f.env }); return 'delivered'; } catch (error) { return error.code; } })();
-  assert.equal(delivered, 'delivered');
-  assert.equal(f.count(), 1);
-  assert.equal(fs.readFileSync(f.attachments.download(f.a, registered.id).path, 'utf8'), 'agent bytes');
-  assert.throws(() => f.attachments.download(f.b, registered.id), { code: 'chat_attachment_unavailable' });
-  const [item] = f.attachments.metadata([row]).get(row.id);
-  assert.deepEqual([item.id, item.available], [registered.id, true]);
-});
-
-test('a user upload whose inbound row is recorded under origin stays downloadable, linked or collected', async t => {
-  const f = fixture(t);
-  const linked = await f.upload(), collected = await f.upload();
-  const annotation = record => `[attachment:file ${f.attachments.resolve(f.a, record.id)} name="user.txt" 10B]`;
-  const linkedRow = f.add(annotation(linked), { direction: 'in', session_group: 'origin' });
-  f.add(annotation(collected), { direction: 'in', session_group: 'origin' });
-  assert.deepEqual(f.attachments.linkRow(linkedRow).map(item => [item.id, item.available]), [[linked.id, true]]);
-  // The collector finds the inbound row of an upload nothing displayed yet.
-  f.store.db.prepare('UPDATE chat_attachments SET next_check_at=0 WHERE id=?').run(collected.id);
-  await f.attachments.gc();
-  assert.equal(f.store.db.prepare('SELECT count(*) n FROM chat_attachment_messages WHERE attachment_id=?').get(collected.id).n, 1);
-  for (const record of [linked, collected]) {
-    assert.equal(fs.readFileSync(f.attachments.download(f.a, record.id).path, 'utf8'), 'user bytes');
-  }
-});

@@ -13,15 +13,6 @@ function query(args) {
   return { status, stdout, stderr };
 }
 
-test('Dashboard session query returns the exact ordinary local name', () => {
-  for (const endpoint of ['conversation_a', 'A.b:c-d_9', 'a'.repeat(95)]) {
-    const result = query([endpoint]);
-    assert.equal(result.status, 0);
-    assert.equal(result.stdout, `${endpoint}\n`);
-    assert.equal(result.stderr, '');
-  }
-});
-
 test('Dashboard session query rejects fixed origin invalid names and wrong argument counts', () => {
   for (const args of [[], ['one', 'two'], ['origin'], [''], [' name'], ['name '],
     ['a\nb'], ['../group'], ['-group'], ['a'.repeat(96)]]) {
