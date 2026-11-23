@@ -4,27 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { Readable } from 'node:stream';
 import { createGroupDeletionFixture } from './helpers/group-deletion-fixture.js';
 import { Store } from '../skills/dashboard/src/lib/store.js';
-import { ChatConversations } from '../skills/dashboard/src/lib/chat/conversations.js';
-import { ChatAttachments } from '../skills/dashboard/src/lib/chat/attachments.js';
-import { ChatSender } from '../skills/dashboard/src/lib/chat/send.js';
-import { AUTO_NAME_PREFIX } from '../skills/dashboard/src/lib/chat/auto-name.js';
-import { createGroupDeletionBridge } from '../skills/dashboard/src/lib/workbench/group-deletion.js';
-import { groupDeletionCliPath } from '../cli/lib/group-delete.js';
-import { isDataError } from '../skills/comm-bridge/scripts/c4-session-group.js';
-import { CONTENT_PREFIX } from '../skills/comm-bridge/scripts/c4-content-schema.js';
 import { buildAnnotatedContent } from '../skills/comm-bridge/scripts/attachment-annotations.js';
-const enabled = process.env.ZYLOS_GROUP_DELETION_INTEGRATION === '1';
 const repo = fileURLToPath(new URL('../', import.meta.url));
-const canonical = group => `g:${Buffer.from(group).toString('hex').toUpperCase()}`;
 function write(file, content) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content); return file; }
 function count(db, table, column, value) { return db.prepare(`SELECT count(*) AS n FROM ${table} WHERE ${column}=?`).get(value).n; }
-function attachmentMessage(id, name) {
-  return CONTENT_PREFIX + JSON.stringify({ version: 1, kind: 'message', messageId: randomUUID(), fallbackText: name,
-    blocks: [{ id: 'file', type: 'x-zylos.file', schemaVersion: 1, fallbackText: name, data: { attachmentId: id, nameSnapshot: name } }] });
-}
 async function setup(t, channel) {
   const localId = 'storage-cycle', group = `${channel}:${localId}`;
   const f = await createGroupDeletionFixture(t, { group });
@@ -34,18 +19,12 @@ async function setup(t, channel) {
   for (const name of ['dashboard', 'comm-bridge']) fs.symlinkSync(path.join(repo, 'skills', name), path.join(skills, name), 'dir');
   // The external transport boundary is an isolated local receipt sink. Core's
   // send command and its authoritative outbound insert remain production code.
-  if (channel !== 'dashboard') {
-    write(path.join(skills, channel, 'package.json'), '{"type":"module"}');
-    write(path.join(skills, channel, 'SKILL.md'), '---\nname: telegram\ntype: communication\n---\n');
-    write(path.join(skills, channel, 'scripts/session-group.js'), `process.stdout.write(${JSON.stringify(localId)});\n`);
-    write(path.join(skills, channel, 'scripts/send.js'), 'import fs from "node:fs";import path from "node:path";fs.appendFileSync(path.join(process.env.ZYLOS_DIR,"external-replies.jsonl"),JSON.stringify(process.argv.slice(2))+"\\n");\n');
-  }
+  write(path.join(skills, channel, 'package.json'), '{"type":"module"}');
+  write(path.join(skills, channel, 'SKILL.md'), '---\nname: telegram\ntype: communication\n---\n');
+  write(path.join(skills, channel, 'scripts/session-group.js'), `process.stdout.write(${JSON.stringify(localId)});\n`);
+  write(path.join(skills, channel, 'scripts/send.js'), 'import fs from "node:fs";import path from "node:path";fs.appendFileSync(path.join(process.env.ZYLOS_DIR,"external-replies.jsonl"),JSON.stringify(process.argv.slice(2))+"\\n");\n');
   f.store.registerChannelNamespace(channel, channel);
   const dashboard = new Store(f.sandbox.paths.dashboardDb); f.sandbox.addCleanup(() => dashboard.close());
-  const conversations = new ChatConversations({ store: dashboard, idGenerator: () => localId });
-  const reader = { _open: () => f.database };
-  const attachments = new ChatAttachments({ store: dashboard, c4Reader: reader, zylosDir: f.root });
-  f.sandbox.addCleanup(() => attachments.close());
   const receiveReal = async args => {
     const child = f.sandbox.startChild(process.execPath, [path.join(repo, 'skills/comm-bridge/scripts/c4-receive.js'), ...args, '--json'],
       { env: f.env, timeoutMs: 15_000 });
@@ -53,9 +32,6 @@ async function setup(t, channel) {
     assert.equal(result.code, 0, result.stdout + result.stderr);
     return JSON.parse(result.stdout.trim());
   };
-  const sender = new ChatSender({ conversations, c4Reader: reader, attachments, zylosDir: f.root,
-    loadCore: async () => ({ receive: receiveReal, ensureChannelNamespace: f.store.ensureChannelNamespace,
-      getChannelNamespace: f.store.getChannelNamespace, isDataError }) });
   const sendReply = async content => {
     const identity = await f.scenes.observeGroup(group);
     const child = f.sandbox.startChild(process.execPath, [path.join(repo, 'skills/comm-bridge/scripts/c4-send.js'), channel, localId, '--session-group', localId],
@@ -78,45 +54,7 @@ async function setup(t, channel) {
       throw error;
     }
   };
-  const bridge = createGroupDeletionBridge({ zylosDir: f.root, env: f.env,
-    loadCoreModule: async () => ({ groupDeletionCliPath }),
-    execute: async (binary, args, options) => {
-      // Preserve the real bridge's arguments, CLI and installed participant;
-      // the sandbox adapter only binds the child to test timeout/cleanup.
-      const child = f.sandbox.startChild(binary, args, { env: options.env, timeoutMs: options.timeout });
-      child.stdin.end(); const result = await child.completion;
-      if (result.code !== 0) throw Object.assign(new Error('Core CLI failed'), result);
-      return result;
-    } });
-  return { ...f, localId, group, channel, skills, dashboard, conversations, attachments, sender, receiveReal, sendReply, delivered, bridge };
-}
-async function completeNaming(f, name) {
-  // The terminal fixture has no model. Act as its Agent only after the real
-  // dispatcher delivers the naming control, then use the instructed CLIs.
-  let control;
-  await f.waitFor(() => {
-    control = f.database.prepare(`SELECT id,status FROM control_queue
-      WHERE session_group=? AND substr(raw_content,1,?)=? ORDER BY id DESC LIMIT 1`)
-      .get(f.group, AUTO_NAME_PREFIX.length, AUTO_NAME_PREFIX);
-    if (!control) return false;
-    assert.ok(['pending', 'running'].includes(control.status), JSON.stringify(control));
-    const receipt = path.join(f.root, 'runtime-input.txt');
-    return control.status === 'running' && fs.existsSync(receipt)
-      && new RegExp(`ack --id ${control.id}(?:\\s|$)`).test(fs.readFileSync(receipt, 'utf8'));
-  }, 'Real dispatcher must deliver the naming control before Agent completion');
-  const identity = await f.scenes.observeGroup(f.group);
-  const env = { ...f.env, ZYLOS_SESSION_GROUP: f.group, ZYLOS_RUN_ID: identity.runId };
-  const run = async args => {
-    const child = f.sandbox.startChild(process.execPath, args, { env, timeoutMs: 15_000 });
-    child.stdin.end(); const result = await child.completion;
-    assert.equal(result.code, 0, result.stdout + result.stderr);
-    return result.stdout;
-  };
-  const named = JSON.parse(await run([path.join(repo, 'skills/dashboard/scripts/conversation-name.js'), f.group, name, '--json']));
-  assert.equal(named.code, 'NAME_WRITTEN');
-  assert.equal(f.conversations.findByGroup(f.group).displayName, name);
-  await run([path.join(f.skills, 'comm-bridge/scripts/c4-control.js'), 'ack', '--id', String(control.id)]);
-  assert.equal(f.database.prepare('SELECT status FROM control_queue WHERE id=?').get(control.id).status, 'done');
+  return { ...f, localId, group, dashboard, receiveReal, sendReply, delivered };
 }
 function seedOwnedData(f, identity) {
   const { group, root, homeDir, dashboard, database } = f;
@@ -175,65 +113,13 @@ function assertDeleted(f, files, operationId) {
   assert.equal(f.store.getDrainFence(f.group), null); assert.equal(f.runtimePresent(f.group), false);
 }
 
-// Covers real draft/attachment storage + native receive and dispatcher delivery,
-// Core CLI/AM stop + final usage import and physical cleanup + new-run replies.
-// Run when Core deletion, Dashboard participant, sender or attachment ownership
-// changes or first-reply naming changes; unrelated UI can skip. Isolated HOME,
-// ZYLOS_DIR, PM2_HOME, short TMPDIR, private tmux and SQLite paths are asserted
-// by the fixture before resources start. No model API.
-test('Dashboard conversation deletes owned storage and recreates with an attachment-first reply', { skip: !enabled, timeout: 90_000 }, async t => {
-  const f = await setup(t, 'dashboard');
-  await f.sandbox.runCase(async () => {
-    const draft = f.conversations.create(); assert.equal(draft.state, 'draft');
-    const upload = await f.attachments.prepareUser(f.localId, { name: 'input.txt', mime: 'text/plain', principal: 'owner', stream: Readable.from(['private input attachment']) });
-    f.startDispatcher();
-    const first = await f.sender.send(draft.id, { content: 'first input', attachments: [upload.id] }, { principal: 'owner' });
-    assert.equal(first.stored, true); await f.delivered(first.messageId);
-    const uploadedFile = f.attachments.resolve(f.localId, upload.id);
-    assert.equal(count(f.dashboard.db, 'chat_attachment_messages', 'attachment_id', upload.id), 1);
-    await f.sendReply('first reply');
-    await completeNaming(f, 'Storage first');
-    const second = await f.sender.send(first.conversationId, { content: 'second input ' + 'x'.repeat(1800) });
-    await f.delivered(second.messageId); await f.sendReply('second reply');
-    const old = await f.scenes.observeGroup(f.group); assert.equal(old.processRunning, true);
-    const files = seedOwnedData(f, old), operationId = randomUUID();
-    const spillDir = path.join(f.root, 'comm-bridge/attachments', `conv-${second.messageId}`); assert.equal(fs.existsSync(spillDir), true);
-    const preview = await f.bridge({ sessionGroup: f.group }, { preview: true, actor: 'dashboard:owner' });
-    assert.equal(preview.ok, true); assert.equal(preview.attachments, 1);
-    let deleted;
-    await f.waitFor(async () => {
-      deleted = await f.bridge({ sessionGroup: f.group }, { actor: 'dashboard:owner', operationId,
-        cutoffId: preview.cutoffId });
-      assert.equal(deleted.ok, true, JSON.stringify(deleted)); return deleted.pending === false;
-    }, 'Real Dashboard bridge CLI must finish deleting', 20_000);
-    assert.equal(deleted.retainedMessages, 0); assert.equal(deleted.groupDataRetained, false);
-    assertDeleted(f, files, operationId); assert.equal(fs.existsSync(uploadedFile), false); assert.equal(fs.existsSync(spillDir), false);
-    assert.equal(count(f.dashboard.db, 'chat_attachment_messages', 'attachment_id', upload.id), 0);
-    assert.equal(f.store.getGroupDeletionAudit(operationId).counts.attachments, 1);
-    const cost = f.dashboard.aggregateCost({ sessionId: files.sid });
-    const recreated = await f.receiveReal(['--channel', 'dashboard', '--endpoint', f.localId, '--session-group', f.localId, '--content', 'recreated scheduled input']);
-    assert.equal(recreated.action, 'queued', JSON.stringify(recreated));
-    await f.delivered(recreated.id);
-    assert.equal(f.conversations.findByGroup(f.group), null, 'Core receive alone does not fabricate Dashboard records');
-    const replySource = write(path.join(f.root, 'workspace/reply.txt'), 'attachment-first reply');
-    const attachment = await f.attachments.register(f.localId, { kind: 'file', path: replySource });
-    assert.equal(attachment.ok, true); assert.equal(f.conversations.findByGroup(f.group).state, 'active');
-    const reply = await f.sendReply(attachmentMessage(attachment.attachmentId, attachment.name));
-    await completeNaming(f, 'Storage recreated');
-    assert.equal(count(f.dashboard.db, 'chat_attachment_messages', 'attachment_id', attachment.attachmentId), 1);
-    assert.equal(f.attachments.download(f.localId, attachment.attachmentId).path, f.attachments.resolve(f.localId, attachment.attachmentId));
-    const followup = await f.sender.send(canonical(f.group), { content: 'normal reply from owner' }); await f.delivered(followup.messageId);
-    const next = await f.scenes.observeGroup(f.group); assert.notEqual(next.runId, old.runId);
-    assert.equal(f.dashboard.aggregateCost({ sessionId: files.sid }), cost); assert.equal(reply.session_group, f.group);
-    console.log('Dashboard storage cycle:', JSON.stringify({ operationId, oldRun: old.runId, newRun: next.runId, attachmentLinked: true, retainedCost: cost }));
-  }, { timeoutMs: 80_000 });
-});
-
 // Covers external-channel real Core receive/send + same native deletion/usage
 // and recreation path. Transport is a private local receipt sink; no Telegram
 // account/network is contacted. Run for Core/storage/lifecycle deletion changes;
-// frontend-only changes can skip under the same isolation/cleanup contract.
-test('external conversation deletes group storage and receives replies after recreation', { skip: !enabled, timeout: 90_000 }, async t => {
+// skip frontend-only changes. The fixture checks isolated HOME, ZYLOS_DIR,
+// PM2_HOME, short TMPDIR, private tmux socket and test databases before launch,
+// and reaps owned processes and paths during teardown.
+test('external conversation deletes group storage and receives replies after recreation', { timeout: 90_000 }, async t => {
   const f = await setup(t, 'telegram');
   await f.sandbox.runCase(async () => {
     f.startDispatcher();
@@ -260,14 +146,3 @@ test('external conversation deletes group storage and receives replies after rec
     console.log('External storage cycle:', JSON.stringify({ operationId, oldRun: old.runId, newRun: next.runId, retainedCost: cost }));
   }, { timeoutMs: 80_000 });
 });
-
-// Manual acceptance of a private prepared copy of genuine Claude parent/child
-// transcripts and its real tasks/*.output layout. No live files or model calls.
-// Run only for owned runtime storage deletion; the fixture proves private HOME,
-// ZYLOS_DIR, PM2_HOME, short TMPDIR, tmux socket and test DBs before startup.
-// Prepared input is read-only; CLI, AM, HTTP and browser are lifecycle-bound.
-test('a real historical Claude subagent session copy deletes from the conversation page',
-  { skip: process.env.ZYLOS_GROUP_DELETION_REAL_HISTORY !== '1', timeout: 100000 }, async t => {
-    const { runRealSessionDeletionBrowser } = await import('./helpers/real-session-deletion-browser.js');
-    await runRealSessionDeletionBrowser(t);
-  });

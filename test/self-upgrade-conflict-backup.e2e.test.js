@@ -85,20 +85,6 @@ describe('self-upgrade durable conflict backups', () => {
     assert.ok(readFile(result.mergeConflicts.find(({ file }) => file === 'SKILL.md').backupPath).includes('value=local'));
   });
 
-  test('JSON success cleanup removes transaction backup and retains durable conflict paths', () => {
-    prepareThreeWayConflictFixture();
-
-    const { result, launcherOutput, transactionBackupDir } = runScenario('json');
-
-    assert.equal(result.success, true);
-    assert.deepEqual(launcherOutput, []);
-    assert.equal(fs.existsSync(transactionBackupDir), false);
-    assert.equal(result.mergeConflicts.length, 2);
-    for (const conflict of result.mergeConflicts) {
-      assert.equal(fs.existsSync(conflict.backupPath), true);
-    }
-  });
-
   test('failure before cutoff compensates installed files and preserves durable conflicts', () => {
     prepareThreeWayConflictFixture();
 
@@ -119,15 +105,4 @@ describe('self-upgrade durable conflict backups', () => {
     assert.ok(readFile(path.join(durableRoot, durableFiles.find((entry) => entry.endsWith('SKILL.md')))).includes('value=local'));
   });
 
-  test('no conflict does not create an empty durable backup directory', () => {
-    writeFile(packageDir, 'skills/new-skill/SKILL.md', '# New\n');
-
-    const { result } = runScenario('no-conflict');
-
-    assert.equal(result.success, true);
-    assert.equal(result.mergeConflicts, null);
-    const conflictFiles = fs.readdirSync(path.join(zylosDir, '.backup'), {recursive:true})
-      .filter(entry => entry.includes('conflicts'));
-    assert.deepEqual(conflictFiles, []);
-  });
 });

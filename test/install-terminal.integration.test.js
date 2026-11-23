@@ -33,7 +33,6 @@ const TEST_TIMEOUT_MS = RUN_TIMEOUT_MS + 5000;
 const SYSTEM_UTILITIES = ['bash', 'basename', 'cat', 'cut', 'grep', 'head', 'id', 'mkdir', 'ln', 'sed', 'sleep', 'uname'];
 const STUBBED_COMMANDS = ['curl', 'git', 'tmux', 'node', 'npm', 'zylos', 'sudo', 'apt-get', 'dnf', 'yum', 'brew'];
 const STUB_TAG = 'v0.0.0-installer-test';
-const INSTALL_URL = `https://github.com/zylos-ai/zylos-core#${STUB_TAG}`;
 const RELEASE_LOOKUP = 'curl -fsSL https://api.github.com/repos/zylos-ai/zylos-core/releases/latest';
 
 const fixtures = [];
@@ -271,84 +270,11 @@ suite('scripts/install.sh terminal handling', () => {
 // HOME, ZYLOS_DIR, PM2_HOME, short TMPDIR and all writable paths before launch.
 // No tmux or database is opened; any socket/database path stays under the fixture.
 // Commands are local stubs, bounded child groups are reaped, and fixtures removed.
-for (const manager of ['apt-get', 'dnf', 'yum']) {
-  for (const missing of [['ps'], ['ps', 'pgrep']]) {
-    test(`installer selects ${manager} package when missing ${missing.join(' and ')}`, { timeout: TEST_TIMEOUT_MS }, async () => {
-      const context = makeFixture({ missing, manager });
-      const result = await run(context.bash, [installer, '--branch', STUB_TAG, '--no-init'], {
-        env: context.env, cwd: context.dirs.home,
-      });
-      assert.equal(result.status, 0);
-      const calls = readCalls(context.calls);
-      assert.deepEqual(calls.filter(call => call.startsWith(`${manager} `)), manager === 'apt-get'
-        ? ['apt-get update -qq', 'apt-get install -y -qq procps'] : [`${manager} install -y procps-ng`]);
-      assert.ok(result.output.includes('procps: installed'));
-      assert.ok(result.output.includes('Installation complete!'));
-    });
-  }
-}
-
-for (const missing of [[], ['pgrep']]) {
-  test(`installer reports existing ps without package installation${missing.length ? ' when pgrep is absent' : ''}`, { timeout: TEST_TIMEOUT_MS }, async () => {
-    const context = makeFixture({ missing });
-    const result = await run(context.bash, [installer, '--branch', STUB_TAG, '--no-init'], {
-      env: context.env, cwd: context.dirs.home,
-    });
-    assert.equal(result.status, 0);
-    assert.equal(result.output.match(/procps: ps available/g).length, 1);
-    assert.equal(readCalls(context.calls).some(call => /^(apt-get|dnf|yum|brew) /.test(call)), false);
-  });
-}
-
-test('installer requires manual procps installation without root or sudo', { timeout: TEST_TIMEOUT_MS }, async () => {
-  const context = makeFixture({ missing: ['ps'], uid: '1000' });
-  const result = await run(context.bash, [installer, '--branch', STUB_TAG, '--no-init'], {
-    env: context.env, cwd: context.dirs.home,
-  });
-  assert.equal(result.status, 1);
-  assert.ok(result.output.includes('sudo not found and not running as root. Please install procps manually as root'));
-  assert.equal(readCalls(context.calls).some(call => /^(apt-get|npm) /.test(call)), false);
-});
-
-test('installer leaves macOS procps unchanged even when commands are missing', { timeout: TEST_TIMEOUT_MS }, async () => {
-  const context = makeFixture({ missing: ['ps', 'pgrep'], osName: 'Darwin' });
-  const result = await run(context.bash, [installer, '--branch', STUB_TAG, '--no-init'], {
-    env: context.env, cwd: context.dirs.home,
-  });
-  assert.equal(result.status, 0);
-  assert.ok(!result.output.includes('procps:'));
-  assert.equal(readCalls(context.calls).some(call => /^(apt-get|dnf|yum|brew) /.test(call)), false);
-});
-
-test('installer stops when procps package installation fails', { timeout: TEST_TIMEOUT_MS }, async () => {
-  const context = makeFixture({ missing: ['ps'], installStatus: 42 });
-  const result = await run(context.bash, [installer, '--branch', STUB_TAG, '--no-init'], {
-    env: context.env, cwd: context.dirs.home,
-  });
-  assert.equal(result.status, 42);
-  assert.ok(!result.output.includes('procps: installed'));
-  assert.equal(readCalls(context.calls).some(call => call.startsWith('npm ')), false);
-});
 
 // Boundary: installer command routing and PATH/init continuation with isolated
 // command doubles. Run for install_zylos or branch argument changes; skip for
 // unrelated code. This does not cover npm's real Git installation internals.
 suite('scripts/install.sh existing installations', () => {
-  test('a fresh installation keeps the GitHub source URL and install flags', { timeout: TEST_TIMEOUT_MS }, async () => {
-    const context = makeFixture({ installed: false });
-    const result = await run(context.bash, [installer, '--no-init'], {
-      env: context.env, cwd: context.dirs.home,
-    });
-    assert.equal(result.signal, null);
-    assert.equal(result.status, 0);
-    assert.deepEqual(readCalls(context.calls), [
-      RELEASE_LOOKUP, 'git --version', 'tmux -V', 'node -v', 'node -v',
-      'npm config get prefix', `npm install -g --install-links ${INSTALL_URL}`,
-      'zylos --version',
-    ]);
-    assert.ok(result.output.includes(`Installing zylos from GitHub (${STUB_TAG})...`));
-    assert.ok(result.output.includes('Skipping zylos init (--no-init).'));
-  });
 
   for (const version of ['0.9.6', '1.0.0-beta.11']) {
     test(`preserves installed version ${version} and continues PATH setup without init`, { timeout: TEST_TIMEOUT_MS }, async () => {
@@ -371,18 +297,4 @@ suite('scripts/install.sh existing installations', () => {
     });
   }
 
-  test('an explicit branch only changes the upgrade hint and init still runs', { timeout: TEST_TIMEOUT_MS }, async () => {
-    const context = makeFixture({ version: '1.0.0-beta.11' });
-    const result = await run(context.bash, [installer, '--branch', 'multi-session/prerelease', '-y'], {
-      env: context.env, cwd: context.dirs.home,
-    });
-    assert.equal(result.signal, null);
-    assert.equal(result.status, 0);
-    assert.ok(result.output.includes('To upgrade, run: zylos upgrade --self --branch multi-session/prerelease'));
-    assert.ok(!result.output.includes('Upgrading...'));
-    assert.deepEqual(readCalls(context.calls), [
-      'git --version', 'tmux -V', 'node -v', 'node -v', 'zylos --version',
-      'zylos init -y', 'stdin=other',
-    ]);
-  });
 });

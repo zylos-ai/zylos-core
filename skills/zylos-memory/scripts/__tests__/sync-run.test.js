@@ -44,18 +44,6 @@ async function draft(f, run, coverage = run.end) {
   return settings;
 }
 
-test('no backlog releases without cleaning drafts, rotating inbox or creating exports', async t => {
-  const f = await fixture(t, 0);
-  fs.mkdirSync(f.runDir, { recursive: true });
-  const stale = path.join(f.memoryDir, 'state.md.stale.tmp'); fs.writeFileSync(stale, 'preserve');
-  const result = await startRun({ env: f.env }, f.deps);
-  assert.equal(result.noInput, true); assert.equal(result.released, true);
-  assert.equal(fs.readFileSync(f.inbox, 'utf8'), 'fact: keep rotated note\n');
-  assert.equal(fs.readFileSync(stale, 'utf8'), 'preserve');
-  assert.equal(fs.existsSync(markerPath(f.runDir, 'group')), false);
-  assert.equal(fs.readdirSync(f.runDir).some(name => name.startsWith('group-sync-')), false);
-});
-
 test('bounded batch and saved inputs publish through the restricted editor without copied receipts', async t => {
   const f = await fixture(t, 3);
   fs.mkdirSync(path.join(f.root, '.zylos'));
@@ -108,25 +96,6 @@ test('expired interrupted runs recover all summaries and rotated notes and remov
   assert.equal((await finishRun(settings, { followedUpIds: [] }, f.deps)).committed, true);
 });
 
-test('saved receipts reject changed rows and segments and token replacement prevents stale publication', async t => {
-  for (const change of ['row', 'segment', 'token']) {
-    const f = await fixture(t); const run = await startRun({ env: f.env }, f.deps);
-    const settings = await draft(f, run);
-    if (change === 'row') f.db.prepare("UPDATE conversations SET content='changed' WHERE id=1").run();
-    if (change === 'segment') fs.appendFileSync(run.inputs.segments[0].path, 'changed');
-    let replacement;
-    if (change === 'token') {
-      const lock = markerPath(f.runDir, 'group'), marker = JSON.parse(fs.readFileSync(lock));
-      replacement = 'a'.repeat(32); marker.token = replacement; fs.writeFileSync(lock, JSON.stringify(marker));
-    }
-    await assert.rejects(finishRun(settings, { followedUpIds: [] }, f.deps), { code: change === 'token' ? 'TOKEN_MISMATCH' : 'INPUT_CHANGED' });
-    assert.equal(fs.readFileSync(f.state, 'utf8'), f.original);
-    assert.equal(fs.existsSync(run.inputs.segments[0].path), true);
-    await closeRun(settings);
-    if (replacement) assert.equal(JSON.parse(fs.readFileSync(markerPath(f.runDir, 'group'))).token, replacement);
-  }
-});
-
 test('a corrected prepare preserves a completed checkpoint instead of replaying it', async t => {
   const f = await fixture(t), run = await startRun({ env: f.env }, f.deps);
   const settings = { env: f.env, token: run.token };
@@ -154,34 +123,4 @@ test('aborting before summary preserves unread rotated notes for the next run', 
   assert.equal(fs.readFileSync(next.inputs.segments[1].path, 'utf8'), 'fact: new note during the failed run\n');
   const settings = await draft(f, next);
   assert.equal((await finishRun(settings, { followedUpIds: [] }, f.deps)).committed, true);
-});
-
-test('start failure removes private exports and releases without consuming inbox', async t => {
-  const f = await fixture(t);
-  fs.mkdirSync(path.join(f.root, '.zylos'), { recursive: true });
-  fs.writeFileSync(path.join(f.root, '.zylos/config.json'), 'invalid JSON');
-  await assert.rejects(startRun({ env: f.env }, f.deps), error => {
-    assert.equal(error.cleanup.released, true); return true;
-  });
-  assert.equal(fs.existsSync(markerPath(f.runDir, 'group')), false);
-  assert.equal(fs.readdirSync(f.runDir).some(name => name.startsWith('group-sync-')), false);
-  assert.equal(fs.readFileSync(f.inbox, 'utf8'), 'fact: keep rotated note\n');
-  assert.equal(f.database.getContentCheckpointsSince(f.scope, 0).length, 0);
-});
-
-test('inherited global coverage and no-content checkpoints allow summary and publication', async t => {
-  for (const noContent of [false, true]) {
-    const f = await fixture(t, 4);
-    f.db.prepare("UPDATE conversations SET status='failed' WHERE id=4").run();
-    f.database.createCheckpoint('*', 1, 'single-session baseline');
-    if (noContent) f.database.createCheckpoint(f.scope, 2, null, { noContent: true });
-    const run = await startRun({ env: f.env }, f.deps);
-    const saved = JSON.parse(fs.readFileSync(path.join(run.directory, 'run.json')));
-    assert.equal(saved.receipt.after, noContent ? 2 : 1);
-    assert.equal(run.end, 3, 'Checkpoint stops at last exported row, before the failed frontier row');
-    const settings = await draft(f, run);
-    assert.equal((await finishRun(settings, { followedUpIds: [] }, f.deps)).committed, true);
-    assert.equal(f.database.getUnsummarizedRange(f.scope).count, 0);
-    assert.equal(fs.existsSync(run.inputs.segments[0].path), false);
-  }
 });

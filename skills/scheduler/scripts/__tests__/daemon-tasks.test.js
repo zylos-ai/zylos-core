@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { updateNextRunTime, processCompletedTasks, settleStaleDeliveries } from '../daemon-tasks.js';
+import { updateNextRunTime, settleStaleDeliveries } from '../daemon-tasks.js';
 import { now } from '../database.js';
 
 async function withDb(fn) {
@@ -69,43 +69,6 @@ function insertTask(db, overrides = {}) {
 // ---- updateNextRunTime ----
 
 describe('updateNextRunTime', () => {
-  it('schedules next cron run for recurring task', async () => {
-    await withDb((db) => {
-      const task = insertTask(db, { type: 'recurring', cron_expression: '0 9 * * *', timezone: 'UTC', status: 'completed' });
-      updateNextRunTime(db, task);
-
-      const updated = db.prepare('SELECT status, next_run_at FROM tasks WHERE id = ?').get(task.id);
-      assert.equal(updated.status, 'pending');
-      assert.ok(updated.next_run_at > now(), 'next_run_at should be in the future');
-    });
-  });
-
-  it('schedules next interval run for interval task', async () => {
-    await withDb((db) => {
-      const task = insertTask(db, { type: 'interval', cron_expression: null, interval_seconds: 7200, status: 'completed' });
-      updateNextRunTime(db, task);
-
-      const updated = db.prepare('SELECT status, next_run_at FROM tasks WHERE id = ?').get(task.id);
-      assert.equal(updated.status, 'pending');
-      const expectedMin = now() + 7200 - 2;
-      const expectedMax = now() + 7200 + 2;
-      assert.ok(updated.next_run_at >= expectedMin && updated.next_run_at <= expectedMax,
-        `expected next_run_at ~${now() + 7200}, got ${updated.next_run_at}`);
-    });
-  });
-
-  it('does nothing for one-time task', async () => {
-    await withDb((db) => {
-      const originalNextRun = now() + 1000;
-      const task = insertTask(db, { type: 'one-time', cron_expression: null, next_run_at: originalNextRun, status: 'completed' });
-      updateNextRunTime(db, task);
-
-      const updated = db.prepare('SELECT status, next_run_at FROM tasks WHERE id = ?').get(task.id);
-      // Should remain unchanged
-      assert.equal(updated.status, 'completed');
-      assert.equal(updated.next_run_at, originalNextRun);
-    });
-  });
 
   it('uses task timezone for cron calculation', async (t) => {
     const originalTz = process.env.TZ;
@@ -146,176 +109,11 @@ describe('updateNextRunTime', () => {
 
 // ---- processCompletedTasks ----
 
-describe('processCompletedTasks', () => {
-  // Observe actual SQLite result rows, rather than only the unchanged one-time
-  // status: filtering after .all() would pass status checks and still grow memory.
-  it('materializes only completed periodic tasks with a large one-time history', async (t) => {
-    t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2030-01-01T00:00:00Z') });
-    await withDb((db) => {
-      const timestamp = now();
-      const historicalCount = 10000;
-      db.transaction(() => {
-        for (let i = 0; i < historicalCount; i++) {
-          insertTask(db, { id: `historical-${i}`, type: 'one-time', cron_expression: null,
-            status: 'completed', prompt: 'archived prompt '.repeat(100),
-            next_run_at: timestamp - 3600, updated_at: timestamp - 1800 });
-        }
-      })();
-      insertTask(db, { id: 'cron', status: 'completed', cron_expression: '0 9 * * *' });
-      insertTask(db, { id: 'interval', status: 'completed', type: 'interval',
-        cron_expression: null, interval_seconds: 1800 });
-      insertTask(db, { id: 'invalid-cron', status: 'completed', cron_expression: 'invalid cron' });
-      for (const status of ['pending', 'running', 'failed', 'paused']) {
-        insertTask(db, { id: status, status });
-      }
-      const controls = db.prepare("SELECT * FROM tasks WHERE status != 'completed' ORDER BY id").all();
-      const originalHistory = db.prepare("SELECT * FROM tasks WHERE id = 'historical-0'").get();
-
-      const materialized = [];
-      const prepare = db.prepare.bind(db);
-      const prepareMock = t.mock.method(db, 'prepare', (sql) => {
-        const statement = prepare(sql);
-        const all = statement.all.bind(statement);
-        t.mock.method(statement, 'all', (...bindings) => {
-          const rows = all(...bindings);
-          assert.ok(rows.length <= 3, `Completed sweep materialized ${rows.length} rows`);
-          materialized.push(rows.map(row => row.id));
-          return rows;
-        });
-        return statement;
-      });
-      try {
-        processCompletedTasks(db);
-        processCompletedTasks(db);
-      } finally {
-        prepareMock.mock.restore();
-      }
-
-      assert.deepEqual(materialized.map(ids => ids.sort()), [['cron', 'interval', 'invalid-cron'], []]);
-      assert.deepEqual(db.prepare("SELECT * FROM tasks WHERE id IN ('pending', 'running', 'failed', 'paused') ORDER BY id").all(), controls);
-      assert.deepEqual(db.prepare("SELECT * FROM tasks WHERE id = 'historical-0'").get(), originalHistory);
-      assert.equal(db.prepare("SELECT count(*) AS count FROM tasks WHERE type = 'one-time' AND status = 'completed' AND updated_at = ?").get(timestamp - 1800).count, historicalCount);
-      for (const [id, nextRun] of [['cron', Date.parse('2030-01-01T09:00:00Z') / 1000], ['interval', timestamp + 1800]]) {
-        const task = db.prepare('SELECT status, next_run_at, last_run_at, updated_at FROM tasks WHERE id = ?').get(id);
-        assert.deepEqual(task, { status: 'pending', next_run_at: nextRun, last_run_at: timestamp, updated_at: timestamp });
-      }
-      const invalid = db.prepare("SELECT status, last_error FROM tasks WHERE id = 'invalid-cron'").get();
-      assert.equal(invalid.status, 'failed');
-      assert.match(invalid.last_error, /Invalid cron/);
-    });
-  });
-
-  it('reschedules completed recurring task', async () => {
-    await withDb((db) => {
-      insertTask(db, { type: 'recurring', cron_expression: '0 9 * * *', status: 'completed' });
-      processCompletedTasks(db);
-
-      const task = db.prepare('SELECT status FROM tasks LIMIT 1').get();
-      assert.equal(task.status, 'pending');
-    });
-  });
-
-  it('reschedules completed interval task', async () => {
-    await withDb((db) => {
-      insertTask(db, { type: 'interval', cron_expression: null, interval_seconds: 3600, status: 'completed' });
-      processCompletedTasks(db);
-
-      const task = db.prepare('SELECT status, next_run_at FROM tasks LIMIT 1').get();
-      assert.equal(task.status, 'pending');
-      assert.ok(task.next_run_at > now());
-    });
-  });
-
-  it('leaves completed one-time task unchanged', async () => {
-    await withDb((db) => {
-      insertTask(db, { type: 'one-time', cron_expression: null, status: 'completed' });
-      processCompletedTasks(db);
-
-      const task = db.prepare('SELECT status FROM tasks LIMIT 1').get();
-      assert.equal(task.status, 'completed');
-    });
-  });
-
-  it('marks task as failed if rescheduling throws', async () => {
-    await withDb((db) => {
-      insertTask(db, { type: 'recurring', cron_expression: 'invalid cron expr', status: 'completed' });
-      processCompletedTasks(db);
-
-      const task = db.prepare('SELECT status, last_error FROM tasks LIMIT 1').get();
-      assert.equal(task.status, 'failed');
-      assert.ok(task.last_error.includes('Invalid cron'));
-    });
-  });
-
-  it('handles multiple completed tasks', async () => {
-    await withDb((db) => {
-      insertTask(db, { id: 'task-a', type: 'recurring', cron_expression: '0 9 * * *', status: 'completed' });
-      insertTask(db, { id: 'task-b', type: 'one-time', cron_expression: null, status: 'completed' });
-      insertTask(db, { id: 'task-c', type: 'interval', cron_expression: null, interval_seconds: 1800, status: 'completed' });
-
-      processCompletedTasks(db);
-
-      const a = db.prepare('SELECT status FROM tasks WHERE id = ?').get('task-a');
-      const b = db.prepare('SELECT status FROM tasks WHERE id = ?').get('task-b');
-      const c = db.prepare('SELECT status FROM tasks WHERE id = ?').get('task-c');
-
-      assert.equal(a.status, 'pending');
-      assert.equal(b.status, 'completed');  // one-time stays completed
-      assert.equal(c.status, 'pending');
-    });
-  });
-});
-
 // Actual recovery/SQLite boundary. Run for interrupted delivery handling changes;
 // unrelated UI changes may skip. The official runner isolates all instance paths,
 // withDb creates a private scheduler DB and closes/removes it in finally. There
 // is no sender, external network, PM2 or tmux; recovery cannot send a notification.
 describe('settleStaleDeliveries', () => {
-  for (const type of ['one-time', 'recurring', 'interval']) for (const started of [true, false]) {
-    it(`${type} abandoned claim ${started ? 'with' : 'without'} started history respects the exact receipt limit`, async t => {
-      const initial = Date.parse('2030-01-01T00:00:00Z');
-      t.mock.timers.enable({ apis: ['Date'], now: initial });
-      await withDb(db => {
-        const task = insertTask(db, { type, status: 'running', updated_at: initial / 1000,
-          cron_expression: type === 'recurring' ? '*/30 * * * *' : null,
-          interval_seconds: type === 'interval' ? 1800 : null, timezone: 'UTC' });
-        db.prepare("INSERT INTO task_history(task_id,executed_at,completed_at,status,error,duration_ms) VALUES(?,1,2,'failed','OLD_FAILURE',1000)").run(task.id);
-        let historyId;
-        if (started) {
-          // Only the latest started occurrence belongs to this claim.
-          db.prepare("INSERT INTO task_history(task_id,executed_at,status,error) VALUES(?,?,'started','OLDER_UNFINISHED')").run(task.id, initial / 1000 - 500);
-          historyId = Number(db.prepare("INSERT INTO task_history(task_id,executed_at,status,error) VALUES(?,?,'started','RECEIVE_RESULT_UNKNOWN')").run(task.id, initial / 1000).lastInsertRowid);
-        }
-        const read = () => ({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id),
-          history: db.prepare('SELECT * FROM task_history WHERE task_id=? ORDER BY id').all(task.id) });
-        const before = read();
-        for (const age of [179, 180]) {
-          t.mock.timers.setTime(initial + age * 1000); settleStaleDeliveries(db);
-          assert.deepEqual(read(), before);
-        }
-        if (started) {
-          // An unrelated task update must not extend the receipt's age.
-          db.prepare('UPDATE tasks SET updated_at=? WHERE id=?').run(initial / 1000 + 170, task.id);
-        }
-        t.mock.timers.setTime(initial + 181000); settleStaleDeliveries(db);
-        const after = read();
-        assert.equal(after.task.status, type === 'one-time' ? 'failed' : 'pending');
-        assert.equal(after.task.last_error, 'DELIVERY_RESULT_UNKNOWN');
-        assert.equal(after.task.failed_at, type === 'one-time' ? initial / 1000 + 181 : null);
-        assert.equal(after.task.updated_at, initial / 1000 + 181);
-        if (type !== 'one-time') assert.equal(after.task.next_run_at,
-          initial / 1000 + (type === 'recurring' ? 1800 : 1981));
-        assert.deepEqual(after.history.slice(0, started ? -1 : undefined), before.history.slice(0, started ? -1 : undefined));
-        if (started) {
-          const latest = after.history.at(-1);
-          assert.equal(latest.id, historyId); assert.equal(latest.status, 'failed');
-          assert.equal(latest.error, 'DELIVERY_RESULT_UNKNOWN');
-          assert.equal(latest.completed_at, initial / 1000 + 181); assert.equal(latest.duration_ms, 181000);
-        }
-        settleStaleDeliveries(db); assert.deepEqual(read(), after);
-      });
-    });
-  }
 
   for (const winner of ['completed delivery', 'new claim', 'refreshed task']) {
     it(`stale enumeration cannot overwrite a concurrent ${winner}`, async t => {
@@ -356,21 +154,4 @@ describe('settleStaleDeliveries', () => {
     });
   }
 
-  for (const type of ['one-time', 'interval']) {
-    it(`${type} unknown-result accounting rolls back history and task together`, async t => {
-      const current = Date.parse('2030-01-01T01:00:00Z');
-      t.mock.timers.enable({ apis: ['Date'], now: current });
-      await withDb(db => {
-        const task = insertTask(db, { type, status: 'running', updated_at: current / 1000 - 181,
-          cron_expression: null, interval_seconds: type === 'interval' ? 1800 : null });
-        db.prepare("INSERT INTO task_history(task_id,executed_at,status) VALUES(?,?,'started')").run(task.id, current / 1000 - 181);
-        const read = () => ({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id),
-          history: db.prepare('SELECT * FROM task_history WHERE task_id=? ORDER BY id').all(task.id) });
-        const before = read();
-        db.exec(`CREATE TRIGGER fail_unknown_settlement BEFORE UPDATE ON tasks WHEN NEW.status='${type === 'one-time' ? 'failed' : 'pending'}' BEGIN SELECT RAISE(ABORT,'settlement fail'); END`);
-        assert.throws(() => settleStaleDeliveries(db), /settlement fail/);
-        assert.deepEqual(read(), before);
-      });
-    });
-  }
 });

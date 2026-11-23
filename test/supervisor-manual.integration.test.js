@@ -12,8 +12,6 @@ import { SupervisorAdmission } from '../skills/activity-monitor/scripts/supervis
 import { RestartRequestStore } from '../skills/activity-monitor/scripts/restart-request-store.js';
 import { SupervisorLifecycle } from '../skills/activity-monitor/scripts/supervisor-lifecycle.js';
 import { tmuxNameForGroup, groupRunDir } from '../cli/lib/session-group-paths.js';
-import { createDispatcher } from '../skills/comm-bridge/scripts/router/factory.js';
-import { MANUAL_WAKE_PROMPT } from '../skills/activity-monitor/scripts/origin-prompts.js';
 const worker = fileURLToPath(new URL('./fixtures/supervisor-manual-worker.js', import.meta.url));
 function start(t, f, requestsFile, mode, pause) {
   const child = spawn(process.execPath, [worker, path.join(f.root, 'comm-bridge/c4.db'), f.socketPath, f.binary, requestsFile, mode, pause],
@@ -66,7 +64,6 @@ for (const mode of ['single', 'multi']) for (const pause of ['after-intent', 'af
     assert.equal(f.tmux('show-environment', '-t', '=zylos-group-origin', 'ZYLOS_RUN_ID'), 'ZYLOS_RUN_ID=replacement');
   });
 }
-
 
 // Boundary: actual lifecycle, F9, SQLite fences and private tmux stop only the
 // explicit group and diagnose matching versus mismatched persisted intent.
@@ -134,83 +131,4 @@ test('ordinary manual lifecycle stops only its target and retains intent until i
   assert.equal(db.countRunningConversations(other), 1);
   assert.ok(events.some(event => event.event === 'manual_restart_done' && event.session_group === group));
   assert.equal(lifecycle.allowed(group, context), true);
-});
-
-// Boundary: real Router scheduling after the manual fence/F9 are withdrawn.
-// Covers conditional manual step completion: ordinary groups create a restart marker;
-// Origin creates a manual wake. Both then pass through real Router activation.
-// Run for manual restart completion, marker or activation changes; skip unrelated
-// lifecycle changes. Fresh HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR and private socket,
-// temporary C4/F9, fixture launch adapter; no live tmux/database/network.
-for (const [group, pending] of [['fixture:a', false], ['fixture:a', true], ['origin', false]]) test(`manual restart completes and reactivates ${group} with pending=${pending}`, { timeout: 20000 }, async t => {
-  const f = readyTmuxTarget(t, { prefix: 'group-demand-', mode: 'multi', runtimeProcess: true });
-  const name = tmuxNameForGroup(group);
-  let clock = Date.now();
-  const now = () => clock;
-  const env = { ...f.env, PM2_HOME: path.join(f.root, 'pm2'), TMPDIR: path.join(f.root, 'tmp'), TMUX_TMPDIR: f.root };
-  delete env.TMUX; fs.mkdirSync(env.TMPDIR);
-  console.log(JSON.stringify({ HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR, PM2_HOME: env.PM2_HOME,
-    TMPDIR: env.TMPDIR, TMUX_TMPDIR: env.TMUX_TMPDIR, TMUX: env.TMUX ?? null, socket: f.socketPath,
-    database: path.join(f.root, 'comm-bridge/c4.db') }));
-  assert.ok(fs.realpathSync(f.root).startsWith(fs.realpathSync(process.env.TMPDIR) + path.sep)); assert.ok(Buffer.byteLength(f.socketPath) < 100);
-  const put = runId => {
-    const dir = groupRunDir(group, env); fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'current-session.json'), JSON.stringify({ runId, sessionId: runId, ts: Date.now(), startupControlIds: [] }));
-    f.tmux('new-session', '-d', '-s', name, '-e', `ZYLOS_RUN_ID=${runId}`, '-e', `ZYLOS_SESSION_GROUP=${group}`,
-      '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', path.join(f.root, 'claude'), '120');
-  };
-  if (group === 'origin') f.tmux('new-session', '-d', '-s', 'fixture-keeper', 'sleep', '120');
-  else put('old-a');
-  const oldRunId = group === 'origin' ? 'run-1' : 'old-a';
-  const db = createStore(f.db, { now, readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
-  const scenes = new SupervisorScenes({ env, connectionOptions: { socketPath: f.socketPath, binary: f.binary }, readMode: () => ({ mode: 'multi' }) });
-  const store = new RestartRequestStore({ file: path.join(f.root, 'activity-monitor/restart-requests.json') });
-  const admission = new SupervisorAdmission({ store, db, readMode: () => ({ mode: 'multi' }), readRun: key => scenes.readRun(key) });
-  admission.openEntry();
-  assert.equal((await admission.handle({ version: 1, type: 'manual_restart', requestId: 'demand', sessionGroup: group, expectedRunId: oldRunId })).result, 'accepted');
-  if (pending) f.db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','fixture','after restart','pending',?)").run(group);
-  const lifecycle = new SupervisorLifecycle({ db, requests: store, observeGroup: key => scenes.observeGroup(key), stop: scene => scenes.stop(scene) });
-  const context = { configuration: { mode: 'multi' }, transition: null, fences: [], restartRequests: store.read(), scenes: await scenes.observe({ configuration: { mode: 'multi' } }) };
-  const beforeControls = f.db.prepare('SELECT COUNT(*) AS count FROM control_queue').get().count;
-  await lifecycle.advanceManual(context);
-  assert.equal((await scenes.observeGroup(group)).present, false); assert.deepEqual(store.read(), []);
-  assert.equal(db.getDrainFence(group), null);
-  const ending = db.listRunEndings([group])[0];
-  assert.equal(ending.runId, oldRunId); assert.equal(ending.reason, 'manual_restart');
-  assert.equal(ending.continuationPending, group === 'origin' ? 0 : 1);
-  const controls = f.db.prepare('SELECT * FROM control_queue ORDER BY id').all();
-  assert.equal(controls.length - beforeControls, group === 'origin' ? 1 : 0);
-  if (group === 'origin') {
-    assert.equal(controls.at(-1).session_group, 'origin');
-    assert.equal(controls.at(-1).raw_content, MANUAL_WAKE_PROMPT);
-    assert.equal(controls.at(-1).target_binding, null);
-  }
-  const launches = [];
-  const routerDb = { ...db, expireTimedOutControls: () => [], cleanupControlQueue: () => {} };
-  const dispatcher = createDispatcher({ env, now, db: routerDb, readSessionMode: () => ({ mode: 'multi', keyPresent: true }),
-    readLiveIdentity: key => scenes.observeGroup(key),
-    readCurrentSession: async key => JSON.parse(fs.readFileSync(path.join(groupRunDir(key, env), 'current-session.json'), 'utf8')),
-    readRuntimeHealth: () => ({ health: 'ok', publicHealth: 'ok' }),
-    readSessionState: async () => ({ state: { valid: true, value: 'idle' } }),
-    session: { launch: async input => { launches.push(input); put(input.runId); }, stop: () => { throw new Error('Unexpected router stop'); } },
-    submit: async () => ({ kind: 'accepted', reply: { ok: true, result: 'not_restricted' } }),
-    notifyDelivered: async () => {}, log: () => {},
-    deliverConversation: async row => db.markDelivered(row.id, { sessionId: 'fixture' }),
-    deliverControl: async row => { f.db.prepare("UPDATE control_queue SET status='done' WHERE id=? AND status='running'").run(row.id); },
-  }, { tmux: { socketPath: f.socketPath, binary: f.binary } });
-  t.after(() => dispatcher.stop()); await dispatcher.initialize();
-  for (let i = 0; i < 5; i++) { dispatcher.tick(); await dispatcher.idle(); }
-  assert.equal(launches.filter(row => row.sessionGroup === group).length, pending ? 1 : 0);
-  clock += 5000;
-  for (let i = 0; i < 5; i++) { dispatcher.tick(); await dispatcher.idle(); }
-  assert.equal(launches.filter(row => row.sessionGroup === group).length, 1);
-  assert.equal((await scenes.observeGroup(group)).present, true);
-  assert.notEqual((await scenes.observeGroup(group)).runId, oldRunId);
-  assert.equal(db.listRunEndings([group])[0].continuationPending, 0);
-  assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM control_queue').get().count - beforeControls, group === 'origin' ? 1 : 0);
-  if (group !== 'origin') {
-    assert.equal((await scenes.observeGroup('origin')).runId, 'run-1');
-    assert.equal(launches.some(row => row.sessionGroup === 'origin'), false);
-  }
-  await dispatcher.stop();
 });

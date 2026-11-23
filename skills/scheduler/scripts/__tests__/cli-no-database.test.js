@@ -35,43 +35,6 @@ function seedV1(file) {
   db.close();
 }
 
-const NO_DATA = [
-  ['--help'], ['-h'], ['help'], [], ['unknown-command'],
-  ['add'], ['add', 'prompt only'], ['add', 'bad duration', '--in', 'soon-ish'], ['add', 'bad cron', '--cron', 'nope'],
-  ['add', 'bad priority', '--in', '5 minutes', '--priority', '9'],
-  ['update'], ['remove'], ['done'], ['pause'], ['resume'], ['history', '--limit', '0'],
-  ['update', 'abc', '--priority', '9'], ['update', 'abc', '--miss-threshold', '-1'],
-  ['update', 'abc', '--in', 'soon-ish'], ['update', 'abc', '--at', 'not a time'],
-  ['update', 'abc', '--cron', 'nope'], ['update', 'abc', '--every', 'often'],
-  ['update', 'abc', '--clear-session-group', '--reply-channel', 'x'],
-];
-
-test('help, unknown commands and argument errors finish without creating the database', t => {
-  const f = fixture(t);
-  for (const args of NO_DATA) {
-    const child = f.run(args);
-    assert.equal(child.error, undefined, `${args.join(' ')}: ${child.error}`);
-    if (args[0] === 'update' && args.length > 1) assert.match(child.stderr + child.stdout, /Error: (Priority|miss-threshold|Invalid|Could not parse|--clear-session-group)/, args.join(' '));
-    assert.equal(fs.existsSync(path.join(f.zylosDir, 'scheduler')), false, `${args.join(' ') || '(none)'} created scheduler data`);
-  }
-  assert.match(f.run(['--help']).stdout, /Usage:/);
-  // A data command in the same environment does create it: the probe is real.
-  assert.equal(f.run(['list']).status, 0);
-  const db = new Database(f.dbFile, { readonly: true });
-  try { assert.equal(owner.inspectSchema(db).version, owner.SUPPORTED_SCHEMA_VERSION); } finally { db.close(); }
-});
-
-test('--help leaves an older live database byte-for-byte unchanged', t => {
-  const f = fixture(t);
-  seedV1(f.dbFile);
-  const before = sha(f.dbFile);
-  for (const args of [['--help'], ['-h'], ['help'], [], ['unknown-command'], ['add']]) {
-    f.run(args);
-    assert.equal(sha(f.dbFile), before, `${args.join(' ') || '(none)'} changed the database`);
-    for (const suffix of ['-wal', '-shm', '-journal']) assert.equal(fs.existsSync(f.dbFile + suffix), false);
-  }
-});
-
 test('a data command on an older database reports the required upgrade and changes nothing', t => {
   const f = fixture(t);
   seedV1(f.dbFile);

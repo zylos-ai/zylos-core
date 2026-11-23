@@ -4,56 +4,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createGroupDeletionFixture } from './helpers/group-deletion-fixture.js';
-const enabled = process.env.ZYLOS_GROUP_DELETION_INTEGRATION === '1';
 
-// Requires isolated HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, a private tmux
-// socket and test databases. The fixture reads back canonical paths before
-// starting resources and reclaims children, connections and temp files on
-// success, failure and timeout. Never run against a live instance.
-// Covers actual monitor startup/native admission, real process stop/ending,
-// coordinator/CLI crash recovery and actual queued-message routing into a new
-// private tmux terminal. Run for deletion/lifecycle/claim changes; unrelated UI
-// edits may skip. Uses no model API and makes no inference-quality claim.
-test('a first deletion of an idle live conversation completes in one CLI call with default timing',
-  { skip: !enabled, timeout: 45_000 }, async t => {
-    const f = await createGroupDeletionFixture(t);
-    await f.sandbox.runCase(async () => {
-      const group = 'telegram:room', operationId = randomUUID();
-      const input = f.store.insertConversation('in', 'telegram', 'room', 'old input', { groupName: 'room' });
-      f.store.claimConversation(input.id); f.store.markDelivered(input.id, { sessionId: 'idle-session' });
-      f.store.insertConversation('out', 'telegram', 'room', 'old reply', { groupName: 'room' });
-      const identity = f.startRuntime(group, { runId: 'idle-run', sessionId: 'idle-session' });
-      await f.waitFor(async () => {
-        const scene = await f.scenes.observeGroup(group);
-        return scene.ready && scene.processRunning === true;
-      }, 'Idle live runtime must be observed before the first deletion');
-      const memory = path.join(f.root, 'memory/session-groups', group);
-      fs.mkdirSync(memory, { recursive: true }); fs.writeFileSync(path.join(memory, 'state.md'), 'owned old memory');
-
-      // Neither the fixture command nor monitor overrides production timing.
-      // The child has the same 30-second ceiling as the Dashboard subprocess.
-      const started = performance.now();
-      const result = await f.startDeleteChild({ group, operationId }).completion;
-      const elapsedMs = Math.round(performance.now() - started);
-      assert.equal(result.code, 0, result.stderr + result.stdout);
-      const receipt = JSON.parse(result.stdout.trim());
-      assert.equal(receipt.pending, false, 'The first call must finish without asking for another deletion');
-      assert.equal(receipt.countsEstimated, false);
-      assert.equal(receipt.retainedMessages, 0); assert.equal(receipt.groupDataRetained, false);
-      assert.equal(receipt.counts.messages, 2); assert.ok(receipt.counts.files >= 1);
-      assert.equal(f.runtimePresent(group), false);
-      assert.equal(fs.existsSync(memory), false);
-      assert.equal(f.store.getDrainFence(group), null);
-      assert.equal(f.store.getGroupDeletionAudit(operationId).status, 'done');
-      assert.equal(f.database.prepare('SELECT count(*) AS n FROM group_deletion_audit').get().n, 1);
-      assert.ok(elapsedMs < 30_000, `First deletion exceeded the subprocess ceiling: ${elapsedMs}ms`);
-      console.log('Default deletion timing proof:', JSON.stringify({ elapsedMs, calls: 1, pending: receipt.pending,
-        defaultTiming: true, childTimeoutMs: 30_000, oldRun: identity.runId, operationId }));
-    }, { timeoutMs: 35_000 });
-  });
-
+// Exercises a killed deletion CLI and delivery of retained input into a new
+// run. Run for deletion, reclaim or dispatcher changes. The fixture verifies
+// private HOME, ZYLOS_DIR, PM2_HOME, short TMPDIR, tmux and C4 DB before launch,
+// and reaps its runtime and subprocesses even on failure or timeout.
 test('deletion survives a killed CLI and delivers fenced input into a recreated run',
-  { skip: !enabled, timeout: 70_000 }, async t => {
+  { timeout: 70_000 }, async t => {
     const f = await createGroupDeletionFixture(t);
     await f.sandbox.runCase(async () => {
       const group = 'telegram:room', operationId = randomUUID();

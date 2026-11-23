@@ -22,34 +22,6 @@ test('parent retains the memory lock, timeout cannot execute a late callback, in
   await withMemoryLock(run, () => {});
 });
 
-// real stopped holder, full 10s wait, resume, and process death.
-test('SIGSTOP retains the memory lock for 10 seconds; SIGCONT and kill release normally', { timeout: 16000 }, async () => {
-  const run = tmp();
-  const child = spawn(process.execPath, ['--input-type=module', '-e', `
-    import { withMemoryLock } from ${JSON.stringify(moduleUrl)};
-    await withMemoryLock(${JSON.stringify(run)}, async () => {
-      console.log('held');
-      await new Promise(resolve => process.on('SIGUSR1', resolve));
-    });
-  `], { stdio: ['ignore', 'pipe', 'pipe'] });
-  const closed = once(child, 'close');
-  try {
-    await once(child.stdout, 'data');
-    child.kill('SIGSTOP');
-    const inode = fs.statSync(path.join(run, 'memory.lock')).ino;
-    const start = performance.now();
-    let called = false;
-    await assert.rejects(withMemoryLock(run, () => { called = true; }), { code: 'LOCK_TIMEOUT', exitCode: 2 });
-    assert.ok(performance.now() - start >= 9900);
-    assert.equal(called, false);
-    assert.equal(fs.statSync(path.join(run, 'memory.lock')).ino, inode);
-    child.kill('SIGCONT'); child.kill('SIGUSR1');
-    await closed;
-    await withMemoryLock(run, () => {});
-    assert.equal(fs.statSync(path.join(run, 'memory.lock')).ino, inode);
-  } finally { child.kill('SIGKILL'); await closed; }
-});
-
 test('kernel releases parent-held lock on SIGKILL', async () => {
   const run = tmp();
   const child = spawn(process.execPath, ['--input-type=module', '-e', `

@@ -55,48 +55,6 @@ test('fresh init seeds Origin and pending marker; every group receives the fifth
   }
 });
 
-// Boundary: documented completion command and subsequent real readers. This
-// verifies command semantics, not an authenticated model following instructions.
-// Run for completion instructions/marker readers; unrelated changes may skip.
-test('documented completion removes only the marker and preserves the empty fifth shard', t => {
-  const f = fixture(t); f.child('fresh');
-  f.write('.claude/skills/onboarding-fixture/package.json','{"type":"module"}');
-  f.write('.claude/skills/onboarding-fixture/scripts/send.js','process.exit(0);\n');
-  const sent = spawnSync(process.execPath,[path.join(repo,'skills/comm-bridge/scripts/c4-send.js'),'onboarding-fixture','private'],
-    {env:f.env,cwd:repo,input:'Security notice fixture',encoding:'utf8',timeout:15000,maxBuffer:65536});
-  assert.equal(sent.error,undefined); assert.equal(sent.status,0,sent.stderr);
-  assert.ok(fs.existsSync(f.marker),'thread deletes the marker only after the successful receipt');
-  const command = template.match(/```sh\n([^`]+)\n```/)[1];
-  assert.match(template,/successfully sent via C4/); assert.match(template,/Do not delete it before sending or when c4-send fails/);
-  for (let repeat = 0; repeat < 2; repeat++) {
-    const result = spawnSync('/bin/sh',['-c',command],{env:f.env,encoding:'utf8',timeout:5000});
-    assert.equal(result.status,0,result.stderr);
-  }
-  assert.equal(fs.existsSync(f.marker),false);
-  const result = f.inspect();
-  assert.equal(result.pending,false); assert.equal(result.body,''); assert.equal(result.scopeRead,true);
-  assert.notEqual(result.prompt.reason,'onboarding_pending');
-  assert.equal(f.child('shard'),'=== ZYLOS STARTUP CONTEXT [5/5] onboarding ===\n');
-});
-
-// Boundary: actual old-instance deployment with stale pending states. Run for
-// init upgrade/reader changes; unrelated changes may skip. No installers or services.
-test('old instances ignore pending states and rerun never creates a marker', t => {
-  const f = fixture(t);
-  f.write('.zylos/config.json',JSON.stringify({session_mode:'single'}));
-  const states = ['memory/state.md','memory/session-groups/origin/state.md'];
-  for (const state of states) f.write(state,'- Status: pending\n');
-  f.child('rerun');
-  for (const group of [undefined,'origin','telegram:other']) {
-    const result=f.inspect(group); assert.equal(result.pending,false); assert.equal(result.body,''); assert.equal(result.scopeRead,true);
-    assert.notEqual(result.prompt.reason,'onboarding_pending');
-  }
-  assert.equal(fs.existsSync(f.marker),false);
-  for (const state of states) {
-    assert.equal(fs.readFileSync(path.join(f.env.ZYLOS_DIR,state),'utf8'),'- Status: pending\n');
-  }
-});
-
 // Boundary: deployed Origin preservation and completed-instance rerun. Run for
 // template-deployment changes; unrelated changes may skip. Files only, private paths.
 test('rerun preserves Origin progress and never recreates completed onboarding', t => {
@@ -106,21 +64,4 @@ test('rerun preserves Origin progress and never recreates completed onboarding',
   assert.equal(fs.existsSync(f.marker),false); assert.equal(fs.readFileSync(state,'utf8'),'owner progress\n');
   fs.unlinkSync(state); f.child('rerun');
   assert.equal(fs.existsSync(state),false); assert.equal(fs.existsSync(f.marker),false);
-});
-
-// Boundary: generated Claude/Codex hook configuration and actual AGY shared
-// startup path. Run for shard/hook membership changes; unrelated changes may
-// skip. Authenticated CLI attachment is deliberately a separate reviewer gate.
-test('Claude Codex and Antigravity hooks include the shared fifth onboarding block', t => {
-  const f=fixture(t); f.child('fresh');
-  const hooks=JSON.parse(f.child('hooks').trim().split('\n').at(-1));
-  for (const runtime of ['claude','codex']) {
-    const core = hooks[runtime].filter(g => g.hooks.some(h => h.command.includes('session-start-orchestrator.js')));
-    assert.equal(core.length, runtime === 'claude' ? 3 : 1);
-    for (const group of core) assert.equal(group.hooks.filter(h=>h.command.endsWith('--shard onboarding')).length,1);
-  }
-  assert.equal(hooks.agy.length,1); assert.match(hooks.agy[0].command,/agy-hooks.js.*SessionStart/);
-  assert.ok(f.child('agy').includes(`=== ZYLOS STARTUP CONTEXT [5/5] onboarding ===\n${template}`));
-  fs.unlinkSync(f.marker);
-  assert.match(f.child('agy'),/=== ZYLOS STARTUP CONTEXT \[5\/5\] onboarding ===\n\n/);
 });

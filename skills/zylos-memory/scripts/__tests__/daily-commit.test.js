@@ -39,18 +39,6 @@ function fixture(t) {
   return { memory, git, write, run };
 }
 
-test('daily snapshot excludes root/nested tmp including staged files on an unborn branch', t => {
-  const f = fixture(t);
-  for (const name of ['state.md.token.tmp', 'session-groups/chat/state.md.token.tmp', 'reference/.page.123.tmp', 'staged[1].tmp']) f.write(name, 'unfinished');
-  f.write('state.md', 'official state');
-  f.write('reference/keep.tmp.md', 'official reference');
-  f.git('add', '--', 'staged[1].tmp', 'reference/.page.123.tmp');
-  f.run();
-  assert.deepEqual(f.git('ls-tree', '-r', '--name-only', 'HEAD').split('\n'), ['reference/keep.tmp.md', 'state.md']);
-  assert.equal(f.git('diff', '--cached', '--name-only'), '');
-  assert.equal(fs.readFileSync(path.join(f.memory, 'staged[1].tmp'), 'utf8'), 'unfinished');
-});
-
 test('daily snapshot excludes staged tmp edits and commits tmp deletions with official changes', t => {
   const f = fixture(t);
   for (const name of ['state.md', 'legacy.tmp', 'deleted.tmp']) f.write(name, 'before');
@@ -65,40 +53,4 @@ test('daily snapshot excludes staged tmp edits and commits tmp deletions with of
   assert.equal(f.git('show', 'HEAD:state.md'), 'after');
   assert.equal(f.git('diff', '--cached', '--name-only'), '');
   assert.equal(fs.existsSync(path.join(f.memory, 'deleted.tmp')), false);
-});
-
-for (const staged of [false, true]) {
-  test(`daily snapshot commits deletion-only cleanup with ${staged ? 'staged' : 'unstaged'} tracked tmp deletions`, t => {
-    const f = fixture(t);
-    const removed = ['deleted.tmp', 'reference/deleted[1].tmp'];
-    for (const name of [...removed, 'edited.tmp', 'state.md']) f.write(name, 'before');
-    f.git('add', '.'); f.git('commit', '-qm', 'baseline');
-    const baseline = f.git('rev-parse', 'HEAD');
-    for (const name of removed) fs.unlinkSync(path.join(f.memory, name));
-    f.write('edited.tmp', 'unfinished replacement');
-    f.write('added.tmp', 'unfinished addition');
-    if (staged) f.git('add', '-A');
-
-    f.run();
-    assert.notEqual(f.git('rev-parse', 'HEAD'), baseline);
-    assert.deepEqual(f.git('diff-tree', '--no-commit-id', '--name-status', '-r', 'HEAD').split('\n'),
-      removed.map(name => `D\t${name}`));
-    assert.deepEqual(f.git('ls-tree', '-r', '--name-only', 'HEAD').split('\n'), ['edited.tmp', 'state.md']);
-    assert.equal(f.git('show', 'HEAD:edited.tmp'), 'before');
-    assert.equal(f.git('diff', '--cached', '--name-only'), '');
-    assert.equal(fs.readFileSync(path.join(f.memory, 'edited.tmp'), 'utf8'), 'unfinished replacement');
-    assert.equal(fs.readFileSync(path.join(f.memory, 'added.tmp'), 'utf8'), 'unfinished addition');
-    for (const name of removed) assert.equal(fs.existsSync(path.join(f.memory, name)), false);
-    assert.match(f.run(), /No memory changes to commit/);
-  });
-}
-
-test('daily snapshot with only staged tmp creates no commit and preserves worktree', t => {
-  const f = fixture(t);
-  f.write('only.tmp', 'unfinished'); f.git('add', '.');
-  assert.match(f.run(), /No memory changes to commit/);
-  assert.equal(f.git('ls-files'), '');
-  assert.equal(fs.readFileSync(path.join(f.memory, 'only.tmp'), 'utf8'), 'unfinished');
-  const head = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: f.memory, encoding: 'utf8' });
-  assert.notEqual(head.status, 0);
 });

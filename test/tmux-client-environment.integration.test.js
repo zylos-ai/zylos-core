@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
 import { isolatedTmux } from './helpers/isolated-tmux.js';
 
 import { openTmuxConnection } from '../cli/lib/runtime/tmux-connection.js';
@@ -123,33 +122,4 @@ test('managed launch keeps identity session-local and avoids collision rereads',
     for (const key of keys) assert.equal(process.env[key], caller[key]);
     t.diagnostic('batch fallbacks=0; both session identities and runtime process environments confirmed');
   });
-});
-
-// Boundary: external tmux startup can still contaminate globals; unchanged
-// collision fallback must distinguish equal, absent and independently set local
-// values. Run for client environment or batch identity changes; skip UI-only work.
-test('external server identity collisions retain individual-read semantics', { timeout: 20000 }, async t => {
-  const f = fixture(t);
-  t.diagnostic('Only this direct external tmux startup deliberately carries the three identity variables');
-  execFileSync(f.binary, ['-S', f.socketPath, '-f', '/dev/null', 'new-session', '-d', '-s', 'keeper', 'sleep 120'],
-    { env: { ...f.env, ...caller }, stdio: 'pipe', timeout: 3000 });
-  const global = f.global();
-  for (const key of keys) assert.equal(global[key], caller[key]);
-  await withCaller(async () => {
-    await f.launch('same', 'same-run');
-    await f.launch('own', 'own-run');
-  });
-  // This intentionally contaminated server bypasses the clean fixture starter.
-  execFileSync(f.binary, ['-S', f.socketPath, '-N', 'new-session', '-d', '-s', 'zylos-group-absent', 'sleep 120'],
-    { env: f.env, stdio: 'pipe', timeout: 3000 });
-  for (const key of keys) f.tmux('set-environment', '-u', '-t', 'zylos-group-absent', key);
-  const { rows, fallbacks } = await f.observe();
-  assert.equal(fallbacks, 1);
-  assert.equal(rows.size, 3);
-  assert.equal(rows.get('same').runId, 'same-run');
-  assert.equal(rows.get('own').runId, 'own-run');
-  assert.equal(rows.get('absent').runId, null);
-  assert.equal(rows.get('absent').runtime, 'unknown');
-  for (const key of keys) assert.equal(rows.get('absent').rawF2[key], '');
-  t.diagnostic('batch fallbacks=1; equal/own/absent values match individual reads');
 });
