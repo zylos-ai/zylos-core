@@ -1695,7 +1695,7 @@ test('the Fleet routes page 20 machines, preserve the summary and reject invalid
       observed.push(...page.items.map(agent => agent.name));
     }
     assert.equal(cursor, null);
-    assert.deepEqual(observed, [...names, 'local']);
+    assert.deepEqual(observed, ['local', ...names]);
     const exact = await get(wall + '?name=remote-19&include=total');
     assert.equal(exact.total, 1);
     assert.equal(exact.summary.count, 20);

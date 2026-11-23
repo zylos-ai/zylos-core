@@ -1764,6 +1764,7 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   html.wb-mobile-ready { --wb-header-h: calc(52px + env(safe-area-inset-top)); }
   html.wb-mobile-ready body { padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
   html.wb-mobile-ready .app-header { display: none; }
+  html.wb-mobile-ready .agent-fleet-head h1 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   html.wb-mobile-ready .wb-mobile-topbar {
     position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 8px;
     height: var(--wb-header-h); padding: env(safe-area-inset-top) calc(6px + env(safe-area-inset-right)) 0 calc(16px + env(safe-area-inset-left));

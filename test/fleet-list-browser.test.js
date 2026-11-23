@@ -7,7 +7,7 @@ import { chatEnabled, createChatSandbox } from '../skills/dashboard/__tests__/he
 import { fleetPageFixture, fleetSettingsPageFixture } from '../skills/dashboard/__tests__/helpers/fleet-page-fixture.js';
 import { startPage } from '../skills/dashboard/__tests__/helpers/workbench-browser.js';
 
-function fleetFixture() {
+function fleetFixture(count = 11, self = 1) {
   const summary = {
     running: 4, listKnown: true, counts: { busy: 1, idle: 1, error: 2 }, problemCount: 2,
     problems: [
@@ -16,14 +16,14 @@ function fleetFixture() {
     ],
     pool: { used: 4, capacity: 6 },
   };
-  const agents = Array.from({ length: 11 }, (_, index) => ({
+  const agents = Array.from({ length: count }, (_, index) => ({
     name: `Node ${String(index + 1).padStart(2, '0')}`,
-    self: index === 0, state: 'IDLE', pulse_rate: 1, session_mode: 'single',
+    self: index + 1 === self, state: 'IDLE', pulse_rate: 1, session_mode: 'single',
     daily_cost: 1, weekly_cost: 2, rate_limit_7d_pct: 21,
     cpu_pct: 13, mem_pct: 24, disk_pct: 35, access: 'read',
   }));
-  Object.assign(agents[9], { state: 'BUSY', session_mode: 'multi', group_summary: summary });
-  Object.assign(agents[10], { state: 'OFFLINE', pulse_rate: 0, last_seen: new Date(Date.now() - 120 * 60_000).toISOString() });
+  Object.assign(agents[2], { state: 'BUSY', session_mode: 'multi', group_summary: summary });
+  Object.assign(agents[4], { state: 'OFFLINE', pulse_rate: 0, last_seen: new Date(Date.now() - 120 * 60_000).toISOString() });
   return { agents, updated_at: new Date().toISOString() };
 }
 
@@ -49,7 +49,7 @@ test('Fleet list persists, pages and links the same machines as cards across des
       const browser = await chromium.launch({ executablePath, headless: true, env: sandbox.env,
         args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
       sandbox.addCleanup(() => browser.close());
-      const fixture = fleetFixture();
+      const fixture = fleetFixture(9, 7);
 
       for (const width of [1280, 390]) {
         await t.test(`${width}px Fleet renders, paginates and opens machines`, async () => {
@@ -84,14 +84,14 @@ test('Fleet list persists, pages and links the same machines as cards across des
             const summary = page.locator('.agent-fleet-summary');
             const pagination = summary.getByRole('navigation', { name: 'Machine pages' });
             const names = locator => locator.evaluateAll(nodes => nodes.map(node => node.dataset.agent));
-            const firstPage = ['Node 11', 'Node 10', 'Node 01', 'Node 02', 'Node 03', 'Node 04', 'Node 05', 'Node 06'];
-            const lastPage = ['Node 07', 'Node 08', 'Node 09'];
+            const firstPage = ['Node 07', 'Node 01', 'Node 02', 'Node 03', 'Node 04', 'Node 05', 'Node 06', 'Node 08'];
+            const lastPage = ['Node 09'];
 
             await cards.first().waitFor();
             assert.equal(await cardMode.getAttribute('aria-pressed'), 'true');
             assert.deepEqual(await names(cards), firstPage);
-            assert.equal(await cards.nth(1).getByRole('link', { name: 'Node 10', exact: true }).count(), 1);
-            const offlineCard = cards.filter({ hasText: 'Node 11' });
+            assert.match(await page.locator('.wb-f-card[data-agent="Node 03"] .wb-f-problem').first().innerText(), /Group one\s+Start failed/);
+            const offlineCard = page.locator('.wb-f-card[data-agent="Node 05"]');
             assert.equal(await offlineCard.getByRole('link').count(), 0);
             const refresh = offlineCard.getByRole('button', { name: 'Refresh status' });
             assert.equal(await refresh.count(), 1);
@@ -108,37 +108,36 @@ test('Fleet list persists, pages and links the same machines as cards across des
             await rows.first().waitFor();
             assert.equal(await listMode.getAttribute('aria-pressed'), 'true');
             assert.deepEqual(await names(rows), firstPage);
-            const group = rows.nth(1);
+            const group = page.locator('.wb-f-list-row[data-agent="Node 03"]');
             const condition = group.locator(mobile ? '.wb-f-list-mobile' : '.wb-f-list-condition');
             assert.match(await condition.innerText(), mobile ? /2 problems/ : /Group one · Start failed \+1/);
             assert.match(await condition.getAttribute('title'), /Group two · Authentication failed/);
-            assert.equal(await group.getByRole('link', { name: 'Node 10', exact: true }).count(), 1);
-            const down = rows.first();
+            assert.equal(await group.getByRole('link', { name: 'Node 03', exact: true }).count(), 1);
+            const down = page.locator('.wb-f-list-row[data-agent="Node 05"]');
             assert.equal(await down.getByRole('link').count(), 0);
             assert.match(await down.innerText(), /Cannot connect · last reachable/);
             assert.equal(await down.locator('.wb-ico-chev').count(), 0);
 
             const totals = await summary.locator('.sum-states, .sum-costs').allTextContents();
-            for (const value of ['1 Working', '9 Idle', '1 Offline', '$11.00', '$22.00']) {
+            for (const value of ['1 Working', '7 Idle', '1 Offline', '$9.00', '$18.00']) {
               assert.ok(totals.join(' ').includes(value), value);
             }
-            assert.match(await pagination.innerText(), /1–8 \/ 11 machines/);
+            assert.match(await pagination.innerText(), /1–8 \/ 9 machines/);
             assert.equal(await pagination.getByRole('button', { name: 'Previous page' }).isDisabled(), true);
             await pagination.getByRole('button', { name: 'Next page' }).click();
             await rows.filter({ hasText: 'Node 09' }).waitFor();
             assert.deepEqual(await names(rows), lastPage);
-            assert.match(await pagination.innerText(), /9–11 \/ 11 machines/);
+            assert.match(await pagination.innerText(), /9–9 \/ 9 machines/);
             assert.equal(await pagination.getByRole('button', { name: 'Next page' }).isDisabled(), true);
             assert.deepEqual(await summary.locator('.sum-states, .sum-costs').allTextContents(), totals);
             await cardMode.click();
             assert.deepEqual(await names(cards), lastPage);
             if (!mobile) {
-              // Attention makes machines sort earlier. Fill the first page before giving Node 09 its own notice.
               await pagination.getByRole('button', { name: 'Previous page' }).click();
-              await cards.filter({ hasText: 'Node 11' }).waitFor();
+              await offlineCard.waitFor();
               payload = structuredClone(fixture);
-              for (const agent of payload.agents.slice(1, 8)) agent.supervisor_paused = true;
-              Object.assign(payload.agents[8], { session_mode: 'multi', group_summary: { ...payload.agents[9].group_summary,
+              payload.agents[1].supervisor_paused = true;
+              Object.assign(payload.agents[8], { session_mode: 'multi', group_summary: { ...payload.agents[2].group_summary,
                 attention: [{ kind: 'data_unreadable', group: 'node-09-group', displayName: 'Node 09 diagnostic' }],
               } });
               await Promise.all([page.waitForResponse(response => new URL(response.url()).pathname === '/api/fleet'), refresh.click()]);
@@ -200,9 +199,9 @@ test('Fleet list persists, pages and links the same machines as cards across des
               const hit = await group.locator('.wb-f-list-mobile').boundingBox();
               await page.touchscreen.tap(hit.x + hit.width / 2, hit.y + hit.height / 2);
             } else {
-              await group.getByRole('link', { name: 'Node 10', exact: true }).click();
+              await group.getByRole('link', { name: 'Node 03', exact: true }).click();
             }
-            await page.waitForURL('**/fleet/Node%2010/');
+            await page.waitForURL('**/fleet/Node%2003/');
             await page.locator('#tab-overview.active').waitFor();
             assert.equal(await originalDocument.evaluate(node => node === document.querySelector('#agent-fleet-root')), true,
               'opening a machine retains the original document');
@@ -322,14 +321,14 @@ test('Fleet reloads the visible page and settings page the configured machines',
           visible = data.agents;
           await push();
         }
-        await waitForCard('Node 11');
+        await waitForCard('Node 08');
         assert.equal(await cards.count(), 8);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
         if (evidence) await root.screenshot({ path: path.join(evidence, `fleet-wall-${width}-${locale}-${theme}.png`) });
         if (functional) {
           const all = await names();
           await root.locator(next).click();
-          await waitForCard('Node 08');
+          await waitForCard('Node 09');
           assert.equal(await cards.count(), 8);
           all.push(...await names());
           await root.locator(next).click();
@@ -340,7 +339,7 @@ test('Fleet reloads the visible page and settings page the configured machines',
           await page.mouse.move(0, 0);
           visible = data.agents.slice(0, 16);
           await push();
-          await waitForCard('Node 08');
+          await waitForCard('Node 09');
           assert.equal(await cards.count(), 8);
           assert.equal(await root.locator(previous).isEnabled(), true);
           assert.equal(await root.locator(next).isDisabled(), true);
@@ -356,9 +355,7 @@ test('Fleet reloads the visible page and settings page the configured machines',
           });
           await push();
           const refreshed = await (await read).json();
-          assert.ok(!refreshed.items.some(item => item.name === 'Node 08'), JSON.stringify({
-            cursor: reads.at(-1)?.searchParams.has('cursor'), items: refreshed.items.map(item => [item.name, item.state]),
-          }));
+          assert.deepEqual(refreshed.items.map(item => item.name), all.slice(8, 16));
           await root.locator('.wb-f-card[data-agent="Node 08"]').waitFor({ state: 'detached' });
           await root.locator(previous).click();
           await waitForCard('Node 08');
