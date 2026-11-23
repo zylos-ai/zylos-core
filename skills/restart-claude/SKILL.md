@@ -1,16 +1,16 @@
 ---
 name: restart-claude
-description: Use when the user asks to restart Claude Code, or after changing settings/hooks/keybindings.
+description: Use when the user asks to restart the agent runtime (Claude Code, Codex or Antigravity), or after changing runtime settings/hooks/keybindings.
 ---
 
-# Restart Claude Code Skill
+# Restart Runtime Skill
 
 Request a runtime restart through the Supervisor. The dispatcher starts replacement sessions after safe reclamation.
 
 ## When to Use
 
-- After changing Claude Code settings, hooks, or keybindings
-- When Claude needs to reload configuration
+- After changing runtime settings, hooks, or keybindings
+- When the runtime needs to reload configuration
 - To clear temporary state without upgrading
 - User explicitly asks to restart
 
@@ -20,7 +20,7 @@ Before requesting the restart, complete these steps **in order**:
 
 ### 1. Stop background tasks
 
-Check for running background agents (Task tool). If any are active, stop them to avoid orphaned work.
+Check for running background agents or subagents. If any are active, stop them to avoid orphaned work.
 
 ### 2. Sync memory
 

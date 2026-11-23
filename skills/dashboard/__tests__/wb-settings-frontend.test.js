@@ -823,6 +823,21 @@ test('failed pricing summary is unknown while a successful empty response is zer
   const empty = priceFixture(); const good = createPricingPanel({ ...empty, usage: { models: [], unmatched: [] }, write: async () => {}, t }); assert.match(empty.root.textContent, /\$0.0000/); good.destroy();
 });
 
+test('a default engine with no usage records gets a line above the price tabs saying these prices do not apply to it', () => {
+  const noteText = root => root.children.filter(child => child.textContent.startsWith('pricing.runtime_no_usage')).map(child => child.textContent);
+  const antigravity = priceFixture(); antigravity.data.active = 'agy';
+  const panel = createPricingPanel({ ...antigravity, usage: { models: [] }, write: async () => {}, t });
+  assert.deepEqual(noteText(antigravity.root), ['pricing.runtime_no_usage:{"runtime":"Antigravity"}']);
+  const children = antigravity.root.children, note = children.find(child => child.textContent.startsWith('pricing.runtime_no_usage'));
+  assert.ok(note.classList.contains('wb-note')); assert.equal(children.indexOf(note) + 1, children.indexOf(children.find(child => child.classList.contains('wb-rt-tabs'))));
+  panel.destroy(); assert.deepEqual(noteText(antigravity.root), []);
+  for (const active of ['claude', 'codex']) {
+    const fixture = priceFixture(); fixture.data.active = active;
+    const other = createPricingPanel({ ...fixture, usage: { models: [] }, write: async () => {}, t });
+    assert.deepEqual(noteText(fixture.root), [], active); other.destroy();
+  }
+});
+
 test('literal settings translation keys used by modules exist in a language pack', () => {
   const packs=['en','zh'].map(lang=>({...JSON.parse(fs.readFileSync(new URL('../public/i18n/'+lang+'.json',import.meta.url))),...JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.'+lang+'.json',import.meta.url)))}));
   for(const file of ['settings','settings-defaults','settings-pricing','settings-ui','settings-version']){

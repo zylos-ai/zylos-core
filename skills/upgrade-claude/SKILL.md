@@ -1,11 +1,13 @@
 ---
 name: upgrade-claude
-description: Upgrade Claude Code to the latest version with graceful shutdown and auto-restart. Use when the user asks to upgrade or when a new Claude Code version is available.
+description: "Upgrade Claude Code to the latest version with graceful shutdown and auto-restart. Use when the user asks to upgrade Claude Code or when a new Claude Code version is available. Claude runtime only: Codex and Antigravity CLIs are upgraded from the Dashboard."
 ---
 
 # Upgrade Claude Code Skill
 
 Upgrade Claude Code and request replacement sessions through the Supervisor.
+
+This skill installs Claude Code only. On a Codex or Antigravity instance, do not use it; upgrade that runtime's CLI from the Dashboard instead.
 
 ## When to Use
 
@@ -19,7 +21,7 @@ Before launching the upgrade script, complete these steps **in order**:
 
 ### 1. Stop background tasks
 
-Check for running background agents (Task tool). If any are active, stop them to avoid orphaned work.
+Check for running background agents or subagents. If any are active, stop them to avoid orphaned work.
 
 ### 2. Sync memory
 
