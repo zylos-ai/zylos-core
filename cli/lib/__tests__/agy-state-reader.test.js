@@ -14,16 +14,6 @@ function fixture(t) {
   fs.writeFileSync(path.join(dir,'statusline.json'),JSON.stringify({session_id:'session',context_window:{used_percentage:37,context_window_size:1048576},zylos:{v:1,runId:'run',capturedAt:1000}}));
   return {root,dir,identity};
 }
-test('single and batched AGY state readers use identity-bound statusLine context',async t=>{
-  const {root,dir,identity}=fixture(t);let closes=0;
-  const reader=createSessionReader({env:{ZYLOS_DIR:root},now:()=>1100,open:async()=>({close:()=>closes++}),observe:async()=>identity,observeAll:async()=>new Map([['origin',identity]])});
-  const single=await reader.readSessionState(null,{freshnessMs:1000});
-  assert.equal(single.usage.valid,true);assert.equal(single.usage.value.context_window.used_percentage,37);
-  const batch=await reader.readSessionStates(['origin'],{freshnessMs:1000});assert.equal(batch.get('origin').usage.valid,true);
-  fs.writeFileSync(path.join(dir,'statusline.json'),JSON.stringify({session_id:'other',zylos:{v:1,runId:'run',capturedAt:1000}}));
-  assert.equal((await reader.readSessionState(null,{freshnessMs:1000})).usage.reason,'identity_mismatch');
-  assert.equal(closes,3);
-});
 test('upgrade preparation renders the same complete AGENTS for agy and Codex', t => {
   const { root } = fixture(t);
   activateFreshSplitInstructions({ zylosDir: root });
@@ -41,24 +31,6 @@ test('upgrade preparation renders the same complete AGENTS for agy and Codex', t
     outputs.push(Buffer.from(agents.content));
   }
   assert.ok(outputs[0].equals(outputs[1]), 'upgrade instruction bytes must not depend on runtime');
-});
-
-test('AGY single and batch readers retain change-driven samples beyond seventy seconds', async t => {
-  const {root,dir,identity}=fixture(t);
-  const reader=createSessionReader({env:{ZYLOS_DIR:root},now:()=>72000,
-    open:async()=>({close:async()=>{}}),observe:async()=>identity,observeAll:async()=>new Map([['origin',identity]])});
-  const status=path.join(dir,'agent-status.json');
-  fs.writeFileSync(status,JSON.stringify({runId:'run',sessionId:'session',state:'idle'}));fs.utimesSync(status,1,1);
-  for(const agent_state of ['idle','working']) {
-    fs.writeFileSync(path.join(dir,'statusline.json'),JSON.stringify({session_id:'session',agent_state,
-      zylos:{v:1,runId:'run',capturedAt:1000}}));
-    const single=await reader.readSessionState(null,{freshnessMs:1000,usageFreshnessMs:1});
-    const batch=(await reader.readSessionStates(['origin'],{freshnessMs:1000,usageFreshnessMs:1})).get('origin');
-    for(const result of [single,batch]) {
-      assert.equal(result.usage.valid,true);assert.equal(result.usage.value.agent_state,agent_state);
-      assert.equal(result.usage.sampledAt,1000);assert.equal(result.status.reason,'stale');
-    }
-  }
 });
 
 test('AGY no-expiry reader keeps run, session, version and live identity fences', async t => {

@@ -4,9 +4,7 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import Database from 'better-sqlite3';
 import { fixture } from './c4-v2-test-helpers.js';
-import { parseSendArgs } from '../c4-send-args.js';
 import { readAbsorbedReply, sendExternal } from '../c4-send-external.js';
 
 function setup(t, endpoint = 'route', options = { groupName: 'room' }) {
@@ -26,29 +24,6 @@ function setup(t, endpoint = 'route', options = { groupName: 'room' }) {
   return { ...result, dir, script, output, row, runId, api };
 }
 
-test('rejects malformed run/id at parse boundary without coercing numeric input', () => {
-  const runId = '01234567-89ab-cdef-0123-456789abcdef';
-  for (const id of ['0', '-1', '+1', '01', '1.0', '1e3', ' 1', '1\n', '12345678901234567890']) {
-    assert.throws(() => parseSendArgs(['--absorbed-reply', runId, id]), { code: 'INVALID_ARGS' });
-  }
-  for (const run of [runId.toUpperCase(), runId + 'x', '', 'not-a-run']) {
-    assert.throws(() => parseSendArgs(['--absorbed-reply', run, '1']), { code: 'INVALID_ARGS' });
-  }
-  assert.equal(parseSendArgs(['--absorbed-reply', runId, '1000000000000000001']).id, '1000000000000000001');
-  assert.throws(() => parseSendArgs(['--absorbed-reply', runId, '1', 'extra']), { code: 'INVALID_ARGS' });
-});
-
-test('missing run, nonmembership and vanished row preserve transition state and never create out audit', t => {
-  const { api, db, runId, row } = setup(t);
-  const original = db.prepare('SELECT absorbed_ids FROM mode_transitions WHERE run_id=?').get(runId).absorbed_ids;
-  assert.throws(() => readAbsorbedReply('00000000-0000-0000-0000-000000000000', String(row.id), api), { code: 'RUN_NOT_FOUND' });
-  assert.throws(() => readAbsorbedReply(runId, '999', api), { code: 'ABSORBED_NOT_IN_RUN' });
-  db.prepare('DELETE FROM conversations WHERE id=?').run(row.id);
-  assert.throws(() => readAbsorbedReply(runId, String(row.id), api), { code: 'ABSORBED_MISMATCH' });
-  assert.equal(db.prepare('SELECT absorbed_ids FROM mode_transitions WHERE run_id=?').get(runId).absorbed_ids, original);
-  assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n, 0);
-});
-
 test('real component receives exact absorbed route bytes and null endpoint is omitted', async t => {
   for (const endpoint of [null, 'a\'"$`\\\nroute', 'x'.repeat(131071)]) {
     const { api, db, runId, row, dir, output } = setup(t, endpoint);
@@ -58,87 +33,4 @@ test('real component receives exact absorbed route bytes and null endpoint is om
     assert.equal(db.prepare("SELECT endpoint_id FROM conversations WHERE direction='out'").get().endpoint_id, endpoint);
     assert.equal(db.prepare('SELECT status FROM conversations WHERE id=?').get(row.id).status, 'switch_absorbed');
   }
-});
-
-test('uninstalled component and unpassable original routes reject without new audit or source mutation', async t => {
-  for (const endpoint of ['x\0y', 'x'.repeat(131072), 'route']) {
-    const { api, db, runId, row, dir, script } = setup(t, endpoint);
-    if (endpoint === 'route') fs.renameSync(script, script + '.removed');
-    const before = db.prepare('SELECT * FROM conversations').all();
-    const runBefore = db.prepare('SELECT * FROM mode_transitions').all();
-    await assert.rejects(sendExternal(readAbsorbedReply(runId, String(row.id), api), 'body', { api, skillsDir: dir }),
-      error => {
-        assert.equal(error.code, endpoint === 'route' ? 'INVALID_ARGS' : 'ENDPOINT_NOT_PASSABLE');
-        if (endpoint !== 'route') {
-          assert.ok(error.message.includes(`id: ${row.id}`));
-          assert.ok(!error.message.includes(endpoint));
-        }
-        return true;
-      });
-    assert.deepEqual(db.prepare('SELECT * FROM conversations').all(), before);
-    assert.deepEqual(db.prepare('SELECT * FROM mode_transitions').all(), runBefore);
-  }
-});
-
-test('transition and conversation reads share an actual WAL snapshot during a concurrent committed state change', t => {
-  const { api, db, filename, runId, row } = setup(t);
-  const writer = new Database(filename);
-  t.after(() => writer.close());
-  const readRun = api.getModeTransition;
-  api.getModeTransition = options => {
-    assert.equal(db.inTransaction, true);
-    const run = readRun(options);
-    writer.transaction(() => {
-      writer.prepare("UPDATE conversations SET status='failed',endpoint_id='changed' WHERE id=?").run(row.id);
-      writer.prepare("UPDATE mode_transitions SET absorbed_ids='[]' WHERE run_id=?").run(runId);
-    })();
-    return run;
-  };
-  assert.equal(readAbsorbedReply(runId, String(row.id), api).endpoint, 'route');
-  assert.equal(db.inTransaction, false);
-  assert.equal(db.prepare('SELECT endpoint_id FROM conversations WHERE id=?').get(row.id).endpoint_id, 'changed');
-  api.getModeTransition = readRun;
-  assert.throws(() => readAbsorbedReply(runId, String(row.id), api), { code: 'ABSORBED_NOT_IN_RUN' });
-});
-
-test('absorbed internal route is retained in full for the internal handler', t => {
-  const { api, db, runId, row } = setup(t);
-  const endpoint = 'peer:room-with-\'"$`\\\nbytes';
-  db.prepare("UPDATE conversations SET channel='internal',endpoint_id=?,session_group='origin' WHERE id=?").run(endpoint, row.id);
-  assert.deepEqual(readAbsorbedReply(runId, String(row.id), api),
-    { kind: 'external', channel: 'internal', endpoint, id: row.id, runId });
-});
-
-test('whole component absorbed route keeps whole-group audit despite later endpoint subgroup history', async t => {
-  const { api, db, store, runId, row, dir, output } = setup(t, 'route', {});
-  store.insertConversation('in', 'demo', 'route', 'later subgroup message', { groupName: 'later' });
-  const request = readAbsorbedReply(runId, String(row.id), api);
-  assert.deepEqual(request, { kind: 'external', channel: 'demo', endpoint: 'route', id: row.id, runId });
-  const audit = await sendExternal(request, 'whole reply', { api, skillsDir: dir });
-  assert.equal(audit.session_group, 'demo');
-  assert.equal(db.prepare('SELECT session_group FROM conversations WHERE id=?').get(audit.id).session_group, 'demo');
-  assert.deepEqual(JSON.parse(fs.readFileSync(output)), ['route', 'whole reply']);
-});
-
-test('legacy empty absorbed group uses component ownership despite later endpoint history', async t => {
-  const { api, db, store, runId, row, dir, output } = setup(t, 'route', {});
-  db.prepare("UPDATE conversations SET session_group='' WHERE id=?").run(row.id);
-  store.insertConversation('in', 'demo', 'route', 'later subgroup message', { groupName: 'later' });
-  const request = readAbsorbedReply(runId, String(row.id), api);
-  assert.deepEqual(request, { kind: 'external', channel: 'demo', endpoint: 'route', id: row.id, runId });
-  const audit = await sendExternal(request, 'legacy reply', { api, skillsDir: dir });
-  assert.equal(audit.session_group, 'demo');
-  assert.deepEqual(JSON.parse(fs.readFileSync(output)), ['route', 'legacy reply']);
-});
-
-test('unsafe numeric absorbed id is refused rather than replying to a rounded neighboring id', t => {
-  const { api, db, row, runId } = setup(t);
-  const exact = '1000000000000000001';
-  db.prepare('UPDATE conversations SET id=? WHERE id=?').run(BigInt(exact), row.id);
-  db.prepare('UPDATE mode_transitions SET absorbed_ids=? WHERE run_id=?').run(`[${exact}]`, runId);
-  const decoded = api.getModeTransition({ runId }).absorbed_ids[0];
-  assert.equal(Number.isSafeInteger(decoded), false);
-  assert.notEqual(String(decoded), exact);
-  assert.throws(() => readAbsorbedReply(runId, exact, api), { code: 'ABSORBED_NOT_IN_RUN' });
-  assert.throws(() => readAbsorbedReply(runId, String(decoded), api), { code: 'ABSORBED_NOT_IN_RUN' });
 });

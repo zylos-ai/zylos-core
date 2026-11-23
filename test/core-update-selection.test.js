@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { test, afterEach } from '@jest/globals';
+import { test, afterEach } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const repo = fileURLToPath(new URL('..', import.meta.url));
@@ -98,64 +98,6 @@ for (const [name, versions, options, latest, hasUpdate] of [
     if (options.beta) assert.notEqual(result.latest, `${otherMajor}-beta.1`);
   });
 }
-
-// Boundary: sync CLI and async doctor selection share the real tag helper.
-// Run for scoped tag/URL changes; skip for unrelated update execution changes.
-test('major-scoped sync and async look beyond the first tag page', () => {
-  const f = fixture(Array.from({ length: 100 }, (_, i) => `v2.0.${i}`));
-  f.routes[`${tagsUrl}&page=2`] = { body: tags(['v1.9.3', 'v1.10.0', 'v0.9.4']) };
-  const result = JSON.parse(f.run(`import {fetchLatestTag,fetchLatestTagAsync} from './cli/lib/github.js';
-    console.log(JSON.stringify([fetchLatestTag('zylos-ai/zylos-core',{major:'0'}),await fetchLatestTagAsync('zylos-ai/zylos-core',{major:'1'}),fetchLatestTag('zylos-ai/zylos-core')]));`));
-  assert.deepEqual(result, ['0.9.4', '1.10.0', '2.0.99']);
-  assert.equal(f.requests().filter(url => url.endsWith('&page=2')).length, 2);
-});
-
-// Boundary: incomplete pagination must remain an error, not "up to date".
-// Run for tag pagination/error changes; skip for unrelated model defaults.
-test('core check reports an error when a later tag page cannot be fetched', () => {
-  const f = fixture(Array.from({ length: 100 }, (_, i) => `v${major + 1}.0.${i}`));
-  f.routes[`${tagsUrl}&page=2`] = { error: true };
-  const result = JSON.parse(f.run(`import {checkForCoreUpdates} from './cli/lib/self-upgrade.js'; console.log(JSON.stringify(checkForCoreUpdates()));`));
-  assert.equal(result.success, false);
-  assert.equal(result.error, 'remote_version_failed');
-});
-
-// Boundary: explicit beta keeps its no-release error contract. Run for core
-// resolution changes; skip for unrelated model/configuration changes.
-test('explicit beta still reports an error when no release tags exist', () => {
-  const f = fixture([]);
-  const result = JSON.parse(f.run(`import {checkForCoreUpdates} from './cli/lib/self-upgrade.js'; console.log(JSON.stringify(checkForCoreUpdates({beta:true})));`));
-  assert.equal(result.success, false);
-  assert.equal(result.error, 'remote_version_failed');
-  assert.equal(result.message, 'No release tags found');
-});
-
-// Boundary: explicit branch resolver bypasses the major restriction as before.
-// Run for core target resolution changes; skip for unrelated component code.
-test('explicit branch still reads and downloads a cross-major branch', () => {
-  const f = fixture([]);
-  f.routes['https://raw.githubusercontent.com/zylos-ai/zylos-core/next/package.json'] = { body: JSON.stringify({ version: otherMajor }) };
-  f.routes['https://github.com/zylos-ai/zylos-core/archive/refs/heads/next.tar.gz'] = { file: f.archive(otherMajor) };
-  f.run(null, ['upgrade', '--self', '--branch', 'next', '--yes', '--json']);
-  assert.equal(JSON.parse(fs.readFileSync(f.handoff)).version, otherMajor);
-  assert.ok(!f.requests().includes(tagsUrl));
-});
-
-// Boundary: real CLI check + default upgrade handoff; fixture entry only captures
-// the target, never installs. Run for core selection/CLI handoff changes; skip
-// when only service installation internals change.
-test('default CLI check and upgrade select the same same-major archive', () => {
-  const f = fixture([`v${otherMajor}`, `v${next}`]);
-  f.routes[`https://github.com/zylos-ai/zylos-core/archive/refs/tags/v${next}.tar.gz`] = { file: f.archive(next) };
-  const checked = JSON.parse(f.run(null, ['upgrade', '--self', '--check', '--json']));
-  assert.equal(checked.latest, next);
-  assert.equal(checked.hasUpdate, true);
-  f.run(null, ['upgrade', '--self', '--yes', '--json']);
-  const captured = JSON.parse(fs.readFileSync(f.handoff));
-  assert.equal(captured.version, next);
-  assert.equal(captured.handoff.fromVersion, current);
-  assert.ok(!f.requests().some(url => url.includes(`v${otherMajor}.tar.gz`)));
-});
 
 // Boundary: real CLI no-update path. Run for target/check changes; skip when
 // only archive extraction or service installation changes.

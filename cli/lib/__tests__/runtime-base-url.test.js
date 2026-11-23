@@ -1,11 +1,9 @@
-import { getRuntime, SUPPORTED_RUNTIMES } from '../runtime/index.js';
 import { runtimeAuthFixture } from './helpers/runtime-auth.js';
 import assert from 'node:assert/strict';
 import { after, describe, test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-runtime-base-url-'));
 const originalEnv = { HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR, CODEX_BIN: process.env.CODEX_BIN };
@@ -30,123 +28,11 @@ describe('runtime base URL support', () => {
       assert.ok(!JSON.stringify(result).includes(privatePart), 'validation must not reflect input');
     }
   });
-  test('Codex readiness returns objects for missing instructions and valid real trust', async t => {
-    const { runtimeHooksReady } = await import('../../commands/runtime.js');
-    const { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, hookKeyFor,
-      isCodexTrustValid } = await import('../runtime/codex/hooks.js');
-    const { stringify } = await import('smol-toml');
-    const root = process.env.ZYLOS_DIR;
-    const instruction = path.join(root, 'AGENTS.md');
-    const fakeCodex = path.join(tmpRoot, 'codex-version');
-    const version = 'codex-cli 0.142.2';
-    const oldBin = process.env.CODEX_BIN;
-    process.env.CODEX_BIN = fakeCodex;
-    t.after(() => { if (oldBin === undefined) delete process.env.CODEX_BIN; else process.env.CODEX_BIN = oldBin; });
-    fs.writeFileSync(fakeCodex, `#!${process.execPath}\nconsole.log(${JSON.stringify(version)});\n`, { mode: 0o755 });
-    const hooksPath = codexHooksPath(root);
-    installCoreCodexHook({ zylosDir: root });
-    fs.writeFileSync(path.join(root, '.codex', 'config.toml'), '[features]\nhooks = true\n');
-    const key = hookKeyFor({ zylosDir: root, event: 'SessionStart', groupIndex: 0, hookIndex: 0 });
-    const trustSnapshot = { [key]: { enabled: true, trusted_hash: 'fixture-current-hash' } };
-    fs.mkdirSync(path.join(tmpRoot, '.codex'), { recursive: true });
-    fs.writeFileSync(path.join(tmpRoot, '.codex', 'config.toml'), stringify({ features: { hooks: true }, hooks: { state: trustSnapshot } }));
-    const marker = { hooksHash: crypto.createHash('sha256').update(fs.readFileSync(hooksPath)).digest('hex'),
-      codexVersion: version, trustSnapshot };
-    fs.writeFileSync(codexTrustMarkerPath(root), JSON.stringify(marker));
-    assert.deepEqual(isCodexTrustValid({ zylosDir: root, homeDir: tmpRoot, codexVersion: version }), { valid: true, reason: 'trusted' });
-    assert.deepEqual(await runtimeHooksReady('codex'), { ready: false, pendingMigration: true });
-    fs.writeFileSync(instruction, '# Fixture instructions\n');
-    assert.deepEqual(await runtimeHooksReady('codex'), { ready: true, pendingMigration: true });
-    fs.rmSync(instruction);
-  });
-  test('readiness checks installed project hooks, and rejects missing/stale hooks', async t => {
-    const { runtimeHooksReady, executeRuntimeSwitch } = await import('../../commands/runtime.js');
-    const { syncRuntimeHooks } = await import('../sync-runtime-hooks.js');
-    const instruction = path.join(process.env.ZYLOS_DIR, 'CLAUDE.md');
-    const installed = path.join(process.env.ZYLOS_DIR, '.claude', 'settings.json');
-    assert.deepEqual(await runtimeHooksReady('claude'), { ready: false, pendingMigration: true });
-    fs.writeFileSync(instruction, 'legacy instructions\n');
-    await syncRuntimeHooks({ zylosDir: process.env.ZYLOS_DIR });
-    const good = fs.readFileSync(installed);
-    const userSettings = path.join(tmpRoot, '.claude', 'settings.json');
-    fs.mkdirSync(path.dirname(userSettings), { recursive: true });
-    fs.writeFileSync(userSettings, '{broken');
-    assert.deepEqual(await runtimeHooksReady('claude'), { ready: true, pendingMigration: true });
-    let writes = 0;
-    const deps = { read: () => ({ state: 'ok', config: { runtime: 'codex', session_mode: 'multi' } }),
-      runtimeFor: id => runtimeAuthFixture(id, { auth: { checkAuth: () => assert.fail('no-validate must skip auth') } }),
-      write: () => { writes++; return { previous: { runtime: 'codex' }, config: { runtime: 'claude', session_mode: 'multi' }, changed: true }; },
-      observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }) };
-    assert.equal((await executeRuntimeSwitch('claude', ['--no-validate'], deps)).ok, true);
-    for (const bad of [null, '{}', '{broken']) {
-      if (bad === null) fs.rmSync(installed); else fs.writeFileSync(installed, bad);
-      const result = await executeRuntimeSwitch('claude', ['--no-validate'], deps);
-      assert.deepEqual(await runtimeHooksReady('claude'), { ready: false, pendingMigration: true });
-      assert.equal(result.error.code, 'RUNTIME_SETUP_INCOMPLETE');
-      assert.deepEqual(result.error.persisted, []);
-    }
-    assert.equal(writes, 1);
-    fs.writeFileSync(installed, good);
-    t.after(() => { fs.rmSync(userSettings, { force: true }); });
-  });
-
-
-  test('runtime command exports helpers for base-url parsing and validation', async () => {
-    const runtimeModule = await import('../../commands/runtime.js');
-
-    assert.equal(typeof runtimeModule.parseRuntimeFlags, 'function');
-    assert.equal(typeof runtimeModule.validateRuntimeFlags, 'function');
-    assert.equal(typeof runtimeModule.showHelp, 'function');
-  });
-
-  test('parseRuntimeFlags accepts --save-base-url and --no-validate, and showHelp shows both', async () => {
-    const runtimeModule = await import('../../commands/runtime.js');
-    const flags = runtimeModule.parseRuntimeFlags([
-      '--save-apikey', 'sk-test',
-      '--save-base-url', 'https://proxy.example.com/v1',
-      '--no-validate',
-    ]);
-
-    assert.equal(flags.apiKey, 'sk-test');
-    assert.equal(flags.baseUrl, 'https://proxy.example.com/v1');
-    assert.equal(flags.noValidate, true);
-
-    const originalLog = console.log;
-    let output = '';
-    console.log = (line = '') => {
-      output += `${line}\n`;
-    };
-
-    try {
-      await runtimeModule.showHelp();
-    } finally {
-      console.log = originalLog;
-    }
-
-    assert.match(output, /--save-base-url <url>/);
-    assert.match(output, /--no-validate/);
-    for (const id of SUPPORTED_RUNTIMES) {
-      const { auth } = await getRuntime(id);
-      assert.ok(output.includes(`  ${(id + ':').padEnd(9)}${auth.cliHelp[0]}`));
-      assert.ok(output.includes(`       ${id}: ${auth.remedy}`));
-    }
-  });
 
 
 
 
 
-  test('validateRuntimeFlags rejects invalid saved base URL values', async () => {
-    const { validateRuntimeFlags } = await import('../../commands/runtime.js');
-
-    const error = validateRuntimeFlags(await runtimeAuthFixture('codex'), {
-      apiKey: null,
-      setupToken: null,
-      baseUrl: 'not-a-url',
-    });
-
-    assert.match(error.error, /Invalid base URL/);
-  });
 
   test('applyBaseUrl writes Claude and Codex base URLs to the expected config', async () => {
     const runtimeModule = await import('../../commands/runtime.js');

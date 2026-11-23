@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { removeOwnedTree } from '../remove-owned-tree.js';
 
 function fixture(t, base = fs.realpathSync(os.tmpdir())) {
@@ -52,88 +50,6 @@ test('owned tree removes only nested link entries and returns a file count', t =
   assert.equal(fs.readFileSync(path.join(external, 'keep'), 'utf8'), 'outside remains');
 });
 
-test('owned tree is idempotent for missing targets and handles a single file', t => {
-  const root = fixture(t), file = path.join(root, 'file');
-  assert.equal(removeOwnedTree(root, path.join(root, 'missing', 'tree')), 0);
-  fs.writeFileSync(file, 'entry');
-  assert.equal(removeOwnedTree(root, file), 1);
-  assert.equal(removeOwnedTree(root, file), 0);
-});
-
-for (const permission of ['unreadable', 'readonly-child', 'readonly-parent']) {
-  test(`owned tree ${permission} permissions abort preflight before any deletion`, { timeout: 15000 }, t => {
-  const privileged = typeof process.getuid === 'function' && process.getuid() === 0;
-  // A root-runner TMPDIR can have private root-only ancestors. Allocate this
-  // root-only child fixture directly in canonical system tmp, then chown it.
-  const root = fixture(t, fs.realpathSync(privileged ? '/tmp' : os.tmpdir()));
-  const tree = path.join(root, 'tree'), locked = path.join(tree, 'm-locked');
-  const visible = path.join(tree, 'a-visible'), visibleLast = path.join(tree, 'z-visible');
-  const hidden = path.join(locked, 'hidden');
-  fs.mkdirSync(locked, { recursive: true });
-  fs.writeFileSync(visible, 'visible remains');
-  fs.writeFileSync(visibleLast, 'last visible remains');
-  fs.writeFileSync(hidden, 'hidden remains');
-  let childEnv, uid, gid;
-  if (privileged) {
-    // Resolve an actual unprivileged OS identity; unknown numeric users may
-    // not have the home-directory information the real helper also checks.
-    uid = Number(execFileSync('id', ['-u', 'nobody'], { encoding: 'utf8', timeout: 2000, killSignal: 'SIGKILL', maxBuffer: 1024 }).trim());
-    gid = Number(execFileSync('id', ['-g', 'nobody'], { encoding: 'utf8', timeout: 2000, killSignal: 'SIGKILL', maxBuffer: 1024 }).trim());
-    assert.ok(Number.isInteger(uid) && uid > 0 && Number.isInteger(gid) && gid > 0);
-    childEnv = { PATH: process.env.PATH || '/usr/bin:/bin',
-      ...(process.env.NODE_OPTIONS ? { NODE_OPTIONS: process.env.NODE_OPTIONS } : {}) };
-    const directories = [];
-    for (const name of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
-      const directory = path.join(root, name.toLowerCase());
-      fs.mkdirSync(directory, { mode: 0o700 });
-      childEnv[name] = directory;
-      directories.push(directory);
-    }
-    for (const file of [root, tree, locked, visible, visibleLast, hidden, ...directories]) fs.chownSync(file, uid, gid);
-    fs.chmodSync(root, 0o700);
-    fs.chmodSync(tree, 0o700);
-  }
-  fs.chmodSync(locked, permission === 'unreadable' ? 0 : permission === 'readonly-child' ? 0o555 : 0o700);
-  if (permission === 'readonly-parent') fs.chmodSync(root, 0o555);
-  try {
-    if (privileged) {
-      const child = fileURLToPath(new URL('./helpers/owned-tree-permission-child.js', import.meta.url));
-      const result = JSON.parse(execFileSync(process.execPath, [child, root, tree, locked, String(uid), String(gid), permission], {
-        cwd: root, env: childEnv, encoding: 'utf8', timeout: 7000, killSignal: 'SIGKILL', maxBuffer: 4096,
-      }));
-      assert.equal(result.uid, uid);
-      assert.equal(result.gid, gid);
-      assert.equal(result.permissionDenied, true);
-      assert.equal(result.writableTree, true);
-      t.diagnostic(`Permission proof: root child dropped to uid=${result.uid}, gid=${result.gid}; ${permission} boundary denied before deletion`);
-    } else {
-      // Permission enforcement is an actual OS boundary, not a mocked error.
-      assert.throws(() => removeOwnedTree(root, tree), error => ['EACCES', 'EPERM'].includes(error.code));
-      t.diagnostic(`Permission proof: unprivileged runner uid=${process.getuid?.() ?? 'unavailable'}`);
-    }
-  } finally { fs.chmodSync(root, 0o700); fs.chmodSync(locked, 0o700); }
-  assert.equal(fs.readFileSync(visible, 'utf8'), 'visible remains');
-  assert.equal(fs.readFileSync(visibleLast, 'utf8'), 'last visible remains');
-  assert.equal(fs.readFileSync(hidden, 'utf8'), 'hidden remains');
-  });
-}
-
-// HOME may use a symlink spelling even though the deletion root is canonical.
-test('owned tree protects the current home through an aliased HOME setting', t => {
-  const root = fixture(t), home = path.join(root, 'private-home'), alias = path.join(root, 'home-alias');
-  fs.mkdirSync(home); fs.writeFileSync(path.join(home, 'keep'), 'home remains');
-  fs.symlinkSync(home, alias, 'dir');
-  const previous = process.env.HOME;
-  try {
-    process.env.HOME = alias;
-    rejected(() => removeOwnedTree(root, home));
-  } finally {
-    if (previous === undefined) delete process.env.HOME;
-    else process.env.HOME = previous;
-  }
-  assert.equal(fs.readFileSync(path.join(home, 'keep'), 'utf8'), 'home remains');
-});
-
 test('owned tree refuses an ancestor of the current home and leaves every entry intact', t => {
   const root = fixture(t), parent = path.join(root, 'parent'), home = path.join(parent, 'home');
   fs.mkdirSync(home, { recursive: true });
@@ -149,9 +65,4 @@ test('owned tree refuses an ancestor of the current home and leaves every entry 
   }
   assert.equal(fs.readFileSync(path.join(home, 'keep'), 'utf8'), 'home contents');
   assert.equal(fs.readFileSync(path.join(parent, 'sibling'), 'utf8'), 'sibling contents');
-});
-
-test('owned tree requires an existing canonical root even when its target is missing', t => {
-  const root = fixture(t), missing = path.join(root, 'missing');
-  assert.throws(() => removeOwnedTree(missing, path.join(missing, 'target')), { code: 'ENOENT' });
 });

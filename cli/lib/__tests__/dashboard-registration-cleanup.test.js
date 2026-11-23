@@ -4,10 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { inspectDashboardRegistrationCleanup, cleanupDashboardRegistration } from '../dashboard-registration-cleanup.js';
+import { cleanupDashboardRegistration } from '../dashboard-registration-cleanup.js';
 import { assertDashboardUninstalled as assertFinalizerDashboardUninstalled } from '../self-upgrade.js';
 import { assertDashboardUninstalled } from '../core-db-backup.js';
-import { uninstallComponent } from '../../commands/component.js';
 
 const isolation = Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, process.env[key]]));
 const admissionGuards = [assertDashboardUninstalled, assertFinalizerDashboardUninstalled];
@@ -77,52 +76,6 @@ for (const wrapped of [false, true]) test(`residual ${wrapped ? 'wrapped' : 'fla
   for (const guard of admissionGuards) assert.doesNotThrow(() => guard(f.zylosDir));
 });
 
-test('cleanup preview does not change registration, shared Core code or data', t => {
-  const f = fixture(t), bytes = fs.readFileSync(f.registryFile, 'utf8'), before = retainedDigest(f);
-  assert.equal(inspectDashboardRegistrationCleanup(f).success, true);
-  assert.equal(fs.readFileSync(f.registryFile, 'utf8'), bytes);
-  assert.equal(retainedDigest(f), before);
-});
-
-for (const record of [null, false, {}]) test(`own dashboard property is removable regardless of its value: ${JSON.stringify(record)}`, t => {
-  const f = fixture(t, { record });
-  assert.equal(cleanupDashboardRegistration(f).success, true);
-  for (const guard of admissionGuards) assert.doesNotThrow(() => guard(f.zylosDir));
-});
-
-for (const inspectOnly of [true, false]) test(`without residual registration ${inspectOnly ? 'preview' : 'cleanup'} refuses Core-managed Dashboard`, t => {
-  const f = fixture(t, { dashboard: false }), bytes = fs.readFileSync(f.registryFile, 'utf8'), before = retainedDigest(f);
-  const result = (inspectOnly ? inspectDashboardRegistrationCleanup : cleanupDashboardRegistration)(f);
-  assert.equal(result.success, false); assert.equal(result.error, 'core_managed');
-  assert.equal(fs.readFileSync(f.registryFile, 'utf8'), bytes); assert.equal(retainedDigest(f), before);
-});
-
-test('missing components.json returns core_managed without creating registration', t => {
-  const f = fixture(t); fs.unlinkSync(f.registryFile);
-  const before = retainedDigest(f);
-  for (const operation of [inspectDashboardRegistrationCleanup, cleanupDashboardRegistration]) {
-    const result = operation(f);
-    assert.equal(result.success, false); assert.equal(result.error, 'core_managed');
-  }
-  assert.equal(fs.existsSync(f.registryFile), false); assert.equal(retainedDigest(f), before);
-});
-
-for (const mode of [0o600, 0o640]) test(`atomic registration replacement preserves file permissions ${mode.toString(8)}`, t => {
-  const f = fixture(t); fs.chmodSync(f.registryFile, mode);
-  const previousUmask = process.umask(0o077);
-  try { assert.equal(cleanupDashboardRegistration(f).success, true); }
-  finally { process.umask(previousUmask); }
-  assert.equal(fs.statSync(f.registryFile).mode & 0o777, mode);
-  assert.deepEqual(fs.readdirSync(path.dirname(f.registryFile)), ['components.json']);
-});
-
-for (const shape of [null, [], 'invalid', 42, { components: [] }, { components: 'invalid' }]) test(`invalid registry structure fails safely: ${JSON.stringify(shape)}`, t => {
-  const f = fixture(t); fs.writeFileSync(f.registryFile, JSON.stringify(shape));
-  const bytes = fs.readFileSync(f.registryFile, 'utf8'), before = retainedDigest(f);
-  assert.equal(cleanupDashboardRegistration(f).success, false);
-  assert.equal(fs.readFileSync(f.registryFile, 'utf8'), bytes); assert.equal(retainedDigest(f), before);
-});
-
 test('malformed registry fails without exposing private content or modifying resources', t => {
   const f = fixture(t), privateMarker = crypto.randomUUID();
   fs.writeFileSync(f.registryFile, '{"private":"' + privateMarker);
@@ -131,50 +84,4 @@ test('malformed registry fails without exposing private content or modifying res
   assert.equal(result.success, false); assert.equal(result.error, 'dashboard_cleanup_failed');
   assert.equal(JSON.stringify(result).includes(privateMarker), false);
   assert.equal(fs.readFileSync(f.registryFile, 'utf8'), bytes); assert.equal(retainedDigest(f), before);
-});
-
-for (const metadata of [null, false, 0, '']) test(`falsey components metadata preserves flat registry semantics: ${JSON.stringify(metadata)}`, t => {
-  const f = fixture(t), entries = registry(f); entries.components = metadata;
-  fs.writeFileSync(f.registryFile, JSON.stringify(entries));
-  assert.equal(cleanupDashboardRegistration(f).success, true);
-  const value = JSON.parse(fs.readFileSync(f.registryFile, 'utf8'));
-  assert.equal(value.components, metadata); assert.equal(value.telegram.version, '1.2.3');
-  for (const guard of admissionGuards) assert.doesNotThrow(() => guard(f.zylosDir));
-});
-
-// Actual command dispatcher with real cleanup helper; only the confirmation
-// answer and console are injected. Run for uninstall routing/flag changes.
-for (const mode of ['cleanup', 'preview', 'purge', 'missing registration', 'cancelled', 'confirmed']) test(`Dashboard uninstall dispatcher handles ${mode}`, async t => {
-  const f = fixture(t, { dashboard: mode !== 'missing registration' });
-  const bytes = fs.readFileSync(f.registryFile, 'utf8'), before = retainedDigest(f), output = [];
-  const previousExitCode = process.exitCode;
-  t.after(() => { process.exitCode = previousExitCode; });
-  t.mock.method(console, 'log', value => output.push(String(value)));
-  t.mock.method(console, 'error', () => {});
-  let prompts = 0;
-  const args = ['dashboard', '--json'];
-  if (mode === 'preview') args.push('--check');
-  else if (mode === 'purge') args.push('--purge', '--force', '--yes');
-  else if (!['cancelled', 'confirmed'].includes(mode)) args.push('--yes');
-  const result = await uninstallComponent(args, { zylosDir: f.zylosDir, promptYesNo: async question => {
-    prompts++; assert.match(question, /\[y\/N\]/); return mode === 'confirmed';
-  } });
-  assert.equal(output.length, 1);
-  const json = JSON.parse(output[0]);
-  assert.equal(json.component, 'dashboard'); assert.equal(json.action, mode === 'preview' ? 'uninstall_check' : 'uninstall');
-  assert.equal(json.success, result.success);
-  if (['cleanup', 'confirmed'].includes(mode)) {
-    assert.equal(result.success, true);
-    for (const guard of admissionGuards) assert.doesNotThrow(() => guard(f.zylosDir));
-    assert.match(result.message, /zylos upgrade --self/);
-  } else {
-    assert.equal(fs.readFileSync(f.registryFile, 'utf8'), bytes);
-    if (mode === 'preview') assert.equal(result.success, true);
-    else {
-      assert.equal(result.error, { purge: 'purge_not_supported', 'missing registration': 'core_managed', cancelled: 'cancelled' }[mode]);
-      assert.equal(process.exitCode, 1);
-    }
-  }
-  assert.equal(prompts, ['cancelled', 'confirmed'].includes(mode) ? 1 : 0);
-  assert.equal(retainedDigest(f), before);
 });

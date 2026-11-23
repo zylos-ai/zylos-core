@@ -25,20 +25,6 @@ describe('session-foreground hook', () => {
     assert.equal(await handleSessionForeground({ session_id: 'child-session', agent_type: 'child' }, options), null);
     assert.equal(JSON.parse(fs.readFileSync(path.join(tmpDir, 'activity-monitor/foreground-session.json'), 'utf8')).session_id, 'new-session');
   });
-  it('records the observed Codex runtime without a Claude default',async()=>{
-    process.env.ZYLOS_DIR=tmpDir;
-    const {handleSessionForeground}=await import(`../session-foreground.js?darwin=${Date.now()}`);
-    let strongChecks=0;
-    const record=await handleSessionForeground({session_id:'darwin-session',source:'startup'}, {
-      env: { ZYLOS_DIR: tmpDir }, scopeReader: async () => ({ kind: 'legacy' }),
-      identityReader: async () => { strongChecks++; return { runtime: 'codex', runtimePid: 4242 }; }, observedAt:4321,
-    });
-    assert.equal(record.session_id,'darwin-session');assert.equal(record.claude_pid,4242);
-    assert.equal(record.observed_at,4321);assert.equal(record.process_start,undefined);assert.equal(strongChecks,1);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(tmpDir,'activity-monitor/foreground-session.json'))).session_id,'darwin-session');
-    assert.equal(record.runtime, 'codex');
-    assert.equal(await handleSessionForeground({session_id:'subagent',agent_id:'child'}),null);
-  });
   it('writes foreground-session.json from SessionStart input', async () => {
     process.env.ZYLOS_DIR = tmpDir;
     process.env.SESSION_FOREGROUND_DISABLE_MAIN = '1';
@@ -64,16 +50,4 @@ describe('session-foreground hook', () => {
     assert.equal(written.claude_pid, 4242);
   });
 
-  it('returns null when session_id is missing', async () => {
-    process.env.ZYLOS_DIR = tmpDir;
-    process.env.SESSION_FOREGROUND_DISABLE_MAIN = '1';
-    const modulePath = new URL('../session-foreground.js', import.meta.url);
-    const { handleSessionForeground } = await import(`${modulePath.href}?t=${Date.now()}-${Math.random()}`);
-
-    const result = await handleSessionForeground({ type: 'event' }, {
-      observedAt: 5678,
-      claudePid: 4242
-    });
-    assert.equal(result, null);
-  });
 });

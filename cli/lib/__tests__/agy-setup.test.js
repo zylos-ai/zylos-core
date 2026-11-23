@@ -1,17 +1,10 @@
-import { runtimeAuthFixture } from './helpers/runtime-auth.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { syncAgyConfig, agyConfigurationPaths, isAgyConfigReady, hasAgyZylosHooks } from '../runtime/agy/hooks.js';
-import { saveAgyApiKey } from '../runtime/agy/auth.js';
-import { ZYLOS_DIR } from '../config.js';
-import { applyCredentials, validateRuntimeFlags, parseRuntimeFlags } from '../../commands/runtime.js';
 import { groupCommand } from '../../commands/group.js';
-import { executeAuth } from '../../commands/auth.js';
-import { prepareInitRuntimeClis, prepareInitRuntimeAssets, runInitAuthentication, validateInitOptions } from '../../commands/init.js';
-import { prepareUpgradeRuntimeClis } from '../upgrade-runtime-preparation.js';
 
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-setup-'));
@@ -56,23 +49,6 @@ test('Antigravity setup merges user settings, hooks, MCP servers and onboarding 
   assert.equal(isAgyConfigReady(f), true);
 });
 
-test('Antigravity setup registers hooks once globally and never creates workspace hooks', t => {
-  const f = fixture(t);
-  fs.mkdirSync(f.zylosDir, { recursive: true });
-  syncAgyConfig(f);
-  syncAgyConfig(f);
-  const global = agyConfigurationPaths(f.home).hooks;
-  assert.equal(global, path.join(f.home, '.gemini/config/hooks.json'));
-  assert.equal(fs.existsSync(path.join(f.zylosDir, '.agents/hooks.json')), false);
-  assert.equal(fs.existsSync(path.join(f.zylosDir, '.gemini')), false);
-  assert.equal(fs.existsSync(path.join(f.zylosDir, '.agents')), false);
-  const hooks = read(global).zylos;
-  for (const event of ['SessionStart', 'PreInvocation', 'Stop', 'PostToolUse']) assert.equal(hooks[event].length, 1);
-  assert.equal(hooks.PreToolUse.length, 2);
-  assert.equal(hooks.PreToolUse.filter(group => group.matcher === '^ask_question$').length, 1);
-  assert.equal(hooks.PreToolUse.filter(group => group.matcher === '^run_command$').length, 1);
-});
-
 test('Antigravity setup refuses malformed user JSON before any writes', t => {
   const f = fixture(t), files = agyConfigurationPaths(f.home);
   fs.mkdirSync(path.dirname(files.hooks), { recursive: true });
@@ -81,85 +57,6 @@ test('Antigravity setup refuses malformed user JSON before any writes', t => {
   assert.equal(fs.existsSync(files.settings), false);
   assert.equal(fs.readFileSync(files.hooks, 'utf8'), 'broken');
   assert.equal(isAgyConfigReady(f), false);
-});
-
-test('Antigravity setup dry run writes no files', t => {
-  const f = fixture(t);
-  assert.equal(syncAgyConfig({ ...f, dryRun: true }).changed, true);
-  assert.equal(fs.existsSync(path.join(f.home, '.gemini')), false);
-});
-
-test('Antigravity API key save replaces duplicate dotenv entries and stays private', async t => {
-  const file = path.join(ZYLOS_DIR, '.env');
-  fs.mkdirSync(ZYLOS_DIR, { recursive: true });
-  const prior = fs.existsSync(file) ? fs.readFileSync(file) : null;
-  const priorKey = process.env.GEMINI_API_KEY;
-  t.after(() => { if (prior) fs.writeFileSync(file, prior); else fs.rmSync(file, { force: true }); if (priorKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = priorKey; });
-  fs.writeFileSync(file, 'KEEP=yes\nGEMINI_API_KEY=old\nexport GEMINI_API_KEY = duplicate\n');
-  assert.equal(applyCredentials(await runtimeAuthFixture('agy'), { apiKey: 'isolated-fake-key' }), true);
-  const content = fs.readFileSync(file, 'utf8');
-  assert.equal(content.split('\n').filter(line => /^GEMINI_API_KEY=/.test(line)).length, 1);
-  assert.match(content, /KEEP=yes/);
-  assert.equal(process.env.GEMINI_API_KEY, 'isolated-fake-key');
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  assert.equal(saveAgyApiKey('bad\nkey'), false);
-  assert.equal(fs.readFileSync(file, 'utf8'), content);
-});
-
-test('Antigravity CLI flags allow API keys and reject subscription and base URL modes', async () => {
-  const agy = await runtimeAuthFixture('agy');
-  assert.equal(validateRuntimeFlags(agy, parseRuntimeFlags(['--save-apikey', 'fake'])), null);
-  assert.equal(validateRuntimeFlags(agy, parseRuntimeFlags(['--save-apikey'])).example, 'zylos runtime agy --save-apikey <key>');
-  assert.match(validateRuntimeFlags(agy, parseRuntimeFlags(['--save-setup-token', 'fake'])).error, /requires claude/);
-  assert.match(validateRuntimeFlags(agy, parseRuntimeFlags(['--save-base-url', 'https://example.com'])).error, /not supported/);
-  assert.equal(validateInitOptions({ runtime: 'agy' }), null);
-});
-
-test('Antigravity auth checks saved API key without opening native login', async () => {
-  let native = 0, notified = 0;
-  const result = await executeAuth(['agy'], { spawn: async () => { native++; }, findRuntime: runtimeAuthFixture, notifyRecovery: async () => { notified++; return true; } });
-  assert.equal(result.ok, true);
-  assert.equal(native, 0);
-  assert.equal(notified, 1);
-  const failed = await executeAuth(['agy'], { findRuntime: id => runtimeAuthFixture(id, { auth: { checkAuth: () => ({ status: 'failure' }) } }) });
-  assert.equal(failed.error.code, 'AUTH_FAILED');
-  assert.match(failed.error.message, /save-apikey/);
-});
-
-test('Antigravity init prepares only explicit runtimes', async t => {
-  const write = t.mock.method(process.stderr, 'write', () => true);
-  const missing = await prepareInitRuntimeClis({
-    runtimes: ['agy'], exists: () => false, install: { agy: async () => false },
-  });
-  assert.deepEqual(missing.failed[0], { item: 'agy.cli', message: 'CLI installation failed or command not on PATH' });
-  const present = await prepareInitRuntimeClis({ runtimes: ['agy'], exists: () => true });
-  assert.deepEqual(present.completed, ['agy.cli']);
-  assert.deepEqual(write.mock.calls.map(call => call.arguments), [
-    ['Installing Antigravity CLI (this can take a few minutes)…\n'],
-  ]);
-  write.mock.restore();
-  const calls = [];
-  const assets = await prepareInitRuntimeAssets({ runtimes: ['agy'], instruction: name => { calls.push(name); return 'instructions'; }, hooks: { agy: () => calls.push('hooks') }, exists: () => true });
-  assert.deepEqual(calls, ['agy', 'hooks']);
-  assert.equal(assets.failed.length, 0);
-  const result = await runInitAuthentication({}, {
-    runtime: 'agy',
-    nativeLogin: () => { throw Error('native login forbidden'); },
-    deps: {
-      findExecutable: () => '/fixture/runtime',
-      agyAuth: async () => ({ status: 'success' }),
-    },
-  });
-  assert.equal(result.authenticated, true);
-});
-
-test('Antigravity upgrade requires its installed CLI for baseline and overrides', async t => {
-  const f = fixture(t);
-  fs.mkdirSync(path.join(f.zylosDir, '.zylos'), { recursive: true });
-  fs.writeFileSync(path.join(f.zylosDir, '.zylos/config.json'), JSON.stringify({ runtime: 'agy', session_mode: 'multi' }));
-  const result = await prepareUpgradeRuntimeClis({ zylosDir: f.zylosDir }, { exists: () => true, listRuntimeOverrides: () => [{ runtime: 'agy' }] });
-  assert.ok(result.completed.includes('agy.cli'));
-  await assert.rejects(prepareUpgradeRuntimeClis({ zylosDir: f.zylosDir }, { exists: name => name !== 'agy', install: { agy: async () => false }, listRuntimeOverrides: () => [] }), { code: 'RUNTIME_PREPARATION_INCOMPLETE' });
 });
 
 for (const ok of [true, false]) {

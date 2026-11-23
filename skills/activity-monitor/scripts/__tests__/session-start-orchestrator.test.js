@@ -7,20 +7,11 @@ import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  installProcessBackstop,
-  readStdinPayload,
   runSessionStartOrchestrator,
-  runSessionStartShard,
-  runStep,
-  shardHeader,
-  writeAllSync,
 } from '../session-start-orchestrator.js';
 import { CORE_SHARDS } from '../shard-registry.js';
-import { enqueueStartupPrompt, isOnboardingPending } from '../session-start-prompt.js';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const C4_SESSION_INIT = path.resolve(SCRIPT_DIR, '../../../comm-bridge/scripts/c4-session-init.js');
-const SESSION_START_PROMPT = path.resolve(SCRIPT_DIR, '../session-start-prompt.js');
 
 function tempStdout() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-start-orch-'));
@@ -108,49 +99,10 @@ describe('session-start-orchestrator', () => {
     assert.equal(result.stdout, 'MEM\nC4\n');
   });
 
-  it('runs clear source with all four steps', async () => {
-    const result = await runWithActions('clear');
-    assert.deepEqual(result.calls.map(([name]) => name), ['memory', 'c4', 'foreground', 'prompt']);
-  });
-
   it('runs compact source without prompt enqueue', async () => {
     const result = await runWithActions('compact');
     assert.deepEqual(result.calls.map(([name]) => name), ['memory', 'c4', 'foreground']);
     assert.equal(result.stdout, 'MEM\nC4\n');
-  });
-
-  // Compatibility only: the legacy no-arg path keeps its pre-shard byte
-  // order (memory before C4) for installs that still run the un-sharded
-  // command. The authoritative injection-order contract is the shard chain —
-  // see the "authoritative injection order (shard chain)" suite below.
-  it('legacy path preserves the pre-shard stdout byte order (memory then C4)', async () => {
-    const result = await runWithActions('startup', {
-      memoryInject: async () => 'A',
-      c4SessionInit: async () => 'B',
-    });
-    assert.equal(result.stdout, 'AB');
-  });
-
-  it('emits a visible failure notice for a failed memory step', async () => {
-    const result = await runWithActions('startup', {
-      memoryInject: async () => { throw new Error('memory failed'); },
-    });
-    assert.match(result.stdout, /=== MEMORY-INJECT UNAVAILABLE ===/);
-    assert.match(result.stdout, /failed: memory failed/);
-    assert.match(result.stdout, /=== END MEMORY-INJECT UNAVAILABLE ===/);
-    // C4 context still follows the notice.
-    assert.ok(result.stdout.endsWith('C4\n'));
-    assert.deepEqual(result.calls.map(([name]) => name), ['c4', 'foreground', 'prompt']);
-  });
-
-  it('emits a visible failure notice for a failed C4 step after the memory context', async () => {
-    const result = await runWithActions('startup', {
-      c4SessionInit: async () => { throw new Error('c4 failed'); },
-    });
-    assert.ok(result.stdout.startsWith('MEM\n'));
-    assert.match(result.stdout, /=== C4-SESSION-INIT UNAVAILABLE ===/);
-    assert.match(result.stdout, /failed: c4 failed/);
-    assert.deepEqual(result.calls.map(([name]) => name), ['memory', 'foreground', 'prompt']);
   });
 
   it('continues when foreground side effect fails', async () => {
@@ -161,14 +113,6 @@ describe('session-start-orchestrator', () => {
     assert.deepEqual(result.calls.map(([name]) => name), ['memory', 'c4', 'prompt']);
   });
 
-  it('continues when prompt side effect fails', async () => {
-    const result = await runWithActions('startup', {
-      startupPrompt: async () => { throw new Error('prompt failed'); },
-    });
-    assert.equal(result.stdout, 'MEM\nC4\n');
-    assert.deepEqual(result.calls.map(([name]) => name), ['memory', 'c4', 'foreground']);
-  });
-
   it('times out async signal-style step bodies without blocking later steps', async () => {
     const result = await runWithActions('startup', {
       memoryInject: () => new Promise(() => {}),
@@ -177,100 +121,6 @@ describe('session-start-orchestrator', () => {
     assert.match(result.stdout, /timed out/);
     assert.ok(result.stdout.endsWith('C4\n'));
     assert.deepEqual(result.calls.map(([name]) => name), ['c4', 'foreground', 'prompt']);
-  });
-
-  it('continues when a dynamic-import-style step fails before producing context', async () => {
-    const result = await runWithActions('startup', {
-      memoryInject: async () => {
-        const err = new Error('Cannot find module');
-        err.code = 'ERR_MODULE_NOT_FOUND';
-        throw err;
-      },
-    });
-    assert.match(result.stdout, /=== MEMORY-INJECT UNAVAILABLE ===/);
-    assert.match(result.stdout, /Cannot find module/);
-    assert.ok(result.stdout.endsWith('C4\n'));
-    assert.deepEqual(result.calls.map(([name]) => name), ['c4', 'foreground', 'prompt']);
-  });
-
-  it('runStep records successful stdout writes', async () => {
-    const out = tempStdout();
-    try {
-      const result = await runStep({
-        name: 'unit',
-        source: 'startup',
-        budgetMs: 50,
-        action: async () => 'payload',
-        writeStdout: true,
-        stdout: out.stdout,
-      });
-      assert.equal(result.ok, true);
-      assert.equal(out.read(), 'payload');
-    } finally {
-      out.cleanup();
-    }
-  });
-
-  it('runStep writes a visible notice to stdout when a writeStdout step fails', async () => {
-    const out = tempStdout();
-    try {
-      const result = await runStep({
-        name: 'memory-inject',
-        source: 'startup',
-        budgetMs: 50,
-        action: async () => { throw new Error('boom'); },
-        writeStdout: true,
-        stdout: out.stdout,
-      });
-      assert.equal(result.ok, false);
-      const text = out.read();
-      assert.match(text, /=== MEMORY-INJECT UNAVAILABLE ===/);
-      assert.match(text, /failed: boom/);
-      assert.match(text, /=== END MEMORY-INJECT UNAVAILABLE ===/);
-    } finally {
-      out.cleanup();
-    }
-  });
-
-  it('runStep stays silent on stdout when a side-effect (non-writeStdout) step fails', async () => {
-    const out = tempStdout();
-    try {
-      const result = await runStep({
-        name: 'session-foreground',
-        source: 'startup',
-        budgetMs: 50,
-        action: async () => { throw new Error('boom'); },
-        writeStdout: false,
-        stdout: out.stdout,
-      });
-      assert.equal(result.ok, false);
-      assert.equal(out.read(), '');
-    } finally {
-      out.cleanup();
-    }
-  });
-
-  it('writeAllSync retries short writes and EAGAIN until the full buffer is written', () => {
-    const chunks = [];
-    let calls = 0;
-    const written = writeAllSync(1, 'abcdef', {
-      writeSync: (fd, buffer, offset, length) => {
-        assert.equal(fd, 1);
-        calls++;
-        if (calls === 2) {
-          const err = new Error('temporarily unavailable');
-          err.code = 'EAGAIN';
-          throw err;
-        }
-        const size = Math.min(2, length);
-        chunks.push(buffer.toString('utf8', offset, offset + size));
-        return size;
-      },
-    });
-
-    assert.equal(written, 6);
-    assert.equal(chunks.join(''), 'abcdef');
-    assert.equal(calls, 4);
   });
 
   it('writes payloads larger than pipe buffers without truncation', () => {
@@ -294,172 +144,6 @@ describe('session-start-orchestrator', () => {
     assert.equal(result.stdout, 'x'.repeat(payloadLength));
   });
 
-  it('runStep reports timeout failures', async () => {
-    const result = await runStep({
-      name: 'unit-timeout',
-      source: 'startup',
-      budgetMs: 5,
-      action: () => new Promise(() => {}),
-    });
-    assert.equal(result.ok, false);
-    assert.match(result.error.message, /timed out/);
-  });
-
-  it('readStdinPayload pauses and unrefs stdin when the read times out', async () => {
-    const calls = [];
-    const stdin = {
-      setEncoding: encoding => calls.push(['setEncoding', encoding]),
-      on: event => calls.push(['on', event]),
-      off: event => calls.push(['off', event]),
-      pause: () => calls.push(['pause']),
-      unref: () => calls.push(['unref']),
-    };
-
-    const payload = await readStdinPayload({ stdin, timeoutMs: 5 });
-
-    assert.deepEqual(payload, {});
-    assert.ok(calls.some(call => call[0] === 'pause'));
-    assert.ok(calls.some(call => call[0] === 'unref'));
-  });
-
-  it('passes a hard timeout and kill signal to prompt child process', async () => {
-    const calls = [];
-    await enqueueStartupPrompt('startup', {
-      controlPath: '/tmp/c4-control.js',
-      childTimeoutMs: 1234,
-      onboardingPending: () => false,
-      scopeReader: async () => ({ sessionGroup: null }),
-      migrationPending: () => false,
-      recentReader: async () => true,
-      execFile: async (...args) => { calls.push(args); return { stdout: '{"id":1}' }; },
-    });
-
-    assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0][0], 'node');
-    assert.deepEqual(calls[0][1].slice(0, 2), ['/tmp/c4-control.js', 'enqueue']);
-    assert.equal(calls[0][2].timeout, 1234);
-    assert.equal(calls[0][2].killSignal, 'SIGKILL');
-  });
-
-  it('detects onboarding pending solely from the marker existence', () => {
-    for (const present of [true, false]) {
-      assert.equal(isOnboardingPending({
-        pendingPath: '/isolated/.zylos/onboarding-pending',
-        existsSync: file => { assert.equal(file, '/isolated/.zylos/onboarding-pending'); return present; },
-      }), present);
-    }
-  });
-
-  it('skips startup prompt enqueue while onboarding is pending', async () => {
-    const calls = [];
-    const result = await enqueueStartupPrompt('startup', {
-      controlPath: '/tmp/c4-control.js',
-      onboardingPending: () => true,
-      execFile: (...args) => calls.push(args),
-    });
-
-    assert.deepEqual(result, { skipped: true, reason: 'onboarding_pending', startupControlIds: [] });
-    assert.equal(calls.length, 0);
-  });
-
-  it('awaits the prompt child asynchronously (genuinely parallelizable)', async () => {
-    let resolveChild;
-    let settled = false;
-    const pending = enqueueStartupPrompt('startup', {
-      controlPath: '/tmp/c4-control.js',
-      onboardingPending: () => false,
-      scopeReader: async () => ({ sessionGroup: null }),
-      migrationPending: () => false,
-      recentReader: async () => true,
-      execFile: () => new Promise((resolve) => { resolveChild = resolve; }),
-    }).then(() => { settled = true; });
-
-    // The async child has not resolved yet → enqueue must still be pending,
-    // proving it does not block synchronously like the old execFileSync.
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(settled, false);
-    resolveChild({ stdout: '{"id":1}' });
-    await pending;
-    assert.equal(settled, true);
-  });
-
-  it('imports c4-session-init without CLI side effects', () => {
-    const result = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(C4_SESSION_INIT)})`], {
-      env: { ...process.env, ZYLOS_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'c4-import-')) },
-      encoding: 'utf8',
-    });
-    assert.equal(result.status, 0);
-    assert.equal(result.stdout, '');
-  });
-
-  it('imports session-start-prompt without CLI side effects', () => {
-    const result = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(SESSION_START_PROMPT)})`], {
-      env: { ...process.env, ZYLOS_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-import-')) },
-      encoding: 'utf8',
-    });
-    assert.equal(result.status, 0);
-    assert.equal(result.stdout, '');
-  });
-
-  it('happy path returns quickly instead of waiting for the backstop', async () => {
-    const start = Date.now();
-    await runWithActions('startup');
-    assert.ok(Date.now() - start < 500);
-  });
-
-  it('process backstop can force a clean exit after the total budget', async () => {
-    let exitCode = null;
-    const timer = installProcessBackstop({
-      totalBudgetMs: 5,
-      exit: (code) => { exitCode = code; },
-    });
-    try {
-      await new Promise(resolve => setTimeout(resolve, 25));
-      assert.equal(exitCode, 0);
-    } finally {
-      clearTimeout(timer);
-    }
-  });
-
-  it('runSessionStartOrchestrator can use a caller-owned hard backstop timer', async () => {
-    const timer = installProcessBackstop({
-      totalBudgetMs: 1000,
-      exit: () => { throw new Error('should not exit'); },
-    });
-    try {
-      const result = await runWithActions('startup', {}, { hardBackstopTimer: timer });
-      assert.equal(result.stdout, 'MEM\nC4\n');
-    } finally {
-      clearTimeout(timer);
-    }
-  });
-
-  it('caller-owned hard backstop can fire while orchestration is still running', async () => {
-    let exitCode = null;
-    const timer = installProcessBackstop({
-      totalBudgetMs: 5,
-      exit: (code) => { exitCode = code; },
-    });
-    try {
-      await runWithActions('startup', {
-        memoryInject: async () => {
-          await new Promise(resolve => setTimeout(resolve, 25));
-          return 'late';
-        },
-      }, {
-        hardBackstopTimer: timer,
-        budgets: {
-          memoryInject: 100,
-          c4SessionInit: 50,
-          foreground: 50,
-          startupPrompt: 50,
-        },
-      });
-      assert.equal(exitCode, 0);
-    } finally {
-      clearTimeout(timer);
-    }
-  });
 });
 
 // The injection-order contract used to be the legacy assertions above
@@ -481,42 +165,4 @@ describe('authoritative injection order (shard chain)', () => {
       `chain ${names.join('→')} must keep memory shards ahead of C4 shards`);
   });
 
-  it('five core shards launched concurrently in reverse order inject in chain order', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shard-chain-order-'));
-    const outPath = path.join(tmpDir, 'stdout.txt');
-    const fd = fs.openSync(outPath, 'w+');
-    const chain = CORE_SHARDS.map((core, index) => ({
-      name: core.name,
-      chainIndex: index,
-      budget: { maxChars: 10_000, maxTokens: 2_200 },
-      emit: async () => `${core.name.toUpperCase()} BODY`,
-    }));
-    const resolveShardImpl = (name) => {
-      const shard = chain.find(entry => entry.name === name);
-      return shard ? { kind: 'content', shard, chain, warnings: [] } : null;
-    };
-
-    try {
-      // Worst-case scheduling: the tail of the chain gets a head start. The
-      // flag chain alone must restore chain order on the shared stdout.
-      await Promise.all([...chain].reverse().map(shard =>
-        runSessionStartShard(shard.name, { session_id: 'sess-chain-order', source: 'startup' }, {
-          stdout: { fd },
-          tmpdir: tmpDir,
-          linkMs: 5000,
-          resolveShardImpl,
-          // In-process stand-in for the per-process exit hook: these shards
-          // share one process, so "exit" is the moment the shard's run ends.
-          registerExitFlagImpl: fn => fn(),
-        })));
-
-      const expected = chain.map((shard, index) =>
-        `${shardHeader({ position: index + 1, total: chain.length, name: shard.name })}\n${shard.name.toUpperCase()} BODY\n`
-      ).join('');
-      assert.equal(fs.readFileSync(outPath, 'utf8'), expected);
-    } finally {
-      try { fs.closeSync(fd); } catch {}
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
 });

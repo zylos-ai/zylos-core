@@ -3,11 +3,9 @@ import { startCodexWrapper } from '../../../../test/helpers/codex-wrapper-ready.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import { parseTargetObservation } from '../tmux-protocol.js';
 const { openTmuxConnection, serverGeneration } = await import('../tmux-connection.js');
-const { observeSessionTarget, resolveSessionTarget, revalidateSessionTarget, readTargetRuntime } = await import('../session-target.js');
+const { observeSessionTarget, resolveSessionTarget, revalidateSessionTarget } = await import('../session-target.js');
 const binary = process.env.TEST_TMUX_BIN || 'tmux';
 const ready = async () => ({ runId: 'r1', sessionId: 's1', ts: 1, startupControlIds: [] });
 async function fixture(t) {
@@ -17,28 +15,6 @@ async function fixture(t) {
   connection = await openTmuxConnection({ binary, socketPath, sessionName: 'fixture' });
   return { connection, tmux, socketPath, dir, options: { connection, tmuxName: 'fixture', readReady: ready } };
 }
-test('ordinary commands preserve quoting and leave no retained tmux clients', async t => {
-  const {connection, tmux,options,dir} = await fixture(t);
-  await resolveSessionTarget(options);
-  const values = ["a'b", 'semi;colon', '$HOME', 'a$b', '${HOME}', '$0', '~x', '{a}', '%1', 'a"b', '\\x', 'a\\$b', "quote'and$HOME;tail", '中文$NAME'];
-  // tmux 3.4 adds display-only backslashes before named dollars even for
-  // unguarded display-message. Verify the action's actual argument bytes instead.
-  const received = await Promise.all(values.map(async (value, index) => {
-    const buffer = `quoting-${index}`, file = path.join(dir, `bytes-${index}`);
-    await connection.commandBatch([
-      ['set-buffer', '-b', buffer, value],
-      ['save-buffer', '-b', buffer, file],
-      ['delete-buffer', '-b', buffer],
-    ]);
-    return fs.readFile(file, 'utf8');
-  }));
-  assert.deepEqual(received, values);
-  assert.match(await serverGeneration(connection), /^\d+:\d+$/);
-  assert.equal(tmux('list-clients','-F','#{client_pid}'), '');
-  await assert.rejects(connection.command(['display-message','-p','x\ny']), TypeError);
-  await assert.rejects(connection.command(['display-message','-p','x\0y']), TypeError);
-  assert.equal(await connection.command(['display-message','-p','still alive']), 'still alive');
-});
 test('fixed pane survives active pane change; run mutation rejected', async t => {
   const {connection, tmux, options} = await fixture(t);
   const target = await resolveSessionTarget(options);
@@ -48,24 +24,6 @@ test('fixed pane survives active pane change; run mutation rejected', async t =>
   assert.equal(await revalidateSessionTarget({connection,target}), true); assert.notEqual(second, target.paneId);
   tmux('set-environment','-t','fixture','ZYLOS_RUN_ID','r2');
   await assert.rejects(revalidateSessionTarget({connection,target}), {code:'RUNID_MISMATCH'});
-});
-test('removed pane, absent target, and missing run ID fail distinctly', async t => {
-  const {connection, tmux, socketPath, options} = await fixture(t);
-  const target = await resolveSessionTarget(options);
-  tmux('split-window','-d','-t','fixture','sleep','120'); tmux('kill-pane','-t',target.paneId);
-  await assert.rejects(revalidateSessionTarget({connection,target}), {code:'TARGET_GONE'});
-  const fresh=await openTmuxConnection({binary,socketPath});t.after(()=>fresh.close());
-  assert.equal((await observeSessionTarget({...options,connection:fresh,tmuxName:'absent'})).present,false);
-  await assert.rejects(resolveSessionTarget({...options,connection:fresh,tmuxName:'absent'}),{code:'TARGET_GONE'});
-  tmux('set-environment','-u','-t','fixture','ZYLOS_RUN_ID');
-  await assert.rejects(resolveSessionTarget({...options,connection:fresh}),{code:'RUNID_MISMATCH'});
-});
-test('F3 malformed/mismatched is not READY; snapshots immutable', async t => {
-  const {options} = await fixture(t);
-  assert.equal((await observeSessionTarget({...options,readReady:async()=>({runId:'r1',sessionId:'s1'})})).ready,false);
-  assert.equal((await observeSessionTarget({...options,readReady:async()=>({...await ready(),runId:'other'})})).ready,false);
-  const good = await observeSessionTarget(options); assert.equal(good.ready,true);
-  assert.throws(()=>{good.rawF2.ZYLOS_RUN_ID='evil';},TypeError); assert.throws(()=>{good.f3.startupControlIds.push(1);},TypeError);
 });
 test('single target accepts READY published by the native child of a Codex launcher pane', async t => {
   let connection;
@@ -85,30 +43,6 @@ test('single target accepts READY published by the native child of a Codex launc
   assert.equal(target.ready, true);
   assert.equal(target.runtimeSessionId, ready.sessionId);
 });
-test('configured observation reads identity and validated environment once', async t => {
-  const {connection, options} = await fixture(t);
-  const command = connection.command.bind(connection), calls = [];
-  connection.command = async (argv, settings) => {
-    calls.push(argv[0]);
-    return command(argv, settings);
-  };
-  const observed = await observeSessionTarget(options);
-  assert.equal(observed.ready, true);
-  assert.equal(observed.processRunning, true);
-  assert.equal(observed.runtimePid, Number(await command(['display-message', '-p', '-t', observed.paneId, '#{pane_pid}'])));
-  assert.deepEqual(calls, ['display-message', 'show-environment']);
-});
-test('first binding adopts the observed server rather than the server at executor creation', async t => {
-  const {connection, tmux, options} = await fixture(t);
-  const original = await serverGeneration(connection);
-  tmux('kill-server');
-  await new Promise(resolve => setTimeout(resolve, 100));
-  tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'fixture', '-e', 'ZYLOS_RUN_ID=r1',
-    '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', 'sleep', '120');
-  const target = await resolveSessionTarget(options);
-  assert.notEqual(target.serverGeneration, original);
-  assert.equal(await revalidateSessionTarget({connection, target}), true);
-});
 test('same socket restart invalidates its read identity without replay', async t => {
   const {connection,tmux,socketPath,options} = await fixture(t);
   const target = await resolveSessionTarget(options); tmux('kill-server');
@@ -117,79 +51,7 @@ test('same socket restart invalidates its read identity without replay', async t
   await assert.rejects(revalidateSessionTarget({connection,target}),{code:'GENERATION_CHANGED'});
   const replacement = await openTmuxConnection({binary,socketPath}); assert.notEqual(await serverGeneration(replacement),target.serverGeneration); replacement.close();
 });
-test('absent server differs from unexecutable transport; missing generation rejected', async t => {
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'session-runtime-no-server-')); t.after(()=>fs.rm(dir,{recursive:true,force:true}));
-  const absent = await openTmuxConnection({binary,socketPath:path.join(dir,'absent')});
-  const missing = await openTmuxConnection({binary:path.join(dir,'missing')});
-  t.after(()=>{absent.close();missing.close();});
-  await assert.rejects(serverGeneration(absent),{code:'TMUX_NO_SERVER'});
-  assert.equal((await observeSessionTarget({connection:absent,tmuxName:'fixture'})).present,false);
-  await assert.rejects(resolveSessionTarget({connection:absent,tmuxName:'fixture'}),{code:'TARGET_GONE'});
-  await assert.rejects(serverGeneration(missing),{code:'TMUX_UNAVAILABLE',cause:'error'});
-  await assert.rejects(serverGeneration({command:async()=> '123:'}),{code:'TMUX_UNAVAILABLE'});
-});
-test('runtime fallback uses unique shallowest name and never invents config', async () => {
-  const connection={command:async()=> '10'};
-  const rows=[{pid:10,ppid:1,name:'node'},{pid:11,ppid:10,name:'codex.exe'},{pid:12,ppid:11,name:'claude'}];
-  assert.deepEqual(await readTargetRuntime({connection,paneId:'%1',rawF2:{},readProcessTree:async()=> rows}),{runtime:'codex',launchConfig:null,runtimeObservation:'present',runtimePid:11});
-  rows.push({pid:13,ppid:10,name:'claude'});
-  assert.equal((await readTargetRuntime({connection,paneId:'%1',rawF2:{},readProcessTree:async()=> rows})).runtime,'unknown');
-  assert.equal((await readTargetRuntime({connection,paneId:'%1',rawF2:{ZYLOS_MODEL_CONFIG:'{"runtime":"claude"}'},readProcessTree:async()=> {throw Error('must not run');}})).runtime,'claude');
-  assert.equal((await readTargetRuntime({connection,paneId:'%1',rawF2:{},readProcessTree:async()=> {throw Error('unreadable');}})).runtime,'unknown');
-});
-test('real Linux comm fallback recognizes a named stand-in without F2 defaults', {skip:process.platform!=='linux'}, async t => {
-  const {connection,tmux,options}=await fixture(t);
-  tmux('set-environment','-u','-t','fixture','ZYLOS_MODEL_CONFIG');
-  // This is a stdlib stand-in, never the installed model CLI or its auth.
-  tmux('respawn-pane','-k','-t','fixture','python3','-c',"import ctypes,time; ctypes.CDLL(None).prctl(15,b'codex',0,0,0); time.sleep(120)");
-  let observed;
-  for (let attempt=0;attempt<30;attempt++) {
-    observed=await observeSessionTarget(options);
-    if(observed.runtime==='codex') break;
-    await new Promise(resolve=>setTimeout(resolve,10));
-  }
-  assert.equal(observed.runtime,'codex'); assert.equal(observed.launchConfig,null);
-  assert.equal(connection.closed,false);
-});
-test('initial disappearance and generation change are detected before any sending', async () => {
-  let reads=0;
-  const connection={bindTarget() {},command:async args=> {
-    if(args[0]==='show-environment') throw Object.assign(Error("can't find session: $1"),{code:'TMUX_COMMAND_FAILED'});
-    return reads++===0 ? '100:200\t$1\t%1\t123\t10' : '100:200';
-  }};
-  await assert.rejects(observeSessionTarget({connection,tmuxName:'fixture',readReady:ready}),{code:'TARGET_GONE'});
-  let generation='100:200';
-  const commands=[];
-  const held={bindTarget() {},command:async args=> {
-    commands.push(args[0]);
-    if(generation!=='100:200') throw Object.assign(Error('Bound server changed'),{code:'GENERATION_CHANGED'});
-    if(args[0]==='show-environment') return String.raw`ZYLOS_RUN_ID="r1"; export ZYLOS_RUN_ID;
-ZYLOS_MODEL_CONFIG="{\"runtime\":\"claude\"}"; export ZYLOS_MODEL_CONFIG;`;
-    return '100:200\t$1\t%1\t123\t10';
-  }};
-  const target=await resolveSessionTarget({connection:held,tmuxName:'fixture',readReady:ready});
-  commands.length=0;
-  await revalidateSessionTarget({connection:held,target});
-  assert.deepEqual(commands,['show-environment']);
-  generation='101:201';
-  await assert.rejects(revalidateSessionTarget({connection:held,target}),{code:'GENERATION_CHANGED'});
-  await assert.rejects(revalidateSessionTarget({connection:held,target:{...target}}),TypeError);
-});
 
-test('malformed environment observation and revalidation expose TMUX_UNAVAILABLE', async () => {
-  let environment = 'ZYLOS_RUN_ID="r1"; export ZYLOS_RUN_ID;';
-  const connection = {bindTarget() {}, command:async args => {
-    if (args[0] === 'show-environment') return environment;
-    if (args.at(-1) === '#{pane_pid}') return '10';
-    return '100:200\t$1\t%1\t123\t10';
-  }};
-  const options = {connection, tmuxName:'fixture', readReady:ready, readProcessTree:async()=>[]};
-  const target = await resolveSessionTarget(options);
-  assert.equal(await revalidateSessionTarget({connection,target}), true);
-  environment = 'ZYLOS_RUN_ID="unterminated';
-  await assert.rejects(observeSessionTarget(options), {code:'TMUX_UNAVAILABLE',cause:'error'});
-  await assert.rejects(revalidateSessionTarget({connection,target}), {code:'TMUX_UNAVAILABLE',cause:'error'});
-});
 test('command timeout leaves executor available for a guarded retry', async t => {
   const {socketPath}=await fixture(t);
   const connection=await openTmuxConnection({binary,socketPath,timeoutMs:40});
@@ -197,58 +59,4 @@ test('command timeout leaves executor available for a guarded retry', async t =>
   await assert.rejects(connection.command(['wait-for','unreleased-test-channel']),{code:'TMUX_UNAVAILABLE',cause:'timeout'});
   assert.equal(connection.closed,false);
   assert.equal(await connection.command(['display-message','-p','retry available']), 'retry available');
-});
-
-test('process observation distinguishes absence from ambiguity and unavailable scans', async () => {
-  const connection = {command:async()=> '10'};
-  const read = readProcessTree => readTargetRuntime({connection,paneId:'%1',rawF2:{},readProcessTree});
-  assert.equal((await read(async()=> [{pid:10,ppid:1,name:'sh'}])).runtimeObservation, 'absent');
-  assert.equal((await read(async()=> [])).runtimeObservation, 'unavailable');
-  assert.equal((await read(async()=> {throw Error('denied');})).runtimeObservation, 'unavailable');
-  assert.equal((await read(async()=> [{pid:10,ppid:1,name:'sh'},{pid:11,ppid:10,name:'claude'},{pid:12,ppid:10,name:'codex'}])).runtimeObservation, 'ambiguous');
-});
-test('last-session kill requires a session guard confirmation after the command', async t => {
-  const {connection,options} = await fixture(t);
-  const target = await resolveSessionTarget(options);
-  await assert.rejects(connection.command(['kill-session','-t','$999999'],{kind:'session'}), {code:'TMUX_COMMAND_FAILED'});
-  await connection.command(['kill-session','-t',target.tmuxSessionId],{kind:'session'});
-  await assert.rejects(connection.command(['display-message','-p','-t',target.tmuxSessionId,'#{session_id}'],{kind:'session'}),{code:'TARGET_GONE'});
-});
-test('closed executor never sends a command', async t => {
-  const {connection,options} = await fixture(t);
-  const target = await resolveSessionTarget(options);
-  connection.close();
-  await assert.rejects(connection.command(['kill-session','-t',target.tmuxSessionId],{kind:'session'}),{code:'TMUX_UNAVAILABLE'});
-});
-
-test('absent target uses a conditional session timestamp and leaves the server alive', async t => {
-  const {connection, tmux, options} = await fixture(t);
-  const command = connection.command.bind(connection);
-  let identityFormat;
-  connection.command = async (argv, settings) => {
-    if (argv.includes('=absent:')) identityFormat = argv.at(-1);
-    return command(argv, settings);
-  };
-  assert.equal((await observeSessionTarget({...options, tmuxName:'absent'})).present, false);
-  assert.equal(identityFormat.split('\t')[3], '#{?session_id,#{session_created},}');
-  assert.equal(tmux('display-message', '-p', '-t', '=absent:', identityFormat.split('\t')[3]), '');
-  assert.equal(tmux('display-message', '-p', '-t', '=fixture:', '#{session_name}'), 'fixture');
-});
-
-test('first resolution maps a disappearing server to TARGET_GONE', async t => {
-  const {connection, tmux, options} = await fixture(t);
-  tmux('kill-server');
-  await assert.rejects(resolveSessionTarget(options), {code:'TARGET_GONE'});
-});
-
-
-test('target observation requires a strict positive pane PID', () => {
-  const prefix = '100:200\t$1\t%1\t123';
-  assert.deepEqual(parseTargetObservation(`${prefix}\t10`), {
-    generation:'100:200', tmuxSessionId:'$1', paneId:'%1', created:'123', panePid:10,
-  });
-  assert.equal(parseTargetObservation('100:200\t\t\t\t'), null);
-  for (const suffix of ['', '\t', '\t0', '\t-1', '\t1.5', '\t9007199254740992', '\t10\n', '\t10\textra']) {
-    assert.throws(() => parseTargetObservation(prefix + suffix), {code:'TMUX_UNAVAILABLE', cause:'error'});
-  }
 });

@@ -134,21 +134,19 @@ setup-token 与 OAuth 订阅登录仍走既有路径。共享机器上宜用环�
 清理竞争的 Claude 凭据变量；`zylos runtime ... --save-base-url` 现在与 init
 一样拒绝带 userinfo、query 或 fragment 的地址。
 
-校验只向选定地址发送一次请求，使用选定请求头，不跟随重定向，也不探测其他地址。
-Claude 按运行时 SDK 的方式在 base URL 后追加 `/v1/messages`：应提供根地址或
-`https://relay.example.com/anthropic` 这样的路径前缀，除非服务商明确要求，
-不要再在末尾加 `/v1`。Codex 在 base URL 后追加 `/models`，其默认值是
+校验只发送一次 GET 请求，使用选定的认证请求头，不跟随重定向。
+Claude 在 base URL 后追加 `/v1/models`，并发送 `anthropic-version` 请求头。
+请提供根地址或 `https://relay.example.com/anthropic` 这样的路径前缀，
+除非服务商明确要求，不要在末尾加 `/v1`。Codex 在 base URL 后追加 `/models`，其默认值是
 `https://api.openai.com/v1`，兼容自定义地址通常也以 `/v1` 结尾。
 Codex 仍将 API key 存在 `~/.codex/auth.json` 的 `OPENAI_API_KEY` 字段中，
 使用 Bearer 认证。
 初始化 Claude 时，显式 `--codex-base-url` 仍只更新 Codex 地址；环境里的
 `OPENAI_API_KEY` 不会阻止该地址更新，也不会触发 Codex 认证。
 
-2xx 视为校验通过，401/403 视为拒绝；只有官方 HTTPS origin
-`https://api.anthropic.com` 对空校验请求返回的 400 也视为通过。
-其他 HTTP 状态、网络错误和超时属于无法确定：init 会提示，
-仍保存所选凭据，让运行时报告实际地址的行为。自定义地址的 400 不会被当成
-认证成功的证据。
+2xx 视为校验通过，401/403 视为拒绝。其他 HTTP 状态（包括中转未实现模型列表接口
+时返回的 404）、网络错误和超时均无法确定校验结果。init 会提示并保存所选凭据，
+让运行时报告实际地址的行为。
 
 **退出码：** `0` = 成功，`1` = 致命错误（如无效 token），`2` = 部分成功（如 Caddy 下载失败但其他步骤正常）。
 

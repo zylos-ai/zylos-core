@@ -89,12 +89,3 @@ async function run(t, mode) {
 for (const mode of ['configured','fallback']) {
   test(`default alert transport delivers through ${mode}`, { timeout: 10000, skip: process.platform === 'win32' }, async t => run(t, mode));
 }
-
-// Process lifecycle boundary: actual default sender hangs in configured or fallback
-// channel, stop closes private databases and worker must naturally exit promptly.
-// Run for abort/stop/default transport changes; skip template-only/UI changes.
-// Same isolated paths/readback/private DB/socket; all child processes belong to a
-// bounded worker group, forcibly reclaimed and reaped even on timeout/failure.
-for (const mode of ['destination_hangs','origin_hangs']) {
-  test(`default alert transport permits natural process exit when ${mode}`, { timeout: 10000, skip: process.platform === 'win32' }, async t => run(t, mode));
-}

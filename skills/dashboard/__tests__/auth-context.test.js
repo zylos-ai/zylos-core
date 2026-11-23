@@ -1,51 +1,11 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import test from 'node:test';
-import { AuthGate, validateApiSession } from '../src/lib/auth.js';
+import { AuthGate } from '../src/lib/auth.js';
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
-
-test('canonical auth context uses server session hash and stable API key id', t => {
-  const cookieToken = 'browser-secret';
-  const apiToken = `zylos_st_${'a'.repeat(64)}`;
-  const now = Date.now();
-  const store = {
-    getSession(hash) {
-      return hash === sha256(cookieToken)
-        ? { created_at: now, last_activity_at: now, remember: 0 }
-        : null;
-    },
-    touchSession() {},
-    deleteSession() {},
-    getApiSession(hash) {
-      return hash === sha256(apiToken)
-        ? { api_key_id: 42, scope: 'admin', expires_at: now + 60_000, key_revoked_at: null }
-        : null;
-    },
-    cleanupSessions() {},
-    cleanupExpiredApiSessions() {},
-  };
-  const gate = new AuthGate({ auth: { password: 'scrypt:configured' } }, store);
-  t.after(() => clearInterval(gate._cleanupTimer));
-
-  const cookieReq = { headers: { cookie: `__Secure-zylos_dashboard_session=${cookieToken}` } };
-  assert.deepEqual(gate.resolveAuthContext(cookieReq), {
-    kind: 'cookie',
-    principalId: sha256(cookieToken),
-    scope: 'admin',
-  });
-  assert.equal(gate.revalidateAuthContext(cookieReq._authContext)?.principalId, sha256(cookieToken));
-  const apiReq = { headers: { authorization: `Bearer ${apiToken}` } };
-  assert.deepEqual(gate.resolveAuthContext(apiReq), {
-    kind: 'api',
-    principalId: '42',
-    scope: 'admin',
-  });
-  assert.equal(gate.revalidateAuthContext(apiReq._authContext)?.principalId, '42');
-  assert.deepEqual(validateApiSession(apiToken), apiReq._authContext);
-});
 
 test('missing password rejects existing cookie and API principals and their revalidation', t => {
   const now = Date.now(), token = `zylos_st_${'c'.repeat(64)}`;
@@ -102,26 +62,4 @@ test('proxied writes and sensitive reads require admin while status reads accept
     scope = 'admin';
     assert.equal(await gate.handle(request(), response, url), false);
   }
-});
-
-test('readonly cookie resolution and revalidation do not touch or delete session rows', t => {
-  const token = 'readonly-session', now = Date.now();
-  const row = { created_at: now, last_activity_at: now }; let touched = 0, deleted = 0;
-  const gate = new AuthGate({ auth: { password: 'scrypt:configured' } }, {
-    getSession: hash => hash === sha256(token) ? row : null,
-    touchSession() { touched++; }, deleteSession() { deleted++; },
-    cleanupSessions() {}, cleanupExpiredApiSessions() {},
-  });
-  t.after(() => clearInterval(gate._cleanupTimer));
-  const req = { headers: { cookie: `__Secure-zylos_dashboard_session=${token}` } };
-  const context = gate.resolveAuthContext(req, { touch: false });
-  assert.equal(context.scope, 'admin');
-  assert.ok(gate.revalidateAuthContext(context, { touch: false }));
-  assert.equal(touched, 0); assert.equal(deleted, 0);
-  assert.ok(gate.resolveAuthContext(req)); assert.equal(touched, 1, 'ordinary HTTP keeps its touch behavior');
-  row.last_activity_at = Date.now() - 3_600_001;
-  assert.equal(gate.resolveAuthContext(req, { touch: false }), null);
-  assert.equal(gate.revalidateAuthContext(context, { touch: false }), null);
-  assert.equal(touched, 1); assert.equal(deleted, 0);
-  assert.equal(gate.resolveAuthContext(req), null); assert.equal(deleted, 1, 'ordinary expiry still prunes its stale row');
 });

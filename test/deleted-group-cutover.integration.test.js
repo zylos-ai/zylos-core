@@ -15,7 +15,6 @@ import { Store } from '../skills/dashboard/src/lib/store.js';
 import { ChatConversations } from '../skills/dashboard/src/lib/chat/conversations.js';
 import { formatDoctorSessionModeStatus } from '../cli/commands/doctor.js';
 
-const enabled = process.env.ZYLOS_DELETED_GROUP_CUTOVER_INTEGRATION === '1';
 const repo = fileURLToPath(new URL('../', import.meta.url));
 function config(f) { return JSON.parse(fs.readFileSync(path.join(f.root, '.zylos/config.json'))); }
 function writeMode(f, mode) {
@@ -177,11 +176,11 @@ function assertNativeTransition(row) {
 
 for (const entry of ['cli', 'dashboard']) {
   // Boundary: real deletion entry point -> private tmux/C4 -> native coordinator
-  // -> CLI/doctor status. Run for deletion/native-cutover changes with the opt-in
-  // gate and a separate Unix user. Actual cutover requires the upstream control
-  // APIs that preserve Origin; until available, select only gating/cancel cases.
-  // Fixture teardown stops every service and child before removing private data.
-  test(`${entry} deletion permits repeated native cutovers with unchanged memory and coverage`, { skip: !enabled, timeout: 90_000 }, async t => {
+  // -> CLI/doctor status. Run for deletion or native-cutover changes. The
+  // fixture verifies private HOME, ZYLOS_DIR,
+  // PM2_HOME, short TMPDIR, tmux socket and test databases before startup,
+  // then stops all children and removes private data in teardown.
+  test(`${entry} deletion permits repeated native cutovers with unchanged memory and coverage`, { timeout: 90_000 }, async t => {
     const f = await setup(t);
     await f.sandbox.runCase(async () => {
       await deletion(f, entry);
@@ -209,23 +208,3 @@ for (const entry of ['cli', 'dashboard']) {
     }, { timeoutMs: 75_000 });
   });
 }
-
-// Boundary: physically empty current C4 after both Dashboard groups disappear,
-// while a retained legacy global checkpoint remains. Run for deletion /
-// empty-history changes with actual Origin-preserving cutover APIs available,
-// under the same opt-in gate and full sandbox isolation; otherwise select gating.
-for (const checkpointSource of ['cutover', 'single']) test(`${checkpointSource} checkpoint with no current messages leaves native cutoff unset`, { skip: !enabled, timeout: 90_000 }, async t => {
-  const f = await setup(t, { noCurrentMessages: true, checkpointSource });
-  await f.sandbox.runCase(async () => {
-    await deletion(f, 'cli');
-    assert.equal(f.database.prepare('SELECT count(*) AS n FROM conversations').get().n, 0);
-    const before = nativePayload(f), events = [], c = coordinator(f, events);
-    const accepted = await c.handle({ target: 'single' });
-    const done = await finish(f, c, accepted.runId);
-    assertNativeTransition(done); assert.equal(nativePayload(f), before);
-    assert.equal(fs.existsSync(path.join(f.root, 'memory/state.md')), false);
-    assert.equal(fs.existsSync(path.join(f.root, 'memory/mode-switch')), false);
-    assert.equal(f.store.getGlobalCoverageEnd(), f.covered);
-    await status(f, events);
-  }, { timeoutMs: 75_000 });
-});

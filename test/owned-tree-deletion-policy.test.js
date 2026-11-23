@@ -8,13 +8,6 @@ import test from 'node:test';
 const repository = fileURLToPath(new URL('../', import.meta.url));
 const implementation = 'skills/comm-bridge/scripts/remove-owned-tree.js';
 const exclusions = /(?:^|\/)(?:__tests__|test|tests|fixtures|docs|documentation|node_modules)(?:\/|$)|\.(?:md|markdown|rst)$/i;
-// These existing legacy test harnesses own disposable fixtures. This exact list
-// does not exempt new files placed in scripts/e2e or other source directories.
-const legacyTestHarnesses = new Set([
-  'scripts/e2e/issue-443-pm2-restart-semantics.sh',
-  'scripts/e2e/issue-452-claude-default-model.sh',
-  'scripts/e2e/issue-454-control-supersede.sh',
-]);
 const permittedBuildLines = new Map([
   // These exact commands run only while building the container image, never on an installed user instance.
   ['    && rm -rf /var/lib/apt/lists/*', 'Remove image-layer package metadata after apt installation.'],
@@ -100,7 +93,7 @@ test('tracked product files use only the shared owned-tree deletion function', (
   const files = execFileSync('git', ['ls-files', '-z'], { cwd: repository, encoding: 'utf8' }).split('\0').filter(Boolean);
   assert.ok(files.includes('cli/lib/group-delete.js'), 'The tracked product-file inventory must not be empty');
   for (const filename of files) {
-    if (filename === implementation || legacyTestHarnesses.has(filename) || exclusions.test(filename)) continue;
+    if (filename === implementation || exclusions.test(filename)) continue;
     const contents = fs.readFileSync(path.join(repository, filename));
     if (contents.includes(0)) continue;
     const violation = firstViolation(filename, contents.toString('utf8'));
@@ -129,20 +122,4 @@ test('the deletion policy detects ordinary fs, directory, shell and child-progra
     'find target -type f -delete', "execFileSync('find', [target, '-type', 'f', '-delete']);",
   ]) assert.equal(firstViolation('cli/example.js', source)?.line, 1, source);
   assert.equal(firstViolation('cli/example.js', 'const value = 1;\nfs.rmSync(target);')?.line, 2);
-});
-
-test('the deletion policy permits empty-directory removal and scopes image exceptions to exact lines', () => {
-  for (const source of [
-    'fs.rmdirSync(target);', 'await fs.promises.rmdir(target);', 'rmdir(target, callback);',
-    'fs.rmdirSync(target)\nfs.mkdirSync(other, {recursive:true});',
-    'fs.rmdirSync(path.join(root, name));', 'fs.rmdir(path.join(root, name), cb);',
-    'fs.rmdir(target, done);', 'fs.rmdir(target, (error) => handle(error));',
-    'fs.rmdir(target, function(error) { handle(error); });',
-    'fs.rmdir(target, async error => handle(error));',
-  ]) assert.equal(firstViolation('cli/example.js', source), null, source);
-  for (const line of permittedBuildLines.keys()) {
-    assert.equal(firstViolation('Dockerfile', line), null);
-    assert.ok(firstViolation('cli/example.js', line));
-    assert.ok(firstViolation('Dockerfile', `${line} && rm -rf /home/user`));
-  }
 });

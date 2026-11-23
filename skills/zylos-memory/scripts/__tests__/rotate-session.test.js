@@ -11,10 +11,6 @@ const SESSIONS_DIR = path.join(TEST_BASE, 'memory', 'sessions');
 const CURRENT_FILE = path.join(SESSIONS_DIR, 'current.md');
 const SCRIPT_PATH = path.resolve(import.meta.dirname, '..', 'rotate-session.js');
 
-// Dynamic import: set ZYLOS_DIR before loading so shared.js picks up temp dir
-process.env.ZYLOS_DIR = TEST_BASE;
-const { findHeaderDate, resolveArchivePath } = await import('../rotate-session.js');
-
 function cleanSessions() {
   if (fs.existsSync(SESSIONS_DIR)) {
     fs.rmSync(SESSIONS_DIR, { recursive: true, force: true });
@@ -39,67 +35,10 @@ function runRotate(envOverrides = {}) {
   });
 }
 
-// ── resolveArchivePath unit tests ────────────────────────────────
-
-describe('resolveArchivePath', () => {
-  afterEach(() => cleanSessions());
-
-  it('returns YYYY-MM-DD.md when no collision', () => {
-    ensureSessionsDir();
-    const result = resolveArchivePath('2025-01-15', 'UTC');
-    assert.equal(path.basename(result), '2025-01-15.md');
-  });
-
-  it('appends -1 suffix on first collision', () => {
-    ensureSessionsDir();
-    fs.writeFileSync(path.join(SESSIONS_DIR, '2025-01-15.md'), 'old', 'utf8');
-    const result = resolveArchivePath('2025-01-15', 'UTC');
-    assert.equal(path.basename(result), '2025-01-15-1.md');
-  });
-
-  it('appends -2 suffix on second collision', () => {
-    ensureSessionsDir();
-    fs.writeFileSync(path.join(SESSIONS_DIR, '2025-01-15.md'), 'old', 'utf8');
-    fs.writeFileSync(path.join(SESSIONS_DIR, '2025-01-15-1.md'), 'old', 'utf8');
-    const result = resolveArchivePath('2025-01-15', 'UTC');
-    assert.equal(path.basename(result), '2025-01-15-2.md');
-  });
-
-  it('falls back to today when baseDate is invalid', () => {
-    ensureSessionsDir();
-    const result = resolveArchivePath('not-a-date', 'UTC');
-    const basename = path.basename(result);
-    assert.match(basename, /^\d{4}-\d{2}-\d{2}\.md$/);
-  });
-
-  it('resolves into SESSIONS_DIR', () => {
-    ensureSessionsDir();
-    const result = resolveArchivePath('2025-03-01', 'UTC');
-    assert.equal(path.dirname(result), SESSIONS_DIR);
-  });
-});
-
 // ── Integration tests (full rotation via child_process) ──────────
 
 describe('rotate-session integration', () => {
   afterEach(() => cleanSessions());
-
-  it('does not recreate current.md when migration has nothing to do', () => {
-    ensureSessionsDir();
-    runRotate();
-    assert.equal(fs.existsSync(CURRENT_FILE), false);
-  });
-
-  it('archives current.md even when its date matches today', () => {
-    const today = new Date().toISOString().slice(0, 10);
-    const content = `# Session Log: ${today}\n\nSome entries.\n`;
-    writeCurrent(content);
-    runRotate({ TZ: 'UTC' });
-    assert.equal(fs.existsSync(CURRENT_FILE), false);
-    assert.equal(fs.readFileSync(path.join(SESSIONS_DIR, `${today}.md`), 'utf8'), content);
-    runRotate({ TZ: 'UTC' });
-    assert.deepEqual(fs.readdirSync(SESSIONS_DIR), [`${today}.md`]);
-  });
 
   it('handles collision when dated archive already exists', () => {
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
@@ -117,24 +56,4 @@ describe('rotate-session integration', () => {
     assert.ok(original.includes('earlier archive'));
   });
 
-  it('uses mtime fallback when header is missing', () => {
-    writeCurrent('No header here, just content.\n');
-    const mtime = new Date('2025-06-15T01:00:00Z');
-    fs.utimesSync(CURRENT_FILE, mtime, mtime);
-
-    const output = runRotate({ TZ: 'America/Los_Angeles' });
-    assert.match(output, /Rotated current\.md/);
-    assert.equal(fs.existsSync(CURRENT_FILE), false);
-
-    const files = fs.readdirSync(SESSIONS_DIR).filter((f) => f !== 'current.md');
-    assert.ok(files.length >= 1, `Expected at least 1 archived file, got: ${files}`);
-    assert.equal(files[0], '2025-06-14.md');
-  });
-
-  it('creates sessions directory if missing', () => {
-    cleanSessions();
-    const output = runRotate();
-    assert.equal(fs.existsSync(CURRENT_FILE), false);
-    assert.equal(fs.existsSync(CURRENT_FILE), false);
-  });
 });

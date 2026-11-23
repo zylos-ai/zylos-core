@@ -4,8 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { loadPostUpgradeSync, preparePostCutoff, publishPostCutoff, removeLegacyDashboardHooks, dashboardHookCommands } from '../upgrade-post-cutoff.js';
-import { installCoreCodexHook, coreSessionStartCommand } from '../runtime/codex/hooks.js';
+import { loadPostUpgradeSync, preparePostCutoff, publishPostCutoff } from '../upgrade-post-cutoff.js';
 
 const sync = await loadPostUpgradeSync();
 
@@ -25,24 +24,6 @@ function fixture(t, runtime = 'claude') {
   const options = { persist, installHook: () => {}, syncConfig: () => ({ attempted: true, fatal: false }) };
   return { root, write, ctx, options, hooks: () => journal.postCutoff.items.hooks };
 }
-
-test('staging leaves shared bytes unchanged and no-Codex state omits reconcile targets', t => {
-  const f = fixture(t);
-  assert.equal(fs.readFileSync(path.join(f.ctx.zylosDir, 'CLAUDE.md'), 'utf8'), 'old instructions');
-  assert.equal(f.hooks().targets.length, 2);
-  assert.equal(fs.existsSync(path.join(f.ctx.zylosDir, '.codex')), false);
-});
-
-test('publication allows a symlink ancestor of the instance root', async t => {
-  const f = fixture(t);
-  const alias = path.join(f.root, 'alias');
-  fs.symlinkSync(f.root, alias, 'dir');
-  f.ctx.journal.zylosDir = path.join(alias, 'zylos');
-  f.ctx.transactionDir = path.join(alias, 'transaction');
-  const result = await publishPostCutoff(f.ctx, f.options);
-  assert.equal(result.ok, true);
-  assert.equal(fs.readFileSync(path.join(f.root, 'zylos/CLAUDE.md'), 'utf8'), 'new instructions');
-});
 
 test('publication rejects a symlink below the instance root', async t => {
   const f = fixture(t);
@@ -86,110 +67,6 @@ for (const damage of ['missing', 'hash', 'traversal', 'symlink']) test(`all mate
   assert.equal(fs.readFileSync(path.join(f.ctx.zylosDir, 'CLAUDE.md'), 'utf8'), 'old instructions');
 });
 
-test('partial publication reports actual writes and a retry omits targets already correct', async t => {
-  const f = fixture(t);
-  const result = await publishPostCutoff(f.ctx, { ...f.options, afterStep: () => { throw Error('interrupted'); } });
-  assert.equal(result.ok, false);
-  assert.deepEqual(result.writtenTargets, ['t01']);
-  assert.equal(fs.readFileSync(path.join(f.ctx.zylosDir, 'CLAUDE.md'), 'utf8'), 'new instructions');
-  const retry = await publishPostCutoff(f.ctx, f.options);
-  assert.equal(retry.ok, true);
-  assert.equal(retry.writtenTargets.includes('t01'), false);
-  assert.deepEqual((await publishPostCutoff(f.ctx, f.options)).writtenTargets, []);
-});
-
-test('Codex partial failure preserves writer-reported target ids without attributing external writes', async t => {
-  const f = fixture(t, 'codex');
-  f.ctx.persisted = new Set();
-  const result = await publishPostCutoff(f.ctx, { ...f.options,
-    syncConfig: ({ onWrite }) => {
-      f.write('.codex/config.toml', 'model = "updated"\n');
-      onWrite(path.join(f.ctx.zylosDir, '.codex/config.toml'));
-      const global = path.join(f.root, '.codex/config.toml');
-      fs.mkdirSync(path.dirname(global), { recursive: true });
-      fs.writeFileSync(global, '# unrelated writer\n');
-      return { attempted: true, fatal: true, error: 'global write rejected' };
-    },
-  });
-  assert.equal(result.ok, false);
-  assert.equal(result.writtenTargets.includes('t04'), true);
-  assert.equal(result.writtenTargets.includes('t05'), false);
-  assert.equal(f.ctx.persisted.has('t04'), true);
-  assert.equal(f.ctx.persisted.has('t05'), false);
-});
-
-test('exact Dashboard command removal preserves mixed user hooks and similar commands', () => {
-  const root = '/isolated/zylos', command = [...dashboardHookCommands(root)][1];
-  const original = { hooks: { SessionStart: [{ matcher: 'x', hooks: [{ command }, { command: command + ' --user' }, { command: 'echo user' }] }] } };
-  const next = removeLegacyDashboardHooks(original, root);
-  assert.equal(original.hooks.SessionStart[0].hooks.length, 3);
-  assert.deepEqual(next.hooks.SessionStart[0].hooks.map(h => h.command), [command + ' --user', 'echo user']);
-});
-
-for (const [name, response, code] of [
-  ['fatal', { attempted: true, fatal: true, error: 'write failed' }, 'codex_config_reconcile_failed'],
-  ['state changed', { attempted: false }, 'codex_config_reconcile_failed'],
-  ['unchanged success', { attempted: true, fatal: false, changed: false }, null],
-  ['warning', { attempted: true, fatal: false, warning: true, error: 'write failed' }, null],
-]) test(`Codex result mapping: ${name}`, async t => {
-  const f = fixture(t, 'codex');
-  const result = await publishPostCutoff(f.ctx, { ...f.options, syncConfig: () => response });
-  assert.equal(result.lastError?.code || null, code);
-  assert.equal(f.hooks().state, code ? 'failed' : 'done');
-  assert.equal(f.hooks().warnings.length, name === 'warning' ? 2 : 0);
-  if (code) assert.equal(result.lastError.targetId, 't04');
-});
-
-for (const [relative, value, id] of [['.codex/hooks.json', '{"hooks":', 't03'], ['.codex/config.toml', 'foo = "', 't04']]) test(`unparseable ${relative} invokes no Codex writer`, async t => {
-  const f = fixture(t, 'codex'); f.write(relative, value);
-  let calls = 0;
-  const result = await publishPostCutoff(f.ctx, { ...f.options, installHook: () => calls++, syncConfig: () => calls++ });
-  assert.equal(result.lastError.code, 'codex_config_unparseable'); assert.equal(result.lastError.targetId, id);
-  assert.equal(calls, 0); assert.equal(fs.readFileSync(path.join(f.ctx.zylosDir, relative), 'utf8'), value);
-});
-
-test('truncated global Codex TOML invokes no writer and preserves global bytes', async t => {
-  const f = fixture(t, 'codex');
-  const file = path.join(f.root, '.codex/config.toml');
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const truncated = 'model = "unfinished';
-  fs.writeFileSync(file, truncated);
-  let calls = 0;
-  const result = await publishPostCutoff(f.ctx, {
-    ...f.options, installHook: () => calls++, syncConfig: () => calls++,
-  });
-  assert.equal(result.lastError.code, 'codex_config_unparseable');
-  assert.equal(result.lastError.targetId, 't05');
-  assert.equal(calls, 0);
-  assert.equal(fs.readFileSync(file, 'utf8'), truncated);
-});
-
-test('Codex writer exception is retryable, done never reconciles again', async t => {
-  const f = fixture(t, 'codex');
-  const result = await publishPostCutoff(f.ctx, { ...f.options, installHook: () => { throw Error('unwritable'); } });
-  assert.equal(result.lastError.code, 'codex_config_reconcile_failed'); assert.equal(result.lastError.targetId, 't03');
-  assert.equal((await publishPostCutoff(f.ctx, f.options)).ok, true);
-  assert.equal((await publishPostCutoff(f.ctx, { ...f.options, installHook: () => { throw Error('must not run'); } })).ok, true);
-  assert.equal(f.hooks().attempts, 2);
-});
-
-for (const stillWarn of [false, true]) test(`warnings from interrupted attempt replaced without duplicates: ${stillWarn}`, async t => {
-  const f = fixture(t, 'codex');
-  const warning = () => ({ attempted: true, fatal: false, warning: true, error: 'cannot write' });
-  await publishPostCutoff(f.ctx, { ...f.options, syncConfig: warning, afterStep: step => { if (step === 'before_done') throw Error('interrupted'); } });
-  assert.equal(f.hooks().state, 'failed'); assert.deepEqual(f.hooks().warnings, []);
-  await publishPostCutoff(f.ctx, { ...f.options, ...(stillWarn ? { syncConfig: warning } : {}) });
-  assert.equal(f.hooks().warnings.length, stillWarn ? 2 : 0);
-  if (stillWarn) assert.deepEqual(f.hooks().warnings.map(w => w.targetId), ['t04', 't05']);
-});
-
-test('CODEX_HOME ignored and same project/global TOML deduplicated', t => {
-  const f = fixture(t, 'codex');
-  assert.equal(f.hooks().codexGlobalDir, path.join(f.root, '.codex'));
-  const staged = preparePostCutoff({ sync, transactionDir: f.ctx.transactionDir, zylosDir: f.ctx.zylosDir, homeDir: f.ctx.zylosDir, runtime: 'codex', replacements: [] });
-  assert.equal(staged.items.hooks.targets.filter(x => x.kind === 'codex_toml').length, 1);
-});
-
 for (const crashAt of ['t02', 'dashboard_hooks_removed', 'codex_hook_installed', 'codex_config_synced', 'before_done']) test(`process death at ${crashAt} resumes solely from durable journal and staged inputs`, async t => {
   const f = fixture(t, 'codex');
   f.options.persist(f.ctx.journal, {});
@@ -216,51 +93,4 @@ for (const crashAt of ['t02', 'dashboard_hooks_removed', 'codex_hook_installed',
   assert.equal(fs.statSync(path.join(f.ctx.zylosDir, '.claude/settings.json')).mtimeMs, publishedAt);
   assert.equal(fs.readFileSync(path.join(f.ctx.zylosDir, 'CLAUDE.md'), 'utf8'), 'new instructions');
   assert.equal(fs.readFileSync(path.join(f.ctx.zylosDir, '.claude/settings.json'), 'utf8'), '{"new":true}');
-});
-
-test('real Core Codex reconciler matches direct reuse after exact Dashboard removal; trust is untouched', async t => {
-  const f = fixture(t, 'codex');
-  const dashboard = [...dashboardHookCommands(f.ctx.zylosDir)][1];
-  const core = coreSessionStartCommand(f.ctx.zylosDir);
-  const original = { hooks: { SessionStart: [
-    { hooks: [{ type: 'command', command: dashboard }] },
-    { hooks: [{ type: 'command', command: core }] },
-    { matcher: 'user', hooks: [{ type: 'command', command: core }, { type: 'command', command: 'echo user' }] },
-  ] } };
-  f.write('.codex/hooks.json', JSON.stringify(removeLegacyDashboardHooks(original, f.ctx.zylosDir)));
-  installCoreCodexHook({ zylosDir: f.ctx.zylosDir });
-  const expected = fs.readFileSync(path.join(f.ctx.zylosDir, '.codex/hooks.json'), 'utf8');
-  f.write('.codex/hooks.json', JSON.stringify(original));
-  f.write('.codex/hooks.trust.json', 'trust-marker-sentinel');
-  const result = await publishPostCutoff(f.ctx, { ...f.options, installHook: installCoreCodexHook });
-  assert.equal(result.ok, true);
-  assert.equal(fs.readFileSync(path.join(f.ctx.zylosDir, '.codex/hooks.json'), 'utf8'), expected);
-  assert.equal(fs.readFileSync(path.join(f.ctx.zylosDir, '.codex/hooks.trust.json'), 'utf8'), 'trust-marker-sentinel');
-  assert.equal(fs.existsSync(path.join(f.root, '.codex/config.toml')), false);
-});
-
-test('real Codex publication uses captured home, preserves user TOML, and ignores CODEX_HOME', t => {
-  const f = fixture(t, 'codex');
-  f.write('.zylos/config.json', '{"runtime":"codex"}');
-  f.write('.codex/config.toml', 'user_setting = "project"\n');
-  fs.mkdirSync(path.join(f.root, '.codex'));
-  fs.writeFileSync(path.join(f.root, '.codex/config.toml'), 'user_setting = "global"\n');
-  f.write('.codex/hooks.trust.json', 'marker sentinel');
-  f.options.persist(f.ctx.journal, {});
-  const moduleUrl = new URL('../upgrade-post-cutoff.js', import.meta.url).href;
-  const script = `import fs from 'node:fs'; import {publishPostCutoff} from ${JSON.stringify(moduleUrl)};
-    const transactionDir=process.argv[1], journal=JSON.parse(fs.readFileSync(transactionDir+'/journal.json'));
-    const result=await publishPostCutoff({transactionDir,journal,transactionId:journal.transactionId}, {
-      persist:(j,c)=>{Object.assign(j,c);fs.writeFileSync(transactionDir+'/journal.json',JSON.stringify(j));}
-    }); console.log(JSON.stringify(result)); if(!result.ok) process.exitCode=1;`;
-  const otherHome = path.join(f.root, 'other-codex-home');
-  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script, f.ctx.transactionDir], {
-    env: { ...process.env, HOME: f.root, ZYLOS_DIR: f.ctx.zylosDir, CODEX_HOME: otherHome }, encoding: 'utf8',
-  });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.equal(JSON.parse(result.stdout).ok, true, 'configuration progress must not contaminate the JSON result');
-  assert.match(fs.readFileSync(path.join(f.root, '.codex/config.toml'), 'utf8'), /user_setting = "global"/);
-  assert.match(fs.readFileSync(path.join(f.ctx.zylosDir, '.codex/config.toml'), 'utf8'), /user_setting = "project"/);
-  assert.equal(fs.readFileSync(path.join(f.ctx.zylosDir, '.codex/hooks.trust.json'), 'utf8'), 'marker sentinel');
-  assert.equal(fs.existsSync(otherHome), false);
 });

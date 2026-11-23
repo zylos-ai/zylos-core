@@ -1719,7 +1719,7 @@ Options:
   --api-key <key>            Claude credential sent as x-api-key
   --auth-token <token>       Claude credential sent as Authorization: Bearer
   --codex-api-key <key>      Codex credential sent as Authorization: Bearer
-  --base-url <url>           Claude API root/prefix (appends /v1/messages for verification)
+  --base-url <url>           Claude API root/prefix (appends /v1/models for verification)
   --codex-base-url <url>     Codex API base, usually ending /v1 (verifies /models)
   --domain <domain>          Configure Caddy with this domain
   --https / --no-https       Enable/disable HTTPS (default: https when domain set)

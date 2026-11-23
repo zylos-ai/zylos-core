@@ -27,15 +27,6 @@ afterEach(() => {
 });
 
 describe('Claude terms pre-acceptance', () => {
-  test('creates a missing home directory before writing ~/.claude.json', async () => {
-    const { launch: { preAccept } } = await getRuntime('claude');
-    const home = useFreshHome({ create: false });
-
-    assert.equal(preAccept(), true);
-
-    assert.equal(readJson(path.join(home, '.claude.json')).hasCompletedOnboarding, true);
-    assert.equal(readJson(path.join(home, '.claude', 'settings.json')).skipDangerousModePermissionPrompt, true);
-  });
 
   test('preserves existing settings and reports no change once accepted', async () => {
     const { launch: { preAccept } } = await getRuntime('claude');

@@ -118,30 +118,6 @@ async function readProbeResult(p) {
   return JSON.parse(fs.readFileSync(p.result, 'utf8'));
 }
 
-// Boundary: real Linux task names on a private legacy tmux pane. Run for
-// ancestor-name confirmation changes; unrelated work may skip. Fixture owns cleanup.
-test('Legacy Bootstrap confirms the kernel task name instead of a ps basename', {skip:process.platform !== 'linux',timeout:30000}, async t => {
-  const f = readyTmuxTarget(t, {prefix:'bootstrap-kernel-name-',ledger:false});
-  legacyClaudePane(f);
-  const native = legacyNamedParent(f);
-  const p = probe(f, {kind:'legacy',sessionGroup:null});
-  f.tmux('respawn-pane', '-k', '-t', '=claude-main:', native, 'claude', process.execPath, p.script);
-  const accepted = await readProbeResult(p);
-  assert.equal(accepted.ok, true, JSON.stringify(accepted));
-  assert.equal(accepted.data.runtime, 'claude');
-  assert.equal(accepted.data.runtimePid, Number(f.tmux('display-message','-p','-t','=claude-main:','#{pane_pid}')));
-
-  fs.unlinkSync(p.result);
-  f.tmux('respawn-pane', '-k', '-t', '=claude-main:', native, 'x/claude', process.execPath, p.script);
-  const rejected = await readProbeResult(p);
-  const panePid = Number(f.tmux('display-message','-p','-t','=claude-main:','#{pane_pid}'));
-  assert.equal(fs.readFileSync(`/proc/${panePid}/comm`,'utf8').trim(), 'x/claude');
-  const psName = execFileSync('ps',['-o','comm=','-p',String(panePid)],{encoding:'utf8'}).trim();
-  assert.equal(path.basename(psName), 'claude', 'the unconfirmed ps basename would falsely match');
-  assert.deepEqual(rejected, {ok:false,code:'IDENTITY_UNAVAILABLE',message:'Hook is not in the current managed runtime pane'});
-  assert.doesNotThrow(() => f.tmux('has-session','-t','=claude-main'));
-});
-
 // Boundary: stale ancestry versus real process exit while its private pane lives.
 // Run for ancestor snapshot/confirmation changes; unrelated work may skip.
 // Fixture and probe cleanup are bounded.

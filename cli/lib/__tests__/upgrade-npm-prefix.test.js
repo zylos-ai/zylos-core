@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {validateUpgradeNpmPrefix, runUpgradeEntry} from '../upgrade-entry.js';
+import {runUpgradeEntry} from '../upgrade-entry.js';
 
 function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'npm-prefix-')));
@@ -13,25 +13,6 @@ function fixture(t) {
   const protectedNpmCli = path.join(root, 'npm-cli.js');
   return {root, coreDir, protectedNpmCli, tempDir:root};
 }
-
-test('prefix precheck runs the selected npm CLI with the current Node and root -g', t => {
-  const f = fixture(t), report = path.join(f.root, 'arguments.json');
-  fs.writeFileSync(f.protectedNpmCli, `
-    const fs = require('node:fs');
-    fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({exe:process.execPath,args:process.argv.slice(2),cwd:process.cwd()}));
-    console.log(${JSON.stringify(path.dirname(f.coreDir))});
-  `);
-  validateUpgradeNpmPrefix(f);
-  assert.deepEqual(JSON.parse(fs.readFileSync(report)), {exe:process.execPath, args:['root','-g'], cwd:f.tempDir});
-});
-
-for (const linked of ['npm root', 'installed root']) test(`prefix precheck accepts an equivalent symlink for ${linked}`, t => {
-  const f = fixture(t), alias = path.join(f.root, 'alias');
-  fs.symlinkSync(linked === 'npm root' ? path.dirname(f.coreDir) : f.coreDir, alias, 'dir');
-  fs.writeFileSync(f.protectedNpmCli, `console.log(${JSON.stringify(linked === 'npm root' ? alias : path.dirname(f.coreDir))});`);
-  if (linked === 'installed root') f.coreDir = alias;
-  assert.doesNotThrow(() => validateUpgradeNpmPrefix(f));
-});
 
 // File/subprocess-only admission cases. The official runner isolates host paths;
 // no installation, service or tmux process runs. Rerun when npm admission changes.

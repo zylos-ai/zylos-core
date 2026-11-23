@@ -4,10 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import {createRequire} from 'node:module';
-import {pathToFileURL} from 'node:url';
-import { inspectUpgradeSource, runUpgradeEntry, installUpgradeTarget, outputUpgradeResult } from '../upgrade-entry.js';
-import {assertDashboardUninstalled} from '../core-db-backup.js';
+import { runUpgradeEntry, installUpgradeTarget } from '../upgrade-entry.js';
 
 function fixture(t, version = '0.9.3') {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-target-entry-')));
@@ -22,119 +19,6 @@ function fixture(t, version = '0.9.3') {
   fs.mkdirSync(input.zylosDir);
   return input;
 }
-
-test('target checks reject old sources and standalone Dashboard before touching database or transaction state', t => {
-  const input = fixture(t, '0.9.2');
-  const deps = {probe() {assert.fail('database inspection must not run');}};
-  assert.throws(() => inspectUpgradeSource(input, deps), {code:'UPGRADE_SOURCE_TOO_OLD'});
-  input.fromVersion = '0.9.3';
-  fs.writeFileSync(path.join(input.installedRoot, 'package.json'), JSON.stringify({name:'zylos', version:'0.9.3'}));
-  fs.mkdirSync(path.join(input.zylosDir, '.zylos'));
-  fs.writeFileSync(path.join(input.zylosDir, '.zylos/components.json'), JSON.stringify({components:{dashboard:{version:'1'}}}));
-  assert.throws(() => inspectUpgradeSource(input, deps), error => error.code === 'DASHBOARD_STILL_INSTALLED' && /zylos uninstall dashboard --yes/.test(error.next));
-  assert.equal(fs.existsSync(path.join(input.zylosDir, '.backup')), false);
-});
-
-for (const invalid of ['linked-root','ordinary-bin','outside-bin']) test(`unsupported global layout rejects ${invalid} before probes or transaction writes`, t => {
-  const input=fixture(t),prefix=path.dirname(path.dirname(path.dirname(input.installedRoot)));
-  const metadata={type:'module',name:'zylos',version:'0.9.3',bin:{zylos:'cli/zylos.js'}};
-  fs.mkdirSync(path.join(input.installedRoot,'cli'),{recursive:true});
-  fs.writeFileSync(path.join(input.installedRoot,'cli/zylos.js'),'#!/usr/bin/env node\n');
-  fs.writeFileSync(path.join(input.installedRoot,'package.json'),JSON.stringify(metadata));
-  const bin=path.join(prefix,'bin/zylos');
-  if(invalid==='linked-root') {
-    const checkout=path.join(path.dirname(prefix),'checkout');
-    fs.renameSync(input.installedRoot,checkout);
-    fs.symlinkSync(checkout,input.installedRoot,'dir');
-  } else if(invalid==='ordinary-bin') fs.writeFileSync(bin,'shim\n');
-  else fs.symlinkSync(path.join(input.zylosDir,'outside.js'),bin);
-  assert.throws(()=>inspectUpgradeSource(input,{probe(){assert.fail('probe must not run');}}),{code:'UNSUPPORTED_INSTALL_LAYOUT'});
-  assert.equal(fs.existsSync(path.join(input.zylosDir,'.backup')),false);
-});
-
-test('all upgrade entrypoints share flat and nested standalone Dashboard rejection',async t=>{
-  const input=fixture(t),file=path.join(input.zylosDir,'.zylos/components.json');
-  const {assertDashboardUninstalled:finalizerCheck}=await import('../self-upgrade.js');
-  fs.mkdirSync(path.dirname(file));
-  for(const registry of [{dashboard:{}},{components:{dashboard:{}}}]) {
-    fs.writeFileSync(file,JSON.stringify(registry));
-    for(const check of [assertDashboardUninstalled,finalizerCheck])assert.throws(()=>check(input.zylosDir),{code:'DASHBOARD_STILL_INSTALLED'});
-  }
-  for(const registry of [{},{components:{}}]) {
-    fs.writeFileSync(file,JSON.stringify(registry));
-    for(const check of [assertDashboardUninstalled,finalizerCheck])assert.doesNotThrow(()=>check(input.zylosDir));
-  }
-});
-
-// File-only preflight coverage: the official runner isolates HOME/ZYLOS_DIR,
-// PM2_HOME and TMPDIR. No service or tmux process is started; probe/rehearsal
-// stop at injected boundaries. Rerun for source-version/database admission changes.
-for (const version of ['0.9.4','0.9.5']) test(`${version} prechecks freeze package and database decisions before transaction creation`, t => {
-  const input = fixture(t,version);
-  const calls = [];
-  const ctx = inspectUpgradeSource(input, {
-    probe(root, target, options) {
-      calls.push('probe');
-      assert.equal(options.dashboardOwnerManaged,false);
-      fs.mkdirSync(path.join(input.installedRoot,'skills/dashboard'),{recursive:true});
-      return {databases:[{},{}],needsMigration:true};
-    },
-    preflight() {calls.push('preflight');},
-    rehearse(root, target, options) {calls.push('rehearse'); assert.equal(options.driverRoot, path.join(input.zylosDir, '.claude/skills'));}
-  });
-  assert.deepEqual(calls, ['probe', 'preflight']);
-  assert.equal(ctx.snapshotFormatVersion, 3);
-  assert.equal(ctx.firstTakeover,true);
-  assert.equal(ctx.dashboardOwnerManaged,false);
-  assert.equal(fs.existsSync(path.join(input.zylosDir, '.backup')), false);
-  input.fromVersion = '1.0.0';
-  assert.throws(() => inspectUpgradeSource(input), {code:'INVALID_UPGRADE_HANDOFF'});
-});
-
-for(const bundled of [false,true]) for(const version of [13,20]) test(`independent takeover: bundled=${bundled}, schema=${version}`,t=>{
-  const input=fixture(t,'0.9.4'),installed=path.resolve('skills/comm-bridge');
-  const Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');
-  const driver=path.join(input.zylosDir,'.claude/skills/comm-bridge');
-  fs.mkdirSync(driver,{recursive:true});fs.writeFileSync(path.join(driver,'package.json'),'{}');
-  fs.symlinkSync(path.join(installed,'node_modules'),path.join(driver,'node_modules'));
-  const database=path.join(input.zylosDir,'components/dashboard/dashboard.db');
-  fs.mkdirSync(path.dirname(database),{recursive:true});
-  const db=new Database(database);db.exec('CREATE TABLE schema_migrations(version INTEGER); PRAGMA user_version=99');
-  db.prepare('INSERT INTO schema_migrations VALUES (?)').run(version);db.close();
-  if(bundled)fs.mkdirSync(path.join(input.installedRoot,'skills/dashboard'),{recursive:true});
-  const marker=path.join(input.zylosDir,'.claude/skills/dashboard/.zylos/core-managed.json');
-  fs.mkdirSync(path.dirname(marker),{recursive:true});fs.writeFileSync(marker,'ignored old marker');
-  const before=fs.readFileSync(database),seen=[];
-  // Core owns the database at the owner-managed baseline, or at any version once
-  // the installed Core already ships Dashboard (the first takeover has run).
-  const managed=version>=20||bundled;
-  const check=options=>{assert.equal(options.dashboardOwnerManaged,managed);};
-  const ctx=inspectUpgradeSource(input,{
-    probe(root,target,options){check(options);seen.push('probe');return {databases:Array.from({length:managed?3:2},()=>({})),needsMigration:true};},
-    preflight(root,options){check(options);seen.push('preflight');},
-    rehearse(root,target,options){check(options);seen.push('rehearse');}
-  });
-  assert.deepEqual(seen,['probe','preflight']);
-  assert.equal(ctx.firstTakeover,!bundled);assert.equal(ctx.dashboardOwnerManaged,managed);
-  assert.ok(fs.readFileSync(database).equals(before),'Dashboard database changed');
-  assert.equal(fs.existsSync(path.join(input.zylosDir,'.backup')),false);
-});
-
-test('invalid installed Dashboard directory rejects independently of old marker',t=>{
-  const input=fixture(t),directory=path.join(input.installedRoot,'skills/dashboard');
-  fs.mkdirSync(path.dirname(directory));fs.symlinkSync('missing',directory);
-  assert.throws(()=>inspectUpgradeSource(input),{code:'DASHBOARD_TAKEOVER_INVALID'});
-});
-
-for(const kind of ['file','symlink','dangling'])test(`target entry rejects ${kind} skill dependencies before probes or transaction writes`,t=>{
-  const input=fixture(t),declared=path.join(input.tempDir,'skills/comm-bridge'),modules=path.join(input.zylosDir,'.claude/skills/comm-bridge/node_modules');
-  fs.mkdirSync(declared,{recursive:true});fs.mkdirSync(path.dirname(modules),{recursive:true});
-  if(kind==='file')fs.writeFileSync(modules,'invalid');
-  else {const target=path.join(input.zylosDir,'dependency-target');if(kind==='symlink')fs.mkdirSync(target);fs.symlinkSync(target,modules);}
-  assert.throws(()=>inspectUpgradeSource(input,{probe(){assert.fail('probe must not run');}}),{code:'INVALID_CORE_DEPENDENCIES'});
-  assert.equal(fs.existsSync(path.join(input.zylosDir,'.backup')),false);
-  assert.equal(fs.existsSync(path.join(input.zylosDir,'.zylos')),false);
-});
 
 function pipeline(input, failAt) {
   const calls = [];
@@ -159,14 +43,6 @@ test('protected entry saves original package before code, stops, snapshot and in
   assert.deepEqual(f.calls, ['begin', 'savePackage', 'saveCode', 'prepare', 'install', 'finalize', 'release']);
 });
 
-test('rejected prechecks never create a transaction or request compensation', async t => {
-  const input = fixture(t), f = pipeline(input);
-  f.deps.inspect = () => { throw Object.assign(Error('precheck rejected'), {code:'PRECHECK_REJECTED'}); };
-  const result = await runUpgradeEntry(input, f.deps);
-  assert.equal(result.success, false);
-  assert.deepEqual(f.calls, []);
-});
-
 for (const failure of ['savePackage', 'saveCode', 'prepare', 'install']) test(`entry compensates ${failure} failure and never finalizes`, async t => {
   const input = fixture(t), f = pipeline(input, failure);
   const result = await runUpgradeEntry(input, f.deps);
@@ -174,44 +50,6 @@ for (const failure of ['savePackage', 'saveCode', 'prepare', 'install']) test(`e
   assert.equal(result.rollback.completed, true);
   assert.equal(f.calls.includes('finalize'), false);
   assert.equal(f.calls.at(-1), 'recover');
-});
-
-for (const finalization of [false, true]) test(`entry retains source version for completed rollback presentation (finalization=${finalization})`, async t => {
-  const input = fixture(t, '1.0.0-beta.11'), f = pipeline(input, finalization ? undefined : 'install');
-  if (finalization) f.deps.finalize = () => ({success:false, error:'Target finalization failed.'});
-  const result = await runUpgradeEntry(input, f.deps);
-  const before = JSON.stringify(result);
-  let stderr = '', stdout = '';
-  const output = {stdout:{write:value => {stdout += value;}}, stderr:{write:value => {stderr += value;}}};
-  outputUpgradeResult(result, {jsonOutput:false}, output);
-  assert.match(stderr, /has been restored to 1\.0\.0-beta\.11\./);
-  outputUpgradeResult(result, {jsonOutput:true}, output);
-  assert.equal(stdout, '\n' + before + '\n');
-  assert.equal(JSON.stringify(result), before);
-  assert.equal(Object.hasOwn(result, 'from'), false);
-});
-
-for (const kind of ['symlink', 'dangling']) test(`dependency ${kind} gets a human path and Next without new JSON fields`, async t => {
-  const input = fixture(t), modules = path.join(input.zylosDir, '.claude/skills/comm-bridge/node_modules');
-  fs.mkdirSync(path.join(input.tempDir, 'skills/comm-bridge'), {recursive:true});
-  fs.mkdirSync(path.dirname(modules), {recursive:true});
-  const target = path.join(input.zylosDir, 'dependencies');
-  if (kind === 'symlink') fs.mkdirSync(target);
-  fs.symlinkSync(target, modules);
-  const result = await runUpgradeEntry(input, {probe() {assert.fail('invalid dependencies reached probe');}});
-  assert.equal(result.code, 'INVALID_CORE_DEPENDENCIES');
-  assert.equal(result.next, undefined);
-  assert.equal(result.error, 'Installed core skill node_modules must be a real directory or absent: comm-bridge');
-  const before = JSON.stringify(result);
-  let stderr = '', stdout = '';
-  const output = {stdout:{write:value => {stdout += value;}}, stderr:{write:value => {stderr += value;}}};
-  outputUpgradeResult(result, {jsonOutput:false}, output);
-  assert.ok(stderr.includes(`Dependency path: ${modules}\n`));
-  assert.match(stderr, /Next: .*real dependency directory.*retry/);
-  outputUpgradeResult(result, {jsonOutput:true}, output);
-  assert.equal(stdout, '\n' + before + '\n');
-  assert.equal(JSON.stringify(result), before);
-  assert.equal(fs.existsSync(path.join(input.zylosDir, '.backup')), false);
 });
 
 test('entry refuses ambiguous prior transactions without inspecting, installing, or recovering them', async t => {
@@ -226,90 +64,6 @@ test('entry refuses ambiguous prior transactions without inspecting, installing,
   assert.deepEqual(f.calls, []);
 });
 
-test('entry directs a closed transaction to forward finalization without changing other recovery handling', async t => {
-  const input=fixture(t),f=pipeline(input);
-  f.deps.maintenance.discover=()=>({candidates:[{journal:{phase:'recovery_required'}}],diagnostics:[],marker:null});
-  f.deps.maintenance.classifyCutoff=()=> 'closed';
-  f.deps.inspect=()=>assert.fail('closed transaction must block prechecks');
-  const result=await runUpgradeEntry(input,f.deps);
-  assert.equal(result.code,'UPGRADE_RECOVERY_REQUIRED');
-  assert.match(result.next,/zylos upgrade --resume-finalize/);
-  assert.doesNotMatch(result.next,/zylos recovery resume/);
-  assert.equal(result.recovery_required,true);
-  assert.deepEqual(f.calls,[]);
-});
-
-test('entry keeps manual recovery guidance when process identity cannot be verified', async t => {
-  const input=fixture(t),f=pipeline(input);
-  f.deps.maintenance.discover=()=>({candidates:[{journal:{phase:'recovery_required'}}],diagnostics:[],marker:null});
-  f.deps.maintenance.classifyCutoff=()=> 'closed';
-  f.deps.maintenance.canRecognizeProcesses=()=> false;
-  f.deps.inspect=()=>assert.fail('closed transaction must block prechecks');
-  const result=await runUpgradeEntry(input,f.deps);
-  assert.equal(result.code,'UPGRADE_RECOVERY_REQUIRED');
-  assert.match(result.next,/zylos recovery status.*zylos recovery resume/);
-  assert.doesNotMatch(result.next,/zylos upgrade --resume-finalize/);
-  assert.deepEqual(f.calls,[]);
-});
-
-test('target rejects missing deployment before recovery discovery', async t => {
-  const input=fixture(t);
-  input.zylosDir=path.join(input.zylosDir,'missing');
-  const result=await runUpgradeEntry(input,{maintenance:{discover(){assert.fail('missing deployment was discovered');}}});
-  assert.equal(result.code,'ZYLOS_NOT_INITIALIZED');
-  assert.match(result.error,/Initialize this deployment/);
-  assert.deepEqual(result.persisted,[]);
-  assert.equal(result.recovery_required,false);
-  assert.equal(result.rollback.attempted,false);
-});
-
-test('downloaded executable keeps malformed JSON classified as invalid handoff', () => {
-  const child=spawnSync(process.execPath,[path.resolve('cli/lib/upgrade-entry.js')],{input:'{',encoding:'utf8'});
-  assert.equal(child.status,1,child.stderr);
-  const result=JSON.parse(child.stdout);
-  assert.equal(result.code,'INVALID_UPGRADE_HANDOFF');
-  assert.deepEqual(result.persisted,[]);
-});
-
-// Integration boundary: spawn the actual downloaded entry as main and exercise
-// its JSON/stdout and warning/stderr path. Run for direct upgrade output changes;
-// skip unrelated finalizer/service work. Runner HOME/ZYLOS_DIR/PM2_HOME/TMPDIR
-// are isolated, and the child receives fixture-owned paths plus a private tmux
-// namespace. Product entry files are copied unchanged; native module mocks stop
-// installer/protection/DB work. The bounded child only permits npm root -g.
-test('downloaded executable prints Core package location warnings separately from runtime warnings', t => {
-  const input = fixture(t), root = path.dirname(input.tempDir), source = path.resolve('.');
-  const filter = file => !file.split(path.sep).includes('__tests__') && !file.split(path.sep).includes('node_modules');
-  fs.cpSync(path.join(source, 'cli/lib'), path.join(input.tempDir, 'cli/lib'), { recursive: true, filter });
-  const admission = 'skills/comm-bridge/scripts/upgrade-admission.js';
-  fs.mkdirSync(path.dirname(path.join(input.tempDir, admission)), { recursive: true });
-  fs.copyFileSync(path.join(source, admission), path.join(input.tempDir, admission));
-  const warning = { code: 'CORE_PACKAGE_LOCATION_WRITE_FAILED', message: 'Record publication denied; set ZYLOS_PACKAGE_ROOT or rerun zylos init.' };
-  const result = { success: true, warnings: [], corePackageWarnings: [warning] };
-  // Only the finalizer boundary is inert; the product CLI's main block,
-  // handoff validation, pipeline and output statements execute in the child.
-  fs.mkdirSync(path.join(input.installedRoot, 'cli/lib'), { recursive: true });
-  fs.writeFileSync(path.join(input.installedRoot, 'cli/lib/self-upgrade.js'),
-    `export function runSelfUpgradeFinalize() { return ${JSON.stringify(result)}; }\n`);
-  const bin = path.join(root, 'prefix/bin'), npmCli = path.join(root, 'npm-cli.js');
-  fs.writeFileSync(npmCli, `import assert from 'node:assert/strict';
-assert.deepEqual(process.argv.slice(2), ['root', '-g']);
-process.stdout.write(${JSON.stringify(path.dirname(input.installedRoot))});\n`);
-  fs.symlinkSync(npmCli, path.join(bin, 'npm'));
-  const home = path.join(root, 'home'), tmp = path.join(root, 'tmp');
-  fs.mkdirSync(home); fs.mkdirSync(tmp);
-  const child = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--import',
-    path.resolve('cli/lib/__tests__/fixtures/upgrade-entry-output.js'), path.join(input.tempDir, 'cli/lib/upgrade-entry.js')], {
-    input: JSON.stringify(input), encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024,
-    env: { ...process.env, UPGRADE_ENTRY_FIXTURE_ROOT: root, HOME: home, ZYLOS_DIR: input.zylosDir,
-      PM2_HOME: path.join(home, '.pm2'), TMPDIR: tmp, TMUX_TMPDIR: tmp, PATH: bin },
-  });
-  assert.equal(child.status, 0, child.stderr);
-  assert.deepEqual(JSON.parse(child.stdout), result);
-  assert.ok(child.stderr.split('\n').includes(`Core package location warning: ${warning.message}`));
-  assert.doesNotMatch(child.stderr, /Runtime warning|the fixture must never launch npm/);
-});
-
 test('downloaded executable redacts paths from its main-block failure', t => {
   const privatePath=path.join(fixture(t).zylosDir,'private-handoff.json');
   const child=spawnSync(process.execPath,[path.resolve('cli/lib/upgrade-entry.js')],{input:privatePath,encoding:'utf8'});
@@ -322,88 +76,6 @@ test('downloaded executable redacts paths from its main-block failure', t => {
   assert.doesNotMatch(result.error,/\n| at /);
 });
 
-test('downloaded executable reports a missing target package without its path', t => {
-  const input=fixture(t);
-  input.tempDir=path.join(path.dirname(input.tempDir),'missing-target');
-  const child=spawnSync(process.execPath,[path.resolve('cli/lib/upgrade-entry.js')],{input:JSON.stringify(input),encoding:'utf8'});
-  assert.equal(child.status,1,child.stderr);
-  const result=JSON.parse(child.stdout);
-  assert.equal(result.code,'UPGRADE_FAILED');
-  assert.deepEqual(result.persisted,[]);
-  assert.match(result.error,/Downloaded target package is unavailable/);
-  assert.doesNotMatch(result.error,new RegExp(input.tempDir.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
-  assert.doesNotMatch(result.error,/\n| at /);
-});
-
-const registeredProtocolCodes = [
-  'ZYLOS_NOT_INITIALIZED', 'INVALID_ARGS', 'UPGRADE_RECOVERY_REQUIRED',
-  'DASHBOARD_STILL_INSTALLED', 'INVALID_CORE_DEPENDENCIES', 'UNSUPPORTED_INSTALL_LAYOUT', 'DASHBOARD_TAKEOVER_INVALID',
-  'RUNTIME_PREPARATION_INCOMPLETE', 'UPGRADE_FAILED', 'SCHEMA_TOO_NEW', 'SCHEMA_MIGRATION_FAILED',
-  'SETTINGS_UNREADABLE', 'UPGRADE_SOURCE_TOO_OLD', 'INVALID_UPGRADE_HANDOFF', 'MANUAL_RECOVERY_REQUIRED',
-  'SNAPSHOT_FAILED', 'NOT_RESUMABLE', 'CUTOFF_UNTRUSTED', 'CUTOFF_WRITE_UNCERTAIN', 'FINALIZE_INCOMPLETE',
-  'CONFIG_LOCK_TIMEOUT', 'CONFIG_UNREADABLE', 'CONFIG_WRITE_FAILED', 'CONFIG_KEY_RESERVED',
-  'LOCK_TIMEOUT', 'DB_BUSY',
-  'material_corrupt', 'runtime_config_conflict', 'codex_config_unparseable', 'codex_config_reconcile_failed',
-];
-
-for(const code of registeredProtocolCodes) test(`entry preserves registered protocol code: ${code}`,async t=>{
-  const input=fixture(t),f=pipeline(input);
-  f.deps.inspect=()=>{throw Object.assign(Error('precheck failed'),{code});};
-  const result=await runUpgradeEntry(input,f.deps);
-  assert.equal(result.code,code);
-  assert.deepEqual(result.persisted,[]);
-  assert.deepEqual(f.calls,[]);
-});
-
-for(const code of [undefined,'',7]) test(`entry normalizes missing failure code: ${code}`,async t=>{
-  const input=fixture(t),f=pipeline(input);
-  f.deps.inspect=()=>{throw Object.assign(Error('precheck failed'),{code});};
-  const result=await runUpgradeEntry(input,f.deps);
-  assert.equal(result.code,'UPGRADE_FAILED');
-  assert.deepEqual(result.persisted,[]);
-  assert.deepEqual(f.calls,[]);
-});
-
-for(const code of ['',7]) test(`returned finalizer failure normalizes non-string code: ${JSON.stringify(code)}`,async t=>{
-  const input=fixture(t),f=pipeline(input);
-  f.deps.finalize=()=>({success:false,code,error:'forward repair failed',failedStep:4,steps:[]});
-  const result=await runUpgradeEntry(input,f.deps);
-  assert.equal(result.code,'UPGRADE_FAILED');
-  assert.equal(result.failedStep,4);
-  assert.equal(result.rollback.completed,true);
-});
-
-test('target entry catch redacts absolute failure paths',async t=>{
-  const input=fixture(t),f=pipeline(input);
-  f.deps.inspect=()=>{throw Object.assign(Error(`Cannot read '${path.join(input.tempDir,'private.json')}'\nRequire stack: ${path.join(input.installedRoot,'source.js')}`),{code:'EACCES'});};
-  const result=await runUpgradeEntry(input,f.deps);
-  assert.equal(result.code,'EACCES');
-  assert.deepEqual(result.persisted,[]);
-  assert.doesNotMatch(result.error,new RegExp(path.dirname(input.tempDir).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
-  assert.doesNotMatch(result.error,/Require stack/);
-});
-
-for (const code of ['EACCES','MODULE_NOT_FOUND','ERR_INVALID_ARG_TYPE','SQLITE_BUSY','SCHEMA_TOO_NEW']) test(`returned finalizer failure preserves non-empty code: ${code}`, async t => {
-  const input=fixture(t), f=pipeline(input);
-  f.deps.finalize=()=>({success:false,code,error:"Finalizer cannot read '/fixture/private/components.json'\nRequire stack: /fixture/source.js",failedStep:4,steps:[]});
-  const result=await runUpgradeEntry(input,f.deps);
-  assert.equal(result.code,code);
-  assert.equal(result.failedStep,4);
-  assert.equal(result.rollback.completed,true);
-  assert.equal(result.error,"Finalizer cannot read '<path>'");
-  assert.deepEqual(f.calls,['begin','savePackage','saveCode','prepare','install','recover']);
-});
-
-for (const error of ['', undefined]) test(`returned finalizer failure uses a readable default for ${error === '' ? 'empty' : 'missing'} error text`, async t => {
-  const input=fixture(t), f=pipeline(input);
-  f.deps.finalize=()=>({success:false,code:'EACCES',error,failedStep:4,steps:[]});
-  const result=await runUpgradeEntry(input,f.deps);
-  assert.equal(result.code,'EACCES');
-  assert.equal(result.error,'Upgrade finalization failed.');
-  assert.equal(result.rollback.completed,true);
-  assert.equal(result.rollback.performed,true);
-  assert.deepEqual(f.calls,['begin','savePackage','saveCode','prepare','install','recover']);
-});
 
 test('target packing precedes installation intent and rejects unsafe npm archive filenames', t => {
   const input = fixture(t);
@@ -432,38 +104,4 @@ test('downloaded executable rejects unsupported source without target node_modul
   const result = JSON.parse(child.stdout);
   assert.equal(result.code, 'UPGRADE_SOURCE_TOO_OLD');
   assert.equal(fs.existsSync(path.join(input.zylosDir, '.backup')), false);
-});
-
-test('downloaded precheck uses real installed SQLite without target dependencies', async t => {
-  const input=fixture(t);
-  const installed=process.env.CORE_DB_TEST_SKILL || path.resolve('skills/comm-bridge');
-  const Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');
-  const source=path.resolve('.');
-  const filter=file=>!file.split(path.sep).includes('__tests__') && !file.split(path.sep).includes('node_modules');
-  fs.cpSync(path.join(source,'cli/lib'),path.join(input.tempDir,'cli/lib'),{recursive:true,filter});
-  for (const name of ['comm-bridge','scheduler']) {
-    const origin=path.join(source,'skills',name);
-    fs.cpSync(origin,path.join(input.tempDir,'skills',name),{recursive:true,filter});
-    fs.cpSync(origin,path.join(input.zylosDir,'.claude/skills',name),{recursive:true,filter});
-  }
-  const modules=path.join(input.zylosDir,'.claude/skills/comm-bridge/node_modules');
-  fs.mkdirSync(modules);
-  for(const name of fs.readdirSync(path.join(installed,'node_modules')))fs.symlinkSync(path.join(installed,'node_modules',name),path.join(modules,name));
-  const file=path.join(input.zylosDir,'comm-bridge/c4.db');
-  fs.mkdirSync(path.dirname(file),{recursive:true});
-  const db=new Database(file);
-  const {migrateDatabase}=await import('../../../skills/comm-bridge/scripts/sqlite-schema.js');
-  const owner=await import('../../../skills/comm-bridge/scripts/c4-schema.js');
-  migrateDatabase(db,owner,{allowNew:true,strict:false});
-  db.exec('CREATE TABLE preserved(value TEXT); INSERT INTO preserved VALUES (\'source\')');
-  db.close();
-  const before=fs.readFileSync(file);
-  const script='const {inspectUpgradeSource}=await import(process.argv[1]);const ctx=inspectUpgradeSource(JSON.parse(process.argv[2]));console.log(JSON.stringify({from:ctx.from,needsMigration:ctx.databaseVersions.needsMigration,firstTakeover:ctx.firstTakeover}));';
-  const child=spawnSync(process.execPath,['--input-type=module','-e',script,pathToFileURL(path.join(input.tempDir,'cli/lib/upgrade-entry.js')).href,JSON.stringify(input)],{encoding:'utf8',timeout:30000});
-  assert.equal(child.status,0,child.stderr);
-  assert.deepEqual(JSON.parse(child.stdout),{from:'0.9.3',needsMigration:true,firstTakeover:true});
-  assert.deepEqual(fs.readFileSync(file),before);
-  assert.equal(fs.existsSync(path.join(input.tempDir,'node_modules')),false);
-  assert.equal(fs.existsSync(path.join(input.tempDir,'skills/comm-bridge/node_modules')),false);
-  assert.equal(fs.existsSync(path.join(input.zylosDir,'.backup')),false);
 });

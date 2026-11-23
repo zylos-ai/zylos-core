@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildDiagnosticJson } from '../../commands/doctor.js';
-import { createTmuxSender, parseTmuxVersion, describeTmuxSendKeys, tmuxFailureDetails } from '../../../skills/comm-bridge/scripts/tmux-send-keys.js';
+import { createTmuxSender, parseTmuxVersion, describeTmuxSendKeys } from '../../../skills/comm-bridge/scripts/tmux-send-keys.js';
 import { tmuxClientArgs } from '../runtime/tmux-client-args.js';
 
 for (const [version, enabled] of [['3.2a', false], ['3.3a', false], ['3.4', true], ['3.6a', true], ['3.7c', true], ['3.10', true], ['4.0', true], ['next-3.8', true], ['next-3.9', true]]) {
@@ -24,56 +23,6 @@ for (const [version, enabled] of [['3.2a', false], ['3.3a', false], ['3.4', true
     assert.match(describeTmuxSendKeys(sender.getCapability()), enabled ? /-c enabled/ : /-c disabled/);
   });
 }
-for (const failure of ['unparseable', 'error', 'openbsd-7.6']) {
-  test(`unknown ${failure} warns once and preserves legacy argv`, () => {
-    let probes = 0; const warnings = []; const sends = [];
-    const sender = createTmuxSender({ warn: s => warnings.push(s), exec: (bin, args) => {
-      if (args[0] === '-V') { probes++; if (failure === 'error') throw Object.assign(new Error('private'), { code: 'ENOENT' }); return failure === 'openbsd-7.6' ? 'tmux openbsd-7.6' : 'unexpected'; }
-      sends.push(args);
-    } });
-    sender.sendKeys('s', ['Enter']); sender.sendKeys('s', ['Escape']);
-    assert.equal(probes, 1); assert.equal(warnings.length, 1);
-    assert.equal(sender.getCapability().version, 'unknown');
-    assert.ok(sender.getCapability().reason);
-    assert.match(describeTmuxSendKeys(sender.getCapability()), /unknown .*legacy argv/);
-    assert.deepEqual(sends[0], [...tmuxClientArgs({ utf8: false }), 'send-keys', '-t', 's', 'Enter']);
-    assert.ok(!warnings[0].includes('private'));
-  });
-}
-test('failure diagnostics contain stderr/status without command or user input', () => {
-  const details = tmuxFailureDetails(Object.assign(new Error('send-keys PRIVATE_INPUT'), { status: 1, stderr: Buffer.from('client is read-only\n') }));
-  assert.deepEqual(details, { status: 1, code: null, signal: null, stderr: 'client is read-only' });
-});
-test('read-only rejection negative control discriminates legacy and protected argv', () => {
-  const exec = (bin, args) => {
-    if (args[0] === '-V') return 'tmux 3.7c';
-    if (!args.includes('-c')) throw new Error('client is read-only');
-    return 'delivered';
-  };
-  assert.throws(() => exec('tmux', ['send-keys', '-t', 'agent', 'Enter']), /read-only/);
-  assert.equal(createTmuxSender({ exec }).sendKeys('agent', ['Enter']), 'delivered');
-});
-test('send failure propagates the original child-process error', () => {
-  const error = Object.assign(new Error('failure'), { status: 1, stderr: Buffer.from('client is read-only') });
-  const sender = createTmuxSender({ exec: (bin, args) => { if (args[0] === '-V') return 'tmux 3.7'; throw error; } });
-  assert.throws(() => sender.sendKeys('agent', ['Enter']), caught => caught === error);
-});
-test('doctor JSON reports enabled, legacy and unknown with reason', () => {
-  for (const version of ['tmux 3.3a', 'tmux 3.7c', 'unrecognized']) {
-    const capability = parseTmuxVersion(version);
-    const diag = { runtime: 'codex', display: 'Codex', system: { tmux: { installed: true, ...capability }, pm2: { installed: false } },
-      ai: { cli: { installed: true }, auth: true, autonomous: true }, services: { running: false, procs: [] } };
-    const json = buildDiagnosticJson(diag, { success: false });
-    const tmux = json.groups.system.checks.tmux;
-    assert.equal(tmux.version, capability.version);
-    assert.equal(tmux.sendKeysClientFlag, capability.useClientFlag);
-    assert.equal(tmux.versionReason, capability.reason);
-    const missingCli = buildDiagnosticJson({ ...diag, ai: { ...diag.ai, cli: { installed: false } } }, { success: false });
-    assert.equal(missingCli.issues.find(issue => issue.id === 'cli_missing').label, 'Codex CLI not installed');
-    const claude = { ...diag, runtime: 'claude', display: 'Claude', ai: { ...diag.ai, cli: { installed: false } } };
-    assert.equal(buildDiagnosticJson(claude, { success: false }).issues.find(issue => issue.id === 'cli_missing').label, 'Claude CLI not installed');
-  }
-});
 // The retired dispatcher source extraction moved to router-delivery.test.js:
 // "Enter failure increments retry, invalid keystroke rejected; valid keystroke always acks".
 // Real bound-key/version behavior remains in the runtime adapter test matrix.

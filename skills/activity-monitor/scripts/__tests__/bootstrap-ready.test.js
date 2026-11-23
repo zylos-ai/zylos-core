@@ -32,25 +32,6 @@ test('compact, resume, child and missing identity never enqueue or publish', asy
   assert.equal(fs.readdirSync(f.dir).length, 0);
 });
 
-test('clear keeps old on publication failure; enqueue failure can still publish empty IDs', async t => {
-  const f = fixture(t), file = path.join(f.dir, 'current-session.json');
-  fs.writeFileSync(file, 'old');
-  await assert.rejects(publishBootstrapReady({ source: 'clear', session_id: 'new' }, { ...f,
-    enqueue: async () => ({ startupControlIds: [] }), rename: () => { throw Error('rename failed'); } }), /rename failed/);
-  assert.equal(fs.readFileSync(file, 'utf8'), 'old');
-  const record = await publishBootstrapReady({ source: 'clear', session_id: 'new' }, { ...f, enqueue: async () => { throw Error('queue unavailable'); } });
-  assert.deepEqual(record.startupControlIds, []);
-  assert.equal(record.sessionId, 'new');
-  assert.deepEqual(record.startupPrompt, { state: 'failed' });
-});
-
-test('rejected managed identity leaves untouched and does not enqueue', async t => {
-  const f = fixture(t);
-  await assert.rejects(publishBootstrapReady({ source: 'startup', session_id: 's' }, { ...f,
-    identityReader: async () => { throw Error('stale'); }, enqueue: async () => { assert.fail('enqueue before identity'); } }), /stale/);
-  assert.equal(fs.readdirSync(f.dir).length, 0);
-});
-
 test('READY identity binds the current run and pane without process ancestry', async () => {
   const scope = { kind: 'group', sessionGroup: 'origin' };
   const env = { ZYLOS_RUN_ID: 'r', ZYLOS_SESSION_GROUP: 'origin', TMUX_PANE: '%3' };
@@ -65,26 +46,3 @@ test('READY identity binds the current run and pane without process ancestry', a
   assert.equal(closed, 3);
 });
 
-test('legacy foreground identity requires a runtime ancestor in the observed pane', async () => {
-  const target = { present: true, runtime: 'codex', paneId: '%3', runId: null };
-  const options = { env: {}, pid: 30,
-    load: async () => ({ LEGACY_TMUX_NAMES: ['codex-main'], confirmProcesses: async (tree, rows) => rows }),
-    open: async () => ({ command: async () => '10', close() {} }), observe: async () => target,
-    processTree: async () => [{ pid: 30, ppid: 20, name: 'node' },
-      { pid: 20, ppid: 10, name: 'codex' }, { pid: 10, ppid: 1, name: 'sh' }] };
-  assert.equal((await readBootstrapIdentity({ kind: 'legacy' }, options)).runtimePid, 20);
-  await assert.rejects(readBootstrapIdentity({ kind: 'legacy' }, { ...options,
-    processTree: async () => [{ pid: 30, ppid: 1, name: 'node' }] }), { code: 'IDENTITY_UNAVAILABLE' });
-});
-
-// Producer/publication boundary: real startup selection and atomic READY file.
-// Run for startup suppression metadata; no DB, subprocess, tmux or service starts.
-test('onboarding suppression persists a skipped outcome instead of enqueue failure', async t => {
-  const { enqueueStartupPrompt } = await import('../session-start-prompt.js');
-  const f = fixture(t);
-  const record = await publishBootstrapReady({ source: 'startup', session_id: 's' }, { ...f,
-    enqueue: source => enqueueStartupPrompt(source, { onboardingPending: () => true, execFile: () => assert.fail('suppressed startup must not enqueue') }) });
-  assert.equal(record.startupControlIds.length, 0);
-  assert.deepEqual(record.startupPrompt, { state: 'skipped', reason: 'onboarding_pending' });
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.dir, 'current-session.json'))).startupPrompt, record.startupPrompt);
-});

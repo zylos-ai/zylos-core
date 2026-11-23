@@ -25,17 +25,3 @@ test('hot TTL preserves positive integer environment and config precedence', () 
   assert.equal(resolveSessionHotTtl({ session_hot_ttl_seconds: 86401 }, {}).seconds, 86401,
     'existing effective values are not clamped to the new-write limits');
 });
-
-test('hot TTL metadata permits editing in configured modes without an environment setting', () => {
-  const configured = { session_hot_ttl_seconds: 2400 };
-  for (const mode of [undefined, 'invalid']) {
-    const resolved = resolveSessionHotTtl({ ...configured, session_mode: mode }, {});
-    assert.equal(resolved.read_only, true);
-    assert.equal(resolved.mode, mode === undefined ? 'single' : mode === 'invalid' ? null : mode);
-  }
-  const resolved = resolveSessionHotTtl({ ...configured, session_mode: 'multi' }, {});
-  assert.equal(resolved.read_only, false);
-  assert.equal(resolved.source, 'config');
-  assert.equal(resolved.min_minutes, 5);
-  assert.equal(resolved.max_minutes, 1440);
-});

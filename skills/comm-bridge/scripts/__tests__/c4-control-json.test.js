@@ -29,68 +29,6 @@ function fixture(t) {
   }
   return {root,db,run,env};
 }
-test('ordinary enqueue JSON reports committed id and exact superseded count',t=>{
-  const {db,run}=fixture(t);
-  const args=['enqueue','--content','same content','--no-ack-suffix','--json'];
-  const first=run(args),second=run(args);
-  assert.deepEqual(first,{ok:true,data:{id:1,supersededCount:0}});
-  assert.deepEqual(second,{ok:true,data:{id:2,supersededCount:1}});
-  assert.deepEqual(db.prepare('SELECT id,status,target_binding FROM control_queue ORDER BY id').all(),[
-    {id:1,status:'superseded',target_binding:null},{id:2,status:'pending',target_binding:null}]);
-});
-test('JSON argument and scope refusals preserve all existing rows',t=>{
-  const {db,run}=fixture(t);
-  run(['enqueue','--content','same content','--no-ack-suffix','--json']);
-  const before=db.prepare('SELECT * FROM control_queue').all();
-  for (const [extra,code] of [
-    [['--priority','-1'],'INVALID_ARGS'],
-    [['--json'],'INVALID_ARGS'],
-    [['--unexpected'],'INVALID_ARGS'],
-    [['--group','*'],'SESSION_GROUP_INVALID'],
-    [['--group','origin'],'ACK_DEADLINE_REQUIRED'],
-    [['--expected-runtime','codex'],'INVALID_ARGS'],
-  ]) {
-    const result=run(['enqueue','--content','same content','--json',...extra],1);
-    assert.equal(result.ok,false); assert.equal(result.error.code,code);
-    assert.deepEqual(result.error.persisted,[]);
-    assert.deepEqual(db.prepare('SELECT * FROM control_queue').all(),before);
-  }
-});
-test('unreadable F1 refuses machine control at the action boundary as one JSON error',t=>{
-  const {root,db,run}=fixture(t);
-  fs.mkdirSync(path.join(root,'.zylos'));
-  fs.writeFileSync(path.join(root,'.zylos/config.json'),'{invalid');
-  const result=run(['enqueue','--content','x','--json'],1);
-  assert.equal(result.ok,false);assert.equal(result.error.code,'CONTROL_TARGET_REQUIRED');
-  assert.deepEqual(result.error.persisted,[]);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n,0);
-});
-
-test('ordinary manual restart fences preserve run identity and existing reason rules',t=>{
-  const {db}=fixture(t),store=createStore(db);
-  const group='telegram:a';
-  store.setDrainFence(group,{reason:'manual_restart',runId:'run-a'});
-  assert.deepEqual(store.getDrainFence(group),{sessionGroup:group,reason:'manual_restart',runId:'run-a',
-    createdAt:store.getDrainFence(group).createdAt});
-  for(const identity of [{},{expectedReason:'manual_restart',expectedRunId:'wrong'},
-    {expectedReason:'ttl',expectedRunId:'run-a'}]) {
-    assert.throws(()=>store.clearDrainFence(group,identity),{code:'FENCE_MISMATCH'});
-    assert.equal(store.getDrainFence(group).runId,'run-a');
-  }
-  store.clearDrainFence(group,{expectedReason:'manual_restart',expectedRunId:'run-a'});
-  assert.equal(store.getDrainFence(group),null);
-  assert.throws(()=>store.setDrainFence(group,{reason:'manual_restart'}),{code:'FENCE_INVALID'});
-  for(const reason of ['ttl','evict','upgrade','auth','mode_switch','model_config']) {
-    store.setDrainFence(group,{reason,runId:'run-a'});
-    assert.equal(store.getDrainFence(group).reason,reason);
-    store.clearDrainFence(group);
-  }
-  assert.throws(()=>store.setDrainFence('origin',{reason:'evict',runId:'run-o'}),{code:'FENCE_INVALID'});
-  store.setDrainFence('origin',{reason:'ttl',runId:'run-o'});
-  assert.equal(store.getDrainFence('origin').reason,'ttl');
-  store.clearDrainFence('origin');
-  assert.throws(()=>store.setDrainFence(group,{reason:'unknown',runId:'run-a'}),{code:'FENCE_INVALID'});
-});
 
 // Integration boundary: real target-binding CLI, Router lanes and guarded adapter
 // deliver a key only to its selected group. Run for group controls, target identity

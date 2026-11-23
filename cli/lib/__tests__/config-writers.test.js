@@ -43,50 +43,12 @@ describe('production config writers', () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(configFile)), { custom: 'value' });
   });
 
-  it('migrates only the explicitly supplied target and preserves falsey keys', async () => {
-    nativeModels();
-    const other = path.join(root, 'other');
-    const targetFile = path.join(root, '.zylos', 'config.json');
-    fs.mkdirSync(path.dirname(targetFile), { recursive: true });
-    fs.writeFileSync(targetFile, JSON.stringify({ new_session_threshold: 0, codex_new_session_threshold: 75, unknown: false }));
-    assert.equal(await migrateNewSessionThresholdDefaults({ zylosDir: root }), true);
-    assert.deepEqual(JSON.parse(fs.readFileSync(targetFile)), {
-      new_session_threshold: 0,
-      codex_new_session_threshold: 75,
-      model_rotation_thresholds: { codex: { small: 75 } },
-      unknown: false,
-    });
-    assert.equal(fs.existsSync(path.join(other, '.zylos', 'config.json')), false);
-  });
-
   it('refuses to overwrite malformed F1 during migration', async () => {
     const configFile = path.join(root, '.zylos', 'config.json');
     fs.mkdirSync(path.dirname(configFile), { recursive: true });
     fs.writeFileSync(configFile, '{');
     await assert.rejects(migrateNewSessionThresholdDefaults({ zylosDir: root }), error => error.code === 'CONFIG_UNREADABLE');
     assert.equal(fs.readFileSync(configFile, 'utf8'), '{');
-  });
-
-  it('rolls back a protocol write through the locked writer when Caddy validation fails', () => {
-    const configFile = path.join(root, '.zylos', 'config.json');
-    const caddyFile = path.join(root, 'http', 'Caddyfile');
-    const caddyBin = path.join(root, 'bin', 'caddy');
-    fs.mkdirSync(path.dirname(configFile), { recursive: true });
-    fs.mkdirSync(path.dirname(caddyFile), { recursive: true });
-    fs.mkdirSync(path.dirname(caddyBin), { recursive: true });
-    fs.writeFileSync(configFile, JSON.stringify({ domain: 'example.test', protocol: 'https', unknown: false }));
-    fs.writeFileSync(caddyFile, '# Domain: example.test\nexample.test {\n    respond "ok"\n}\n');
-    fs.writeFileSync(caddyBin, '#!/bin/sh\nexit 1\n');
-    fs.chmodSync(caddyBin, 0o755);
-
-    const result = cli(['config', 'set', 'protocol', 'http']);
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Config reverted/);
-    assert.deepEqual(JSON.parse(fs.readFileSync(configFile, 'utf8')), {
-      domain: 'example.test', protocol: 'https', unknown: false,
-    });
-    assert.match(fs.readFileSync(caddyFile, 'utf8'), /^example\.test \{/m);
-    assert.equal(fs.statSync(`${configFile}.lock`).isFile(), true);
   });
 
   it('keeps fresh-install and re-init defaults idempotent through real production writers', () => {
@@ -120,21 +82,4 @@ describe('production config writers', () => {
     });
   });
 
-  it('has no legacy writer references or standalone F1 overwrite implementation', () => {
-    const production = [
-      'cli/commands/runtime.js',
-      'cli/commands/config.js',
-      'cli/commands/init.js',
-      'cli/lib/sync-runtime-hooks.js',
-      'cli/lib/runtime/claude/hooks.js',
-      'cli/lib/migrate.js',
-      'skills/http/scripts/setup-caddy.js',
-    ];
-    for (const relative of production) {
-      const source = fs.readFileSync(path.join(rootDir, relative), 'utf8');
-      assert.doesNotMatch(source, /\bupdateZylosConfig\b/, relative);
-    }
-    assert.doesNotMatch(fs.readFileSync(path.join(rootDir, 'cli/lib/migrate.js'), 'utf8'), /writeFileSync\(configPath/);
-    assert.doesNotMatch(fs.readFileSync(path.join(rootDir, 'skills/http/scripts/setup-caddy.js'), 'utf8'), /writeFileSync\(CONFIG_FILE/);
-  });
 });

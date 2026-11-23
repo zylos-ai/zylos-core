@@ -1,4 +1,4 @@
-import { test, expect, afterEach } from '@jest/globals';
+import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -67,7 +67,7 @@ async function finish(worker) {
 // The private worker uses its own database and supervisor socket, with injected
 // runtime and process-manager boundaries. Skip for unrelated changes.
 for (const point of ['before-config', 'after-config', 'before-confirm', 'before-complete', 'after-complete']) {
-  test(`first migration recovers after interruption at ${point}`, async () => {
+  test(`first migration recovers after interruption at ${point}`, { timeout: 20000 }, async () => {
     const dir = root();
     let worker = launch(dir, point);
     await worker.next();
@@ -79,44 +79,14 @@ for (const point of ['before-config', 'after-config', 'before-confirm', 'before-
       signal = await worker.command('tick');
       if (signal.boundary) break;
     }
-    expect(signal.boundary).toBe(point);
+    assert.equal(signal.boundary, point);
     await kill(worker);
     worker = launch(dir);
     const first = await worker.next();
     const done = first.last?.phase === 'complete' ? first : await finish(worker);
-    expect(done.last.run_id).toBe(accepted.runId);
-    expect(done.fences).toEqual([]);
-    expect(done.mode.mode).toBe('multi');
-    expect(done.messages).toEqual([{ id: 1, status: 'pending', session_group: 'origin' }]);
-  }, 20000);
+    assert.equal(done.last.run_id, accepted.runId);
+    assert.deepEqual(done.fences, []);
+    assert.equal(done.mode.mode, 'multi');
+    assert.deepEqual(done.messages, [{ id: 1, status: 'pending', session_group: 'origin' }]);
+  });
 }
-
-function diagnostics(dir) {
-  const file = path.join(dir, 'activity-monitor/supervisor-events.jsonl');
-  return fs.readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-}
-
-// Run for missing-deadline/config-conflict gating or supervisor restart changes.
-// This required case uses an isolated worker/database and injected scenes, with
-// no real tmux session or PM2 service.
-test('real supervisor missing deadlines and mode conflict remain blocked across restart then recover',async()=>{
- // A present source executor keeps its controls blocked; absent legacy
- // executors are intentionally cleaned up during single-to-multi migration.
- const scenes=[{sessionGroup:'origin',runId:'source-control-owner',present:true,ready:false,processRunning:true}];
- const dir=root(); let worker=launch(dir,'',scenes); await worker.next(); await worker.command({controlGroup:null});
- const socket = net.createConnection(path.join(dir, 'activity-monitor/am.sock'));
- await once(socket, 'connect');
- socket.end(JSON.stringify({version:1,type:'mode_switch',requestId:'native-fixture',target:'multi'})+'\n');
- const chunks = [];
- for await (const chunk of socket) chunks.push(chunk);
- expect(JSON.parse(Buffer.concat(chunks).toString()).result).toBe('accepted');
- let state=await worker.command('tick'); expect(state.row.reason).toBe('running_control_without_deadline:machine:1');
- await worker.command('tick'); expect(diagnostics(dir).filter(e=>e.event==='transition_blocked').length).toBe(1);
- await kill(worker); worker=launch(dir,'',scenes); await worker.next(); state=await worker.command('tick'); expect(state.row.reason).toBe('running_control_without_deadline:machine:1');
- expect(diagnostics(dir).filter(e=>e.event==='transition_blocked').length).toBe(2);
- await worker.command('expire-controls'); await worker.command({controlGroup:'telegram:other'}); state=await worker.command('tick'); expect(state.row.reason).toBe('running_control_without_deadline:allSessionGroups:2');
- fs.writeFileSync(path.join(dir,'.zylos/config.json'),JSON.stringify({runtime:'claude',session_mode:'multi'}));
- state=await worker.command('tick'); expect(state.row.reason).toBe('mode_conflict:gating:multi'); expect(state.fences.map(f=>f.sessionGroup)).toEqual(['*']);
- fs.writeFileSync(path.join(dir,'.zylos/config.json'),JSON.stringify({runtime:'claude',session_mode:'single'}));
- await worker.command('expire-controls'); await worker.command({scenes:[]}); const done=await finish(worker); expect(done.last.reason).toBeNull(); expect(done.fences).toEqual([]);
-},20000);

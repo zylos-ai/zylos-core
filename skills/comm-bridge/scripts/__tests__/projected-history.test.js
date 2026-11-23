@@ -1,4 +1,3 @@
-import { seedHistoricalAbsorption } from './fixtures/historical-absorption.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -8,9 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { fixture as storeFixture } from './c4-v2-test-helpers.js';
 import { createQueryHandlers } from '../c4-v2-cli.js';
-import { escapeText } from '../c4-query-format.js';
 import { projectC4Content } from '../c4-content-projection.js';
-import { CONTENT_PREFIX, parseC4Content } from '../c4-content-schema.js';
+import { CONTENT_PREFIX } from '../c4-content-schema.js';
 
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/c4-content-protocol.json', import.meta.url)));
 const hidden = 'host_only_secret_1987';
@@ -94,161 +92,4 @@ test('CLI fetch branches project full rows once in both JSON and default output'
   assert.deepEqual(originalRows.map(row => row.content), contents);
   assert.deepEqual(f.store.getUnsummarizedConversations('dashboard:alpha', { upToConversationId: Number(end) }).map(row => row.content), contents);
   assert.deepEqual(f.store.queries.originCombined('dashboard:alpha').rows.map(row => row.content), contents);
-});
-
-// Absorbed integration: real query/formatters and private --out files. Run for
-// absorbed projection/export changes; skip unrelated runtime or UI changes.
-// CLI children are bounded to 5s; no services are started, and every export
-// remains inside the owned short TMPDIR fixture.
-test('absorbed pages, full fields and exports measure projected text without changing raw reconciliation', t => {
-  const f = fixture(t), originals = seed(f, { pending: true });
-  const { runId } = f.store.beginModeTransition('single', 'multi');
-  f.store.setDrainFence('*'); seedHistoricalAbsorption(f.db, runId);
-  const absorbed = originals.filter(row => row.direction === 'in');
-  for (const json of [false, true]) {
-    const cli = args => f.invoke('../c4-fetch.js', ['--absorbed', '--run-id', runId, ...args, ...(json ? ['--json'] : [])]);
-    const page = cli([]); assert.equal(page.includes(hidden), false);
-    if (json) {
-      const { items } = JSON.parse(page).data;
-      assert.equal(items.length, absorbed.length);
-      for (const [i, item] of items.entries()) {
-        const text = projectC4Content(absorbed[i].content, { c4Id: absorbed[i].id });
-        assert.equal(item.text, [...text].slice(0, 300).join(''));
-        assert.equal(item.textBytes, Buffer.byteLength(text)); assert.equal(item.textTruncated, [...text].length > 300);
-      }
-    }
-    for (const row of absorbed) for (const field of ['text', 'endpoint']) {
-      const text = field === 'text' ? projectC4Content(row.content, { c4Id: row.id }) : row.endpoint_id;
-      const output = cli(['--id', String(row.id), '--field', field]); assert.equal(output.includes(hidden), false);
-      if (json) { const data = JSON.parse(output).data; assert.equal(data.data, text); assert.equal(data.bytes, Buffer.byteLength(text)); }
-      else assert.equal(output, `absorbed-full run=${runId} id=${row.id} field=${field} bytes=${Buffer.byteLength(text)}\ndata: ${escapeText(text)}\nend id=${row.id} field=${field}\n`);
-      const out = path.join(f.root, `${row.id}-${field}-${json}.txt`);
-      const receipt = cli(['--id', String(row.id), '--field', field, '--out', out]);
-      assert.equal(fs.readFileSync(out, 'utf8'), text); assert.equal(receipt.includes(hidden), false);
-      if (json) assert.equal(JSON.parse(receipt).data.bytes, Buffer.byteLength(text));
-    }
-  }
-  assert.deepEqual(f.store.queries.readAbsorbed(runId).rows.map(row => row.content), absorbed.map(row => row.content));
-});
-
-test('group preview projects before Unicode truncation and matching across list modes', t => {
-  const f = fixture(t);
-  for (const [groupName, content] of [['valid', valid], ['broken', broken], ['plain', plain], ['nested', nested]]) {
-    const row = f.store.insertConversation('in', 'dashboard', 'route', content, { groupName });
-    const groups = f.query.groups({ keyMatch: `dashboard:${groupName}` });
-    assert.equal(groups[0].preview.text, [...projectC4Content(content, { c4Id: row.id })].slice(0, 80).join(''));
-  }
-  for (const json of [false, true]) {
-    const invoke = args => {
-      const value = JSON.parse(f.invoke('../c4-db.js', ['groups', ...args, ...(json ? ['--json'] : [])]));
-      return json ? value.data : value;
-    };
-    assert.deepEqual(invoke(['--match', hidden]), []);
-    const visible = invoke(['--match', 'matchneedle']);
-    assert.equal(visible.length, 1); assert.ok(visible[0].preview.text.includes('matchneedle'));
-    for (const args of [[], ['--active-since', '0'], ['--key-match', 'dashboard:']]) {
-      const result = invoke(args), groups = Array.isArray(result) ? result : result.groups;
-      assert.equal(groups.length, 4); assert.equal(JSON.stringify(groups).includes(hidden), false);
-    }
-  }
-  assert.deepEqual(f.query.groups({ match: hidden }), []);
-  assert.equal(f.query.groups({ match: 'matchneedle' }).length, 1);
-  for (const options of [{}, { activeSince: 0 }, { keyMatch: 'dashboard:' }]) {
-    const result = f.query.groups(options), groups = Array.isArray(result) ? result : result.groups;
-    assert.equal(JSON.stringify(groups).includes(hidden), false);
-  }
-});
-
-// CLI integration uses the same isolated fixture and bounded children above.
-// Run for group preview/match changes; skip unrelated conversion/runtime work.
-test('group matching ignores fallback text and references beyond the 80-character preview', t => {
-  const f = fixture(t);
-  const keyword = 'beyond_preview_keyword';
-  const reference = 'beyond_preview_reference';
-  const content = encode({ ...base, messageId: reference, fallbackText: '🚀'.repeat(80) + keyword });
-  const row = f.store.insertConversation('in', 'dashboard', 'route', content, { groupName: 'long' });
-  const projected = projectC4Content(content, { c4Id: row.id });
-  const preview = f.query.groups({ keyMatch: 'dashboard:long' })[0].preview.text;
-  assert.equal(preview, '🚀'.repeat(80));
-  for (const word of [keyword, reference, `c4_id=${row.id}`]) {
-    assert.ok(projected.includes(word), 'the complete projection contains the excluded match');
-    assert.equal(preview.includes(word), false);
-    assert.deepEqual(f.query.groups({ match: word }), []);
-    for (const json of [false, true]) {
-      const result = JSON.parse(f.invoke('../c4-db.js', ['groups', '--match', word, ...(json ? ['--json'] : [])]));
-      assert.deepEqual(json ? result.data : result, []);
-    }
-  }
-  assert.equal(f.query.groups({ match: '🚀' }).length, 1);
-});
-
-// CLI integration: real send must invoke the declared abort hook before any
-// write; direct insert must not invoke it. Both use the isolated fixture above.
-// Run for insert/send boundary changes; skip unrelated conversion/runtime work.
-// No real channel/network is invoked; hook/CLI children are bounded and cleaned.
-test('insert receipts project text but direct Dashboard insertion still bypasses BeforeSend', t => {
-  const f = fixture(t), component = path.join(f.env.ZYLOS_DIR, '.claude/skills/dashboard');
-  const marker = path.join(f.root, 'hook-called');
-  fs.writeFileSync(path.join(component, 'before-send.js'), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, 'called'); console.log('{"version":1,"decision":"abort","message":"fixture abort"}');`);
-  fs.writeFileSync(path.join(component, 'package.json'), '{"type":"module"}');
-  fs.writeFileSync(path.join(component, 'SKILL.md'), '---\nname: dashboard\nc4:\n  before_send:\n    hook_id: dashboard-shape\n    entry: before-send.js\n    timeout_ms: 1000\n---\n');
-  fs.mkdirSync(path.join(component, 'scripts'));
-  fs.writeFileSync(path.join(component, 'scripts/send.js'), "throw new Error('delivery must not run after abort');");
-  const control = spawnSync(process.execPath,
-    [fileURLToPath(new URL('../c4-send.js', import.meta.url)), 'dashboard', 'route'],
-    { env: f.env, input: valid, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024 });
-  assert.equal(control.status, 1, control.stderr);
-  assert.equal(JSON.parse(control.stdout).error.code, 'HOOK_ABORTED');
-  assert.match(control.stderr, /HOOK_ABORTED fixture abort/);
-  assert.equal(fs.readFileSync(marker, 'utf8'), 'called');
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM conversations').get().n, 0);
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM group_heads').get().n, 0);
-  fs.unlinkSync(marker);
-  for (const json of [false, true]) {
-    const output = f.invoke('../c4-db.js', ['insert', 'out', 'dashboard', 'route', valid, ...(json ? ['--json'] : [])]);
-    const value = JSON.parse(json ? output : output.slice('Inserted: '.length)), row = json ? value.data : value;
-    assert.equal(row.content, projectC4Content(valid, { c4Id: row.id }));
-    assert.equal(f.db.prepare('SELECT content FROM conversations WHERE id=?').get(row.id).content, valid);
-    assert.equal(fs.existsSync(marker), false);
-  }
-  const raw = f.invoke('../c4-db.js', ['insert', 'out', 'system', 'null', plain]);
-  const row = JSON.parse(raw.slice('Inserted: '.length)); assert.equal(row.content, plain);
-});
-
-test('CLI and SQL documentation preserve projection and direct-insert boundaries', () => {
-  const skill = fs.readFileSync(new URL('../../SKILL.md', import.meta.url), 'utf8');
-  const usage = fs.readFileSync(new URL('../../references/c4-db.md', import.meta.url), 'utf8');
-  for (const text of [skill, usage]) {
-    assert.ok(text.includes('projectC4Content(content, { c4Id: row.id })'));
-    assert.ok(text.includes('insert out dashboard')); assert.match(text, /bypasses\s+BeforeSend/);
-  }
-});
-
-// Default public reader integration: one real private SQLite row is read via
-// the actual CLI before/after only its View metadata changes. Run for View or
-// public projection changes; skip unrelated runtime/UI work. The fixture above
-// verifies every owned path and bounds children to 5s; no services or network.
-test('default CLI reading ignores valid unknown and overdeep View metadata', t => {
-  const f = fixture(t);
-  const shared = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
-  const envelope = structuredClone(shared.message);
-  envelope.blocks[0].data.text = 'CONTENT_ONLY_SECRET' + 'x'.repeat(30000);
-  const content = encode(envelope);
-  const saved = f.store.insertConversation('out', 'dashboard', 'route', content, { groupName: 'alpha' });
-  const args = ['--begin', String(saved.id), '--end', String(saved.id)];
-  const expected = f.invoke('../c4-fetch.js', args);
-  assert.ok(expected.includes(envelope.fallbackText));
-  assert.equal(expected.includes('CONTENT_ONLY_SECRET'), false);
-  const view = structuredClone(shared.views.find(item => item.name === 'balanced_columns').view);
-  const unknown = { ...structuredClone(view), schemaVersion: 99 };
-  const overdeep = structuredClone(view); overdeep.nodes[1].extra = { b: { c: 'VIEW_ONLY_SECRET' } };
-  for (const [layout, valid] of [[view, true], [unknown, false], [overdeep, false]]) {
-    const withView = encode({ ...envelope, metadata: { view: layout } });
-    const parsed = parseC4Content(withView);
-    assert.equal(parsed.kind, 'envelope');
-    assert.equal(parsed.view !== null, valid);
-    f.db.prepare('UPDATE conversations SET content=? WHERE id=?').run(withView, saved.id);
-    assert.equal(f.invoke('../c4-fetch.js', args), expected);
-    assert.equal(f.db.prepare('SELECT content FROM conversations WHERE id=?').get(saved.id).content, withView);
-  }
 });

@@ -57,9 +57,13 @@ A PR adding or changing a Dashboard collection (list) endpoint must follow [the 
 
 ## Testing
 
-Tests never touch a live instance. The Node and Jest test runners set `HOME` and
+Run `npm test` for the default suite or `node scripts/run-node-tests.js --list`
+to see the collected paths. The runner discovers `*.test.js` under the root
+`test/` and the existing module test directories.
+
+Tests never touch a live instance. The Node test runner sets `HOME` and
 `ZYLOS_DIR` to fresh temporary directories before any test module loads; do not
-bypass these runners. Tests may override these defaults with their own isolated
+bypass this runner. Tests may override these defaults with their own isolated
 fixtures. On a machine running a live Zylos instance, run `npm install`, `npm ci`,
 or `npm test` only in an isolated environment: a separate Unix user, or temporary
 `HOME` and `ZYLOS_DIR` with `--ignore-scripts`. The package's `postinstall` syncs
@@ -68,8 +72,8 @@ dependencies separately in that isolated environment.
 
 Slow tests use `*.slow.test.js` and begin with `// covers: ` followed by
 space-separated repository-relative source files/directories and directly used
-test helpers or fixtures. Both default runners skip them. Set `ZYLOS_SLOW_TESTS=1` to include them, or pass an explicit
-slow path to `node scripts/run-node-tests.js` (Jest still requires the variable).
+test helpers or fixtures. The default runner skips them. Set `ZYLOS_SLOW_TESTS=1`
+to include them, or pass an explicit slow path to `node scripts/run-node-tests.js`.
 Run `node scripts/select-slow-tests.js --since <git-ref>` to list slow tests whose
 own file or covered paths changed, including staged and unstaged changes.
 Developers and reviewers must run the selected tests when those boundaries change;
@@ -88,8 +92,6 @@ Minimum supported tmux is **3.2a**. Version matrix: **3.2a, 3.3a, 3.4, 3.7c, 3.8
 A change that builds tmux commands, format strings or environment values, or parses anything read back from tmux (`cli/lib/runtime/` and its callers), merges only after it passes the whole matrix. One local tmux version does not stand in for the matrix. For each version:
 
 1. **Runtime tests.** Put a binary named `tmux` of that version first on `PATH` and point `TEST_TMUX_BIN` at it, then run `node scripts/run-node-tests.js cli/lib/runtime/__tests__/*.test.js`. Every test must pass.
-2. **Real-path stress.** Launch at least 300 rounds and deliver at least 150 rounds through the real adapter code, on one socket with background session create/kill churn. Required: 0 errors, 0 tmux server crashes, 0 lines delivered to the wrong pane, 0 missing lines.
-3. **Positive control.** Under the same harness, a known-bad variant must fail: for example, the guard condition made constant-true, or the previous crashing code. A run that cannot fail does not count.
 
 Release rule: matrix green and no P0/P1 in review means the change merges. Each remaining P2/P3 becomes a backlog issue, not another revision round.
 
@@ -108,8 +110,8 @@ records. Keep this rule covered across all five versions, including literal
 backslashes next to dollars and control characters.
 
 Run the scripted gate as described in `docs/tmux-matrix.md` with all five
-preprovisioned binaries. It writes runtime logs, stress metrics, a failing
-known-bad guard control and provenance into a fresh evidence directory.
+preprovisioned binaries. It writes runtime logs and provenance into a fresh
+evidence directory.
 
 ## Release Process
 

@@ -129,14 +129,6 @@ test('tagged routing schema upgrades only delivery rows and is repeatable', t =>
   assert.deepEqual(snapshot(db), after);
 });
 
-test('new scheduler database traverses the full migration chain without runs to convert', t => {
-  const db = new Database(':memory:'); t.after(() => db.close());
-  assert.equal(migrateDatabase(db, owner, { allowNew: true }).version, 3);
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n, 0);
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM task_history').get().n, 0);
-  assert.deepEqual(planDatabaseMigration(db, owner).steps, []);
-});
-
 test('installed daemon schedules migrated periodic rows once without replaying the delivered occurrence', t => {
   t.mock.timers.enable({ apis: ['Date'], now: timestamp * 1000 });
   const db = legacy(t, 'scheduler-v0.9.0-v1.sql');

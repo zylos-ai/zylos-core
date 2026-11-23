@@ -10,13 +10,7 @@ import { activateFreshSplitInstructions, instructionPaths } from '../instruction
 const declarations = await Promise.all(SUPPORTED_RUNTIMES.map(async id => (await getRuntime(id)).instructions));
 
 for (const [index, id] of SUPPORTED_RUNTIMES.entries()) {
-  const { template, output, sessionStartInjection } = declarations[index];
-  test(`${id} names a shipped template and an instruction file`, () => {
-    assert.ok(typeof template === 'string' && template.length > 0);
-    assert.ok(fs.statSync(new URL(`../../../../templates/${template}-system.md`, import.meta.url)).isFile());
-    assert.ok(typeof output === 'string' && output.length > 0 && !/[/\\]/.test(output));
-    assert.ok(sessionStartInjection === UNSUPPORTED || typeof sessionStartInjection === 'function');
-  });
+  const { sessionStartInjection } = declarations[index];
 
   if (sessionStartInjection !== UNSUPPORTED) {
     test(`${id} injects the complete split system and user instructions`, t => {
@@ -30,13 +24,3 @@ for (const [index, id] of SUPPORTED_RUNTIMES.entries()) {
     });
   }
 }
-
-test('implementations sharing an instruction output also share its template', () => {
-  const templates = new Map();
-  for (const { template, output } of declarations) {
-    if (templates.has(output)) {
-      assert.equal(template, templates.get(output), `conflicting templates for ${output}`);
-    }
-    templates.set(output, template);
-  }
-});

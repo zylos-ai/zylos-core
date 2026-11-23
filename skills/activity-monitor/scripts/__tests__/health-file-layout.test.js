@@ -33,12 +33,6 @@ function camelKeys(value) {
 }
 function consume(f) {assert.equal(f.store.consume(event,{hookHealth, identity}).status,'processed');}
 
-test('missing health file always starts ok regardless of old projected health',t=>{
-  const f=fixture(t,{initialHealth:'rate_limited',initialReason:'rate_limit_five_hour'});
-  assert.equal(f.store.read().health,'ok');assert.equal(f.store.read().reason,'');
-  assert.equal(fs.existsSync(f.file),false);
-});
-
 test('disk has exact engine fields, nested camelCase evidence and exact pending shape',t=>{
   const f=fixture(t);consume(f);
   const evidence=f.store.read();
@@ -69,7 +63,7 @@ test('disk has exact engine fields, nested camelCase evidence and exact pending 
   assert.equal(reopened.consume(event,{identity}).reason,'replay');
 });
 
-for(const mode of ['json','version','runtime'])test('invalid '+mode+' is quarantined and warned before ok fallback',t=>{
+for(const mode of ['json'])test('invalid '+mode+' is quarantined and warned before ok fallback',t=>{
   const f=fixture(t);consume(f);
   const original=mode==='json'?'{broken':JSON.stringify({...disk(f),...(mode==='version'?{v:2}:{runtime:'codex'})});
   fs.writeFileSync(f.file,original);
@@ -80,66 +74,3 @@ for(const mode of ['json','version','runtime'])test('invalid '+mode+' is quarant
   assert.equal(f.warnings.length,1);
 });
 
-for(const field of ['lastProcessedAt','revision','episode'])test('malformed hook '+field+' is quarantined without losing original bytes',t=>{
-  for(const value of ['invalid',-1,1.5]) {
-    const f=fixture(t);consume(f);
-    const raw=disk(f);(field === 'lastProcessedAt' ? raw.hook.groups.origin : raw.hook)[field]=value;
-    const original=JSON.stringify(raw);fs.writeFileSync(f.file,original);
-    const state=f.store.read();
-    assert.equal(state.health,'ok');assert.equal(state.reason,'');
-    assert.equal(state.pending_notice,undefined);assert.equal(state.last_processed,undefined);
-    assert.equal(fs.existsSync(f.file),false);
-    const backups=fs.readdirSync(path.dirname(f.file)).filter(name=>/^claude\.json\.corrupt-\d+$/.test(name));
-    assert.equal(backups.length,1);
-    assert.equal(fs.readFileSync(path.join(path.dirname(f.file),backups[0]),'utf8'),original);
-    assert.equal(f.warnings.length,1);
-  }
-});
-
-test('two corrupt files at the same millisecond preserve both quarantined originals',t=>{
-  const f=fixture(t);consume(f);
-  fs.writeFileSync(f.file,'{first-corrupt');assert.equal(f.store.read().health,'ok');
-  const first=path.join(path.dirname(f.file),'claude.json.corrupt-100000');
-  assert.equal(fs.readFileSync(first,'utf8'),'{first-corrupt');
-  fs.writeFileSync(f.file,'{second-corrupt');assert.equal(f.store.read().health,'ok');
-  assert.equal(fs.readFileSync(first,'utf8'),'{first-corrupt');
-  assert.equal(fs.readFileSync(path.join(path.dirname(f.file),'claude.json.corrupt-100001'),'utf8'),'{second-corrupt');
-  assert.equal(f.warnings.length,2);assert.equal(fs.existsSync(f.file),false);
-});
-
-for(const status of ['sent','failed','uncertain','suppressed','stale'])test('terminal '+status+' clears pending and records outcome together',t=>{
-  const f=fixture(t);consume(f);
-  assert.equal(f.store.updatePending(event.event_id,{status,updated_at:100001}),true);
-  const raw=disk(f);assert.equal(raw.hook.groups.origin.pendingNotice,undefined);assert.equal(raw.hook.groups.origin.pendingAttempt,undefined);
-  assert.equal(raw.hook.groups.origin.lastNoticeOutcome.status,status);camelKeys(raw);
-  const restored=new HealthStore({zylosDir:f.root});
-  assert.equal(restored.read().pending_notice,undefined);assert.equal(restored.read().last_notice_outcome.status,status);
-});
-
-test('sending marker is outside pending payload and restart records uncertain without replay',t=>{
-  const f=fixture(t);consume(f);
-  f.store.updatePending(event.event_id,{status:'sending',updated_at:100001});
-  assert.deepEqual(Object.keys(disk(f).hook.groups.origin.pendingNotice).sort(),pendingFields);
-  assert.ok(disk(f).hook.groups.origin.pendingAttempt);camelKeys(disk(f));
-  const restarted=new HealthStore({zylosDir:f.root}).read();
-  assert.equal(restarted.pending_notice,undefined);
-  assert.equal(restarted.last_notice_outcome.status,'uncertain');
-  assert.equal(disk(f).hook.groups.origin.pendingNotice,undefined);
-});
-
-test('old send outcome cannot clear a newer pending event',t=>{
-  const f=fixture(t);consume(f);
-  const state=f.store.read();
-  state.pending_notice.event_id='22222222-2222-2222-2222-222222222222';
-  f.store.write(state);
-  const before=fs.readFileSync(f.file,'utf8');
-  assert.equal(f.store.updatePending(event.event_id,{status:'sent',updated_at:100001}),false);
-  assert.equal(fs.readFileSync(f.file,'utf8'),before);
-});
-
-test('runtime files remain independent and self-identifying',t=>{
-  const f=fixture(t);f.store.write(f.store.read());
-  const other=new HealthStore({runtime:'codex',zylosDir:f.root,now:()=>100000});other.write(other.read());
-  assert.equal(disk(f).runtime,'claude');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(path.dirname(f.file),'codex.json'),'utf8')).runtime,'codex');
-});

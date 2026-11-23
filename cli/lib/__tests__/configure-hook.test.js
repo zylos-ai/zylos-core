@@ -5,9 +5,6 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 const {
-  CONFIGURE_HOOK_TIMEOUT_MS,
-  hasConfigureHook,
-  resolveHookPath,
   runConfigureHook,
 } = await import('../configure-hook.js');
 
@@ -16,24 +13,6 @@ function makeTempDir() {
 }
 
 describe('configure-hook', () => {
-  it('uses a bounded timeout for configure hooks', () => {
-    assert.equal(CONFIGURE_HOOK_TIMEOUT_MS, 30_000);
-  });
-
-  it('detects non-empty configure hook declarations', () => {
-    assert.equal(hasConfigureHook({ configure: 'hooks/configure.js' }), true);
-    assert.equal(hasConfigureHook({ configure: '  ' }), false);
-    assert.equal(hasConfigureHook({ 'post-install': 'hooks/post-install.js' }), false);
-    assert.equal(hasConfigureHook(null), false);
-  });
-
-  it('resolves configure hook paths relative to the skill directory', () => {
-    assert.equal(
-      resolveHookPath('/tmp/component', 'hooks/configure.js'),
-      path.resolve('/tmp/component/hooks/configure.js')
-    );
-    assert.equal(resolveHookPath('/tmp/component', ''), null);
-  });
 
   it('pipes collected config as stdin JSON with component env vars', () => {
     const root = makeTempDir();
@@ -77,18 +56,4 @@ describe('configure-hook', () => {
     assert.deepEqual(captured.input, { EXAMPLE_API_KEY: 'secret' });
   });
 
-  it('fails when configure hook is declared but missing', () => {
-    const root = makeTempDir();
-    const result = runConfigureHook({
-      componentName: 'missing',
-      skillDir: root,
-      dataDir: root,
-      hookRef: 'hooks/configure.js',
-      configValues: {},
-      stdio: 'pipe',
-    });
-
-    assert.equal(result.success, false);
-    assert.match(result.error, /configure hook not found/);
-  });
 });

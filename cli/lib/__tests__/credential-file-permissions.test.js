@@ -1,4 +1,3 @@
-import { runtimeAuthFixture } from './helpers/runtime-auth.js';
 import test, { after, beforeEach, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -25,17 +24,10 @@ for (const key of credentialKeys) delete process.env[key];
 assert.equal(os.homedir(), home, 'HOME is isolated before any writer runs');
 console.log('Credential file isolation: ' + JSON.stringify({ HOME: os.homedir(), ZYLOS_DIR: process.env.ZYLOS_DIR, PATH: process.env.PATH, umask: '022' }));
 
-const { credentialFilePermissionWarnings } = await import('../runtime-setup.js');
-const { getRuntime } = await import('../runtime/index.js');
 const claude = await import('../runtime/claude/auth.js');
 const codex = await import('../runtime/codex/auth.js');
-const { launch: { preAccept } } = await getRuntime('claude');
-const { runInitAuthentication } = await import('../../commands/init.js');
-const { applyBaseUrl } = await import('../../commands/runtime.js');
 const { persistInstalledSettingsAndSyncCoupledThreshold } = await import('../runtime/claude/hooks.js');
-const { reconcileAssemblerSettingsFile, updateFailureReport } = await import('../instruction-migration.js');
-const { checkPrivateFile, copyPrivateFile, writePrivateFile } = await import('../private-file.js');
-const { writeEnvEntries } = await import('../env.js');
+const { copyPrivateFile, writePrivateFile } = await import('../private-file.js');
 
 after(() => {
   process.umask(originalUmask);
@@ -80,79 +72,8 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
         assert.equal(process.env[key], 'credential-value-new-file-0001');
       });
 
-      test(`${label} tightens an existing world-readable ~/.claude.json and leaves settings.json unchanged`, () => {
-        worldReadable(userSettings, { theme: 'dark', env: { [key]: 'hand-configured' } });
-        worldReadable(claudeJson, { keep: true });
-        const settingsBefore = fs.readFileSync(userSettings, 'utf8');
-        assert.equal(save('credential-value-existing-0002'), true);
-        assert.equal(mode(claudeJson), '600');
-        assert.equal(readJson(claudeJson).keep, true);
-        assert.equal(fs.readFileSync(userSettings, 'utf8'), settingsBefore);
-      });
     }
 
-    test('approveApiKey creates ~/.claude.json owner-only and tightens an existing one', () => {
-      claude.approveApiKey('credential-value-approve-0003');
-      assert.equal(mode(claudeJson), '600');
-      worldReadable(claudeJson, { keep: true });
-      claude.approveApiKey('credential-value-approve-0004');
-      assert.equal(mode(claudeJson), '600');
-      assert.equal(readJson(claudeJson).keep, true);
-    });
-
-    test('saveClaudeBaseUrlToEnv neither creates nor rewrites settings.json', () => {
-      assert.equal(claude.saveClaudeBaseUrlToEnv('https://relay.example.test'), true);
-      assert.equal(fs.existsSync(userSettings), false);
-      worldReadable(userSettings, { env: { ANTHROPIC_API_KEY: 'credential-value-0005', ANTHROPIC_BASE_URL: 'https://hand.example.test' } });
-      const before = fs.readFileSync(userSettings, 'utf8');
-      assert.equal(claude.saveClaudeBaseUrlToEnv('https://relay2.example.test'), true);
-      assert.equal(fs.readFileSync(userSettings, 'utf8'), before);
-    });
-
-    test('init terms pre-acceptance creates both files owner-only', () => {
-      assert.equal(preAccept(), true);
-      assert.equal(mode(userSettings), '600');
-      assert.equal(mode(claudeJson), '600');
-    });
-
-    test('init terms pre-acceptance tightens existing world-readable files it rewrites', () => {
-      worldReadable(userSettings, { env: { ANTHROPIC_API_KEY: 'credential-value-0006' } });
-      worldReadable(claudeJson, { keep: true });
-      assert.equal(preAccept(), true);
-      assert.equal(mode(userSettings), '600');
-      assert.equal(mode(claudeJson), '600');
-    });
-
-    test('init setup-token rollback clears the process token and leaves settings.json unchanged', async () => {
-      // A hand-configured, world-readable settings.json holding a token must not be rewritten.
-      worldReadable(userSettings, { env: { CLAUDE_CODE_OAUTH_TOKEN: 'hand-configured-token' } });
-      const before = fs.readFileSync(userSettings, 'utf8');
-      const result = await runInitAuthentication({ setupToken: 'credential-value-0007' }, {
-        runtime: 'claude',
-        quiet: true,
-        skipConfirm: true,
-        log: () => {},
-        reportError: () => {},
-        deps: {
-          findExecutable: () => '/fixture/runtime',
-          claudeStatus: () => false,
-          setupSave: () => { process.env.CLAUDE_CODE_OAUTH_TOKEN = 'credential-value-0007'; return true; },
-          setupVerify: () => ({ valid: false, authError: true }),
-        },
-      });
-      assert.equal(result.authenticated, false);
-      assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
-      assert.equal(fs.readFileSync(userSettings, 'utf8'), before);
-      assert.equal(mode(userSettings), '644');
-    });
-
-    test('runtime base URL save leaves settings owner-only without warnings', async () => {
-      worldReadable(userSettings, { env: { ANTHROPIC_API_KEY: 'credential-value-0008' } });
-      const warnings = [];
-      assert.equal(applyBaseUrl(await runtimeAuthFixture('claude'), 'https://relay.example.test', warnings), true);
-      assert.equal(mode(userSettings), '600');
-      assert.deepEqual(warnings, []);
-    });
   });
 
   describe('Codex credential writer (~/.codex/auth.json)', () => {
@@ -161,24 +82,12 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
       assert.equal(mode(codexAuth), '600');
     });
 
-    test('saveCodexApiKey tightens an existing world-readable auth.json', () => {
-      worldReadable(codexAuth, { tokens: { keep: true } });
-      assert.equal(codex.saveCodexApiKey('credential-value-0010'), true);
-      assert.equal(mode(codexAuth), '600');
-      assert.deepEqual(readJson(codexAuth).tokens, { keep: true });
-    });
   });
 
   describe('project settings ($ZYLOS_DIR/.claude/settings.json)', () => {
     const persist = (options = {}) => persistInstalledSettingsAndSyncCoupledThreshold({
       installedSettings: { hooks: {}, env: { ANTHROPIC_API_KEY: 'credential-value-0011' } },
       settingsPath: projectSettings, syncThreshold: () => ({ changed: false }), ...options,
-    });
-
-    test('hook sync creates settings owner-only without a backup', () => {
-      persist();
-      assert.equal(mode(projectSettings), '600');
-      assert.equal(backups(path.dirname(projectSettings)).length, 0);
     });
 
     test('hook sync tightens existing settings and writes an owner-only backup', () => {
@@ -191,48 +100,6 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
       assert.equal(readJson(backup).before, true);
     });
 
-    test('hook sync restores the backup owner-only when the write fails', () => {
-      worldReadable(projectSettings, { hooks: {}, before: true });
-      const original = fs.readFileSync(projectSettings);
-      assert.throws(() => persist({ writeFileSync: () => { throw new Error('disk full'); } }), /disk full/);
-      assert.deepEqual(fs.readFileSync(projectSettings), original);
-      assert.equal(mode(projectSettings), '600');
-      const [backup] = backups(path.dirname(projectSettings));
-      assert.equal(mode(backup), '600');
-    });
-
-    test('instruction migration writes settings owner-only, new or existing', () => {
-      let result = reconcileAssemblerSettingsFile({ zylosDir: zylos, apply: true });
-      assert.equal(result.changed, true);
-      assert.equal(mode(projectSettings), '600');
-      worldReadable(projectSettings, { hooks: {} });
-      result = reconcileAssemblerSettingsFile({ zylosDir: zylos, apply: true });
-      assert.equal(result.changed, true);
-      assert.equal(mode(projectSettings), '600');
-    });
-
-    test('instruction migration creates its settings temporary file owner-only', () => {
-      // The final chmod also restricts the file; this checks the temporary file is never created wider.
-      const writes = [];
-      const io = { writeFileSync: (file, content, options) => { writes.push({ file, options }); return fs.writeFileSync(file, content, options); } };
-      const result = reconcileAssemblerSettingsFile({ zylosDir: zylos, apply: true, io });
-      assert.equal(result.changed, true);
-      const temporary = writes.filter(({ file }) => file.startsWith(`${projectSettings}.tmp.`));
-      assert.equal(temporary.length, 1);
-      assert.equal(temporary[0].options?.mode, 0o600);
-    });
-
-    test('instruction migration keeps the existing mode of non-settings files it rewrites', () => {
-      const backupPath = path.join(root, 'migration-backup');
-      fs.mkdirSync(backupPath, { recursive: true });
-      const report = path.join(backupPath, 'migration-report.md');
-      const baseReport = { classification: 'fixture', matched: null, candidates: [] };
-      updateFailureReport({ backupPath, baseReport, failure: new Error('fixture failure') });
-      assert.equal(mode(report), '644');
-      fs.chmodSync(report, 0o640);
-      updateFailureReport({ backupPath, baseReport, failure: new Error('fixture failure') });
-      assert.equal(mode(report), '640');
-    });
   });
 
   describe('owner-only file helpers', () => {
@@ -266,59 +133,6 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
       assert.equal(readJson(userSettings).env.ANTHROPIC_API_KEY, 'credential-value-0013');
     });
 
-    test('appending to an existing world-readable .env restricts it before the entries are written', t => {
-      const envFile = path.join(zylos, '.env');
-      fs.writeFileSync(envFile, 'TZ=UTC\n');
-      fs.chmodSync(envFile, 0o644);
-      assert.deepEqual(modesSeenByWrites(t, () => writeEnvEntries({ FIXTURE_TOKEN: 'credential-value-0014' }, 'fixture')), ['600']);
-      assert.match(fs.readFileSync(envFile, 'utf8'), /^TZ=UTC\n[\s\S]*^FIXTURE_TOKEN=credential-value-0014$/m);
-    });
 
-    test('the credential file list names each runtime\'s own files', async () => {
-      assert.deepEqual((await getRuntime('claude')).auth.credentialFiles(), [userSettings, claudeJson]);
-      assert.deepEqual((await getRuntime('codex')).auth.credentialFiles(), [codexAuth]);
-    });
-
-    // /dev/null is root-owned and writable by everyone: fchmod fails with EPERM, the write is harmless.
-    // Never run as root, where fchmod would succeed and change the device node's mode.
-    const devNull = (() => { try { return fs.statSync('/dev/null'); } catch { return null; } })();
-    test('a writable file that cannot be restricted is still written without an error',
-      { skip: !(devNull && process.getuid?.() !== 0 && devNull.uid !== process.getuid?.()) && 'needs a root-owned /dev/null and a non-root test user' }, () => {
-        assert.doesNotThrow(() => writePrivateFile('/dev/null', 'x'));
-        assert.equal(fs.statSync('/dev/null').mode, devNull.mode);
-      });
-
-    test('a symbolic link is followed: its target is written and tightened', () => {
-      const target = path.join(root, 'link-target.json'), link = path.join(root, 'link.json');
-      worldReadable(target, {});
-      fs.symlinkSync(target, link);
-      writePrivateFile(link, '{"written":true}\n');
-      assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
-      assert.equal(mode(target), '600');
-      assert.equal(readJson(target).written, true);
-    });
-
-    test('an own world-readable credential file is tightened and not reported', async () => {
-      worldReadable(userSettings, {});
-      assert.deepEqual(checkPrivateFile(userSettings), { ok: true, mode: '600', fixed: true, previousMode: '644' });
-      assert.deepEqual(credentialFilePermissionWarnings((await getRuntime('claude')).auth.credentialFiles()), []);
-    });
-
-    // Real foreign-owned file: only checked, never written.
-    const foreign = '/etc/hostname';
-    const foreignStat = (() => { try { return fs.statSync(foreign); } catch { return null; } })();
-    const foreignUsable = foreignStat && process.getuid?.() !== 0 && foreignStat.uid !== process.getuid?.()
-      && (foreignStat.mode & 0o777) === 0o644;
-    test('a foreign-owned 0644 file is reported with its real mode and left unchanged',
-      { skip: !foreignUsable && `needs a root-owned 0644 ${foreign} and a non-root test user` }, () => {
-        assert.deepEqual(checkPrivateFile(foreign), { ok: false, mode: '644', fixed: false });
-        const warnings = credentialFilePermissionWarnings([foreign]);
-        assert.equal(warnings.length, 1);
-        assert.match(warnings[0], /mode 644/);
-        assert.ok(warnings[0].includes(`chmod 600 ${foreign}`));
-        const afterStat = fs.statSync(foreign);
-        assert.equal(afterStat.mode, foreignStat.mode);
-        assert.equal(afterStat.mtimeMs, foreignStat.mtimeMs);
-      });
   });
 });

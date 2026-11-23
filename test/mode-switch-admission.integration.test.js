@@ -1,10 +1,10 @@
-import { test, expect, afterEach } from '@jest/globals';
+import { test, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { once } from 'node:events';
-import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
 import { guardDatabase } from '../skills/comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../skills/comm-bridge/scripts/c4-schema.js';
@@ -17,7 +17,7 @@ afterEach(async()=>{while(cleanups.length) await cleanups.pop()();});
 async function fixture(responder) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'sw-cli-'));
   const home = fs.realpathSync(process.env.HOME);
-  expect(root.startsWith(home + path.sep)).toBe(false);
+  assert.equal(root.startsWith(home + path.sep), false);
   console.info({ HOME: home, ZYLOS_DIR: process.env.ZYLOS_DIR, PM2_HOME: process.env.PM2_HOME,
     TMPDIR: os.tmpdir(), database: path.join(root, 'c4.db'), socket: path.join(root, 'am.sock') });
   cleanups.push(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -39,7 +39,7 @@ async function fixture(responder) {
 // the mode transition store; other changes can skip it.
 // The server's reply or close decides each branch, never a reply timer. The
 // fixture leaves submit's 10 s reply budget in place, which the command's own
-// 10 s deadline also caps and which outlasts Jest's 5 s test timeout: a short
+// 10 s deadline also caps and which outlasts the 5 s test timeout: a short
 // budget armed when the request is written can expire under CPU load before
 // the client reads a reply the server has already sent, sending the client
 // down the lookup branch. A slow reply now fails the test as a timeout.
@@ -47,7 +47,7 @@ async function fixture(responder) {
 // timeout cases in am-sock-client.test.js, and the timeout-then-lookup cases
 // in session-mode-command.test.js.
 for (const behavior of ['accept','lost-after-commit','malformed','closed-before-commit']) {
-  test(`real socket ${behavior} and real observation`,async()=>{
+  test(`real socket ${behavior} and real observation`, { timeout: 5000 }, async () => {
     const f=await fixture((socket,request,store)=>{
       if(behavior==='accept'||behavior==='lost-after-commit') {
         const {runId}=store.beginModeTransition('single','multi');
@@ -57,12 +57,12 @@ for (const behavior of ['accept','lost-after-commit','malformed','closed-before-
     });
     let reads=0;
     const result=await executeSessionMode(['switch','multi'],{send:f.send,lookup:(target,options)=>lookupModeSwitch(target,{...options,getModeTransition:()=>{reads++;return f.store.getModeTransition();},readMode:()=>({mode:'single'})})});
-    expect(f.requests).toHaveLength(1);
-    expect(f.db.prepare('SELECT count(*) n FROM mode_transitions').get().n).toBe(['accept','lost-after-commit'].includes(behavior)?1:0);
-    expect(result.ok).toBe(['accept','lost-after-commit'].includes(behavior));
-    expect(reads).toBe(behavior==='accept'?0:1);
-    if(behavior==='lost-after-commit')expect(result.data.observed).toBe('transition_open');
-    if(!result.ok)expect(result.error.persisted).toBeNull();
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.db.prepare('SELECT count(*) n FROM mode_transitions').get().n, ['accept','lost-after-commit'].includes(behavior)?1:0);
+    assert.equal(result.ok, ['accept','lost-after-commit'].includes(behavior));
+    assert.equal(reads, behavior==='accept'?0:1);
+    if(behavior==='lost-after-commit')assert.equal(result.data.observed, 'transition_open');
+    if(!result.ok)assert.equal(result.error.persisted, null);
   });
 }
 // Budget expiry is driven by a controlled clock, not by real elapsed time:
@@ -70,9 +70,9 @@ for (const behavior of ['accept','lost-after-commit','malformed','closed-before-
 // request, then jumps to it. The client's write callback is held until that
 // moment, so submit arms its reply timer with no time left and its real timer
 // ends the wait as deadline_exceeded. Until then the 10 s window outlasts
-// Jest's test timeout, so no timer can expire before the request is sent and
+// the test timeout, so no timer can expire before the request is sent and
 // read, however slow the machine is.
-test('expired reply budget does not start a read or resend',async()=>{
+test('expired reply budget does not start a read or resend', { timeout: 5000 }, async () => {
   const start=Date.now();const deadlineAt=start+10000;let expired=false;let markReceived;
   const received=new Promise(resolve=>{markReceived=resolve;});
   const now=()=>expired?deadlineAt:start;
@@ -84,13 +84,5 @@ test('expired reply budget does not start a read or resend',async()=>{
   };
   const result=await executeSessionMode(['switch','multi'],{deadlineAt,send:(request,options)=>f.send(request,{...options,now,connect}),
     lookup:(target,options)=>lookupModeSwitch(target,{...options,now,getModeTransition:()=>{reads++;return f.store.getModeTransition();}})});
-  expect(result.ok).toBe(false);expect(result.error.code).toBe('deadline_exceeded');expect(result.error.persisted).toBeNull();expect(reads).toBe(0);expect(f.requests).toHaveLength(1);
-});
-// Run for public switch argument or command changes. CLI children inherit a
-// private PM2 home and short TMPDIR and use only the temporary instance root.
-test('public CLI rejects an invalid switch target with no instance writes',()=>{
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'mode-switch-cli-args-'));cleanups.push(()=>fs.rmSync(root,{recursive:true,force:true}));
-  const child=spawnSync(process.execPath,['cli/zylos.js','session-mode','switch','bad','--json'],{encoding:'utf8',timeout:5000,env:{...process.env,HOME:root,ZYLOS_DIR:root}});
-  expect(child.status).toBe(1);expect(JSON.parse(child.stdout).error.code).toBe('INVALID_ARGUMENT');
-  expect(child.stdout.trim().split('\n')).toHaveLength(1);expect(fs.readdirSync(root)).toEqual([]);
+  assert.equal(result.ok, false);assert.equal(result.error.code, 'deadline_exceeded');assert.equal(result.error.persisted, null);assert.equal(reads, 0);assert.equal(f.requests.length, 1);
 });

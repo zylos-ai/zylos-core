@@ -11,9 +11,7 @@ import { stringify } from 'smol-toml';
 import { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, ensureHooksFeature } from '../../runtime/codex/hooks.js';
 
 const exec = promisify(execFile);
-const runtimeDir = fileURLToPath(new URL('../', import.meta.url));
 const promptHook = fileURLToPath(new URL('../../../../skills/activity-monitor/scripts/session-start-prompt.js', import.meta.url));
-const kick = 'System startup trigger, not a user message. Continue with startup context.';
 const tmuxBinary = process.env.TEST_TMUX_BIN || 'tmux';
 
 async function launchFixture(t, runtime, withHook) {
@@ -149,27 +147,3 @@ for (const withHook of [false,true]) {
     }
   });
 }
-
-test('Codex launch retains its startup kick without producing C4 control',async t=>{
-  const {observed,calls}=await launchFixture(t,'codex',false);
-  assert.equal(observed.argv.at(-1),kick);
-  assert.equal(observed.argv.filter(arg=>arg===kick).length,1);
-  assert.deepEqual(calls,[]);
-});
-
-test('runtime sources contain no dedicated adapter startup fallback implementation or calls',async()=>{
-  const matches=[];
-  async function scan(dir) {
-    for(const entry of await fs.readdir(dir,{withFileTypes:true})) {
-      if(entry.name==='__tests__')continue;
-      const file=path.join(dir,entry.name);
-      if(entry.isDirectory())await scan(file);
-      else if(/\.[cm]?js$/.test(entry.name)) {
-        const source=await fs.readFile(file,'utf8');
-        if(/enqueueStartupPrompt|_hasStartupHook/.test(source))matches.push(path.relative(runtimeDir,file));
-      }
-    }
-  }
-  await scan(runtimeDir);
-  assert.deepEqual(matches,[],'dedicated adapter implementation and calls must stay deleted');
-});

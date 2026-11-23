@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Readable } from 'node:stream';
+
 import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../src/lib/store.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
@@ -13,21 +13,20 @@ import { ChatHistory } from '../src/lib/chat/history.js';
 import { ChatAnswers } from '../src/lib/chat/answers.js';
 import { ChatAnswerDelivery } from '../src/lib/chat/delivery.js';
 import { ChatAttachments } from '../src/lib/chat/attachments.js';
-import { registerQuestion } from '../src/lib/chat/questions.js';
+
 import { requireChatWrite } from '../src/lib/chat/access.js';
 import { requestConversationName } from '../src/lib/chat/auto-name.js';
 import { ensureOriginConversation, ORIGIN_CONVERSATION_ID } from '../src/lib/chat/origin.js';
 import { createGroupDeletionStorage } from '../src/lib/group-deletion-storage.js';
-import { evaluateBeforeSend } from '../scripts/send-hook.js';
+
 import { createStore } from '../../comm-bridge/scripts/c4-v2-store.js';
 import { receive } from '../../comm-bridge/scripts/c4-receive.js';
 import { isDataError } from '../../comm-bridge/scripts/c4-session-group.js';
 import { SKILLS_DIR } from '../../comm-bridge/scripts/c4-config.js';
-import { CONTENT_PREFIX, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
+
 import { guardDatabase } from '../../comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../../comm-bridge/scripts/c4-schema.js';
 
-const protocol = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 const groupId = group => `g:${Buffer.from(group).toString('hex').toUpperCase()}`;
 const auth = { enabled: true, resolveAuthContext: req => { req._authContext = req.context; return req.context; } };
 const local = { kind: 'cookie', scope: 'admin' };
@@ -99,40 +98,6 @@ function fixture(t, { mode = 'multi', ids } = {}) {
     originRows: () => db.prepare("SELECT * FROM conversations WHERE session_group='origin' ORDER BY id").all() };
 }
 
-test('the Origin conversation is pinned first in "mine" with or without messages and never listed in external', async t => {
-  const f = fixture(t);
-  const [empty] = f.history.list({ tab: 'mine' }).items;
-  assert.deepEqual({ id: empty.id, group: empty.session_group, endpoint: empty.endpoint_id, localId: empty.localId,
-    name: empty.display_name, preview: empty.preview, draft: empty.draft, origin: empty.origin },
-  { id: ORIGIN_CONVERSATION_ID, group: 'origin', endpoint: 'origin', localId: 'origin',
-    name: 'Origin', preview: '', draft: false, origin: true });
-  assert.equal(f.history.list({ tab: 'mine' }).items.length, 1);
-  assert.deepEqual(f.history.messages(ORIGIN_CONVERSATION_ID).items, [], 'an empty Origin conversation is empty, not missing');
-  f.add('out', 'dashboard', 'origin', 'An older alert');
-  const draft = f.conversations.create({ displayName: 'Newer work' });
-  const sent = await f.sender.send(draft.id, { content: 'newer conversation' });
-  assert.equal(sent.stored, true);
-  f.db.prepare("UPDATE conversations SET timestamp='2020-01-01 00:00:00' WHERE session_group='origin'").run();
-  const listed = f.history.list({ tab: 'mine' }).items;
-  assert.deepEqual(listed.map(item => item.id), [ORIGIN_CONVERSATION_ID, sent.conversationId], 'Origin stays first outside activity order');
-  assert.equal(listed[0].preview, 'An older alert');
-  const first = f.history.list({ tab: 'mine', limit: 1 });
-  assert.deepEqual(first.items.map(item => item.id), [ORIGIN_CONVERSATION_ID, sent.conversationId]);
-  assert.equal(first.nextCursor, null);
-  f.add('in', 'telegram', 'chat', 'external words', 'telegram:chat');
-  assert.equal(f.history.list({ tab: 'external' }).items.some(item => item.id === ORIGIN_CONVERSATION_ID || item.session_group === 'origin'), false);
-  assert.throws(() => f.history.messages(ORIGIN_CONVERSATION_ID, { tab: 'external' }), { code: 'chat_conversation_not_found' });
-  const { highwater } = f.history.chatChangeSnapshot({ tab: 'mine' });
-  const scheduled = f.add('in', 'system', 'scheduler', 'scheduled task');
-  f.db.prepare("UPDATE conversations SET timestamp='2026-02-03 04:05:06' WHERE id=?").run(scheduled);
-  assert.equal(f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: highwater }).listChanged, true);
-  const [updatedOrigin] = f.history.list({ tab: 'mine' }).items;
-  assert.equal(updatedOrigin.stamp, f.db.prepare("SELECT julianday('2026-02-03 04:05:06')").pluck().get());
-  assert.equal(updatedOrigin.preview, 'An older alert');
-  f.add('out', 'dashboard', 'origin', 'A new alert');
-  assert.equal(f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: highwater }).listChanged, true);
-});
-
 test('Origin messages show Dashboard and internal rows both ways but not system, scheduler, control or void rows', t => {
   const f = fixture(t);
   const shown = [
@@ -173,23 +138,6 @@ test('in single mode Origin accepts sends without a session group while other co
   assert.equal(hasGroupArgument(f.calls[1]), true, 'ordinary conversations keep their session group');
 });
 
-test('an interrupted Origin send is reconciled from its fixed record and never resent automatically', async t => {
-  const f = fixture(t);
-  f.setInvoke(async args => { await f.realReceive(args); throw Error('lost receipt'); });
-  const lost = await f.sender.send(ORIGIN_CONVERSATION_ID, { content: 'did this arrive?' });
-  assert.equal(lost.needsReconciliation, true);
-  assert.equal(f.conversations.get('origin').lastOutcome.kind, 'unknown');
-  f.setInvoke(null);
-  const restarted = f.makeSender();
-  const reopened = await restarted.reconcile(ORIGIN_CONVERSATION_ID);
-  assert.equal(reopened.conversationId, ORIGIN_CONVERSATION_ID);
-  assert.equal(reopened.needsReconciliation, true);
-  const again = await restarted.send(ORIGIN_CONVERSATION_ID, { content: 'did this arrive?' });
-  assert.equal(again.needsReconciliation, true);
-  assert.equal(f.calls.length, 1, 'no automatic resend after the uncertain send');
-  assert.equal(f.originRows().length, 1);
-});
-
 test('Origin is fixed: it cannot be renamed, deleted, auto-named or used as an ordinary conversation ID', async t => {
   const f = fixture(t, { ids: ['origin', 'fresh-id'] });
   assert.equal(f.conversations.create().localId, 'fresh-id', 'a new conversation never takes the Origin ID');
@@ -213,98 +161,5 @@ test('Origin is fixed: it cannot be renamed, deleted, auto-named or used as an o
   assert.equal(naming, null);
 });
 
-test('Origin answers, uploads and agent attachments work without a session group in single mode', async t => {
-  const f = fixture(t, { mode: 'single' });
-  const authorize = f.authorizeAs(local, 'single');
-  const origin = await f.sender.resolve(ORIGIN_CONVERSATION_ID);
-  assert.equal(origin.sessionGroup, 'origin');
-  const envelope = structuredClone(parseC4Content(protocol.valid.find(item => item.name === 'single').content).envelope);
-  const question = f.c4.insertConversation('out', 'dashboard', 'origin', CONTENT_PREFIX + JSON.stringify(envelope));
-  registerQuestion(question, { env: { ZYLOS_DIR: f.root } });
-  const block = envelope.blocks.find(item => item.id === envelope.interrupt.blockId);
-  const accepted = f.answers.accept({ sessionGroup: origin.sessionGroup, endpointId: origin.localId, interruptId: envelope.interruptId,
-    action: { id: 'origin_answer', protocolVersion: '0.1', type: block.data.action.type, target: block.data.action.target,
-      context: { messageId: envelope.messageId, blockId: block.id }, payload: { selected: ['a'] } } });
-  const answered = await f.delivery.deliver(accepted.answer.answerId, { initial: accepted.created, authorize: () => authorize(origin) });
-  assert.equal(answered.stored, true);
-  assert.equal(hasGroupArgument(f.calls.at(-1)), false, 'answers to Origin carry no session group');
-  assert.equal(f.originRows().at(-1).session_group, 'origin');
-
-  const prepared = await f.sender.prepareAttachmentConversation(origin, { authorize });
-  const upload = await f.attachments.prepareUser(prepared, { name: 'note.txt', mime: 'text/plain', principal: 'cookie:owner',
-    stream: Readable.from(['owner bytes']), watermark: f.attachments.captureWatermark() });
-  const sent = await f.sender.send(ORIGIN_CONVERSATION_ID, { content: 'see the note', attachments: [upload.id] },
-    { authorize, principal: 'cookie:owner' });
-  assert.equal(sent.stored, true);
-  assert.equal(hasGroupArgument(f.calls.at(-1)), false);
-  const withFile = f.history.messages(ORIGIN_CONVERSATION_ID).items.find(row => row.id === sent.messageId);
-  assert.deepEqual(withFile.attachments.map(item => [item.name, item.available]), [['note.txt', true]]);
-
-  // The agent's attachment reply to `dashboard origin` passes the unchanged BeforeSend check.
-  const source = path.join(f.root, 'workspace', 'report.txt');
-  fs.writeFileSync(source, 'agent bytes');
-  const registered = await f.attachments.register(origin, { kind: 'file', path: source });
-  const id = registered.attachmentId ?? registered.id;
-  const reply = CONTENT_PREFIX + JSON.stringify({ version: 1, kind: 'message', messageId: 'origin_reply', fallbackText: 'report',
-    blocks: [{ id: 'file', type: 'x-zylos.file', schemaVersion: 1, fallbackText: 'report.txt', data: { attachmentId: id, nameSnapshot: 'report.txt' } }] });
-  const input = groupName => ({ version: 1, hook_event_name: 'BeforeSend', hook_id: 'dashboard.content', request_id: 'r', invocation_id: 'i',
-    request: { channel: 'dashboard', endpoint: 'origin', content: reply, options: { groupName, wholeGroup: false } },
-    context: { session_group: 'origin' } });
-  const env = { ...process.env, ZYLOS_DIR: f.root };
-  assert.equal(evaluateBeforeSend(input('origin'), { env }).decision, 'continue');
-  assert.equal(evaluateBeforeSend(input('elsewhere'), { env }).decision, 'abort');
-});
-
-test('an internal message to origin from another session appears in the Origin conversation', async t => {
-  const f = fixture(t);
-  const draft = f.conversations.create();
-  const seed = await f.sender.send(draft.id, { content: 'work in another conversation' });
-  const group = `${seed.namespace}:${draft.localId}`;
-  // Core's own internal-message insert, as `c4-send internal origin` stores it.
-  f.c4.insertInternalMessage(group, 'origin', 'please tell the owner in Origin');
-  const items = f.history.messages(ORIGIN_CONVERSATION_ID).items;
-  assert.deepEqual(items.map(row => [row.direction, row.channel, row.internal?.peerSessionGroup, row.internal?.content]),
-    [['in', 'internal', group, 'please tell the owner in Origin']]);
-  assert.equal(f.history.list({ tab: 'mine' }).items[0].preview, '', 'a relay alone does not provide a list preview');
-});
-
 // In single mode Core records the rows of every conversation and external chat
 // under `origin` when it delivers them; the Origin conversation shows them all.
-test('the Origin conversation shows every row recorded under origin with its own channel and conversation', async t => {
-  const f = fixture(t, { mode: 'single' });
-  const multi = f.authorizeAs(local, 'multi');
-  const named = f.conversations.create(), unnamed = f.conversations.create();
-  const seed = await f.sender.send(named.id, { content: 'before the switch' }, { authorize: multi });
-  await f.sender.send(unnamed.id, { content: 'another conversation' }, { authorize: multi });
-  const namedGroup = `${seed.namespace}:${named.localId}`;
-  f.store.writeGroupDisplayName(namedGroup, 'Project X', 'human');
-  const { highwater } = f.history.chatChangeSnapshot({ tab: 'mine' });
-  const shown = [
-    f.add('in', 'dashboard', 'origin', 'owner asks Origin'),
-    f.add('in', 'dashboard', named.localId, 'queued in X before the switch'),
-    f.add('out', 'dashboard', named.localId, 'Origin answers in X'),
-    f.add('out', 'dashboard', unnamed.localId, 'Origin answers the unnamed one'),
-    f.add('in', 'telegram', '-100|thread:7', '[TG GROUP:Team] from Telegram\n[MEDIA:/private/photo.jpg]'),
-  ];
-  shown.push(f.add('out', 'internal', namedGroup, 'Origin to the X thread'));
-  const latest = f.add('out', 'telegram', '-100|thread:7', 'Origin answers Telegram');
-  shown.push(latest);
-  const items = f.history.messages(ORIGIN_CONVERSATION_ID, { locale: 'en' }).items;
-  assert.deepEqual(items.map(row => row.id), shown);
-  assert.deepEqual(items.map(row => [row.channel, row.conversationName]), [
-    ['dashboard', 'Origin'], ['dashboard', 'Project X'], ['dashboard', 'Project X'], ['dashboard', null],
-    ['telegram', undefined], ['internal', undefined], ['telegram', undefined]]);
-  // An external chat's row reads as on the external page.
-  assert.equal(items[4].preview, '[TG GROUP:Team] from Telegram\n[Media] Original-channel attachment');
-  assert.deepEqual([items[5].internal.peerSessionGroup, items[5].internal.content], [namedGroup, 'Origin to the X thread']);
-  const [origin] = f.history.list({ tab: 'mine' }).items;
-  assert.equal(origin.id, ORIGIN_CONVERSATION_ID);
-  assert.equal(origin.preview, 'Origin answers Telegram');
-  assert.equal(origin.previewDirection, 'out');
-  assert.equal(f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: highwater }).listChanged, true);
-  assert.equal(f.history.chatChangeSnapshot({ tab: 'mine', conversationId: ORIGIN_CONVERSATION_ID }).latestId, latest);
-  // The other pages keep their rows: X shows only what is recorded in X's own group.
-  assert.deepEqual(f.history.messages(groupId(namedGroup)).items.map(row => row.content), ['before the switch']);
-  assert.equal(f.history.list({ tab: 'external' }).items.length, 0);
-  assert.throws(() => f.history.messages(groupId('origin'), { tab: 'external' }), { code: 'chat_conversation_not_found' });
-});

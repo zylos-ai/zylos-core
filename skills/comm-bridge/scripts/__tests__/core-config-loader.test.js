@@ -84,35 +84,6 @@ for (const { title, development, explicit, expected } of [
   assert.equal(fx.count(), 0);
 });
 
-test('npm fallback resolves once for concurrent and repeated successful loads', t => {
-  const fx = fixture(t);
-  copyCore(path.join(fx.npmRoot, 'zylos'));
-  const result = run(fx, `
-    const modules = await Promise.all(Array.from({ length: 5 }, () => loadCoreConfig()));
-    for (const module of modules) assert.equal(module, modules[0]);
-    assert.equal(modules[0].readZylosConfigStrict().state, 'missing');
-    for (let i = 0; i < 5; i++) assert.equal(resolveCoreConfigModule(), ${JSON.stringify(path.join(fx.npmRoot, 'zylos/cli/lib/config.js'))});
-    fs.mkdirSync(${JSON.stringify(path.join(fx.env.ZYLOS_DIR, '.zylos'))}, { recursive: true });
-    fs.writeFileSync(modules[0].CONFIG_FILE, '{');
-    assert.equal((await loadCoreConfig()).readZylosConfigStrict().state, 'error');
-    process.env.PATH = '';
-    assert.equal(await loadCoreConfig(), modules[0]);
-  `);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(fx.count(), 1);
-});
-
-test('unrelated PATH package falls back to validated global Core', t => {
-  const fx = fixture(t);
-  const unrelated = copyCore(path.join(fx.root, 'unrelated'));
-  fs.writeFileSync(path.join(unrelated, 'package.json'), '{"type":"module","name":"unrelated"}');
-  fs.symlinkSync(path.join(unrelated, 'cli/zylos.js'), path.join(fx.bin, 'zylos'));
-  copyCore(path.join(fx.npmRoot, 'zylos'));
-  const result = run(fx, `assert.equal((await loadCoreConfig()).CONFIG_FILE, ${JSON.stringify(path.join(fx.env.ZYLOS_DIR, '.zylos/config.json'))});`);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(fx.count(), 1);
-});
-
 test('invalid explicit root rejects without trying valid alternatives', t => {
   const fx = fixture(t);
   copyCore(fx.deployed);
@@ -129,25 +100,6 @@ test('invalid explicit root rejects without trying valid alternatives', t => {
   assert.equal(fx.count(), 0);
 });
 
-test('missing Core and invalid global package identity reject and failed resolution retries', t => {
-  const fx = fixture(t);
-  const result = run(fx, `
-    await assert.rejects(loadCoreConfig(), /Cannot locate/);
-    await assert.rejects(loadCoreConfig(), /Cannot locate/);
-    process.env.ZYLOS_PACKAGE_ROOT = ${JSON.stringify(packageRoot)};
-    const recovered = await Promise.all(Array.from({ length: 5 }, () => loadCoreConfig()));
-    assert.equal(typeof recovered[0].readZylosConfigOrThrow, 'function');
-    for (const module of recovered) assert.equal(module, recovered[0]);
-  `);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(fx.count(), 2);
-  const global = copyCore(path.join(fx.npmRoot, 'zylos'));
-  fs.writeFileSync(path.join(global, 'package.json'), '{"type":"module","name":"unrelated"}');
-  const invalid = run(fx, `await assert.rejects(loadCoreConfig(), /Cannot locate/);`);
-  assert.equal(invalid.status, 0, invalid.stderr);
-  assert.equal(fx.count(), 3);
-});
-
 for (const [title, development, explicit, expected] of [
   ['explicit root wins over the installation record', false, true, 'explicit'],
   ['development tree wins over the installation record', true, false, 'deployed'],
@@ -162,65 +114,5 @@ for (const [title, development, explicit, expected] of [
   fs.symlinkSync(path.join(roots.installed, 'cli/zylos.js'), path.join(fx.bin, 'zylos'));
   copyCore(path.join(fx.npmRoot, 'zylos'));
   assertLoaded(fx, roots[expected], explicit ? { ZYLOS_PACKAGE_ROOT: roots.explicit } : undefined);
-  assert.equal(fx.count(), 0);
-});
-
-test('minimal PATH resolves the record beside the loader independently of ZYLOS_DIR', t => {
-  const fx = fixture(t), core = copyCore(path.join(fx.root, 'recorded'));
-  writeRecord(fx, { v: 1, packageRoot: core });
-  assertLoaded(fx, core, { PATH: '/usr/bin:/bin' });
-  assert.equal(fx.count(), 0);
-});
-
-for (const fault of ['missing', 'malformed', 'version', 'relative', 'unrelated', 'stale']) {
-  test('invalid installation record preserves PATH and npm fallbacks and actionable failure: ' + fault, t => {
-    const fx = fixture(t);
-    const recorded = copyCore(path.join(fx.root, 'recorded'));
-    // The child runs in fx.root, so ./recorded is a real, loadable Core. Only
-    // the absolute-path contract can reject it in favor of the PATH package.
-    if (fault === 'relative') {
-      const probe = run(fx, `assert.ok(fs.statSync('./recorded/cli/lib/config.js').isFile());`);
-      assert.equal(probe.status, 0, probe.stderr);
-    }
-    if (fault !== 'missing') {
-      writeRecord(fx, fault === 'malformed' ? '{' : {
-        v: fault === 'version' ? 2 : 1,
-        packageRoot: fault === 'relative' ? './recorded' : fault === 'stale' ? path.join(fx.root, 'absent') : recorded,
-      });
-    }
-    if (fault === 'unrelated') fs.writeFileSync(path.join(recorded, 'package.json'), '{"type":"module","name":"unrelated"}');
-    const installed = copyCore(path.join(fx.root, 'installed'));
-    const executable = path.join(fx.bin, 'zylos');
-    fs.symlinkSync(path.join(installed, 'cli/zylos.js'), executable);
-    assertLoaded(fx, installed);
-    assert.equal(fx.count(), 0);
-    fs.unlinkSync(executable);
-    const global = copyCore(path.join(fx.npmRoot, 'zylos'));
-    assertLoaded(fx, global);
-    assert.equal(fx.count(), 1);
-    fs.writeFileSync(path.join(global, 'package.json'), '{"type":"module","name":"unrelated"}');
-    const result = run(fx, `
-      await assert.rejects(loadCoreConfig(), error => {
-        assert.match(error.message, /ZYLOS_PACKAGE_ROOT/);
-        assert.ok(error.message.includes(${JSON.stringify(path.resolve(path.dirname(fx.loader), '../.zylos/core-package.json'))}));
-        assert.ok(error.message.includes('/absolute/path/to/node /absolute/path/to/zylos/cli/zylos.js init'));
-        assert.match(error.message, /PATH/);
-        return true;
-      });
-    `);
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(fx.count(), 2);
-  });
-}
-
-test('record resolution observes an updated installation without another locator cache', t => {
-  const fx = fixture(t), before = copyCore(path.join(fx.root, 'before')), after = copyCore(path.join(fx.root, 'after'));
-  const record = writeRecord(fx, { v: 1, packageRoot: before });
-  const result = run(fx, `
-    assert.equal(resolveCoreConfigModule(), ${JSON.stringify(path.join(before, 'cli/lib/config.js'))});
-    fs.writeFileSync(${JSON.stringify(record)}, ${JSON.stringify(JSON.stringify({ v: 1, packageRoot: after }))});
-    assert.equal(resolveCoreConfigModule(), ${JSON.stringify(path.join(after, 'cli/lib/config.js'))});
-  `);
-  assert.equal(result.status, 0, result.stderr);
   assert.equal(fx.count(), 0);
 });

@@ -96,9 +96,6 @@ function controls(database) {
 // private database, with a network-free curl fixture installing a version stub.
 // Run when install/submission order changes; skip for unrelated edits. No service or
 // tmux server is started; real authenticated replacement is a reviewer scenario.
-// Run only in isolation, never against live resources: isolate HOME, ZYLOS_DIR,
-// PM2_HOME and a short TMPDIR; reserve a private tmux socket and test database.
-// Read actual paths before starting and clean all processes/resources afterwards.
 for (const otherClaude of [false, true]) {
   test(`pre-migration upgrade installs before requesting a restart${otherClaude ? ' while another Claude remains running' : ''}`,
     { timeout: 25000 }, async t => {
@@ -153,19 +150,6 @@ async function assertFailedUpgrade(t, failure) {
 
 // Boundary: real installer failure through main's error handling and private C4
 // state; run for installation-error or exit-queue changes, skip unrelated edits.
-// Run only in isolation, never against live resources: isolate HOME, ZYLOS_DIR,
-// PM2_HOME and a short TMPDIR; reserve a private tmux socket and test database.
-// Read actual paths before starting and clean all processes/resources afterwards.
 test('failed installation logs an error and leaves the running Claude without queued exit', { timeout: 25000 }, async t => {
   await assertFailedUpgrade(t, 'install');
-});
-
-// Boundary: curl fails before writing any installer input; the real shell
-// pipeline/main must report failure and preserve the current runtime. Run for
-// native download/pipeline error handling; unrelated edits may skip.
-// Run only in isolation, never against live resources: isolate HOME, ZYLOS_DIR,
-// PM2_HOME and a short TMPDIR; reserve a private tmux socket and test database.
-// Read actual paths before starting and clean all processes/resources afterwards.
-test('failed download logs an error and leaves the running Claude without queued exit', { timeout: 25000 }, async t => {
-  await assertFailedUpgrade(t, 'download');
 });

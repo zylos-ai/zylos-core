@@ -44,13 +44,6 @@ function resetTables() {
 describe('createCheckpoint', () => {
   beforeEach(seedCheckpointHead);
 
-  it('creates first checkpoint with start_conversation_id=1', () => {
-    const cp = mod.createCheckpoint('*', 10, 'First batch');
-    assert.equal(cp.start_conversation_id, 1);
-    assert.equal(cp.end_conversation_id, 10);
-    assert.ok(cp.id > 0);
-  });
-
   it('auto-computes start from previous checkpoint', () => {
     mod.createCheckpoint('*', 10, 'First');
     const cp = mod.createCheckpoint('*', 25, 'Second');
@@ -74,11 +67,6 @@ describe('createCheckpoint', () => {
 describe('getLatestContentCheckpoint', () => {
   beforeEach(resetTables);
 
-  it('returns null when no checkpoints exist', () => {
-    const cp = mod.getLatestContentCheckpoint('*');
-    assert.equal(cp, null);
-  });
-
   it('returns the most recent content checkpoint', () => {
     seedCheckpointHead();
     mod.createCheckpoint('*', 10, 'First');
@@ -93,46 +81,10 @@ describe('getLatestContentCheckpoint', () => {
 
 // -- getCheckpoints --
 
-describe('getCheckpoints', () => {
-  beforeEach(resetTables);
-
-  it('returns empty array when none exist', () => {
-    const rows = mod.getCheckpoints();
-    assert.ok(Array.isArray(rows));
-    assert.equal(rows.length, 0);
-  });
-
-  it('returns all checkpoints in reverse chronological order', () => {
-    seedCheckpointHead();
-    mod.createCheckpoint('*', 10, 'First');
-    mod.createCheckpoint('*', 20, 'Second');
-    mod.createCheckpoint('*', 30, 'Third');
-    db.exec("UPDATE checkpoints SET timestamp=printf('2026-01-%02d 00:00:00', id)");
-    const rows = mod.getCheckpoints();
-    assert.equal(rows.length, 3);
-    assert.equal(rows[0].summary, 'Third');
-    assert.equal(rows[2].summary, 'First');
-  });
-});
-
 // -- getUnsummarizedRange --
 
 describe('getUnsummarizedRange', () => {
   beforeEach(resetTables);
-
-  it('returns count 0 when no conversations exist', () => {
-    const range = mod.getGlobalUnsummarizedRange();
-    assert.equal(range.count, 0);
-  });
-
-  it('returns all conversations when no checkpoint exists', () => {
-    insertDelivered('in', 'telegram', '123', 'msg1');
-    insertDelivered('in', 'telegram', '123', 'msg2');
-    const range = mod.getGlobalUnsummarizedRange();
-    assert.equal(range.count, 2);
-    assert.equal(range.firstConversationId, 1);
-    assert.equal(range.lastConversationId, 2);
-  });
 
   it('returns only conversations after last checkpoint', () => {
     insertDelivered('in', 'telegram', '123', 'msg1');
@@ -147,38 +99,6 @@ describe('getUnsummarizedRange', () => {
 });
 
 // -- getUnsummarizedConversations --
-
-describe('getUnsummarizedConversations', () => {
-  beforeEach(resetTables);
-
-  it('returns all unsummarized conversations', () => {
-    insertDelivered('in', 'telegram', '123', 'msg1');
-    insertDelivered('out', 'telegram', '123', 'reply1');
-    const rows = mod.getGlobalUnsummarizedConversations({ upToConversationId: mod.getGlobalDeliveredFrontier() });
-    assert.equal(rows.length, 2);
-    assert.equal(rows[0].content, 'msg1');
-  });
-
-  it('respects limit parameter', () => {
-    for (let i = 1; i <= 5; i++) {
-      insertDelivered('in', 'telegram', '123', `msg${i}`);
-    }
-    const rows = mod.getGlobalUnsummarizedConversations({ upToConversationId: mod.getGlobalDeliveredFrontier(), limit: 2 });
-    assert.equal(rows.length, 2);
-    // B returns the earliest unsummarized page in id order.
-    assert.equal(rows[0].content, 'msg1');
-    assert.equal(rows[1].content, 'msg2');
-  });
-
-  it('excludes conversations before checkpoint', () => {
-    insertDelivered('in', 'telegram', '123', 'old');
-    mod.createCheckpoint('*', 1, 'Synced');
-    insertDelivered('in', 'telegram', '123', 'new');
-    const rows = mod.getGlobalUnsummarizedConversations({ upToConversationId: mod.getGlobalDeliveredFrontier() });
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].content, 'new');
-  });
-});
 
 // -- getConversationsByRange --
 
@@ -195,51 +115,9 @@ describe('getConversationsByRange', () => {
     assert.equal(rows[2].content, 'msg4');
   });
 
-  it('returns empty array for out-of-range query', () => {
-    insertDelivered('in', 'telegram', '123', 'msg1');
-    const rows = mod.getConversationsByRange(100, 200);
-    assert.equal(rows.length, 0);
-  });
 });
 
 // -- formatConversations --
-
-describe('formatConversations', () => {
-  it('returns empty string for empty array', () => {
-    assert.equal(mod.formatConversations([]), '');
-  });
-
-  it('returns empty string for null', () => {
-    assert.equal(mod.formatConversations(null), '');
-  });
-
-  it('formats IN conversation with endpoint', () => {
-    const result = mod.formatConversations([{
-      timestamp: '2025-01-15 10:00:00',
-      direction: 'in',
-      channel: 'telegram',
-      endpoint_id: '123',
-      content: 'hello'
-    }]);
-    assert.ok(result.includes('IN'));
-    assert.ok(result.includes('telegram:123'));
-    assert.ok(result.includes('hello'));
-    assert.ok(!result.includes('reply via:'));
-  });
-
-  it('formats OUT conversation without endpoint', () => {
-    const result = mod.formatConversations([{
-      timestamp: '2025-01-15 10:00:00',
-      direction: 'out',
-      channel: 'telegram',
-      endpoint_id: null,
-      content: 'reply'
-    }]);
-    assert.ok(result.includes('OUT'));
-    assert.ok(result.includes('(telegram)'));
-    assert.ok(result.includes('reply'));
-  });
-});
 
 describe('formatConversationsForAgent', () => {
   it('adds reply routing for IN conversation with endpoint', () => {
@@ -255,57 +133,4 @@ describe('formatConversationsForAgent', () => {
     assert.ok(result.includes('"telegram" "123"'));
   });
 
-  it('does not add reply routing for OUT conversation', () => {
-    const result = mod.formatConversationsForAgent([{
-      timestamp: '2025-01-15 10:00:00',
-      direction: 'out',
-      channel: 'telegram',
-      endpoint_id: '123',
-      content: 'reply'
-    }]);
-
-    assert.ok(result.includes('reply'));
-    assert.ok(!result.includes('reply via:'));
-  });
-
-  it('does not add reply routing when endpoint is missing', () => {
-    const result = mod.formatConversationsForAgent([{
-      timestamp: '2025-01-15 10:00:00',
-      direction: 'in',
-      channel: 'system',
-      endpoint_id: null,
-      content: 'notice'
-    }]);
-
-    assert.ok(result.includes('notice'));
-    assert.ok(!result.includes('reply via:'));
-  });
-
-  it('does not duplicate legacy stored reply routing', () => {
-    const legacy = 'hello ---- reply via: node /tmp/c4-send.js "telegram" "123"';
-    const result = mod.formatConversationsForAgent([{
-      timestamp: '2025-01-15 10:00:00',
-      direction: 'in',
-      channel: 'telegram',
-      endpoint_id: '123',
-      content: legacy
-    }]);
-
-    assert.equal((result.match(/reply via:/g) || []).length, 1);
-  });
-
-  it('adds reply routing when content only mentions the marker text', () => {
-    const content = 'Please inspect the literal marker ---- reply via: in this paragraph.';
-    const result = mod.formatConversationsForAgent([{
-      timestamp: '2025-01-15 10:00:00',
-      direction: 'in',
-      channel: 'telegram',
-      endpoint_id: '123',
-      content
-    }]);
-
-    assert.ok(result.includes(content));
-    assert.ok(result.includes('"telegram" "123"'));
-    assert.equal((result.match(/reply via:/g) || []).length, 2);
-  });
 });

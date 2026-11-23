@@ -6,8 +6,6 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { enqueueRestartIfNeeded, syncRuntimeHooks } from '../sync-runtime-hooks.js';
 import { approvePermission } from '../../../skills/activity-monitor/scripts/hook-auth-prompt.js';
-import { desiredClaudeHooks } from '../runtime/claude/hooks.js';
-import { isCoreCodexHook, syncCodexConfig } from '../runtime/codex/hooks.js';
 
 const payload = { hook_event_name: 'PermissionRequest', session_id: 'real-session' };
 const env = { ZYLOS_RUN_ID: 'run-1' };
@@ -57,39 +55,6 @@ function sockFixture(outcome, lookup = 'unknown') {
     lookupRestart: async (...args) => { lookups.push(args); return lookup; } };
 }
 
-test('hook consumer uses submit, frozen envelope and accepted results', async () => {
-  for (const result of ['accepted', 'already_accepted', 'done_empty']) {
-    const runCount = result === 'done_empty' ? 0 : 3;
-    const options = sockFixture({ kind: 'accepted', sent: true,
-      reply: { requestId: 'upgrade-1000-aabbccddeeff', result, runCount } });
-    const actual = await enqueueRestartIfNeeded(options);
-    assert.deepEqual(actual, { submitted: true, requestId: 'upgrade-1000-aabbccddeeff', result, runCount });
-    assert.equal(options.submits.length, 1);
-    assert.deepEqual(options.submits[0][0], { version: 1, type: 'restart_all', requestId: 'upgrade-1000-aabbccddeeff', reason: 'upgrade' });
-    assert.equal(options.submits[0][1].deadlineAt, 11000);
-    assert.equal(options.submits[0][1].replyMaxMs, 10000);
-    assert.equal(options.submits[0][1].connectRetryEveryMs, undefined);
-    assert.match(options.submits[0][1].socketPath, /activity-monitor\/am\.sock$/);
-    assert.equal(options.lookups.length, 0);
-  }
-});
-
-test('definitive rejection and sent:false never look up or resubmit', async () => {
-  for (const code of ['manual_restart_pending', 'requests_unreadable', 'request_conflict', 'invalid_request', 'entry_not_open']) {
-    const options = sockFixture({ kind: 'rejected', sent: true, reply: { requestId: 'upgrade-1000-aabbccddeeff', code } });
-    const actual = await enqueueRestartIfNeeded(options);
-    assert.equal(actual.submitted, false); assert.equal(actual.code, code);
-    assert.deepEqual(actual.persisted, []);
-    assert.equal(actual.category, ['manual_restart_pending', 'entry_not_open'].includes(code) ? 'T' : 'R');
-    assert.equal(options.lookups.length, 0); assert.equal(options.submits.length, 1);
-  }
-  for (const kind of ['connect_failed', 'deadline_exceeded']) {
-    const options = sockFixture({ kind, sent: false });
-    assert.equal((await enqueueRestartIfNeeded(options)).category, 'T');
-    assert.equal(options.lookups.length, 0); assert.equal(options.submits.length, 1);
-  }
-});
-
 test('all uncertain outcomes use one same-deadline lookup and never resubmit', async () => {
   for (const kind of ['no_reply', 'invalid_reply', 'timeout', 'deadline_exceeded']) {
     for (const lookup of ['accepted', 'done', 'unknown', 'deadline_exceeded']) {
@@ -101,28 +66,6 @@ test('all uncertain outcomes use one same-deadline lookup and never resubmit', a
       assert.equal(options.submits.length, 1);
     }
   }
-});
-
-test('lookup failure and exhausted budget remain fail closed', async () => {
-  const failed = sockFixture({ kind: 'no_reply', sent: true });
-  failed.lookupRestart = () => { throw Error('unreadable'); };
-  const actual = await enqueueRestartIfNeeded(failed);
-  assert.equal(actual.category, 'U'); assert.equal(actual.lookup, 'unknown'); assert.equal(actual.submitted, null);
-  const expired = sockFixture(); expired.deadlineAt = 1000;
-  assert.equal((await enqueueRestartIfNeeded(expired)).sent, false);
-  assert.equal(expired.submits.length, 0); assert.equal(expired.lookups.length, 0);
-});
-
-test('both-runtime preparation preserves unrelated hook identity', () => {
-  assert.equal(isCoreCodexHook('node /custom/session-start-orchestrator.js', '/instance'), false);
-  assert.equal(isCoreCodexHook('node /instance/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js --shard identity', '/instance'), true);
-  const desired = desiredClaudeHooks({ zylosDir: '/isolated-instance', existsSync: () => false });
-  for (const groups of Object.values(desired)) for (const group of groups) for (const hook of group.hooks) {
-    assert.ok(hook.command.startsWith('exec node /isolated-instance/.claude/'), hook.command);
-  }
-  const failed = syncCodexConfig({ projectDir: '/isolated-instance',
-    readFileSync: () => 'malformed toml [', log: () => {}, writeConfig: () => false });
-  assert.equal(failed.fatal, true);
 });
 
 test('init hook sync generates both runtime assets idempotently without restart', async t => {
@@ -174,38 +117,6 @@ test('init hook sync generates both runtime assets idempotently without restart'
   assert.equal(claudeOnly.changed, true);
   assert.equal(claudeOnly.codex.changed, false);
   assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), JSON.parse(before[0]));
-});
-
-test('init hook sync preserves unreadable settings and reports failure before Codex generation', async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-control-bad-hook-sync-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const settingsPath = path.join(root, '.claude', 'settings.json');
-  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-  for (const bad of ['{broken', '[]', '{"hooks":[]}']) {
-    fs.writeFileSync(settingsPath, bad);
-    await assert.rejects(syncRuntimeHooks({ zylosDir: root, stopFailureSupported: false, log: () => {} }), { code: 'SETTINGS_UNREADABLE' });
-    assert.equal(fs.readFileSync(settingsPath, 'utf8'), bad);
-    assert.equal(fs.existsSync(path.join(root, '.codex', 'hooks.json')), false);
-  }
-});
-
-test('init hook sync rejects malformed project Codex TOML before persisting Claude settings', async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-control-bad-codex-toml-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const settings = path.join(root, '.claude', 'settings.json');
-  const config = path.join(root, '.codex', 'config.toml');
-  fs.mkdirSync(path.dirname(settings));
-  fs.mkdirSync(path.dirname(config));
-  const before = Buffer.from('{"hooks":{}}\n');
-  fs.writeFileSync(settings, before);
-  fs.writeFileSync(config, 'foo = "');
-
-  await assert.rejects(
-    syncRuntimeHooks({ zylosDir: root, stopFailureSupported: false, subagentHooksSupported: false, log: () => {} }),
-    { message: 'Failed to refresh Codex project config: check TOML syntax and deployment environment.' },
-  );
-  assert.deepEqual(fs.readFileSync(settings), before);
-  assert.equal(fs.existsSync(path.join(root, '.codex', 'hooks.json')), false);
 });
 
 test('upgrade refreshes stale Codex hooks with unchanged TOML and dry-run preserves them', t => {

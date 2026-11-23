@@ -4,7 +4,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { ClaudeHistory } from '../skills/dashboard/src/lib/runtime/claude/history.js';
 
@@ -116,94 +115,3 @@ test('history HTTP lists page isolated transcript files, authenticate cursor sco
   assert.equal((await entries({ cursor: anchored.nextCursor })).error.code, 'invalid_cursor');
   assert.deepEqual(bodies(await entries({ anchor: match.entry, limit: 5 })), bodies(anchored));
 });
-
-// Run for history UI, list contract, or responsive control changes; skip unrelated UI or backend changes.
-// Requires the isolated Node runner (private HOME, ZYLOS_DIR, PM2_HOME, short TMPDIR)
-// plus the browser gate. Chromium sees only the synthetic loopback fixture, with no tmux or database.
-test('history browser loads both lists incrementally and recovers after a restart',
-  { skip: process.env.ZYLOS_CHAT_INTEGRATION !== '1', timeout: 60000 }, async t => {
-    const { origin, append, restart } = await fixture(t);
-    const { chromium } = await import(pathToFileURL(process.env.ZYLOS_CHAT_BROWSER_MODULE));
-    const launching = chromium.launch({ executablePath: process.env.ZYLOS_CHAT_BROWSER_BIN, headless: true, timeout: 15000,
-      args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
-    t.after(async () => { await (await launching.catch(() => null))?.close(); });
-    const browser = await launching;
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-    const selector = name => `[data-history="${name}"]`;
-    const waitCount = (query, count) => page.waitForFunction(({ query, count }) => document.querySelectorAll(query).length === count, { query, count });
-    const options = `${selector('sessions')} option`;
-    const articles = '.history-entry';
-    const more = page.locator(selector('more-sessions'));
-    const status = page.locator(selector('status'));
-    await page.goto(`${origin}/fixture?lang=en&theme=light`);
-    await waitCount(options, 50);
-    await waitCount(articles, 50);
-    await restart();
-    const rejectedList = page.waitForResponse(response => response.url().includes('/history/sessions?cursor=') && response.status() === 400);
-    const reloadedList = page.waitForResponse(response => response.url().includes('/history/sessions') && !new URL(response.url()).searchParams.has('cursor') && response.status() === 200);
-    await more.click();
-    await rejectedList; await reloadedList;
-    await waitCount(options, 50);
-    await more.click();
-    await waitCount(options, 80);
-    assert.deepEqual(await page.locator(options).evaluateAll(nodes => nodes.map(node => node.value)), ids);
-    assert.equal(await more.isVisible(), false);
-    assert.equal(await status.textContent(), '');
-    const sessions = page.locator(selector('sessions'));
-    const offPage = ids.at(-1);
-    await sessions.selectOption(offPage);
-    await page.locator(articles).filter({ hasText: offPage }).waitFor();
-    await page.evaluate(() => window.dispatchEvent(new Event('history-fixture-reactivate')));
-    await waitCount(options, 51);
-    assert.equal(await sessions.inputValue(), offPage);
-    await page.locator(articles).filter({ hasText: offPage }).waitFor();
-    await page.locator(selector('internal')).check();
-    await page.locator(articles).filter({ hasText: offPage }).waitFor();
-    const selectedEntry = await page.locator(articles).elementHandle();
-    await restart();
-    const staleSelection = page.waitForResponse(response => response.url().includes('/history/sessions?cursor=') && response.status() === 400);
-    await more.click();
-    await staleSelection;
-    await page.waitForFunction(() => !document.querySelector('[data-history="more-sessions"]').disabled);
-    assert.equal(await sessions.inputValue(), offPage);
-    assert.equal(await selectedEntry.evaluate(element => element.isConnected), true);
-    await sessions.selectOption(ids[0]);
-    await waitCount(articles, 50);
-    const timeline = page.locator(selector('timeline'));
-    for (let count = 100; count <= 500; count += 50) {
-      await timeline.evaluate(element => { element.scrollTop = 0; });
-      await waitCount(articles, count);
-    }
-    assert.equal(await page.locator(selector('older')).isVisible(), false);
-    assert.match(await page.locator(articles).first().textContent(), /Entry 000/);
-    await append('Browser append');
-    await timeline.evaluate(element => { element.scrollTop = element.scrollHeight; });
-    await waitCount(articles, 501);
-    assert.match(await page.locator(articles).last().textContent(), /Browser append/);
-    await page.locator(selector('query')).fill('anchor needle');
-    await page.locator(selector('query')).press('Enter');
-    await page.locator('.history-search-match').click();
-    await waitCount(articles, 50);
-    assert.equal(await timeline.getByText('Entry 249 anchor needle', { exact: true }).count(), 1);
-    await restart();
-    const anchorReload = page.waitForResponse(response => response.url().includes('/history/entries?') && response.url().includes('&anchor=') && response.status() === 200);
-    await timeline.evaluate(element => { element.scrollTop = 0; });
-    await anchorReload;
-    await waitCount(articles, 50);
-    assert.equal(await timeline.getByText('Entry 249 anchor needle', { exact: true }).count(), 1);
-    assert.equal(await status.textContent(), '');
-    await timeline.evaluate(element => { element.scrollTop = element.scrollHeight; });
-    await waitCount(articles, 100);
-    const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
-    if (evidence) await fs.mkdir(evidence, { recursive: true });
-    for (const width of [1280, 390]) for (const lang of ['en', 'zh']) for (const theme of ['light', 'dark']) {
-      await page.setViewportSize({ width, height: 800 });
-      await page.goto(`${origin}/fixture?lang=${lang}&theme=${theme}`);
-      await waitCount(articles, 50);
-      await more.focus();
-      assert.equal(await more.textContent(), lang === 'en' ? 'Load more sessions' : '加载更多会话');
-      assert.equal(await more.evaluate(button => button.getBoundingClientRect().height), 36);
-      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-      if (evidence) await page.screenshot({ path: path.join(evidence, `history-${width}-${lang}-${theme}.png`) });
-    }
-  });

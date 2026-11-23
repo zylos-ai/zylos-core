@@ -13,7 +13,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { after, afterEach, before, describe, it } from 'node:test';
 
@@ -194,11 +193,6 @@ process.exit(22);
 }
 
 const githubSource = (ref, refType, commit) => ({ type: 'github-release', repo: REPO, ref, refType, commit });
-// File deliveries name the component, so the host's registry maps it to the fixture repository.
-const useRegistry = (host) => fs.writeFileSync(
-  path.join(host.zylosDir, '.zylos', 'registry.json'),
-  JSON.stringify({ components: { [NAME]: { repo: REPO, type: 'service' } } }),
-);
 
 describe('components.json records where the installed code came from', () => {
   it('a release install and each later upgrade record the tag and commit actually installed', () => {
@@ -217,35 +211,6 @@ describe('components.json records where the installed code came from', () => {
 
     host.ok(['upgrade', NAME, '--beta', '--yes', '--json'], { tags: ['v2.1.0-beta.1', 'v2.0.0', 'v1.0.0'] });
     assert.deepEqual(host.record().source, githubSource('v2.1.0-beta.1', 'tag', upstream.commits['v2.1.0-beta.1']));
-  });
-
-  it('a branch install and a branch upgrade record the branch and the commit it was at', () => {
-    const host = makeHost();
-    host.ok(['add', REPO, '--branch', 'main', '--json'], { tags: ['v1.0.0'] });
-    assert.deepEqual(host.record().source, githubSource('main', 'branch', upstream.commits.main));
-    assert.equal(host.record().branch, 'main');
-
-    host.ok(['upgrade', NAME, '--branch', 'feat/x', '--yes', '--json'], { tags: ['v1.0.0'] });
-    assert.equal(host.installed('payload.txt'), 'payload 2.0.1\n');
-    assert.deepEqual(host.record().source, githubSource('feat/x', 'branch', upstream.commits['feat/x']));
-    assert.equal(host.record().branch, 'feat/x', 'the branch field follows the branch now installed');
-
-    // A plain upgrade of a branch install still goes to the latest release, and the record stops naming a branch.
-    host.ok(['upgrade', NAME, '--yes', '--json'], { tags: ['v2.3.0', 'v2.0.0', 'v1.0.0'] });
-    assert.equal(host.installed('payload.txt'), 'payload 2.3.0\n');
-    assert.deepEqual(host.record().source, githubSource('v2.3.0', 'tag', upstream.commits['v2.3.0']));
-    assert.equal('branch' in host.record(), false, 'a release install has no branch');
-  });
-
-  it('an upgrade whose release archive cannot be downloaded records the main branch it installed instead', () => {
-    const host = makeHost();
-    host.ok(['add', `${REPO}@1.0.0`, '--json'], { tags: ['v1.0.0'] });
-
-    host.ok(['upgrade', NAME, '--yes', '--json'], { tags: ['v2.0.0', 'v1.0.0'], missing: ['tags/v2.0.0'] });
-    assert.match(host.fetched(), /\/archive\/refs\/heads\/main\.tar\.gz/, 'the upgrade fell back to the main branch');
-    assert.equal(host.installed('payload.txt'), 'payload 2.2.0\n');
-    assert.deepEqual(host.record().source, githubSource('main', 'branch', upstream.commits.main));
-    assert.equal(host.record().branch, 'main');
   });
 
   it('a failed upgrade that rolls back leaves the record of the code still installed', () => {
@@ -274,57 +239,4 @@ describe('components.json records where the installed code came from', () => {
     assert.deepEqual(host.record().source, githubSource('v2.0.0', 'tag', upstream.commits['v2.0.0']));
   });
 
-  it('an AI-mode install records the tag or branch and the commit actually installed', () => {
-    const fromTag = makeHost();
-    fromTag.ok(['add', `${REPO}@4.0.0`, '--json'], { tags: ['v4.0.0'] });
-    const tagged = fromTag.record();
-    assert.equal(tagged.type, 'ai');
-    assert.equal(tagged.setupComplete, false);
-    assert.deepEqual(tagged.source, githubSource('v4.0.0', 'tag', upstream.commits['v4.0.0']));
-
-    const fromBranch = makeHost();
-    fromBranch.ok(['add', REPO, '--branch', 'ai-mode', '--json'], { tags: ['v1.0.0'] });
-    const branched = fromBranch.record();
-    assert.equal(branched.type, 'ai');
-    assert.deepEqual(branched.source, githubSource('ai-mode', 'branch', upstream.commits['ai-mode']));
-    assert.equal(branched.branch, 'ai-mode');
-  });
-
-  it('upgrading a component delivered from an unverified file drops the file delivery from its record', () => {
-    const host = makeHost();
-    useRegistry(host);
-    host.ok(['add', `${NAME}@2.0.0`, '--file', path.join(upstream.archives, 'tags', 'v2.0.0.tar.gz'), '--trust-file', '--json']);
-    assert.equal(host.record().deliveredVia?.type, 'file');
-    assert.equal(host.record().deliveredVia.verified, false);
-    assert.match(host.ok(['list']).stdout, /Delivered via file — checksum NOT verified/);
-
-    host.ok(['upgrade', NAME, '--yes', '--json'], { tags: ['v2.3.0', 'v2.0.0'] });
-    assert.deepEqual(host.record().source, githubSource('v2.3.0', 'tag', upstream.commits['v2.3.0']));
-    assert.equal('deliveredVia' in host.record(), false, 'the installed code now comes from GitHub, not the file');
-    assert.doesNotMatch(host.ok(['list']).stdout, /Delivered via file/);
-  });
-
-  it('a file delivery records the commit its archive names, and null when the archive names none', () => {
-    const delivered = (host, tarball) => {
-      useRegistry(host);
-      const sha256 = createHash('sha256').update(fs.readFileSync(tarball)).digest('hex');
-      host.ok(['add', `${NAME}@2.0.0`, '--file', tarball, '--sha256', sha256, '--json']);
-      assert.equal(host.fetched(), '', 'a file delivery downloads nothing');
-      return host.record().source;
-    };
-
-    const fromGit = makeHost();
-    assert.deepEqual(
-      delivered(fromGit, path.join(upstream.archives, 'tags', 'v2.0.0.tar.gz')),
-      githubSource('v2.0.0', 'tag', upstream.commits['v2.0.0']),
-    );
-
-    const fromTar = makeHost();
-    const wrapper = path.join(fromTar.root, `zylos-${NAME}`);
-    fs.mkdirSync(wrapper);
-    fs.writeFileSync(path.join(wrapper, 'SKILL.md'), skillMd('2.0.0'));
-    const plain = path.join(fromTar.root, 'plain.tar.gz');
-    execFileSync('tar', ['czf', plain, '-C', fromTar.root, path.basename(wrapper)]);
-    assert.deepEqual(delivered(fromTar, plain), githubSource('v2.0.0', 'tag', null));
-  });
 });

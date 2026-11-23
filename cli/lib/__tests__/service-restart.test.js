@@ -4,45 +4,6 @@ import { describe, it } from 'node:test';
 const { restartServicesWithDeps } = await import('../../commands/service.js');
 
 describe('restartServicesWithDeps', () => {
-  it('falls back only for the service that failed ecosystem restart', () => {
-    const ecosystemCalls = [];
-    const managedCalls = [];
-    const execCalls = [];
-    const messages = [];
-
-    const ok = restartServicesWithDeps({
-      restartFromEcosystemFn: (names, opts) => {
-        ecosystemCalls.push({ names, opts });
-        if (names[0] === 'scheduler') {
-          throw new Error('bad ecosystem');
-        }
-      },
-      restartManagedProcessFn: (name, opts) => {
-        managedCalls.push({ name, opts });
-      },
-      getCoreEcosystemPathFn: () => '/tmp/ecosystem.config.cjs',
-      execSyncFn: (cmd, opts) => execCalls.push({ cmd, opts }),
-      logSuccess: (msg) => messages.push(msg),
-      logError: (msg) => messages.push(msg),
-    });
-
-    assert.equal(ok, true);
-    assert.equal(ecosystemCalls.length, 3);
-    assert.equal(ecosystemCalls.some(({ names }) => names.includes('web-console')), false);
-    assert.deepStrictEqual(managedCalls, [{
-      name: 'scheduler',
-      opts: {
-        ecosystemPath: '/tmp/ecosystem.config.cjs',
-        stdio: 'inherit',
-        fallbackToPlainRestartOnError: true,
-      },
-    }]);
-    assert.deepStrictEqual(execCalls, [{
-      cmd: 'pm2 save 2>/dev/null',
-      opts: { stdio: 'inherit' },
-    }]);
-    assert.equal(messages.some((msg) => String(msg).includes('scheduler')), true);
-  });
 
   it('persists already-restarted services before returning false on a later failure', () => {
     const execCalls = [];

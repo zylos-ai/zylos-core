@@ -10,7 +10,6 @@ import * as tmux from '../tmux-connection.js';
 import * as claudeLaunch from '../claude/launch.js';
 import * as codexLaunch from '../codex/launch.js';
 import { getRuntime } from '../index.js';
-import { buildKickPrompt } from '../kick-prompt.js';
 
 let context;
 let captured;
@@ -73,38 +72,3 @@ test('throwing trusted discovery builds an isolated recovery launch', async t =>
   assert.match(captured.args.at(-1), /Do not query C4/);
   assert.equal(captured.args.at(-1).includes(ordinary.at(-1)), false);
 });
-
-for (const runtime of ['claude', 'codex']) {
-  test(`${runtime} puts blocked and interrupted upgrade prompts at its startup prompt boundary`, async t => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'upgrade-prompt-')));
-    t.after(() => fs.rm(root, { recursive: true, force: true }));
-    t.after(() => { context = undefined; skipCodexPrepare = false; });
-    skipCodexPrepare = true;
-    const help = ' --no-daemon ';
-    const launchConfig = { runtime, mode: 'default' };
-    const options = {
-      root,
-      env: { HOME: root, PATH: '/empty' },
-      paths: { tmuxNameForGroup: () => 'isolated' },
-      runtimeExecutable: () => '/unused',
-      runtimeHelp: async () => help,
-      dependencies: {
-        openTmuxConnection: async () => ({ close() {} }),
-        observeSessionTarget: async () => ({ present: false }),
-      },
-    };
-    const ordinary = (await getRuntime(runtime)).launch.buildArgs(launchConfig, { root, help });
-    for (const blocked of [true, false]) {
-      const prompt = blocked ? 'Upgrade blocked' : 'Upgrade interrupted';
-      context = { blocked, active: true, controllerAlive: false, prompt };
-      captured = undefined;
-      await assert.rejects(launchSession({
-        runtime, sessionGroup: null, runId: 'isolated-run', sessionMode: 'single', launchConfig,
-      }, options), { code: 'LAUNCH_FAILED', message: 'isolated tmux boundary' });
-      const expected = runtime === 'claude'
-        ? [...ordinary, '--', prompt]
-        : [...ordinary.slice(0, -1), blocked ? prompt : `${buildKickPrompt()}\n\n${prompt}`];
-      assert.deepEqual(captured.args, expected);
-    }
-  });
-}

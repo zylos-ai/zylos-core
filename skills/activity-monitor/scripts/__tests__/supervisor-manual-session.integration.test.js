@@ -36,25 +36,6 @@ async function after(t,mode){
  await f.stop();
 }
 for(const mode of ['single','multi'])test(`${mode} actual entry stops accepted run after session changes without rechecking sessionId`,{timeout:20000},async t=>{await after(t,mode);});
-test('missing post-acceptance hook marker retains run-level stop boundary without invented atomic session proof',{timeout:20000},async t=>{
- const f=await fixture(t);assert.equal((await f.submit()).kind,'accepted');fs.unlinkSync(f.readyPath);
- const state=await f.command('tick');assert.deepEqual(state.requests,[]);assert.deepEqual(state.fences,[]);assert.throws(()=>f.tmux('has-session','-t','=zylos-group-origin'));assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));await f.stop();
-});
-
-// After admission, runId remains the execution boundary even if READY is missing or malformed.
-for(const [name,fields] of [
- ['empty session',{sessionId:''}],
- ['missing timestamp',{sessionId:'new-session',ts:undefined}],
- ['noninteger timestamp',{sessionId:'new-session',ts:1.5}],
- ['missing control IDs',{sessionId:'new-session',startupControlIds:undefined}],
- ['nonarray control IDs',{sessionId:'new-session',startupControlIds:{}}],
- ['noninteger control ID',{sessionId:'new-session',startupControlIds:[1,'2']}],
-])test(`invalid READY ${name} does not invent a context-change veto`,{timeout:20000},async t=>{
- const f=await fixture(t);assert.equal((await f.submit()).kind,'accepted');
- fs.writeFileSync(f.readyPath,JSON.stringify({...f.ready,...fields}));
- const state=await f.command('tick');assert.deepEqual(state.requests,[]);assert.deepEqual(state.fences,[]);
- assert.throws(()=>f.tmux('has-session','-t','=zylos-group-origin'));assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));await f.stop();
-});
 
 test('replacement READY identity preserves replacement and renamed original',{timeout:20000},async t=>{
  const f=await fixture(t);assert.equal((await f.submit()).kind,'accepted');

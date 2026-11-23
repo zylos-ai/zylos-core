@@ -1,8 +1,7 @@
 /**
  * Child-process driver for the #715 commit-boundary e2e tests: runs the REAL runUpgrade()
  * pipeline in a clean process so the test can control the child environment
- * (ZYLOS_DIR fixture root, PATH-shim npm) — Jest's sandboxed process.env is
- * not inherited by grandchildren, so the pipeline must run outside it.
+ * (ZYLOS_DIR fixture root, PATH-shim npm) inherited by its subprocesses.
  *
  * argv: <component> <tempDir> <newVersion>
  * stdout: the runUpgrade() result as JSON

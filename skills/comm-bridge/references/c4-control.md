@@ -28,7 +28,7 @@ c4-control.js enqueue --content "<text>" [--priority 3] [--block-queue-until-idl
 | `--bypass-state` | Deliver regardless of current state |
 | `--ack-deadline <seconds>` | Seconds from now until the control times out if unacknowledged |
 | `--available-in <seconds>` | Delay before the control becomes eligible for delivery |
-| `--group <G>` | Target session group in multi mode; omit in single mode |
+| `--group <G>` | Target session group. Required once `session_mode` is set in config.json or during a mode switch; see [Target Session Group](#target-session-group) |
 | `--target-run <ID>` | Bind to the observed running run ID; rejected if the target changed or is not ready |
 | `--expected-runtime <RT>` | With `--target-run`, require the observed runtime to match (for example `claude` or `codex`) |
 | `--expected-session <ID>` | With `--target-run`, also require the observed runtime session ID to match |
@@ -40,6 +40,17 @@ c4-control.js enqueue --content "<text>" [--priority 3] [--block-queue-until-idl
 ```
 OK: enqueued control 42
 ```
+
+#### Target Session Group
+
+`--group` names the session that receives the control.
+
+- **When it is required:** whenever `~/zylos/.zylos/config.json` contains `session_mode` (multi mode, or single mode after migration), and while a mode switch is in progress. Omitting it then is rejected with `CONTROL_TARGET_REQUIRED` and nothing is queued. Only an install whose config has no `session_mode` accepts a control without `--group`.
+- **Which group:** the session the control relates to, for example the session a user is interrupting or the session of the conversation the notice is about. Use `origin` only for a notice that belongs to no specific session. Pass the full group name, including the component namespace (`openmax:dm-<id>`, `telegram:group-100123:topic-45`, or just `openmax` for the component's overall group); unlike `c4-receive --session-group`, nothing is prefixed for you. In single mode after migration the only target is `origin`.
+- **Acknowledgement deadline:** a targeted control that keeps the ack suffix must also pass `--ack-deadline`; otherwise it is rejected with `ACK_DEADLINE_REQUIRED`.
+- **Delivery is not guaranteed:** controls are delivered only to a running session. A control for a session group that is not running stays pending until that group next starts, and that start marks it `timeout` (`last_error=SESSION_ENDED`) without delivering it. Origin's own restarts keep its pending controls. Senders must not assume delivery: read the result with `get`, or treat the control as best effort.
+
+A notice that should become part of the agent's conversation history (and so feed Memory Sync) is not a control: send it as an ordinary message with [c4-receive](c4-receive.md). Controls are not read by Memory Sync.
 
 ### get
 

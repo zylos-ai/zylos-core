@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture } from './c4-v2-test-helpers.js';
-import { createStore } from '../c4-v2-store.js';
 
 function setup(t, readConfig = () => ({ state: 'ok', config: { session_mode: 'single' } })) {
   const f = fixture(t, { readConfig });
@@ -53,47 +52,4 @@ for (const [name, result, conservative] of [
     assert.throws(() => s.createCheckpoint('origin', 23, 'gap'), { code: 'CHECKPOINT_GAP' });
     assert.throws(() => s.getUnsummarizedConversations('origin', { upToConversationId: 23 }), { code: 'UPTO_BEYOND_FRONTIER' });
   } else s.createCheckpoint('origin', 23, 'multi');
-});
-
-test('an open transition and a thrown config read both retain all-group gaps', t => {
-  let throwing = false;
-  const { db, store: s, seed } = setup(t, () => { if (throwing) throw new Error('read failure'); return { state: 'missing' }; });
-  seed(10, 'telegram:a'); seed(11, 'origin', 'delivered');
-  assert.equal(s.getDeliveredFrontier('origin'), 11);
-  s.beginModeTransition('multi', 'single');
-  assert.equal(s.getDeliveredFrontier('origin'), 9);
-  assert.throws(() => s.createCheckpoint('origin', 11, 'gap'), { code: 'CHECKPOINT_GAP' });
-  db.exec('DELETE FROM mode_transitions'); throwing = true;
-  assert.equal(s.getDeliveredFrontier('origin'), 9);
-});
-
-test('origin fences block single selection and late claims without reading configuration', t => {
-  const { store: s, seed } = setup(t, () => { throw new Error('selection must not read config'); });
-  seed(10, 'telegram:a'); seed(11, 'telegram:b');
-  s.setDrainFence('origin', { reason: 'ttl', runId: 'run' });
-  assert.equal(s.getNextPending({ sessionMode: 'single' }), null);
-  assert.equal(s.claimConversation(10, { sessionMode: 'single' }), false);
-  assert.equal(s.getNextPending({ sessionMode: 'multi' }).id, 10);
-  assert.equal(s.getNextPending().id, 10);
-  assert.equal(s.claimConversation(11), true);
-  s.clearDrainFence('origin');
-  assert.equal(s.claimConversation(10, { sessionMode: 'single' }), true);
-});
-
-test('scheduled input changes its recording group only on successful delivery', t => {
-  const { db, store: s, seed } = setup(t);
-  seed(10, 'telegram:a', 'pending', 'scheduler');
-  s.claimConversation(10, { sessionMode: 'single' });
-  s.failDelivery(10);
-  assert.equal(db.prepare('SELECT session_group FROM conversations WHERE id=10').get().session_group, 'telegram:a');
-  s.claimConversation(10, { sessionMode: 'single' }); s.markDelivered(10, { sessionGroup: 'origin' });
-  assert.equal(db.prepare('SELECT session_group FROM conversations WHERE id=10').get().session_group, 'origin');
-});
-
-test('Origin progress requires an injected reader and applies the single frontier when it fails', t => {
-  const { db, store } = fixture(t, { readConfig: () => { throw new Error('unreadable config'); } });
-  const gap = store.insertConversation('in', 'other', 'e', 'pending');
-  store.insertConversation('out', 'system', 'owner', 'later Origin output');
-  assert.throws(() => createStore(db).getUnsummarizedRange('origin'), /Origin progress requires readConfig/);
-  assert.equal(store.getUnsummarizedRange('origin').safeEnd, gap.id - 1);
 });

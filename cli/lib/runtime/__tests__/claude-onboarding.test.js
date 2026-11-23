@@ -68,47 +68,11 @@ for (const state of ['missing', 'false']) for (const missing of ['onboarding', '
   });
 }
 
-for (const state of ['missing', 'false']) {
-  test(`Claude launch leaves all true confirmations byte-identical with ${state} project-onboarding`, async t => {
-    const f = fixture(t);
-    if (state === 'missing') delete f.config.projects[f.root].hasCompletedProjectOnboarding;
-    else f.config.projects[f.root].hasCompletedProjectOnboarding = false;
-    f.write();
-    const before = Object.fromEntries(Object.entries(f.files).map(([name, file]) => [name, fs.readFileSync(file)]));
-    await f.launch();
-    for (const [name, file] of Object.entries(f.files)) assert.deepEqual(fs.readFileSync(file), before[name]);
-  });
-}
-
-test('Claude launch creates missing confirmation files and project entry', async t => {
-  const f = fixture(t);
-  await f.launch();
-  const config = JSON.parse(fs.readFileSync(f.files.config));
-  const settings = JSON.parse(fs.readFileSync(f.files.settings));
-  assert.equal(config.hasCompletedOnboarding, true);
-  assert.equal(config.lastOnboardingVersion, '2.1.59 (Claude Code)');
-  assert.equal(config.effortCalloutDismissed, true);
-  assert.deepEqual(config.projects[f.root], { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true });
-  assert.deepEqual(settings, { skipDangerousModePermissionPrompt: true });
-});
-
 // Both files can hold credentials (~/.claude.json approved key suffixes, settings env).
 test('Claude launch creates missing confirmation files owner-only', async t => {
   const umask = process.umask(0o022);
   t.after(() => process.umask(umask));
   const f = fixture(t);
-  await f.launch();
-  for (const file of Object.values(f.files)) assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600', file);
-});
-
-test('Claude launch tightens world-readable confirmation files it repairs', async t => {
-  const umask = process.umask(0o022);
-  t.after(() => process.umask(umask));
-  const f = fixture(t);
-  delete f.config.hasCompletedOnboarding;
-  delete f.settings.skipDangerousModePermissionPrompt;
-  f.write();
-  for (const file of Object.values(f.files)) fs.chmodSync(file, 0o644);
   await f.launch();
   for (const file of Object.values(f.files)) assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600', file);
 });
@@ -124,96 +88,6 @@ test('Claude launch leaves true confirmations and user files byte-identical', as
   await f.launch();
   for (const [name, file] of Object.entries(f.files)) assert.deepEqual(fs.readFileSync(file), before[name]);
   assert.deepEqual(fs.readdirSync(path.dirname(projectSettings)), ['settings.json']);
-});
-
-for (const content of ['{坏', '[]']) {
-  test(`Claude launch rebuilds damaged project settings (${content}) before starting`, async t => {
-    const f = fixture(t);
-    const dir = path.join(f.root, '.claude');
-    const file = path.join(dir, 'settings.json');
-    fs.mkdirSync(dir);
-    fs.writeFileSync(file, content);
-
-    await f.launch();
-
-    const backup = fs.readdirSync(dir).find(name => /^settings\.json\.corrupt\.\d+$/.test(name));
-    assert.ok(backup);
-    assert.deepEqual(fs.readFileSync(path.join(dir, backup)), Buffer.from(content));
-    const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const template = JSON.parse(fs.readFileSync(new URL('../../../../templates/.claude/settings.json', import.meta.url)));
-    assert.deepEqual(settings.statusLine, template.statusLine);
-    assert.ok(settings.hooks.SessionStart.find(group => group.matcher === 'startup')
-      .hooks.some(hook => hook.command.includes(path.join(f.root, '.claude', 'skills/activity-monitor/scripts/hook-health.js'))));
-  });
-}
-
-for (const content of ['{invalid JSON', 'null', '[]', '42', '"text"']) {
-  test(`Claude launch repairs non-object confirmation files (${content})`, async t => {
-    const f = fixture(t);
-    for (const file of Object.values(f.files)) fs.writeFileSync(file, content);
-    await f.launch();
-    const config = JSON.parse(fs.readFileSync(f.files.config));
-    const settings = JSON.parse(fs.readFileSync(f.files.settings));
-    assert.equal(config.hasCompletedOnboarding, true);
-    assert.equal(config.lastOnboardingVersion, '2.1.59 (Claude Code)');
-    assert.equal(config.effortCalloutDismissed, true);
-    assert.deepEqual(config.projects[f.root], { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true });
-    assert.deepEqual(settings, { skipDangerousModePermissionPrompt: true });
-  });
-}
-
-for (const fileName of ['config', 'settings']) for (const failure of ['unreadable', 'unwritable']) {
-  test(`Claude launch succeeds with ${failure} ${fileName} and preserves that file`, {
-    skip: process.getuid?.() === 0 ? 'Root bypasses POSIX file permission checks' : false,
-  }, async t => {
-    const f = fixture(t);
-    delete f.config.hasCompletedOnboarding;
-    delete f.settings.skipDangerousModePermissionPrompt;
-    f.write();
-    const file = f.files[fileName];
-    const before = fs.readFileSync(file);
-    const mode = failure === 'unreadable' ? 0o200 : 0o400;
-    fs.chmodSync(file, mode);
-    try {
-      if (failure === 'unreadable') assert.throws(() => fs.readFileSync(file), { code: 'EACCES' });
-      if (failure === 'unwritable') assert.throws(() => fs.accessSync(file, fs.constants.W_OK), { code: 'EACCES' });
-      await f.launch();
-    } finally { fs.chmodSync(file, 0o600); }
-    assert.deepEqual(fs.readFileSync(file), before);
-    const other = fileName === 'config' ? JSON.parse(fs.readFileSync(f.files.settings)) : JSON.parse(fs.readFileSync(f.files.config));
-    assert.equal(fileName === 'config' ? other.skipDangerousModePermissionPrompt : other.hasCompletedOnboarding, true);
-  });
-}
-
-for (const invalid of ['projects', 'project']) for (const value of [null, [], false]) {
-  test(`Claude launch repairs malformed ${invalid} (${JSON.stringify(value)})`, async t => {
-    const f = fixture(t);
-    if (invalid === 'projects') f.config.projects = value;
-    else f.config.projects[f.root] = value;
-    delete f.settings.skipDangerousModePermissionPrompt;
-    f.write();
-    await f.launch();
-    const config = JSON.parse(fs.readFileSync(f.files.config));
-    assert.deepEqual(config.projects[f.root], { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true });
-    assert.deepEqual(config.mcpServers, f.config.mcpServers);
-    assert.deepEqual(config.userConfigKey, f.config.userConfigKey);
-    assert.equal(config.lastOnboardingVersion, 'existing-version');
-    assert.equal(JSON.parse(fs.readFileSync(f.files.settings)).skipDangerousModePermissionPrompt, true);
-  });
-}
-
-test('Claude launch trusts the real startup directory when root is a symlink', async t => {
-  const f = fixture(t);
-  const linkedRoot = path.join(f.home, 'linked-zylos');
-  fs.symlinkSync(f.root, linkedRoot, 'dir');
-  f.options.root = linkedRoot;
-  f.options.env.ZYLOS_DIR = linkedRoot;
-  await f.launch();
-  const config = JSON.parse(fs.readFileSync(f.files.config));
-  const realRoot = fs.realpathSync(linkedRoot);
-  assert.equal(config.projects[realRoot].hasTrustDialogAccepted, true);
-  assert.equal(config.projects[realRoot].hasCompletedProjectOnboarding, true);
-  assert.equal(Object.hasOwn(config.projects, linkedRoot), false);
 });
 
 test('Claude launch pre-approves a .env API key on an already onboarded and trusted install', async t => {

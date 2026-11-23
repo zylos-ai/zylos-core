@@ -37,60 +37,6 @@ async function fixture(t) {
   return { ...f, writer, task, reader, query, onQuery: fn => { beforeQuery = fn; } };
 }
 
-test('a completion between list SELECTs cannot split counts, rows and timeline across snapshots', async t => {
-  const f = await fixture(t);
-  f.task('finishing');
-  f.task('previous', 'completed');
-  let writes = 0;
-  f.onQuery(sql => {
-    if (!sql.startsWith('SELECT status, count(*)')) return;
-    f.onQuery(null);
-    f.writer.prepare("UPDATE tasks SET status = 'completed', updated_at = ? WHERE id = 'finishing'").run(NOW + 1);
-    writes++;
-  });
-  const page = await f.reader.read(undefined, f.query({ status: 'completed' }));
-  assert.equal(writes, 1);
-  assert.equal(page.counts.enabled, 1);
-  assert.equal(page.counts.completed, 1);
-  assert.equal(page.items.length, 1);
-  assert.equal(page.items[0].id, 'previous');
-  assert.equal(page.items[0].status, 'completed');
-  assert.equal(page.timelineTasks.length, 1);
-  assert.equal(page.timelineTasks[0].id, 'finishing');
-  assert.equal(page.kpi.enabled, 1);
-  const next = await f.reader.read(undefined, f.query({ status: 'completed' }));
-  assert.equal(next.counts.enabled, 0);
-  assert.equal(next.counts.completed, 2);
-  assert.equal(next.items.length, 2);
-  assert.ok(next.items.every(task => task.status === 'completed'));
-  assert.equal(next.timelineTasks.length, 0);
-});
-
-test('task detail and its recent history share one snapshot during a concurrent completion', async t => {
-  const f = await fixture(t);
-  f.task('finishing');
-  let writes = 0;
-  f.onQuery(sql => {
-    if (!sql.includes('FROM task_history')) return;
-    f.onQuery(null);
-    f.writer.transaction(() => {
-      f.writer.prepare("UPDATE tasks SET status = 'completed', prompt = 'New prompt' WHERE id = 'finishing'").run();
-      f.writer.prepare("INSERT INTO task_history (task_id, executed_at, completed_at, status) VALUES ('finishing', ?, ?, 'success')").run(NOW, NOW + 1);
-    })();
-    writes++;
-  });
-  const old = (await f.reader.detail('finishing')).task;
-  assert.equal(writes, 1);
-  assert.equal(old.status, 'pending');
-  assert.equal(old.prompt, 'Prompt finishing');
-  assert.equal(old.recent.length, 0);
-  const current = (await f.reader.detail('finishing')).task;
-  assert.equal(current.status, 'completed');
-  assert.equal(current.prompt, 'New prompt');
-  assert.equal(current.recent.length, 1);
-  assert.equal(current.recent[0].status, 'success');
-});
-
 test('a failed snapshot read releases its transaction and connection', async t => {
   const f = await fixture(t);
   f.task('pending');

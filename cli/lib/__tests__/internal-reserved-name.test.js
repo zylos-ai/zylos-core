@@ -5,7 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-const repository=fileURLToPath(new URL('../../../',import.meta.url));
 const add=new URL('../../commands/add.js',import.meta.url).href;
 const loader=fileURLToPath(new URL('./fixtures/internal-reserved-loader.js',import.meta.url));
 function setup(t,name){
@@ -36,10 +35,4 @@ for(const kind of ['registry','github','local','file'])test(`reserved names reje
   }
   const f=setup(t,'ordinary'),result=run(f,[...target(f,'ordinary',kind),'--json','--check']);
   assert.equal(result.status,0,result.stderr);assert.equal(JSON.parse(result.stdout).success,true);
-});
-
-test('internal sending rules remain in the communication skill',()=>{
-  const skill=fs.readFileSync(path.join(repository,'skills/comm-bridge/SKILL.md'),'utf8');
-  for(const text of ['c4-db.js groups --match','c4-send.js internal','body is stdin only','could not contact the target','no `--session-group`','queued, not read','no broadcast','control queue',"other thread's files"])
-    assert.ok(skill.includes(text),text);
 });

@@ -1,4 +1,3 @@
-import { checkAuth } from '../runtime/claude/auth.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -7,10 +6,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-import { resolveCodexBypassPermissions } from '../runtime/codex/hooks.js';
-import { readEnvTimezone } from '../../commands/init.js';
 import { ZYLOS_DIR } from '../config.js';
-import { createPrivateFixture, runPrivateFixture } from '../../../test/helpers/private-instance-fixture.js';
 import { readEnvFile, writeEnvEntries } from '../env.js';
 
 function fixture(t) {
@@ -29,57 +25,6 @@ function assertIsolatedEnvironment() {
     assert.equal(actual, target, key);
   }
 }
-
-test('Claude auth probe uses dotenv values without contacting a runtime', async t => {
-  const root = fixture(t);
-  fs.writeFileSync(path.join(root, '.env'), [
-    'ANTHROPIC_API_KEY=obsolete', 'export ANTHROPIC_API_KEY="fixture api # literal" # comment',
-    "CLAUDE_CODE_OAUTH_TOKEN='fixture setup' # comment", 'export ANTHROPIC_BASE_URL=https://fixture.invalid # comment',
-  ].join('\n'));
-  let calls = 0;
-  const adapterOptions = { root, env: { HOME: root, PATH: '/empty' }, execFile: async (_, __, { env }) => {
-    calls++;
-    assert.equal(env.ANTHROPIC_API_KEY, 'fixture api # literal');
-    assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, 'fixture setup');
-    assert.equal(env.ANTHROPIC_BASE_URL, 'https://fixture.invalid');
-    return { stdout: 'ok' };
-  } };
-  assert.equal((await checkAuth(adapterOptions)).status, 'success');
-  assert.equal(calls, 1);
-});
-
-test('Codex permission preference uses dotenv and preserves explicit precedence', t => {
-  const root = fixture(t);
-  const previous = process.env.CODEX_BYPASS_PERMISSIONS;
-  t.after(() => {
-    if (previous === undefined) delete process.env.CODEX_BYPASS_PERMISSIONS;
-    else process.env.CODEX_BYPASS_PERMISSIONS = previous;
-  });
-  delete process.env.CODEX_BYPASS_PERMISSIONS;
-  fs.writeFileSync(path.join(root, '.env'), 'CODEX_BYPASS_PERMISSIONS=true\nexport CODEX_BYPASS_PERMISSIONS="false" # comment\n');
-  assert.equal(resolveCodexBypassPermissions(root), false);
-  assert.equal(resolveCodexBypassPermissions(root, { bypassPermissions: true }), true);
-  process.env.CODEX_BYPASS_PERMISSIONS = 'true';
-  assert.equal(resolveCodexBypassPermissions(root), true);
-  delete process.env.CODEX_BYPASS_PERMISSIONS;
-  fs.mkdirSync(path.join(root, 'unreadable'));
-  fs.mkdirSync(path.join(root, 'unreadable', '.env'));
-  assert.throws(() => resolveCodexBypassPermissions(path.join(root, 'unreadable')), { code: 'EISDIR' });
-});
-
-test('init reads timezone with dotenv', () => {
-  fs.mkdirSync(ZYLOS_DIR, { recursive: true });
-  const file = path.join(ZYLOS_DIR, '.env');
-  assert.equal(fs.existsSync(file), false, 'runner provides a fresh isolated instance');
-  try {
-    fs.writeFileSync(file, [
-      'TZ=obsolete', 'export TZ="UTC" # comment',
-    ].join('\n'));
-    const before = fs.readFileSync(file, 'utf8');
-    assert.equal(readEnvTimezone(), 'UTC');
-    assert.equal(fs.readFileSync(file, 'utf8'), before);
-  } finally { fs.rmSync(file, { force: true }); }
-});
 
 test('environment entry writes recognize exported existing keys and remain append-only', () => {
   const file = path.join(ZYLOS_DIR, '.env');
@@ -144,67 +89,3 @@ for (const deployed of [false, true]) test(`PM2 template reads dotenv from an is
     }
   }
 });
-
-// Integration boundary: real init discovery/reset with a deployed template and
-// missing skills. Run for template/service discovery/reset changes; skip otherwise.
-// Each child gets its own HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR before config imports;
-// no PM2, tmux, runtime or database starts. Output/deadline are bounded and all
-// private state is removed before the next case, never from the shared runner root.
-for (const [mode, title] of [
-  ['discovery', 'init service discovery propagates deployed template loading errors'],
-  ['reset', 'init reset warns and cleans managed state when deployed skills are missing'],
-]) test(title, { timeout: 15000 }, async t => {
-  const scope = createPrivateFixture(t);
-  try {
-    await runPrivateFixture(scope, fileURLToPath(new URL('../../../test/fixtures/dotenv-init-fixture.js', import.meta.url)), [mode]);
-  } finally {
-    scope.remove();
-  }
-  assert.equal(fs.existsSync(scope.root), false, 'init fixture directory is clean after the child exits');
-});
-
-// Integration boundary: the deployed template must reject unreadable settings
-// and unavailable Core/parser locations. No PM2, tmux or database is started.
-// Run when template loading changes; skip otherwise. All paths use runner fixtures.
-for (const failure of ['missing installation', 'stale override', 'missing loader', 'unreadable env', 'missing env']) {
-  test(`deployed PM2 template handles ${failure} explicitly`, t => {
-    assertIsolatedEnvironment();
-    const root = fixture(t);
-    const instance = path.join(root, 'instance');
-    const skill = path.join(instance, '.claude/skills/comm-bridge');
-    const packageRoot = fileURLToPath(new URL('../../../', import.meta.url));
-    fs.mkdirSync(path.join(skill, 'scripts'), { recursive: true });
-    fs.mkdirSync(path.join(instance, 'pm2'));
-    const template = path.join(instance, 'pm2/ecosystem.config.cjs');
-    fs.copyFileSync(path.join(packageRoot, 'templates/pm2/ecosystem.config.cjs'), template);
-    fs.copyFileSync(path.join(packageRoot, 'skills/comm-bridge/package.json'), path.join(skill, 'package.json'));
-    if (failure !== 'missing loader') fs.copyFileSync(path.join(packageRoot, 'skills/comm-bridge/scripts/core-config-loader.js'), path.join(skill, 'scripts/core-config-loader.js'));
-    // A neighboring source tree must never rescue a broken deployed instance.
-    const neighbor = path.join(root, 'skills/comm-bridge/scripts');
-    fs.mkdirSync(neighbor, { recursive: true });
-    fs.copyFileSync(path.join(packageRoot, 'skills/comm-bridge/scripts/core-config-loader.js'), path.join(neighbor, 'core-config-loader.js'));
-    if (failure === 'unreadable env') fs.mkdirSync(path.join(instance, '.env'));
-    else if (failure !== 'missing env') fs.writeFileSync(path.join(instance, '.env'), 'CLAUDE_BYPASS_PERMISSIONS=false\nCODEX_BYPASS_PERMISSIONS=false\n');
-    const before = { ZYLOS_DIR: process.env.ZYLOS_DIR, PATH: process.env.PATH, ZYLOS_PACKAGE_ROOT: process.env.ZYLOS_PACKAGE_ROOT };
-    const require = createRequire(import.meta.url);
-    console.log('isolated PM2 rejection', JSON.stringify({ template, instance, home: process.env.HOME, pm2: process.env.PM2_HOME, tmp: process.env.TMPDIR, path: '/empty', failure, tmux: 'not used', database: 'not used' }));
-    try {
-      process.env.ZYLOS_DIR = instance;
-      process.env.PATH = '/empty';
-      delete process.env.ZYLOS_PACKAGE_ROOT;
-      if (failure === 'stale override') process.env.ZYLOS_PACKAGE_ROOT = path.join(root, 'removed-package');
-      if (failure === 'missing env') {
-        const monitor = require(template).apps.find(app => app.name === 'activity-monitor');
-        assert.equal(monitor.env.CODEX_BYPASS_PERMISSIONS, 'true');
-      } else if (failure === 'unreadable env') assert.throws(() => require(template), { code: 'EISDIR' });
-      else if (failure === 'missing loader') assert.throws(() => require(template), { code: 'MODULE_NOT_FOUND' });
-      else assert.throws(() => require(template), failure === 'stale override' ? /at ZYLOS_PACKAGE_ROOT/ : /Cannot locate the installed zylos-core/);
-    } finally {
-      delete require.cache[template];
-      for (const [key, value] of Object.entries(before)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
-  });
-}

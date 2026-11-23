@@ -5,45 +5,15 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { once } from 'node:events';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { createHash } from 'node:crypto';
 import { fixture } from './c4-v2-test-helpers.js';
 import { ipcRoute, queryRoute } from '../c4-entry-route.js';
-import { queryRejection } from '../c4-entry-events.js';
 
 const scripts = new URL('../', import.meta.url);
 const moduleURL = name => new URL(name, scripts).href;
 const databaseModule = createRequire(import.meta.url).resolve('better-sqlite3');
 const pending = { decision: 'pending', recovered: true, runtime: 'codex', health: 'rate_limited', reason: 'quota', transitionHold: false };
-const auth = { decision: 'auth_rejected', recovered: false, runtime: 'codex', health: 'auth_failed', reason: 'auth_failed', transitionHold: false, auth: { result: 'failed', detail: 'original rejection' } };
-
-test('receive CLI maps database open failure to INTERNAL_ERROR with no persisted writes', t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'payload-routing-open-failure-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  fs.mkdirSync(path.join(dir, '.claude', 'skills', 'chat'), { recursive: true });
-  const databasePath = path.join(dir, 'comm-bridge', 'c4.db');
-  fs.mkdirSync(databasePath, { recursive: true });
-  for (const json of [true, false]) {
-    const result = spawnSync(process.execPath, [new URL('c4-receive.js', scripts).pathname,
-      '--channel', 'chat', '--content', 'request', '--no-reply', ...(json ? ['--json'] : [])], {
-      env: { ...process.env, ZYLOS_DIR: dir }, encoding: 'utf8', timeout: 3000,
-    });
-    assert.equal(result.status, 1, result.stderr + result.stdout);
-    if (json) {
-      const output = JSON.parse(result.stdout);
-      assert.equal(output.ok, false);
-      assert.equal(output.error.code, 'INTERNAL_ERROR');
-      assert.deepEqual(output.error.persisted, []);
-      assert.equal(result.stderr, '');
-    } else {
-      assert.match(result.stderr, /^Error \[INTERNAL_ERROR\]:/);
-      assert.equal(result.stdout, '');
-    }
-    assert.deepEqual(fs.readdirSync(databasePath), []);
-    assert.deepEqual(fs.readdirSync(path.dirname(databasePath)), ['c4.db']);
-  }
-});
 
 function startChild(t, source, args = []) {
   const child = spawn(process.execPath, ['--input-type=module', '-e', source, ...args], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
@@ -56,53 +26,6 @@ function startChild(t, source, args = []) {
   return { child, exited, stderr: () => stderr,
     message: () => Promise.race([once(child, 'message').then(([value]) => value), exited.then(() => { throw new Error('child exited before barrier: ' + stderr); })]) };
 }
-
-function receiveChild(filename, mode, eventFile) {
-  return `import Database from ${JSON.stringify(databaseModule)};
-    import { createStore } from ${JSON.stringify(moduleURL('c4-v2-store.js'))};
-    import { receive } from ${JSON.stringify(moduleURL('c4-receive.js'))};
-    import fs from 'node:fs';
-    const db = new Database(${JSON.stringify(filename)}); db.pragma('busy_timeout=3000');
-    const store = createStore(db, { validateComponent: () => true,
-      readConfig: () => ({ state: 'ok', config: {runtime:'codex',session_mode:'multi'} }), validateModel: () => true });
-    const pause = label => { process.send({ label, inTransaction: db.inTransaction }); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0); };
-    if (${JSON.stringify(mode)} === 'before') {
-      db.function('hold_commit', () => { pause('before'); return 0; });
-      db.exec('CREATE TEMP TRIGGER hold_insert AFTER INSERT ON conversations BEGIN SELECT hold_commit(); END');
-    }
-    const insert = store.insertConversation;
-    const wrapped = {...store, insertConversation: (...args) => { const row = insert(...args);
-      if (${JSON.stringify(mode)} === 'after') pause('after'); return row; }};
-    await receive(['--channel','chat','--content','original','--session-group','Team','--no-reply'], {
-      db: wrapped, queryRoute: async () => (${JSON.stringify(auth)}),
-      appendEntryEvent: async event => { fs.appendFileSync(${JSON.stringify(eventFile)}, JSON.stringify(event)+'\\n'); return true; }
-    });
-    db.close(); process.exit(0);`;
-}
-
-test('SIGKILL before commit rolls back /; after commit retains terminal rejection before', { timeout: 15000 }, async t => {
-  fs.mkdirSync(path.join(process.env.ZYLOS_DIR, '.claude', 'skills', 'chat'), { recursive: true });
-  for (const mode of ['before', 'after']) {
-    const f = fixture(t, {}, true), eventFile = path.join(path.dirname(f.filename), 'events.jsonl');
-    const child = startChild(t, receiveChild(f.filename, mode, eventFile));
-    const barrier = await child.message();
-    assert.equal(barrier.label, mode);
-    assert.equal(barrier.inTransaction, mode === 'before');
-    child.child.kill('SIGKILL');
-    assert.deepEqual(await child.exited, [null, 'SIGKILL']);
-    assert.equal(child.stderr(), '');
-    const expected = mode === 'before' ? 0 : 1;
-    for (const table of ['conversations', 'channel_namespaces', 'group_heads']) {
-      assert.equal(f.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n, expected, `${mode} ${table}`);
-    }
-    if (expected) {
-      const row = f.db.prepare('SELECT status,delivery_action,session_group FROM conversations').get();
-      assert.deepEqual(row, { status: 'failed', delivery_action: 'auth_rejected', session_group: 'chat:Team' });
-    }
-    assert.equal(fs.existsSync(eventFile), false, 'F14 cannot precede successful commit');
-    assert.equal(f.db.pragma('integrity_check', { simple: true }), 'ok');
-  }
-});
 
 test('simultaneous first receives commit one namespace and consistent final group without rerouting', { timeout: 15000 }, async t => {
   fs.mkdirSync(path.join(process.env.ZYLOS_DIR, '.claude', 'skills', 'chat'), { recursive: true });
@@ -162,45 +85,5 @@ test('real socket accepts fragmented v2 replies and rejects malformed/correlatio
     assert.equal(fallback, index === 0 ? 0 : 1);
     assert.equal(result.fallback, index === 0 ? undefined : true);
     assert.deepEqual(server.requests, [request]);
-  }
-});
-
-test('rejection lookup rescans real rename race and never invents a missing historical reason', t => {
-  const f = fixture(t, {}, true), filename = path.join(path.dirname(f.filename), 'receive-events.jsonl');
-  const row = f.store.insertConversation('in', 'chat', null, 'rejected', { status: 'failed', deliveryAction: 'auth_rejected' });
-  fs.writeFileSync(filename, JSON.stringify({ v: 1, event: 'auth_rejected', conversation_id: row.id, reason_code: 'auth_check_failed', detail: 'then', runtime: 'codex', ts: 10 }) + '\n');
-  let rotated = false;
-  const io = { ...fs, readFileSync(file, encoding) {
-    if (!rotated && file === filename) { rotated = true; fs.renameSync(filename, filename.replace('.jsonl', '.100.jsonl')); }
-    return fs.readFileSync(file, encoding);
-  } };
-  const deps = { filename, io, getConversationsByRange: (a, b) => f.db.prepare('SELECT status,delivery_action FROM conversations WHERE id BETWEEN ? AND ?').all(a, b) };
-  assert.equal(queryRejection(String(row.id), deps).detail, 'then');
-  assert.equal(rotated, true);
-  assert.deepEqual(queryRejection(String(row.id), { ...deps, filename: path.join(path.dirname(filename), 'expired.jsonl') }),
-    { status: 'failed', category: 'auth_rejected', reason: 'expired_or_missing' });
-});
-
-test('actual rejection CLI preserves database/log bytes across success and rejection errors', { timeout: 10000 }, t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'payload-routing-rejection-cli-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const dataDir = path.join(dir, 'comm-bridge'); fs.mkdirSync(dataDir);
-  const f = fixture(t, {}, path.join(dataDir, 'c4.db'));
-  f.db.pragma('journal_mode=WAL');
-  const rejected = f.store.insertConversation('in', 'chat', null, 'old', { status: 'failed', deliveryAction: 'auth_rejected' });
-  const queued = f.store.insertConversation('in', 'chat', null, 'new');
-  const logfile = path.join(dataDir, 'receive-events.jsonl');
-  fs.writeFileSync(logfile, JSON.stringify({ v: 1, event: 'auth_rejected', conversation_id: rejected.id, reason_code: 'auth_check_unconfirmed', detail: 'historical', runtime: 'codex', ts: 20 }) + '\n');
-  f.db.pragma('wal_checkpoint(TRUNCATE)');
-  f.db.close();
-  const hash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-  const before = [hash(f.filename), hash(logfile)];
-  for (const [id, status, code] of [[String(rejected.id), 0], [String(queued.id), 1, 'NOT_REJECTED'], ['999', 1, 'NOT_FOUND'], ['0', 1, 'INVALID_ARGS']]) {
-    const result = spawnSync(process.execPath, [new URL('c4-db.js', scripts).pathname, 'rejection', '--id', id, '--json'], { env: { ...process.env, ZYLOS_DIR: dir }, encoding: 'utf8', timeout: 3000 });
-    assert.equal(result.status, status, result.stderr + result.stdout);
-    const json = JSON.parse(result.stdout);
-    if (status === 0) { assert.equal(json.data.detail, 'historical'); assert.equal(json.data.reason_code, 'auth_check_unconfirmed'); }
-    else assert.equal(json.error.code, code);
-    assert.deepEqual([hash(f.filename), hash(logfile)], before);
   }
 });

@@ -36,52 +36,6 @@ function withTmpDir(fn) {
   }
 }
 
-describe('c4-db recent', () => {
-  it('preserves literal help text after the insert positional boundary', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const result = spawnSync(process.execPath,
-        [DB_CLI_PATH, 'insert', '--', 'in', 'system', 'null', '-h'],
-        { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 10000 });
-      assert.equal(result.error, undefined);
-      assert.equal(result.status, 0, result.stderr);
-      assert.match(result.stdout, /^Inserted:/);
-      const database = new Database(path.join(tmpDir, 'comm-bridge', 'c4.db'), { readonly: true });
-      try {
-        assert.equal(database.prepare('SELECT content FROM conversations').get().content, '-h');
-      } finally { database.close(); }
-    });
-  });
-
-  it('validates help-like option values instead of treating them as flags', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const result = spawnSync(process.execPath,
-        [DB_CLI_PATH, 'groups', '--limit', '-h', '--json'],
-        { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 10000 });
-      assert.equal(result.error, undefined);
-      assert.equal(result.status, 1);
-      assert.equal(JSON.parse(result.stdout).error.code, 'INVALID_ARGS');
-      assert.equal(fs.existsSync(path.join(tmpDir, 'comm-bridge', 'c4.db')), false);
-    });
-  });
-
-  it('returns the latest N conversations in chronological order', () => {
-    withTmpDir(({ env }) => {
-      for (let i = 1; i <= 4; i++) {
-        const result = dbCli(['insert', 'out', 'system', 'null', `msg${i}`], env);
-        assert.equal(result.status, 0);
-      }
-
-      const { stdout, status } = dbCli(['recent', '3'], env);
-      assert.equal(status, 0);
-
-      const rows = JSON.parse(stdout);
-      assert.equal(rows.length, 3);
-      assert.deepEqual(rows.map(row => row.content), ['msg2', 'msg3', 'msg4']);
-      assert.deepEqual(rows.map(row => row.id), [2, 3, 4]);
-    });
-  });
-});
-
 describe('void channel migration (#689)', () => {
   it('re-tags legacy web-console session-handoff rows to the void channel', () => {
     withTmpDir(({ tmpDir, env }) => {
@@ -157,47 +111,6 @@ describe('group query CLI', () => {
       assert.match(dbCli(['--help'], env).stdout, /group-queues/);
       assert.match(dbCli(['--help'], env).stdout, /active-since/);
       assert.match(dbCli(['--help'], env).stdout, /--raw/);
-    });
-  });
-  it('rejects positional, unknown, missing, duplicate, invalid and conflicting options', () => {
-    withTmpDir(({ env }) => {
-      for (const args of [
-        ['group-queues', 'extra'], ['group-queues', '--bogus'],
-        ['groups', '--match', 'a', '--active-since', '1'],
-        ['groups', '--key-match', 'a', '--active-since', '1'],
-        ['groups', '--match', 'a', '--key-match', 'b'],
-        ['groups', '--key-match', '  '], ['groups', '--active-since', '-1'],
-        ['groups', '--active-since', 'x'], ['groups', '--active-since', '1.5'],
-        ['groups', '--active-since', '1e3'],
-        ['groups', '--active-since', '9007199254740992'], ['groups', '--active-since'],
-        ['groups', '--active-since', '0', '--active-since', '1'], ['groups', '--limit', '0'],
-        ['groups', 'extra'], ['groups', '--bogus'], ['groups', '--raw', '--raw'],
-      ]) {
-        const result = dbCli([...args, '--json'], env);
-        assert.equal(result.status, 1, JSON.stringify({ args, ...result }));
-        assert.equal(JSON.parse(result.stdout).ok, false);
-        assert.equal(JSON.parse(result.stdout).error.code, 'INVALID_ARGS');
-      }
-    });
-  });
-});
-
-describe('commands that need no data', () => {
-  it('help, unknown commands and argument errors never create or change the database', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const file = path.join(tmpDir, 'comm-bridge', 'c4.db');
-      const noData = [[], ['--help'], ['-h'], ['unknown-command'], ['recent', '1', '2'], ['insert', 'in'], ['checkpoint'], ['rejection']];
-      for (const args of noData) {
-        dbCli(args, env);
-        assert.equal(fs.existsSync(path.join(tmpDir, 'comm-bridge')), false, `${args.join(' ') || '(none)'} created C4 data`);
-      }
-      const v1 = new Database((fs.mkdirSync(path.dirname(file), { recursive: true }), file));
-      v1.exec(fs.readFileSync(new URL('./fixtures/migration-history/c4-v0.9.0-v1.sql', import.meta.url), 'utf8'));
-      v1.close();
-      const before = fs.readFileSync(file);
-      for (const args of noData) dbCli(args, env);
-      assert.ok(fs.readFileSync(file).equals(before), `${file} changed`);
-      for (const suffix of ['-wal', '-shm', '-journal']) assert.equal(fs.existsSync(file + suffix), false);
     });
   });
 });

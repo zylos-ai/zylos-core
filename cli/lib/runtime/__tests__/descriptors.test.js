@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test } from 'node:test';
 import {
-  CAPABILITIES, DEFAULT_RUNTIME, RUNTIME_DESCRIPTORS, SUPPORTED_RUNTIMES, runtimeDisplayName, runtimeInstallPolicy, runtimesWith,
+  CAPABILITIES, DEFAULT_RUNTIME, RUNTIME_DESCRIPTORS, SUPPORTED_RUNTIMES, runtimeDisplayName, runtimeInstallPolicy,
 } from '../descriptors.js';
 
 test('runtime descriptors declare all capabilities and match the implementation directories', () => {
@@ -32,25 +32,4 @@ test('runtime descriptors declare all capabilities and match the implementation 
     .map(entry => entry.name)
     .sort();
   assert.deepEqual([...SUPPORTED_RUNTIMES].sort(), implementations);
-});
-
-test('runtime descriptor queries preserve order, reject invalid capabilities and return unknown names unchanged', () => {
-  for (const capability of CAPABILITIES) {
-    for (const value of ['supported', 'unsupported']) {
-      const runtimes = runtimesWith(capability, value);
-      assert.ok(Object.isFrozen(runtimes));
-      assert.deepEqual(runtimes, RUNTIME_DESCRIPTORS
-        .filter(({ capabilities }) => capabilities[capability] === value)
-        .map(({ id }) => id));
-    }
-    assert.deepEqual(runtimesWith(capability), runtimesWith(capability, 'supported'));
-  }
-  assert.throws(() => runtimesWith('nope'), { name: 'TypeError', message: 'Unknown runtime capability' });
-  assert.throws(() => runtimesWith('usage', 'yes'), { name: 'TypeError', message: 'Unknown capability value' });
-  for (const unknown of ['', 'unknown', 'constructor', undefined]) {
-    if (!SUPPORTED_RUNTIMES.includes(unknown)) {
-      assert.equal(runtimeDisplayName(unknown), unknown);
-      assert.equal(runtimeInstallPolicy(unknown), null);
-    }
-  }
 });

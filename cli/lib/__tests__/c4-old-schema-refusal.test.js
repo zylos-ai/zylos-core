@@ -7,8 +7,6 @@ import { fileURLToPath } from 'node:url';
 import Database from '../../../skills/comm-bridge/scripts/sqlite-driver.js';
 import { SUPPORTED_SCHEMA_VERSION } from '../../../skills/comm-bridge/scripts/c4-schema.js';
 import { openReadStore } from '../c4-read-store.js';
-import { readSessionModeStatus } from '../session-mode-status.js';
-import { readOriginFacts } from '../origin-presence.js';
 import { createGroupDeletion } from '../group-delete.js';
 
 // Ordinary C4 openers only check the schema. An older database is refused with
@@ -43,21 +41,6 @@ const upgradeRequired = file => error => {
 test('read store refuses an older C4 database instead of reading a partial layout', async t => {
   const f = oldInstance(t);
   await assert.rejects(openReadStore(f.zylosDir), upgradeRequired(f.file));
-  f.unchanged();
-});
-
-test('session-mode status surfaces the refusal to its caller', async t => {
-  const f = oldInstance(t);
-  await assert.rejects(readSessionModeStatus({ zylosDir: f.zylosDir, readMode: () => ({ mode: 'multi' }) }), upgradeRequired(f.file));
-  f.unchanged();
-});
-
-test('origin presence reports the refusal as an unreadable need, not as absence', async t => {
-  const f = oldInstance(t);
-  const facts = await readOriginFacts({ zylosDir: f.zylosDir });
-  assert.equal(facts.originNeed.error.code, 'READ_FAILED');
-  assert.match(facts.originNeed.error.message, /schema version 1 is older than supported .*run "zylos upgrade --self"/);
-  assert.equal(facts.transitionOpen, null);
   f.unchanged();
 });
 

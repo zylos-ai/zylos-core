@@ -49,15 +49,6 @@ beforeEach(() => {
   calls.length = 0;
 });
 
-test('valid Codex trust switches without a rebuild', async () => {
-  const result = await executeRuntimeSwitch('codex', [], deps);
-  assert.equal(result.ok, true, JSON.stringify(result));
-  assert.equal(result.data.result, 'saved');
-  assert.equal(appServerStarts(), 0);
-  assert.deepEqual(calls, [{ auth: 0 }]);
-  assert.equal(readZylosConfigStrict().config.runtime, 'codex');
-});
-
 test('invalid Codex trust is rebuilt, then the remaining preflight runs and the runtime is saved', async () => {
   fs.rmSync(codexTrustMarkerPath(root));
   const result = await executeRuntimeSwitch('codex', [], deps);

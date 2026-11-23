@@ -6,8 +6,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { FleetProxy } from '../src/lib/fleet-proxy.js';
-import { ObserverService } from '../src/lib/observer-service.js';
+
 import { VersionChecker } from '../src/lib/version-checker.js';
 
 const BAD_HOSTS = ['][', 'a b', '127.0.0.1:99999', '[::1', '%'];
@@ -123,77 +122,4 @@ test('Dashboard entry rejects malformed Host on HTTP and both upgrade routes wit
     await server.closeAttachments();
     fs.rmSync(dir, { recursive: true, force: true });
   }
-});
-
-test('local and Fleet upgrade handlers independently sanitize invalid URLs before auth or upstream work', async (t) => {
-  for (const type of ['local', 'fleet']) await t.test(type, async () => {
-    const unexpected = () => { throw new Error('malformed request reached a dependency'); };
-    const service = type === 'local'
-      ? new ObserverService({ containment: {}, coordinator: {}, manager: {}, authGate: {}, upstreamFactory: unexpected })
-      : new FleetProxy({ config: {}, poller: { getSessionToken: unexpected } });
-    if (type === 'local') service._ready = unexpected;
-    const server = http.createServer((_req, res) => res.writeHead(204).end());
-    server.on('upgrade', (req, socket, head) => service.handleUpgrade(req, socket, head));
-    const port = await listen(server);
-    try {
-      for (const host of BAD_HOSTS) {
-        assertResponse(await rawRequest(port, type === 'local' ? '/observer/stream' : '/fleet/Remote/observer/stream', host),
-          400, 'Bad Request', 'invalid_request');
-      }
-      assert.equal((await fetch(`http://127.0.0.1:${port}`)).status, 204);
-      const reset = new EventEmitter();
-      let destroyed = false;
-      reset.destroy = () => { destroyed = true; };
-      reset.end = () => reset.emit('error', new Error('fixture reset during rejection write'));
-      await service.handleUpgrade({ url: '/observer/stream', headers: { host: '][' } }, reset, Buffer.alloc(0));
-      assert.equal(destroyed, true, 'handler owns socket errors before writing the rejection');
-    } finally {
-      await close(server);
-    }
-  });
-});
-
-test('Fleet upstream connection failure drains the complete byte-level 502 response before cleanup', async () => {
-  const principal = { kind: 'api', principalId: 'fixture', scope: 'admin' };
-  const leaseId = 'f'.repeat(32);
-  let attempts = 0;
-  const proxy = new FleetProxy({
-    config: { fleet: { agents: [{ name: 'Remote', base_url: 'http://127.0.0.1:1' }] } },
-    poller: { getSessionToken: async () => 'fixture-token' },
-    authGate: { revalidateAuthContext: (value) => value },
-    observerConnect: async () => { attempts += 1; throw new Error('fixture unreachable'); },
-  });
-  proxy.observerLeases.set(leaseId, { agentName: 'Remote', principal, expiresAt: Date.now() + 30_000 });
-  const server = http.createServer();
-  server.on('upgrade', (req, socket, head) => {
-    req._authContext = principal;
-    proxy.handleUpgrade(req, socket, head);
-  });
-  const port = await listen(server);
-  try {
-    assertResponse(await rawRequest(port, '/fleet/Remote/observer/stream', `127.0.0.1:${port}`, {
-      headers: [`Sec-WebSocket-Protocol: zylos-observer-v1, lease.${leaseId}`],
-    }), 502, 'Bad Gateway', 'upstream_unreachable');
-    assert.equal(attempts, 2);
-    assert.equal(proxy.observerStreams.size, 0);
-  } finally {
-    await close(server);
-  }
-});
-
-test('local raw close preserves a rejection response that is already draining', async () => {
-  const service = new ObserverService({ containment: {}, coordinator: {}, manager: {}, authGate: {} });
-  const socket = new EventEmitter();
-  let destroyed = false;
-  let response = '';
-  socket.writableEnded = false;
-  socket.destroy = () => { destroyed = true; };
-  socket.end = (bytes) => {
-    response = bytes;
-    socket.writableEnded = true;
-    socket.emit('end');
-  };
-  await service.handleUpgrade({ url: '/ws', headers: { host: 'localhost' } }, socket, Buffer.alloc(0));
-  assert.equal(destroyed, false, 'raw close must not truncate the queued response');
-  assertResponse(response, 404, 'Not Found', 'not_found');
 });

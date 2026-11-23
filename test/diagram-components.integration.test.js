@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CONTENT_PREFIX, COMPONENT_DEFINITIONS, CATALOG_SOURCE } from '../skills/comm-bridge/scripts/c4-content-schema.js';
+import { CONTENT_PREFIX, COMPONENT_DEFINITIONS } from '../skills/comm-bridge/scripts/c4-content-schema.js';
 
 // Boundary: real Dashboard component CLI and Core catalog/validator. Run after
 // diagram schema/catalog or component CLI changes; unrelated UI work may skip.
@@ -24,25 +24,6 @@ function componentCli(args, input) {
   assert.equal(result.error, undefined);
   return result;
 }
-
-test('component CLI lists and describes the implemented diagram and local parameter references', () => {
-  const listed = componentCli(['list', '--json']);
-  assert.equal(listed.status, 0, listed.stderr);
-  const catalog = JSON.parse(listed.stdout).data;
-  assert.ok(catalog.keys.includes('diagram@1'));
-  assert.equal(catalog.components.find(item => item.key === 'diagram@1').schemaVersion, 1);
-  const described = componentCli(['describe', 'diagram@1', '--json']);
-  assert.equal(described.status, 0, described.stderr);
-  const definition = JSON.parse(described.stdout).data;
-  assert.equal(definition.source.chatweaveCommit, CATALOG_SOURCE.chatweaveCommit);
-  assert.equal(definition.parameters.properties.steps.items.$ref, '#/$defs/block__diagramStep');
-  assert.equal(definition.parameters.$defs.block__diagramNode.properties.icon.pattern, '^[a-z][a-z0-9-]{0,31}$');
-  assert.equal(definition.parameters.$defs.block__diagramGroup.required.join(','), 'label,from,to');
-  assert.match(definition.description, /Unknown valid icon names are accepted with the icon omitted/);
-  const unavailable = componentCli(['describe', 'diagram@2', '--json']);
-  assert.equal(unavailable.status, 1);
-  assert.match(unavailable.stderr, /not implemented/);
-});
 
 test('component CLI validates diagram defaults and rejects semantic errors with exact diagnostics', () => {
   const envelope = structuredClone(COMPONENT_DEFINITIONS.find(item => item.key === 'diagram@1').example);

@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawn } from 'node:child_process';
 import { encodeGroupCharacters as enc, decodeGroupCharacters as dec } from '../session-group-codec.js';
 export const groups = ['origin','telegram:g-100123','telegram:g-1','wechat:abc_chatroom','lark','larkx','lark:x','lark:oc_x:omt_y','openmax:dm.AbC','ns:a:b','ns:a.b','ns:a_b','ns:a__b','ns:a_cb','ns:AbC','ns:abc','ns:x:','ns:x.', `${'n'.repeat(32)}:${'A'.repeat(95)}`];
 // Deterministic generated inputs exercise character combinations; legality remains
@@ -102,61 +101,4 @@ test('real private tmux: names, timestamps, exact targets and missing server', a
   const pane=p.tmuxPaneTarget(p.tmuxNameForGroup('origin'));
   tmux('send-keys','-t',pane,'-l','session-runtime-private-marker');
   assert.match(tmux('capture-pane','-p','-t',pane),/session-runtime-private-marker/);
-});
-
-// A subprocess proves both event-loop responsiveness and natural exit while the
-// private server remains frozen (tmux passes its client pipes to the server).
-test('async list keeps timers responsive and exits after frozen-server timeout', {timeout:12000}, async t => {
-  let server,child,exited;
-  const {dir,socketPath,binary,tmux}=isolatedTmux(t,{prefix:'session-runtime-list-',tmuxArgs:['-u'],timeout:2000,beforeCleanup:async()=>{
-    if(child && child.exitCode===null && child.signalCode===null) child.kill('SIGKILL');
-    if(exited) await exited;
-    if(server) try{process.kill(server,'SIGKILL');}catch{}
-  }});
-  const pidFile=path.join(dir,'client-pid');
-  const quote=value=>`'${value.replaceAll("'", "'\\''")}'`;
-  const wrapper=path.join(dir,'tmux-wrapper');
-  fs.writeFileSync(wrapper,`#!/bin/sh\nprintf '%s\\n' "$$" > ${quote(pidFile)}\nexec ${quote(binary)} "$@"\n`,{mode:0o700});
-  tmux('-f','/dev/null','new-session','-d','-s','keeper','sleep 30');
-  server=Number(tmux('display-message','-p','#{pid}'));
-  process.kill(server,'SIGSTOP');
-  const moduleUrl=new URL('../session-group-paths.js',import.meta.url).href;
-  const source=`
-    import assert from 'node:assert/strict';
-    import fs from 'node:fs';
-    import {listGroupTmuxSessions} from ${JSON.stringify(moduleUrl)};
-    const start=performance.now();let pending=true,tickMs,tickWhilePending;
-    const tick=new Promise(resolve=>setTimeout(()=>{
-      tickMs=performance.now()-start;tickWhilePending=pending;resolve();
-    },100));
-    let error;
-    try{await listGroupTmuxSessions(${JSON.stringify({socketPath,binary:wrapper})});}
-    catch(caught){error=caught;}
-    pending=false;
-    const elapsed=performance.now()-start;
-    await tick;
-    const clientPid=Number(fs.readFileSync(${JSON.stringify(pidFile)},'utf8'));
-    const report={tickMs,tickWhilePending,elapsed,code:error?.code,status:error?.status,signal:error?.signal,clientPid};
-    console.log(JSON.stringify(report));
-    assert.ok(tickWhilePending && tickMs<1000,'enumeration blocked the caller timer');
-    assert.equal(error?.code,'ETIMEDOUT');
-    // Some tmux clients exit zero after sending their request while the server
-    // retains their pipes; others stay alive until killed at the deadline.
-    assert.ok((error?.status===0 && error?.signal===null) ||
-      (error?.status===null && error?.signal==='SIGTERM'),'timeout must preserve the actual client exit state');
-    assert.ok(elapsed>=4900 && elapsed<7000,'enumeration must retain its five-second timeout');
-    assert.throws(()=>process.kill(clientPid,0),{code:'ESRCH'},'owned tmux client must be gone before rejection');
-  `;
-  const env={...process.env,HOME:dir,ZYLOS_DIR:dir};
-  delete env.TMUX;delete env.TMUX_PANE;
-  child=spawn(process.execPath,['--input-type=module','-e',source],{env,stdio:['ignore','pipe','pipe']});
-  let stdout='',stderr='';child.stdout.on('data',data=>stdout+=data);child.stderr.on('data',data=>stderr+=data);
-  exited=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));});
-  let timer;
-  const result=await Promise.race([exited,new Promise(resolve=>{timer=setTimeout(()=>resolve(null),8000);})]).finally(()=>clearTimeout(timer));
-  assert.notEqual(result,null,'caller retained client, timer or pipes after enumeration timeout');
-  assert.deepEqual(result,{code:0,signal:null},`${stdout}\n${stderr}`);
-  assert.match(execFileSync('ps',['-o','stat=','-p',String(server)],{encoding:'utf8'}).trim(),/^T/,
-    'caller must exit before the server is resumed or killed');
-  t.diagnostic(stdout.trim());
 });

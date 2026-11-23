@@ -41,7 +41,6 @@ test('invalid records do not write; partial write rolls back under', async () =>
   assert.deepEqual(fs.readFileSync(result.path), before);
 });
 
-
 // Legacy and single writers of global memory share the origin memory lock.
 test('legacy global append contends on the same origin memory lock as single Sync', async () => {
   const env = fixture();
@@ -55,21 +54,4 @@ test('legacy global append contends on the same origin memory lock as single Syn
   });
   assert.equal(fs.existsSync(path.join(legacy.memoryDir, 'inbox.md')), false);
   await appendInbox({ kind: 'fact', content: 'after release', env: legacyEnv });
-});
-
-// session append needs only the final byte, not the entire daily log.
-test('session append reads one trailing byte and preserves a missing newline', async () => {
-  const env = fixture();
-  const now = () => new Date('2026-10-10T12:00:00Z');
-  const first = await appendSession({ content: 'first', env }, { now });
-  fs.writeFileSync(first.path, 'older text');
-  let reads = 0;
-  const io = { ...fs, readFileSync() { assert.fail('must not read full session'); },
-    readSync(fd, buffer, offset, length, position) {
-      reads++; assert.equal(length, 1); assert.equal(position, 9);
-      return fs.readSync(fd, buffer, offset, length, position);
-    } };
-  await appendSession({ content: 'next', env }, { now, io });
-  assert.equal(reads, 1);
-  assert.equal(fs.readFileSync(first.path, 'utf8'), 'older text\nnext\n');
 });

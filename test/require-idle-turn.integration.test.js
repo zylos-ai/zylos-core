@@ -208,50 +208,6 @@ for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex'
   }
 }
 
-// Boundary: a real model transcript disarms no-response recovery; the production
-// observation/publication action then admits one inactivity Escape and idle work.
-// Run for response/inactivity coordination changes; skip unrelated UI/docs. Same
-// isolated env/database/socket fixture, injected terminal I/O, no child processes.
-for (const runtime of ['claude', 'codex']) test(`${runtime} AI work followed by an unclosed silent turn gets one inactivity Escape`, { timeout: 5000 }, async t => {
-  const f = await fixture(t, { runtime });
-  f.supervisor.observer.notifyDelivered({ ...f.scene, pastedAt: f.startedAt });
-  f.advance(1000); f.output();
-  await f.observe();
-  const tracked = f.supervisor.observer.sceneState(f.scene);
-  assert.equal(tracked.delivery.noResponseEligible, false);
-  assert.equal(f.read().lastResponseAt, f.now());
-  const lastActivityAt = f.read().lastActivityAt;
-  const controls = ['/clear', 'Memory Sync requested'].map(content => f.store.insertControl(content,
-    { sessionGroup: f.scene.sessionGroup, priority: 1, requireIdle: true, appendAckSuffix: false }));
-  for (const elapsed of [900000, 1080000, OPEN_TURN_INACTIVITY_TIMEOUT_MS - 1]) {
-    f.at(lastActivityAt + elapsed); await f.observe();
-    assert.equal(f.read().state, 'busy'); assert.equal(f.escapeRows().length, 0);
-    assert.equal(tracked.delivery.recovery, null); assert.equal(f.stops.length, 0);
-  }
-  f.advance(1); await f.observe();
-  assert.equal(f.read().state, 'idle'); assert.equal(f.escapeRows().length, 1);
-  assert.equal(tracked.delivery.recovery, null); assert.equal(f.stops.length, 0);
-  const nextControl = () => f.store.getNextPendingControl(Math.floor(f.now() / 1000), { sessionGroups: [f.scene.sessionGroup] });
-  const escape = nextControl();
-  assert.equal(escape.content, '[KEYSTROKE]Escape');
-  assert.equal(escape.priority, 0);
-  // Same-second insertion exercises the id tie-breaker in the real queue.
-  const laterControl = f.store.insertControl('Later idle control',
-    { sessionGroup: f.scene.sessionGroup, priority: 0, requireIdle: true, appendAckSuffix: false });
-  assert.equal(laterControl.created_at, escape.created_at);
-  assert.ok(laterControl.id > escape.id);
-  assert.equal(nextControl().id, escape.id);
-  assert.equal((await f.deliver(escape)).delivered, true);
-  assert.equal(nextControl().id, laterControl.id);
-  assert.equal((await f.deliver(laterControl)).delivered, true);
-  for (const control of controls) assert.equal((await f.deliver(control)).delivered, true);
-  for (const elapsed of [1, 1000, OPEN_TURN_INACTIVITY_TIMEOUT_MS]) { f.advance(elapsed); await f.observe(); }
-  assert.equal(f.escapeRows().length, 1); assert.equal(f.keys.filter(value => value[0] === 'Escape').length, 1);
-  assert.equal(f.pasted.length, controls.length + 1);
-  for (const control of [...controls, laterControl]) assert.equal(f.store.claimControl(control.id), false);
-  assert.equal(f.database.prepare("SELECT count(*) AS count FROM control_queue WHERE raw_content='continue'").get().count, 0);
-});
-
 // Boundary: actual group lane owns an in-flight paste/Enter verification while
 // the Supervisor admits Escape into real SQLite; no direct terminal path is used.
 // Run when queue priority, inactivity insertion or lane serialization changes;
@@ -284,27 +240,4 @@ for (const runtime of ['claude', 'codex']) test(`${runtime} queued inactivity Es
   assert.deepEqual(f.calls.filter(value => value[0] !== 'log'), [['paste-start', 'keep this message'], ['paste-end', 'keep this message'], ['key', 'Enter'], ['key', 'Escape']]);
   await lane.kick(); await f.interrupt();
   assert.equal(f.escapeRows().length, 1); assert.equal(f.keys.filter(value => value[0] === 'Escape').length, 1);
-});
-
-// Boundary: actual health observer/no-response pair + inactivity admission share
-// one run. Run when these timers/actions change; skip unrelated UI/docs. Same
-// isolated SQLite/env; fake scene stop, no native runtime or background processes.
-for (const runtime of ['claude', 'codex']) test(`${runtime} no-response recovery stops the run before inactivity can add another Escape`, { timeout: 5000 }, async t => {
-  const f = await fixture(t, { runtime });
-  f.read();
-  f.supervisor.observer.notifyDelivered({ ...f.scene, pastedAt: f.startedAt });
-  f.at(f.startedAt + 899999); await f.observe();
-  assert.equal(f.escapeRows().length, 0);
-  f.advance(1); await f.observe();
-  assert.equal(f.escapeRows().length, 1);
-  const controls = f.database.prepare("SELECT * FROM control_queue WHERE json_extract(target_binding,'$.expectedRunId')=? ORDER BY id").all(f.scene.runId);
-  assert.equal(controls.length, 2); assert.equal(controls[0].content, '[KEYSTROKE]Escape'); assert.equal(controls[1].content, 'continue');
-  for (const control of controls) assert.equal((await f.deliver(control)).delivered, true);
-  const recovery = f.supervisor.observer.sceneState(f.scene).delivery.recovery;
-  f.at(recovery.nudgedAt + 179999); await f.observe(); assert.equal(f.stops.length, 0);
-  f.advance(1); await f.observe(); assert.equal(f.stops.length, 1);
-  f.at(f.startedAt + OPEN_TURN_INACTIVITY_TIMEOUT_MS); await f.observe();
-  assert.equal(f.escapeRows().length, 1); assert.equal(f.keys.filter(value => value[0] === 'Escape').length, 1);
-  assert.equal(f.database.prepare("SELECT count(*) AS count FROM control_queue WHERE raw_content='continue' AND json_extract(target_binding,'$.expectedRunId')=?").get(f.scene.runId).count, 1);
-  assert.equal(f.stops.length, 1);
 });

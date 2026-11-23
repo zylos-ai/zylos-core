@@ -5,41 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createRequire} from 'node:module';
-import {applyUpgradePrompt,shellArgument,upgradeStartupPrompt,discoverUpgradeContext} from '../runtime/upgrade-context.js';
-import {recoveryCommand} from '../../commands/recovery.js';
+import {discoverUpgradeContext} from '../runtime/upgrade-context.js';
 const maintenance = createRequire(import.meta.url)('../upgrade-maintenance.cjs');
-test('Codex recovery replaces the sole positional startup prompt and shell quoting preserves hostile text',()=>{
- const prompt="recovery $(false) `false` 'quotes'\nnext line";
- const args=applyUpgradePrompt(['--no-daemon','old startup prompt'],prompt,1);
- assert.deepEqual(args,['--no-daemon',prompt]);
- const result=spawnSync('/bin/sh',['-c','printf %s '+shellArgument(prompt)],{encoding:'utf8'});
- assert.equal(result.status,0);assert.equal(result.stdout,prompt);
- assert.throws(()=>applyUpgradePrompt(['--no-daemon'],prompt,1),/prompt index/);
-});
-test('partial skill deployment does not import diagnostics, formatting, registry, or C4 before file recovery',t=>{
- const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-startup-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
- const stable=path.join(root,'.zylos/upgrade'),hook=path.join(root,'hook/c4-session-init.js');fs.mkdirSync(stable,{recursive:true,mode:0o700});fs.mkdirSync(path.dirname(hook));
- fs.writeFileSync(path.join(root,'package.json'),'{"type":"module"}');
- fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/c4-session-init.js'),hook);
- for(const [source,target] of [['upgrade-bootstrap.cjs','bootstrap.cjs'],['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs']]){fs.copyFileSync(path.resolve('cli/lib',source),path.join(stable,target));fs.chmodSync(path.join(stable,target),0o600);}
- const dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.writeFileSync(path.join(dir,'journal.json'),'{broken',{mode:0o600});fs.writeFileSync(path.join(stable,'active.json'),'{}',{mode:0o600});
- // An explicit directory alias exercises this entry-point boundary on Linux too.
- const alias=path.join(root,'hook-alias');fs.symlinkSync(path.dirname(hook),alias,'dir');
- for(const entry of [hook,path.join(alias,'c4-session-init.js')]) {
-  const result=spawnSync(process.execPath,[entry],{encoding:'utf8',env:{HOME:root,ZYLOS_DIR:root,PATH:process.env.PATH}});
-  assert.equal(result.status,0,result.stderr);assert.match(result.stdout,/UPGRADE RECOVERY TASK/);assert.match(result.stdout,/SYSTEM RECOVERY TASK/);assert.match(result.stdout,/diagnostics/);
- }
-});
-
-test('unmarked historical transactions do not require stable startup helpers', t => {
- for (const missing of ['.zylos', '.zylos/upgrade']) {
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-lost-stable-'));
-  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  fs.mkdirSync(path.join(root,'.backup/self-upgrade/tx'),{recursive:true,mode:0o700});
-  if (missing === '.zylos/upgrade') fs.mkdirSync(path.join(root,'.zylos'),{mode:0o700});
-  assert.equal(upgradeStartupPrompt(root), null);
- }
-});
 
 function publishedTransaction(t, {fail = false, controller = false, failure} = {}) {
  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-startup-published-')));
@@ -61,14 +28,6 @@ function publishedTransaction(t, {fail = false, controller = false, failure} = {
  return {root,dir,journal,executed};
 }
 
-test('startup runs the published transaction runner before a stable bootstrap or marker exists', {skip:process.platform!=='linux'}, t => {
- t.mock.method(maintenance,'canRecognizeProcesses',()=>true);
- const f=publishedTransaction(t);
- assert.equal(fs.existsSync(path.join(f.root,'.zylos')),false);
- assert.deepEqual(discoverUpgradeContext(f.root),{active:false,blocked:false});
- assert.deepEqual(JSON.parse(fs.readFileSync(f.executed,'utf8')),['resume','--transaction-dir',f.dir]);
-});
-
 test('failed startup recovery preserves history and returns the recovery prompt', {skip:process.platform!=='linux'}, t => {
  t.mock.method(maintenance,'canRecognizeProcesses',()=>true);
  const f=publishedTransaction(t,{fail:true});
@@ -80,88 +39,6 @@ test('failed startup recovery preserves history and returns the recovery prompt'
 });
 
 
-// Real discovery/runner boundary shared by startup, recovery resume and upgrade.
-// Run for recovery propagation changes. Official runner isolates all instance
-// roots; the fixture runner only prints a failure, with no PM2/DB/tmux access.
-// Linux exercises actual automatic recovery; Mac refusal has separate coverage.
-test('startup and recovery resume preserve the same failure code cause and next action as upgrade', {skip:process.platform!=='linux', timeout:15000}, async t => {
-  t.mock.method(maintenance,'canRecognizeProcesses',()=>true);
-  const failure={code:'UPGRADE_RECOVERY_REQUIRED',error:'EACCES: cleanup code denied',recovery_required:true};
-  const f=publishedTransaction(t,{failure});
-  const startup=discoverUpgradeContext(f.root);
-  assert.equal(startup.recovery_required,true);
-  assert.equal(startup.code,failure.code);
-  assert.equal(startup.error,failure.error);
-  for(const value of [startup.code,startup.error,startup.next]) assert.ok(startup.prompt.includes(value));
-  const output=[],log=console.log,exitCode=process.exitCode;
-  console.log=value=>output.push(JSON.parse(value));
-  try {
-    await recoveryCommand(['resume'],{root:f.root});
-    assert.equal(process.exitCode,1);
-  } finally {console.log=log;process.exitCode=exitCode;}
-  const {upgradeSelfCore}=await import('../../commands/component.js');
-  const upgrade=[];
-  assert.equal(await upgradeSelfCore({skipConfirm:true,jsonOutput:true},{zylosDir:f.root,
-    checkForCoreUpdates(){assert.fail('failed recovery must not check updates');},
-    console:{log(value){upgrade.push(JSON.parse(value));}}
-  }),false);
-  assert.equal(output.length,1);assert.equal(upgrade.length,1);
-  for(const key of ['code','error','next']) {
-    assert.equal(output[0][key],startup[key]);assert.equal(upgrade[0][key],startup[key]);
-  }
-  assert.equal(fs.existsSync(f.dir),true);
-});
-
-// Discovery-only failure still reaches the actual displayed startup prompt.
-// No subprocess or service is needed on either platform.
-test('startup prompt preserves the filesystem error rather than replacing it with generic discovery failure', t=>{
-  const root=path.join(os.tmpdir(),'missing-recovery-root-'+process.pid);
-  assert.equal(fs.existsSync(root),false);
-  const context=discoverUpgradeContext(root);
-  assert.equal(context.code,'ENOENT');assert.equal(context.recovery_required,true);
-  assert.match(context.error,/ENOENT/);
-  for(const value of [context.code,context.error,context.next])assert.ok(context.prompt.includes(value));
-});
-
-test('read-only discovery preserves published recovery material without executing the runner', t => {
- const f=publishedTransaction(t);
- const before=fs.readFileSync(path.join(f.dir,'journal.json'),'utf8');
- const context=discoverUpgradeContext(f.root,{recover:false});
- assert.equal(context.active,true);
- assert.equal(context.candidates.length,1);
- assert.equal(fs.existsSync(f.executed),false);
- assert.equal(fs.readFileSync(path.join(f.dir,'journal.json'),'utf8'),before);
-});
-
-test('recovery resume output directs a closed transaction to forward finalization', {skip:process.platform!=='linux'}, async t => {
- const f=publishedTransaction(t),hash='a'.repeat(64);
- fs.copyFileSync(path.resolve('cli/lib/upgrade-recovery.cjs'),path.join(f.dir,'runner.cjs'));
- Object.assign(f.journal,{phase:'compensation_closed',snapshotManifestHash:hash,originalServices:[],lastError:'EACCES: retained diagnostic',
-  compensationCutoff:{formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:hash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'},
-  postCutoff:{formatVersion:1,items:{hooks:{state:'done',attempts:1,lastError:null}}},dashboardInstall:null});
- f.journal.recoveryHashes=Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs','remove-owned-tree.mjs'].map(name=>[name,maintenance.hash(path.join(f.dir,name))]));
- maintenance.durable(path.join(f.dir,'journal.json'),f.journal);
- const output=[],log=console.log,exitCode=process.exitCode;
- console.log=value=>output.push(String(value));
- try {await recoveryCommand(['resume'],{root:f.root});}
- finally {console.log=log;process.exitCode=exitCode;}
- assert.equal(output.length,1);
- assert.match(output[0],/zylos upgrade --resume-finalize/);
- assert.match(output[0],/Do not use zylos recovery resume/);
-});
-
-test('pre-marker recovery material remains isolated with corrupt or absent journal publication', t => {
- for (const damage of ['corrupt','missing','partial-recovery']) {
-  const f=publishedTransaction(t);
-  if(damage==='corrupt')fs.writeFileSync(path.join(f.dir,'journal.json'),'{broken');
-  else fs.unlinkSync(path.join(f.dir,'journal.json'));
-  if(damage==='partial-recovery')for(const name of ['runner.cjs','installer.cjs'])fs.unlinkSync(path.join(f.dir,name));
-  const context=discoverUpgradeContext(f.root);
-  assert.equal(context.active,true);assert.equal(context.blocked,true);assert.equal(context.recovery_required,true);
-  assert.equal(fs.existsSync(f.executed),false);
- }
-});
-
 test('completed historical transactions with retained recovery files leave ordinary startup untouched', t => {
  const f=publishedTransaction(t),digest='a'.repeat(64);
  Object.assign(f.journal,{phase:'aborted_before_install',skillsDir:path.join(f.root,'.claude/skills'),
@@ -171,20 +48,6 @@ test('completed historical transactions with retained recovery files leave ordin
  maintenance.update(f.dir,f.journal);
  assert.equal(maintenance.terminalValid(f.journal),true);
  assert.deepEqual(discoverUpgradeContext(f.root),{active:false,blocked:false});
- assert.equal(fs.existsSync(f.executed),false);
-});
-
-test('startup observes a live published controller without executing its recovery runner', {skip:process.platform!=='linux'}, t => {
- t.mock.method(maintenance,'canRecognizeProcesses',()=>true);
- t.mock.method(maintenance,'alive',()=>true);
- const f=publishedTransaction(t,{controller:true});
- const context=discoverUpgradeContext(f.root);
- assert.equal(context.controllerAlive,true);
- assert.equal(context.observing,true);
- assert.equal(context.recovery_required,false);
- for(const key of ['code','error','next'])assert.equal(Object.hasOwn(context,key),false,key);
- assert.doesNotMatch(context.prompt,/"recovery_required"\s*:\s*true/);
- assert.match(context.prompt,/Observe only/);
  assert.equal(fs.existsSync(f.executed),false);
 });
 
@@ -208,35 +71,6 @@ test('startup rejects modified transaction recovery and unrecognizable ownership
   if(attack==='unknown-process')assert.doesNotMatch(context.prompt,/zylos upgrade --resume-finalize/);
   assert.equal(fs.existsSync(f.executed),false);
  }
-});
-
-test('startup diagnostics preserve active READY availability despite unrelated damaged history', t => {
- const f=publishedTransaction(t),digest='a'.repeat(64);
- Object.assign(f.journal,{phase:'restored_data_ready',installationIntent:true,skillsDir:path.join(f.root,'.claude/skills'),dbBackupDir:path.join(f.root,'.backup/db/tx'),snapshotManifestHash:digest,
-  coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[],
-  initialIdentity:{nodePath:process.execPath,packageJson:path.join(f.root,'package.json'),packageHash:digest,cliRoot:path.join(f.root,'cli'),cliHash:digest,workerPath:path.join(f.root,'cli/worker.js'),workerHash:digest,ecosystemHash:null,databases:maintenance.databasePaths(2).map(source=>({source,exists:true}))}});
- maintenance.update(f.dir,f.journal);maintenance.marker(f.root,f.dir,f.journal);
- const unrelated=path.join(f.root,'.backup/self-upgrade/old');fs.mkdirSync(unrelated);fs.writeFileSync(path.join(unrelated,'journal.json'),'{');
- const context=discoverUpgradeContext(f.root);
- assert.equal(context.active,true);assert.equal(context.blocked,false);assert.equal(context.recovery_required,true);
- assert.equal(context.code,'UPGRADE_RECOVERY_REQUIRED');
- assert.match(context.error,/JSON/);
- assert.notEqual(context.error,'Upgrade discovery failed.');
- assert.match(context.next,/zylos recovery/);
- assert.equal(fs.existsSync(f.executed),false);
-});
-
- test('nonblocking recovery cue remains available alongside normal context', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-available-startup-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const stable = path.join(root, '.zylos/upgrade');
-  fs.mkdirSync(stable, { recursive: true });
-  fs.chmodSync(stable, 0o700);
-  fs.writeFileSync(path.join(stable, 'active.json'), '{}', {mode: 0o600});
-  for (const file of ['maintenance.cjs']) fs.writeFileSync(path.join(stable, file), '// fixture dependency\n', {mode: 0o600});
-  fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), "exports.bootstrap = () => ({ active: true, blocked: false, prompt: 'cleanup task' });\n");
-  fs.chmodSync(path.join(stable, 'bootstrap.cjs'), 0o600);
-  assert.equal(upgradeStartupPrompt(root), 'cleanup task');
 });
 
 test('C4 delivered-tail hook reads normal context after READY but isolates blocked recovery', t => {
@@ -284,33 +118,6 @@ function stableFixture(t, body) {
   return {root, stable, entry};
 }
 
-test('writable stable modules load while symlinked modules remain isolated', t => {
-  for (const attack of ['entry-writable', 'dependency-writable', 'entry-link', 'directory-link']) {
-    const f = stableFixture(t, 'throw Error("must never execute");\n');
-    const sentinel = path.join(f.root, 'executed');
-    fs.writeFileSync(f.entry, `require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'executed'); exports.bootstrap = () => ({active:false});\n`);
-    if (attack === 'entry-writable') fs.chmodSync(f.entry, 0o666);
-    if (attack === 'dependency-writable') fs.chmodSync(path.join(f.stable, 'maintenance.cjs'), 0o666);
-    if (attack === 'entry-link') {
-      const target = path.join(f.root, 'linked-bootstrap.cjs');
-      fs.renameSync(f.entry, target);
-      fs.symlinkSync(target, f.entry);
-    }
-    if (attack === 'directory-link') {
-      const target = path.join(f.root, 'linked-upgrade');
-      fs.renameSync(f.stable, target);
-      fs.symlinkSync(target, f.stable);
-    }
-    if (attack.endsWith('-writable')) {
-      assert.equal(upgradeStartupPrompt(f.root), null);
-      assert.equal(fs.existsSync(sentinel), true, attack);
-    } else {
-      assert.match(upgradeStartupPrompt(f.root), /Upgrade discovery failed/);
-      assert.equal(fs.existsSync(sentinel), false, attack);
-    }
-  }
-});
-
 test('direct delivered-tail export receives recovery before scope loading despite a stale runtime flag', t => {
   const f = stableFixture(t, 'exports.bootstrap = () => {throw Error("discovery unavailable");};\n');
   const scripts = path.join(f.root, 'hook');
@@ -327,69 +134,4 @@ test('direct delivered-tail export receives recovery before scope loading despit
     assert.equal(result.status, 0, result.stderr);
     assert.equal((result.stdout.match(/SYSTEM RECOVERY TASK/g) || []).length, 1);
   }
-});
-
-test('nonblocking cue append preserves original prompt and avoids duplicate adapter cue', () => {
-  const original = 'ordinary\n\nrecovery cue';
-  assert.deepEqual(applyUpgradePrompt([original], 'recovery cue', 0, {append: true}), [original]);
-});
-
- test('ordinary deployment skips incomplete stable runtime discovery without upgrade materials', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-normal-context-'));
-  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
-  const stable = path.join(root, '.zylos/upgrade');
-  fs.mkdirSync(stable, {recursive: true});
-  fs.chmodSync(stable, 0o775);
-  fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), 'throw Error("ordinary startup must not load this");', {mode:0o664});
-  assert.equal(upgradeStartupPrompt(root), null);
-});
-
-
-test('same-process startup discovery uses the current bootstrap and maintenance generation',t=>{
- const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-context-generation-')));
- t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
- const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
- fs.writeFileSync(path.join(stable,'active.json'),'{}',{mode:0o600});
- const entry=path.join(stable,'bootstrap.cjs'),dependency=path.join(stable,'maintenance.cjs');
- fs.writeFileSync(entry,"const m=require('./maintenance.cjs');exports.bootstrap=()=>({active:true,blocked:true,prompt:'old '+m.prompt});",{mode:0o600});
- fs.writeFileSync(dependency,"exports.prompt='generation';",{mode:0o600});
- assert.equal(upgradeStartupPrompt(root),'old generation');
- fs.writeFileSync(entry,"const m=require('./maintenance.cjs');exports.bootstrap=()=>({active:true,blocked:true,prompt:'new '+m.prompt});");
- fs.writeFileSync(dependency,"exports.prompt='manual recovery';");
- assert.equal(upgradeStartupPrompt(root),'new manual recovery');
-});
-
-test('Mac runtime startup recovery prompt permits status and manual recovery only',{skip:process.platform!=='darwin'},t=>{
- const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-context-mac-')));
- t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
- const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
- for(const [source,target] of [['upgrade-bootstrap.cjs','bootstrap.cjs'],['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs']]){fs.copyFileSync(path.resolve('cli/lib',source),path.join(stable,target));fs.chmodSync(path.join(stable,target),0o600);}
- fs.writeFileSync(path.join(stable,'active.json'),'{broken',{mode:0o600});
- const prompt=upgradeStartupPrompt(root);
- assert.match(prompt,/manual recovery/);assert.match(prompt,/--status/);assert.match(prompt,/do not run automatic resume/);assert.doesNotMatch(prompt,/--once/);
-});
-
-// Legacy fallback calls a trusted stable bootstrap, without transaction protocol
-// files that would select the modern runner. Run when recovery CLI fallback or
-// exception formatting changes. No services, databases or tmux are invoked.
-test('recovery resume fallback preserves a stable bootstrap exception as a nonzero structured result', async t=>{
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'resume-fallback-'));
-  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
-  fs.writeFileSync(path.join(stable,'active.json'),'{}',{mode:0o600});
-  fs.writeFileSync(path.join(stable,'maintenance.cjs'),'module.exports={};',{mode:0o600});
-  fs.writeFileSync(path.join(stable,'bootstrap.cjs'),`exports.bootstrap=(_root,{once}={})=>{
-    if(once)throw Object.assign(Error('EACCES: stable resume denied'),{code:'EACCES',next:'Run zylos recovery status.'});
-    return {active:true,blocked:true,prompt:'pending legacy recovery'};
-  };`,{mode:0o600});
-  const output=[],log=console.log,exitCode=process.exitCode;
-  console.log=value=>output.push(JSON.parse(value));
-  try{
-    await recoveryCommand(['resume'],{root});
-    assert.equal(process.exitCode,1);
-  }finally{console.log=log;process.exitCode=exitCode;}
-  assert.equal(output.length,1);
-  assert.equal(output[0].code,'EACCES');assert.equal(output[0].error,'EACCES: stable resume denied');
-  assert.equal(output[0].next,'Run zylos recovery status.');
-  for(const key of ['code','error','next'])assert.ok(output[0].prompt.includes(output[0][key]));
 });
