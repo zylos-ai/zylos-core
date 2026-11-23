@@ -1,4 +1,4 @@
-// covers: cli/lib/upgrade-entry.js cli/lib/upgrade-discovery.js cli/lib/upgrade-maintenance.cjs cli/lib/upgrade-recovery.cjs cli/lib/dashboard-install.js cli/lib/request-runtime-restart.js cli/lib/am-sock-client.js cli/lib/__tests__/helpers/protected-package-crash.js
+// covers: cli/lib/upgrade-entry.js cli/lib/upgrade-discovery.js cli/lib/upgrade-maintenance.cjs cli/lib/upgrade-recovery.cjs cli/lib/dashboard-install.js cli/lib/request-runtime-restart.js cli/lib/am-sock-client.js cli/lib/__tests__/helpers/protected-package-crash.js cli/lib/__tests__/helpers/stop-after-prepared-journal.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

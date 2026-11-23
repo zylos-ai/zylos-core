@@ -215,7 +215,11 @@ for(const [rel,owner]of [['comm-bridge/c4.db','comm-bridge/scripts/c4-schema.js'
     }
   }
   async function kill(input, stage) {
-    const child = spawn(process.execPath, [path.join(input.tempDir, 'cli/lib/upgrade-entry.js')], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const entry = path.join(input.tempDir, 'cli/lib/upgrade-entry.js');
+    const args = stage === 'before'
+      ? ['--import', new URL('./stop-after-prepared-journal.js', import.meta.url).href, entry]
+      : [entry];
+    const child = spawn(process.execPath, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
     const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })));
     let stdout = '', stderr = '';
     child.stdout.on('data', bytes => { stdout += bytes; });
