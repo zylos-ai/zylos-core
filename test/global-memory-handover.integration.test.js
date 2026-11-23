@@ -87,7 +87,3 @@ test('handover and ordinary concurrent Origin append share lock and preserve com
   assert.equal([...inbox.matchAll(/commitment:/g)].length, 1); assert.equal([...inbox.matchAll(/fact: ordinary Origin entry/g)].length, 1);
   assert.equal(inbox.split('\n').filter(line => line.startsWith('- ')).length, 2);
 });
-
-// Run for conflict recovery, plan retry, or inbox content changes. All files,
-// SQLite and memory locks are isolated by the Node runner. The injected rename
-// failure writes no external state and schedules no background work.

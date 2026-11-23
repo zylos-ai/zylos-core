@@ -152,3 +152,49 @@ test('CLI exits distinguish malformed input, ownership loss, lock timeout and su
   const forbidden = run('sync-files', ['commit', '--group', 'origin', '--token', token], env, '{}');
   assert.equal(forbidden.status, 1); assert.match(forbidden.stderr, /^Error \[INVALID_INPUT\]:/);
 });
+
+// Integration boundary: real CLI chain c4-fetch --origin-sync --out ->
+// sync-files list --group -> origin-cursor advance (receipts on stdin) against a
+// temporary SQLite database. Run when Origin reads, receipts, list or cursor CLI
+// change; skip otherwise. readyTmuxTarget owns the private tmux socket,
+// database and root; HOME/ZYLOS_DIR/PM2_HOME/TMPDIR remain isolated.
+test('Origin cursor CLI advances only to what exported receipts prove was read', async t => {
+  const f = readyTmuxTarget(t, { prefix: 'origin-cursor-cli-', mode: 'multi', packageRoot: rootPath });
+  const env = { ...process.env, ...f.env, ZYLOS_RUN_ID: f.ready.runId, ZYLOS_SESSION_GROUP: 'origin',
+    PM2_HOME: path.join(f.root, 'pm2'), TMPDIR: path.join(f.root, 'tmp') };
+  for (const key of ['PM2_HOME', 'TMPDIR']) fs.mkdirSync(env[key]);
+  console.log(JSON.stringify({ boundary: 'Origin receipt CLI chain', HOME: env.HOME,
+    ZYLOS_DIR: env.ZYLOS_DIR, PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR,
+    socket: f.socketPath, database: path.join(f.root, 'comm-bridge/c4.db') }));
+  const group = 'telegram:raw-only';
+  const insert = f.db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','system',?,'delivered',?)");
+  const ids = ['first', 'second', 'third'].map(text => Number(insert.run(text, group).lastInsertRowid));
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM checkpoints WHERE session_group=?').get(group).n, 0);
+  const token = await acquire({ env, kind: 'origin' }, { currentRunId: async () => env.ZYLOS_RUN_ID });
+  const exports = fs.mkdtempSync(path.join(env.TMPDIR, 'origin-'));
+  const fetch = args => {
+    const result = spawnSync(process.execPath, [path.join(rootPath, 'skills/comm-bridge/scripts/c4-fetch.js'), '--origin-sync', '--group', group, ...args, '--json'], { env, encoding: 'utf8', timeout: 15000, cwd: exports });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout).data;
+  };
+  const summary = fetch(['--summaries-only', '--out', 'summaries.json']);
+  assert.equal(summary.path, path.join(exports, 'summaries.json'));
+  assert.deepEqual(summary.receipt.count, 0);
+  const raw = fetch(['--raw-only', '--after', String(summary.receipt.coverageEnd), '--limit', '2', '--out', 'raw.json']);
+  assert.deepEqual([raw.count, raw.firstId, raw.lastId, raw.receipt.end], [2, ids[0], ids[1], ids[1]]);
+  const listed = run('sync-files', ['list', '--group', group], env);
+  assert.equal(listed.status, 0, listed.stderr);
+  const cursor = () => f.db.prepare('SELECT synced_id,checkpoint_id FROM origin_sync_cursors WHERE session_group=?').get(group) ?? null;
+  const input = JSON.stringify({ summary: summary.receipt, raw: raw.receipt, inputs: JSON.parse(listed.stdout) });
+  const forged = run('origin-cursor', ['advance', '--group', group, '--token', token], env, JSON.stringify({ summary: summary.receipt, raw: { ...raw.receipt, end: ids[2] }, inputs: JSON.parse(listed.stdout) }));
+  assert.equal(forged.status, 1, forged.stderr); assert.match(forged.stderr, /^Error \[INPUT_CHANGED\]:/);
+  assert.equal(cursor(), null);
+  const result = run('origin-cursor', ['advance', '--group', group, '--token', token], env, input);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { advanced: true, syncedId: ids[1], checkpointId: 0 });
+  assert.deepEqual(cursor(), { synced_id: ids[1], checkpoint_id: 0 });
+  const replay = run('origin-cursor', ['advance', '--group', group, '--token', token], env, input);
+  assert.equal(replay.status, 1, replay.stderr); assert.match(replay.stderr, /^Error \[INPUT_CHANGED\]:/);
+  assert.deepEqual(cursor(), { synced_id: ids[1], checkpoint_id: 0 });
+  fs.rmSync(exports, { recursive: true, force: true });
+});

@@ -87,13 +87,3 @@ for (const mutation of ['run identity', 'ready identity', 'pane identity', 'sess
     assert.equal(result.observationError.code, 'TARGET_GONE');
   });
 }
-
-// Boundary: collision fallback must validate the identities captured by list-panes.
-// Run after fallback framing or identity changes; skip for scheduling/UI-only changes.
-
-// Boundary: failures on the final observation cannot publish trusted samples;
-// unavailable responses propagate the same public code used by individual reads.
-// Run after batch error handling changes; skip for UI-only changes.
-
-// Boundary: malformed real command responses use the public unavailable code.
-// Run after response framing/parser changes; skip for UI-only changes.

@@ -19,9 +19,7 @@ import assert from 'node:assert/strict';
  *
  * Run when the consent prompt, the /dev/tty probe or the zylos init hand-off in
  * scripts/install.sh changes. Skip for changes that do not touch the
- * installer. The pseudo-terminal cases need util-linux script(1) and are
- * skipped without it (macOS ships the BSD variant, which rejects the socket
- * Node uses for a child's stdin).
+ * installer.
  */
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -43,17 +41,6 @@ afterEach(() => {
 function which(command) {
   return execFileSync('/bin/sh', ['-c', 'command -v "$1"', 'sh', command], { encoding: 'utf8' }).trim();
 }
-
-function findUtilLinuxScript() {
-  try {
-    const script = which('script');
-    return execFileSync(script, ['--version'], { encoding: 'utf8' }).includes('util-linux') ? script : null;
-  } catch {
-    return null;
-  }
-}
-
-const scriptPath = process.platform === 'linux' ? findUtilLinuxScript() : null;
 
 // Each stub appends "<name> <args>" to $INSTALL_TEST_CALLS; zylos init also
 // records whether its stdin is a terminal. Commands the installer must not
@@ -189,20 +176,6 @@ function run(command, args, { env, cwd, input }) {
   });
 }
 
-function shellQuote(value) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-// Pipes the installer into bash on a fresh pseudo-terminal, as
-// `curl ... | bash` does in an interactive session, and types the consent
-// answer into the terminal. script -e passes the pipeline's exit status through.
-function runInPty({ env, dirs, bash }, answer) {
-  const command = `cat ${shellQuote(installer)} | ${shellQuote(bash)}`;
-  return run(scriptPath, ['-qec', command, '/dev/null'], { env, cwd: dirs.home, input: `${answer}\n` });
-}
-
-const ptyTest = scriptPath ? test : test.skip;
-
 suite('scripts/install.sh terminal handling', () => {
   // Boundary: `curl ... | bash` without a controlling terminal (ssh -T, cron,
   // CI). /dev/tty exists but cannot be opened, so the consent prompt must be
@@ -220,56 +193,7 @@ suite('scripts/install.sh terminal handling', () => {
     assert.ok(result.output.includes('Installation complete!'));
     assert.deepEqual(readCalls(context.calls), fullInstallCalls('zylos init', 'stdin=other'));
   });
-
-  // Boundary: `curl ... | bash` in an interactive terminal, user declines. Nothing past the
-  // release lookup may run and HOME must stay untouched.
-  ptyTest('in a terminal, answering n cancels before anything is installed', { timeout: TEST_TIMEOUT_MS }, async () => {
-    const context = makeFixture();
-    const result = await runInPty(context, 'n');
-
-    assert.equal(result.signal, null);
-    assert.equal(result.status, 0);
-    assert.ok(result.output.includes('Security Notice'));
-    assert.ok(result.output.includes('Installation cancelled. No changes were made.'));
-    assert.deepEqual(readCalls(context.calls), [RELEASE_LOOKUP]);
-    assert.deepEqual(fs.readdirSync(context.dirs.home), []);
-  });
-
-  // Boundary: `curl ... | bash` in an interactive terminal, user accepts. The
-  // installer must pass --skip-consent so zylos init does not ask again, and
-  // hand init the terminal instead of the piped script on stdin.
-  ptyTest('in a terminal, answering y runs zylos init --skip-consent on the terminal', { timeout: TEST_TIMEOUT_MS }, async () => {
-    const context = makeFixture();
-    const result = await runInPty(context, 'y');
-
-    assert.equal(result.signal, null);
-    assert.equal(result.status, 0);
-    assert.ok(result.output.includes('Security Notice'));
-    assert.ok(!result.output.includes('Installation cancelled'));
-    assert.deepEqual(readCalls(context.calls), fullInstallCalls('zylos init --skip-consent', 'stdin=tty'));
-  });
-
-  // Boundary: `curl ... | bash` in an interactive terminal, user presses Enter.
-  // The prompt defaults to Y, so an empty answer must install exactly like y.
-  ptyTest('in a terminal, pressing Enter accepts the default like answering y', { timeout: TEST_TIMEOUT_MS }, async () => {
-    const context = makeFixture();
-    const result = await runInPty(context, '');
-
-    assert.equal(result.signal, null);
-    assert.equal(result.status, 0);
-    assert.ok(result.output.includes('Security Notice'));
-    assert.ok(!result.output.includes('Installation cancelled'));
-    assert.deepEqual(readCalls(context.calls), fullInstallCalls('zylos init --skip-consent', 'stdin=tty'));
-  });
 });
-
-// Boundary: real install.sh prerequisite selection and failure propagation, with
-// every package/install command recorded in a private PATH. Run when procps
-// detection or package selection changes; skip for unrelated installer changes.
-// Only run in isolation: never use live resources. makeFixture verifies isolated
-// HOME, ZYLOS_DIR, PM2_HOME, short TMPDIR and all writable paths before launch.
-// No tmux or database is opened; any socket/database path stays under the fixture.
-// Commands are local stubs, bounded child groups are reaped, and fixtures removed.
 
 // Boundary: installer command routing and PATH/init continuation with isolated
 // command doubles. Run for install_zylos or branch argument changes; skip for

@@ -265,6 +265,35 @@ describe('smartSync manifest authority', () => {
     assert.equal(manifest.files['clean-then-removed.js'], undefined);
   });
 
+  test('crash after legacy originals staging: next sync recovers before merging', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Previous install with originals v1 (three-way merge base)
+    writeFile(dest, 'a.js', 'line1\nline2\nline3\nline4\nline5\n');
+    saveManifest(dest, generateManifest(dest));
+    saveOriginals(dest, dest);
+
+    // Simulate a crash mid-transaction: originals were moved aside and never
+    // restored (the legacy .bak staging scheme)
+    fs.renameSync(
+      path.join(dest, '.zylos', 'originals'),
+      path.join(dest, '.zylos', 'originals.bak')
+    );
+
+    // User edit + upstream edit on different lines — clean-mergeable, but only
+    // if the originals are recovered before the merge logic reads them
+    writeFile(dest, 'a.js', 'line1\nuser-modified\nline3\nline4\nline5\n');
+    writeFile(src, 'a.js', 'line1\nline2\nline3\nline4\nupstream-modified\n');
+
+    const result = smartSync(src, dest);
+    assert.ok(result.merged.includes('a.js'));
+    assert.deepEqual(result.conflicts, []);
+    assert.ok(readFile(dest, 'a.js').includes('user-modified'));
+    assert.ok(readFile(dest, 'a.js').includes('upstream-modified'));
+    assert.equal(fs.existsSync(path.join(dest, '.zylos', 'originals.bak')), false);
+  });
+
   test('sync with errors keeps the previous manifest and originals', () => {
     const src = mkTmp();
     const dest = mkTmp();

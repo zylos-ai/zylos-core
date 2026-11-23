@@ -1,12 +1,6 @@
-import { afterEach, describe, test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import { isLatestStableTag } from '../scripts/docker-latest.js';
-
-const fixtures = [];
-afterEach(() => {
-  for (const fixture of fixtures.splice(0)) fs.rmSync(fixture, { recursive: true, force: true });
-});
 
 describe('latest stable version selection', () => {
   for (const [name, current, tags, expected] of [
@@ -31,8 +25,3 @@ describe('latest stable version selection', () => {
     });
   }
 });
-
-// Covers the real CLI/git/output boundary. Run when the script or workflow wiring
-// changes; skip for documentation-only edits. Every case uses fake git, no network,
-// private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/cwd and no inherited credentials/config.
-// tmux and databases are not exercised. afterEach removes only this case's fixture.

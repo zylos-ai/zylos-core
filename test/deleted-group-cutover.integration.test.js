@@ -1,4 +1,3 @@
-// covers: cli/commands/doctor.js cli/lib/group-delete.js cli/lib/session-mode-status.js cli/zylos.js skills/activity-monitor/scripts/mode-switch.js skills/comm-bridge/scripts/c4-store-transition.js skills/dashboard/src/lib/chat/conversations.js skills/dashboard/src/lib/store.js skills/dashboard/src/lib/workbench/group-deletion.js test/fixtures/group-deletion-monitor.js test/helpers/group-deletion-fixture.js test/helpers/isolated-tmux.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -177,8 +176,8 @@ function assertNativeTransition(row) {
 
 for (const entry of ['cli', 'dashboard']) {
   // Boundary: real deletion entry point -> private tmux/C4 -> native coordinator
-  // -> CLI/doctor status. Run from the pre-release slow suite for deletion or
-  // native-cutover changes. The fixture verifies private HOME, ZYLOS_DIR,
+  // -> CLI/doctor status. Run for deletion or native-cutover changes. The
+  // fixture verifies private HOME, ZYLOS_DIR,
   // PM2_HOME, short TMPDIR, tmux socket and test databases before startup,
   // then stops all children and removes private data in teardown.
   test(`${entry} deletion permits repeated native cutovers with unchanged memory and coverage`, { timeout: 90_000 }, async t => {
