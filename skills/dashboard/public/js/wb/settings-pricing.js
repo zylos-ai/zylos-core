@@ -98,6 +98,8 @@ export function createPricingPanel({ root, host, groupCounts = {}, data, usage =
   const saved = structuredClone(data.runtimes), drafts = structuredClone(data.runtimes), usedModels = usage?.models ?? [];
   const top = host.querySelector('#settings-pricing-top') ?? root;
   const summary = element(document, 'p', undefined, 'wb-price-sum'), unmatched = element(document, 'div');
+  // The instance default engine may keep no usage records; the tabs then open on Claude's prices, so say they are not its prices.
+  const noUsage = data.active && !usageRuntimes.includes(data.active) ? element(document, 'p', t('pricing.runtime_no_usage', { runtime: runtimeName(data.active) }), 'wb-note') : null;
   const tabs = element(document, 'div', undefined, 'wb-rt-tabs'); tabs.setAttribute('role', 'tablist');
   const tabButtons = new Map();
   for (const value of runtimesWith('usage')) {
@@ -105,7 +107,8 @@ export function createPricingPanel({ root, host, groupCounts = {}, data, usage =
     button.addEventListener('click', () => { try { capture(); runtime = value; render(); } catch (error) { status.textContent = error.message; status.hidden = false; } });
     tabs.append(button); tabButtons.set(value, button);
   }
-  if (top === root) root.prepend(summary, unmatched, tabs); else top.append(summary, unmatched, tabs);
+  const above = [summary, unmatched, ...(noUsage ? [noUsage] : []), tabs];
+  if (top === root) root.prepend(...above); else top.append(...above);
   const baseRows = host.querySelector('#settings-price-rows'), priorityRows = host.querySelector('#settings-priority-price-rows');
   const fastInput = host.querySelector('#settings-fast-multiplier'), status = host.querySelector('#settings-status');
   const baseTitle = host.querySelector('#settings-price-title'), baseCount = host.querySelector('#settings-price-count'), savebar = host.querySelector('.settings-footer'), dirtyText = host.querySelector('#settings-dirty');
@@ -258,6 +261,6 @@ export function createPricingPanel({ root, host, groupCounts = {}, data, usage =
       refreshDirty(); row.querySelector('input')?.focus?.();
     },
     runtime: () => runtime,
-    destroy() { stopped = true; tabs.remove(); summary.remove(); unmatched.remove(); pages.search.remove(); pages.empty.remove(); pages.pager.remove(); table.style.minHeight = ''; if (savebar) savebar.hidden = true; onDirty(0); },
+    destroy() { stopped = true; tabs.remove(); summary.remove(); unmatched.remove(); noUsage?.remove(); pages.search.remove(); pages.empty.remove(); pages.pager.remove(); table.style.minHeight = ''; if (savebar) savebar.hidden = true; onDirty(0); },
   };
 }
