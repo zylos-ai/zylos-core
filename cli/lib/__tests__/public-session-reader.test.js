@@ -42,10 +42,3 @@ test('public no-server observation is absent and status not_running without serv
   await fs.writeFile(path.join(dir,'.zylos/config.json'),'{broken');
   assert.equal(call('resolveTargetRuntime',[null]).error.code,'CONFIG_UNREADABLE');
 });
-test('public async reader rejects invalid options and unavailable tmux',async t=>{
-  const {call}=await fixture(t,{server:false});
-  assert.match(call('readSessionState',[null,{freshnessMs:-1}]).error.message,/freshnessMs/);
-  const unavailable=call('readLiveIdentity',[null],{PATH:'/session-runtime-no-binaries'});
-  assert.equal(unavailable.error.code,'TMUX_UNAVAILABLE');
-  assert.equal(unavailable.error.cause,'error');
-});

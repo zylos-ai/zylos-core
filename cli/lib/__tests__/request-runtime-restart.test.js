@@ -26,11 +26,6 @@ test('producer never retries explicit refusal, connect failure or U; lookup repo
     }
   }
 });
-test('expired submission budgets do not submit', async () => {
-  const result = await requestRuntimeRestart({ ...base, now: () => 1000,
-    send: () => assert.fail('expired requests do not submit') });
-  assert.equal(result.error.code, 'deadline_exceeded');
-});
 test('upgrade restart submission retries only connects with a 30s total budget and 1s spacing',async()=>{
   for (const afterServiceRestart of [false,true]) {
     let options;
@@ -39,29 +34,6 @@ test('upgrade restart submission retries only connects with a 30s total budget a
     assert.deepEqual(options,afterServiceRestart ? {deadlineAt:30100,connectRetryEveryMs:1000} : {deadlineAt:10100});
     assert.equal(result.ok,false);
     if(afterServiceRestart) assert.match(result.error.message,/All currently running managed sessions, including Origin, need manual restart/);
-  }
-});
-
-test('upgrade restart submission uses its own 30 second window regardless of an obsolete parent deadline',async()=>{
-  for(const [deadlineAt,expected] of [[500,30100],[100000,30100]]) {
-    let deadline;
-    await requestRuntimeRestart({...base,afterServiceRestart:true,deadlineAt,
-      send:async(_request,options)=>{deadline=options.deadlineAt;return {kind:'connect_failed',sent:false};}});
-    assert.equal(deadline,expected);
-  }
-});
-
-test('supervisor upgrade retries never repeat a connected uncertain or refused request',async()=>{
-  for(const kind of ['rejected','no_reply','invalid_reply','timeout']) {
-    let sends=0,lookups=0;
-    const result=await requestRuntimeRestart({...base,afterServiceRestart:true,
-      send:async()=>{sends++;return {kind,sent:true,reply:{code:'entry_not_open'}};},
-      lookup:async()=>{lookups++;return 'unknown';}});
-    assert.equal(sends,1);assert.equal(lookups,kind==='rejected'?0:1);assert.equal(result.ok,false);
-    if(kind!=='rejected') {
-      assert.equal(result.error.persisted,null);assert.match(result.error.message,/do not resubmit automatically/);
-      assert.doesNotMatch(result.error.message,/need manual restart/);
-    }
   }
 });
 

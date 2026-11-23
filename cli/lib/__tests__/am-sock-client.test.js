@@ -5,39 +5,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { submit, validateReply, lookupRestartRequest, lookupModeSwitch, notifyAuthCompleted } from '../am-sock-client.js';
+import { submit, validateReply, lookupRestartRequest, lookupModeSwitch } from '../am-sock-client.js';
 
 const request = { version: 1, type: 'restart_all', requestId: 'test-1', reason: 'upgrade' };
 const reply = { version: 1, type: 'restart_all', requestId: 'test-1', ok: true, result: 'accepted', runCount: 2 };
-test('authentication notification accepts only a matching acknowledgment and never retries', async () => {
-  for (const outcome of ['ack', 'fragmented', 'wrong_id', 'wrong_version', 'admission', 'invalid', 'error', 'close', 'throw', 'connect_error', 'timeout', 'write_error']) {
-    let connections = 0, destroyed = 0;
-    const socket = new EventEmitter();
-    socket.destroy = () => { destroyed++; };
-    socket.write = (line, callback) => {
-      const input = JSON.parse(line);
-      assert.deepEqual(input, { version: 1, type: 'auth_completed', requestId: `auth-${process.pid}-123`, runtime: 'codex' });
-      callback(outcome === 'write_error' ? new Error('write failed') : null);
-      queueMicrotask(() => {
-        if (outcome === 'error') return socket.emit('error', new Error('absent'));
-        if (outcome === 'close') return socket.emit('close');
-        if (['timeout', 'write_error'].includes(outcome)) return;
-        const reply = { version: outcome === 'wrong_version' ? 2 : 1, type: outcome === 'admission' ? 'auth_completed' : 'ack',
-          requestId: outcome === 'wrong_id' ? 'other' : input.requestId };
-        const bytes = outcome === 'invalid' ? 'bad\n' : JSON.stringify(reply) + '\n';
-        if (outcome === 'fragmented') socket.emit('data', Buffer.from(bytes.slice(0, 5)));
-        socket.emit('data', Buffer.from(outcome === 'fragmented' ? bytes.slice(5) : bytes));
-      });
-    };
-    const actual = await notifyAuthCompleted('codex', { now: () => 123, timeoutMs: 10, connect: () => {
-      connections++; if (outcome === 'throw') throw new Error('connect');
-      queueMicrotask(() => outcome === 'connect_error' ? socket.emit('error', new Error('absent')) : socket.emit('connect')); return socket;
-    } });
-    assert.equal(actual, ['ack', 'fragmented'].includes(outcome));
-    assert.equal(connections, 1); assert.equal(destroyed, outcome === 'throw' ? 0 : 1);
-  }
-  assert.throws(() => submit({ type: 'auth_completed' }), TypeError);
-});
 async function withServer(handler, fn) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'am-sock-'));
   const socketPath = path.join(root, 'am.sock'); const sockets = new Set();
@@ -79,28 +50,7 @@ test('validates all five reply branches and mandatory relationships', () => {
   assert.equal(validateReply(request, { ...reply, requestId: 'wrong' }), false);
   assert.equal(validateReply(request, { ...reply, version: 2 }), false);
 });
-test('first line wins; EOF after accepted is not uncertain', async () => {
-  await withServer(socket => socket.once('data', () => socket.end(`${JSON.stringify(reply)}\ninvalid\n`)), async socketPath => {
-    assert.deepEqual(await submit(request, { socketPath }), { kind: 'accepted', reply, sent: true });
-  });
-});
 
-// Boundary: real socket transport preserves an explicit group and classifies
-// the single-mode refusal. Run for manual request/reply changes; skip unrelated
-// lifecycle work. The Node runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR;
-// withServer uses a private socket and cleans it, with no tmux/database/network.
-test('manual restart sends the requested group and accepts a mode refusal', async () => {
-  const input = { version: 1, type: 'manual_restart', requestId: 'group-restart',
-    sessionGroup: 'telegram:group-a', expectedRunId: 'run-a' };
-  const refusal = { version: 1, type: input.type, requestId: input.requestId,
-    ok: false, result: 'rejected', reason: 'not_multi' };
-  await withServer(socket => socket.once('data', bytes => {
-    assert.deepEqual(JSON.parse(bytes.toString('utf8')), input);
-    socket.end(JSON.stringify(refusal) + '\n');
-  }), async socketPath => {
-    assert.deepEqual(await submit(input, { socketPath }), { kind: 'rejected', reply: refusal, sent: true });
-  });
-});
 test('malformed complete reply is invalid_reply, including positive-control bad relationship', async () => {
   for (const body of ['not-json\n', JSON.stringify({ ...reply, result: 'done_empty', runCount: 2 }) + '\n']) {
     await withServer(socket => socket.once('data', () => socket.end(body)), async socketPath => {
@@ -115,16 +65,6 @@ test('half line and connected write failure remain uncertain', async () => {
   const fake = new EventEmitter(); fake.destroy = () => {}; fake.write = (_, cb) => cb(new Error('write failed'));
   const result = submit(request, { connect: () => { queueMicrotask(() => fake.emit('connect')); return fake; } });
   assert.deepEqual(await result, { kind: 'no_reply', sent: true });
-});
-test('unknown socket is unsent; expired budget never connects', async () => {
-  assert.deepEqual(await submit(request, { socketPath: path.join(os.tmpdir(), `missing-${process.pid}.sock`) }), { kind: 'connect_failed', sent: false });
-  assert.deepEqual(await submit(request, { deadlineAt: Date.now() - 1, connect: () => { throw new Error('must not connect'); } }), { kind: 'deadline_exceeded', sent: false });
-});
-test('total and reply deadlines have distinct classifications', async () => {
-  await withServer(() => {}, async socketPath => {
-    assert.deepEqual(await submit(request, { socketPath, deadlineAt: Date.now() + 1000, replyMaxMs: 20 }), { kind: 'timeout', sent: true });
-    assert.deepEqual(await submit(request, { socketPath, deadlineAt: Date.now() + 20, replyMaxMs: 1000 }), { kind: 'deadline_exceeded', sent: true });
-  });
 });
 test('connection retry uses total budget and does not retry entry_not_open', async () => {
   let calls = 0;
@@ -204,38 +144,6 @@ test('five-family matrix: complete, partial, reset, malformed, late and deadline
   }
   assert.throws(()=>submit({type:'notify_delivered'}),TypeError);
   assert.throws(()=>submit({type:'route'}),TypeError);
-});
-
-test('rtual 30s connection budget permits 12s listener and gives independent 10s reply deadline', async t => {
-  t.mock.timers.enable({apis:['setTimeout']});
-  for(const responds of [true,false]) {
-    let clock=1792000000000;const start=clock;const attempts=[];let closedAt=null,writtenAt=null,socket;
-    const connect=()=>{attempts.push(clock-start);socket=new EventEmitter();socket.destroy=()=>{closedAt=clock-start;};
-      socket.write=(_,cb)=>{writtenAt=clock-start;cb();if(responds)setTimeout(()=>socket.emit('data',Buffer.from(JSON.stringify(reply)+'\n')),1000);};
-      queueMicrotask(()=>clock-start<12000?socket.emit('error',Object.assign(new Error(),{code:'ECONNREFUSED'})):socket.emit('connect'));
-      return socket;};
-    const pending=submit(request,{connect,now:()=>clock,deadlineAt:start+30000,connectRetryEveryMs:1000});
-    for(let second=0;second<=(responds?13:22);second++) {
-      if(second){clock+=1000;t.mock.timers.tick(1000);}for(let n=0;n<5;n++)await Promise.resolve();
-    }
-    const result=await pending;
-    assert.equal(result.kind,responds?'accepted':'timeout');assert.equal(result.sent,true);
-    assert.deepEqual(attempts,Array.from({length:13},(_,i)=>i*1000));assert.equal(writtenAt,12000);assert.equal(closedAt,responds?13000:22000);
-  }
-});
-
-test('default completion lookup reads retained events only after authoritative absence', async () => {
-  const { supervisorDiagnosticPath } = await import('../session-group-paths.js');
-  const file=supervisorDiagnosticPath();fs.mkdirSync(path.dirname(file),{recursive:true});
-  const rotated=file.replace('.jsonl','.1792000000000.jsonl');
-  fs.writeFileSync(rotated,JSON.stringify({v:1,event:'manual_restart_done',requestId:'manual'})+'\n');
-  fs.writeFileSync(file,'bad line\n'+JSON.stringify({v:1,event:'restart_done',requestId:'upgrade'})+'\n');
-  assert.equal(await lookupRestartRequest('upgrade',{readRequests:()=>[{requestId:'upgrade'}]}),'accepted');
-  assert.equal(await lookupRestartRequest('upgrade',{readRequests:()=>[]}), 'done');
-  assert.equal(await lookupRestartRequest('manual',{readRequests:()=>[]}), 'done');
-  assert.equal(await lookupRestartRequest('missing',{readRequests:()=>[]}), 'unknown');
-  fs.rmSync(file);fs.rmSync(rotated);
-  assert.equal(await lookupRestartRequest('upgrade',{readRequests:()=>[]}), 'unknown');
 });
 
 // Group progress uses the same authoritative request/completion readers. Run

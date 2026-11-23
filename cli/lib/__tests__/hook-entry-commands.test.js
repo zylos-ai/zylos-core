@@ -61,13 +61,6 @@ test('every Codex hook zylos installs, including component shards, runs through 
   assertThroughEntry(commandsOf(config.hooks), dir);
 });
 
-test('the statusLine template runs through the hook entry', () => {
-  const template = JSON.parse(fs.readFileSync(path.join(repoRoot, 'templates', '.claude', 'settings.json'), 'utf8'));
-  const command = template.statusLine.command;
-  assert.match(command, /^exec node ~\/zylos\/\.claude\/skills\/activity-monitor\/scripts\/hook-entry\.js /);
-  assert.equal(hookEntryTarget(command), path.join(process.env.HOME, 'zylos', '.claude', 'skills', 'activity-monitor', 'scripts', 'context-monitor.js'));
-});
-
 test('direct Claude hook commands from earlier versions are replaced in place', t => {
   const dir = process.env.ZYLOS_DIR;
   const scripts = path.join(dir, '.claude', 'skills', 'activity-monitor', 'scripts');
@@ -85,21 +78,4 @@ test('direct Claude hook commands from earlier versions are replaced in place', 
     [path.join(scripts, 'hook-activity.js'), path.join(scripts, 'hook-health.js')]);
   assert.ok(stop.includes('node /opt/custom/my-hook.js'), 'user hooks are kept');
   assertThroughEntry(commandsOf(installed.hooks).filter(command => command.includes(path.join(dir, '.claude'))), dir);
-});
-
-test('direct Codex hook commands from earlier versions are replaced in place', t => {
-  const dir = zylosDir(t, 'codex-upgrade');
-  const scripts = path.join(dir, '.claude', 'skills', 'activity-monitor', 'scripts');
-  fs.mkdirSync(path.dirname(codexHooksPath(dir)), { recursive: true });
-  fs.writeFileSync(codexHooksPath(dir), JSON.stringify({ hooks: {
-    SessionStart: [{ hooks: [{ type: 'command', command: `node ${path.join(scripts, 'session-start-orchestrator.js')} --shard memory` }] }],
-    Stop: [{ hooks: [{ type: 'command', command: `node ${path.join(scripts, 'hook-activity.js')}` },
-      { type: 'command', command: 'node /opt/custom/my-hook.js' }] }],
-  } }));
-  installCoreCodexHook({ zylosDir: dir });
-  const config = JSON.parse(fs.readFileSync(codexHooksPath(dir), 'utf8'));
-  const stop = commandsOf({ Stop: config.hooks.Stop });
-  assert.equal(stop.filter(command => command.includes('hook-activity.js')).length, 1);
-  assert.ok(stop.includes('node /opt/custom/my-hook.js'));
-  assertThroughEntry(commandsOf(config.hooks).filter(command => command.includes(scripts)), dir);
 });

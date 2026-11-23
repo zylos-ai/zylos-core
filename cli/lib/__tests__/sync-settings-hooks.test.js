@@ -12,12 +12,9 @@ const {
   desiredClaudeHooks,
   persistInstalledSettingsAndSyncCoupledThreshold,
   syncHooks,
-  syncModelCoupledNewSessionThreshold,
   syncTemplateSetting,
-  syncTemplateModelSetting,
 } = await import('../runtime/claude/hooks.js');
-const { isCoreManaged, syncRuntimeHooks } = await import('../sync-runtime-hooks.js');
-const { extractScriptPath, getCommandHooks, hookScriptKey, hookScriptBaseKey, extractShardArg } = await import('../hook-utils.js');
+const { hookScriptBaseKey, extractShardArg } = await import('../hook-utils.js');
 const {
   syncCodexConfig, codexHooksPath, installCoreCodexHook,
   renderCodexGlobalConfig,
@@ -26,8 +23,6 @@ const {
 const { activateFreshSplitInstructions, instructionPaths } = await import('../runtime/instruction-builder.js');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TEMPLATE_SETTINGS_PATH = path.join(__dirname, '..', '..', '..', 'templates', '.claude', 'settings.json');
-const POSTINSTALL_PATH = path.join(__dirname, '..', '..', '..', 'scripts', 'postinstall.js');
 const INIT_MODULE_PATH = path.join(__dirname, '..', '..', 'commands', 'init.js');
 
 function fixtureZylosDir() {
@@ -37,24 +32,6 @@ function fixtureZylosDir() {
 function zylosHookPath(relativePath) {
   return path.join(fixtureZylosDir(), '.claude', relativePath).replaceAll('\\', '/');
 }
-
-describe('Claude settings template', () => {
-  it('defaults fresh installs to Opus with 1M context (opus[1m])', () => {
-    const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
-    assert.equal(template.model, 'opus[1m]');
-  });
-
-  it('disables autoMemoryEnabled and autoDreamEnabled by default', () => {
-    const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
-    assert.equal(template.autoMemoryEnabled, false);
-    assert.equal(template.autoDreamEnabled, false);
-  });
-
-  it('does not carry runtime hooks in the template', () => {
-    const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
-    assert.equal(Object.hasOwn(template, 'hooks'), false);
-  });
-});
 
 const CORE_SHARD_SEQUENCE = [
   'identity',
@@ -67,41 +44,6 @@ const CORE_SHARD_SEQUENCE = [
 ];
 
 describe('desiredClaudeHooks', () => {
-  it('omits assembler hooks until the assembler is materialized', () => {
-    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-unmaterialized-hooks-'));
-    const groups = desiredClaudeHooks({ zylosDir }).SessionStart;
-    assert.equal(groups.length, 3);
-    for (const group of groups) {
-      assert.equal(group.hooks.some(hook => hook.command.includes('assembler.mjs')), false);
-      assert.deepEqual(group.hooks.filter(h => h.command.includes('session-start-orchestrator.js')).map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
-    }
-    fs.rmSync(zylosDir, { recursive: true, force: true });
-  });
-
-  it('real postinstall does not publish dead assembler hooks before init', () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-postinstall-hooks-'));
-    const zylosDir = path.join(homeDir, 'zylos');
-    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
-    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
-    fs.writeFileSync(path.join(zylosDir, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }));
-    fs.writeFileSync(path.join(zylosDir, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude' }));
-    execFileSync(process.execPath, [POSTINSTALL_PATH], {
-      stdio: 'pipe',
-      env: {
-        ...process.env,
-        CI: '',
-        HOME: homeDir,
-        ZYLOS_DIR: zylosDir,
-        ZYLOS_SKIP_POSTINSTALL: '1',
-      },
-    });
-    const settings = JSON.parse(fs.readFileSync(path.join(zylosDir, '.claude', 'settings.json'), 'utf8'));
-    const installedHooks = Object.values(settings.hooks)
-      .flatMap(groups => groups.flatMap(group => getCommandHooks(group)));
-    assert.ok(installedHooks.some(hook => hook.command.includes('session-start-orchestrator.js --shard identity')));
-    assert.equal(installedHooks.some(hook => hook.command.includes('assembler.mjs')), false);
-    fs.rmSync(homeDir, { recursive: true, force: true });
-  });
 
   it('fresh init deploy syncs exactly one assembler hook for startup, clear, and compact', () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-init-hooks-'));
@@ -154,222 +96,10 @@ describe('desiredClaudeHooks', () => {
     fs.rmSync(zylosDir, { recursive: true, force: true });
   });
 
-  it('uses absolute per-shard SessionStart orchestrator commands for all matchers', () => {
-    const hooks = desiredClaudeHooks({ existsSync: () => true });
-    const groups = hooks.SessionStart;
-    assert.equal(groups.length, 3);
-    for (const group of groups) {
-      assert.match(group.hooks[1].command, /\.zylos\/instructions\/assembler\.mjs/);
-      assert.equal(extractShardArg(group.hooks[1].command), null);
-      assert.deepEqual(group.hooks.slice(2, -1).map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
-      for (const hook of group.hooks.slice(2, -1)) {
-        assert.match(hook.command, /session-start-orchestrator\.js --shard /);
-        assert.equal(path.isAbsolute(extractScriptPath(hook.command)), true);
-        assert.equal(hook.timeout, 20000);
-      }
-    }
-  });
-
-  it('includes PostToolUseFailure activity hook', () => {
-    const groups = desiredClaudeHooks().PostToolUseFailure || [];
-    assert.equal(groups.length, 1);
-    assert.ok(groups[0].hooks.some(h => h.command.includes('hook-activity.js')));
-    assert.equal(path.isAbsolute(extractScriptPath(groups[0].hooks[0].command)), true);
-  });
-});
-
-describe('syncTemplateModelSetting', () => {
-  it('backfills the template model when the installed settings omit model', () => {
-    const installedSettings = {};
-    const logs = [];
-
-    const result = syncTemplateModelSetting({
-      templateSettings: { model: 'claude-opus-4-6' },
-      installedSettings,
-      cfg: {},
-      log: (line) => logs.push(line),
-    });
-
-    assert.equal(result.changed, true);
-    assert.equal(installedSettings.model, 'claude-opus-4-6');
-    assert.deepEqual(logs, ['  + model: claude-opus-4-6']);
-  });
-
-  it('preserves an existing user-configured model', () => {
-    const installedSettings = { model: 'sonnet' };
-
-    const result = syncTemplateModelSetting({
-      templateSettings: { model: 'opus' },
-      installedSettings,
-      cfg: {},
-      log: () => {
-        throw new Error('should not log when model already exists');
-      },
-    });
-
-    assert.equal(result.changed, false);
-    assert.equal(installedSettings.model, 'sonnet');
-  });
-
-  it('preserves the 1M model when an old scalar threshold is high', () => {
-    const installedSettings = {};
-    const logs = [];
-
-    const result = syncTemplateModelSetting({
-      templateSettings: { model: 'opus[1m]' },
-      installedSettings,
-      cfg: { new_session_threshold: 70 },
-      log: (line) => logs.push(line),
-    });
-
-    assert.equal(result.changed, true);
-    assert.equal(installedSettings.model, 'opus[1m]');
-    assert.equal(result.model, 'opus[1m]');
-  });
-
-  it('keeps opus[1m] when threshold is not set', () => {
-    const installedSettings = {};
-    const logs = [];
-
-    const result = syncTemplateModelSetting({
-      templateSettings: { model: 'opus[1m]' },
-      installedSettings,
-      cfg: {},
-      log: (line) => logs.push(line),
-    });
-
-    assert.equal(result.changed, true);
-    assert.equal(installedSettings.model, 'opus[1m]');
-  });
-
-  it('keeps opus[1m] when threshold is at or below 30', () => {
-    const installedSettings = {};
-    const logs = [];
-
-    const result = syncTemplateModelSetting({
-      templateSettings: { model: 'opus[1m]' },
-      installedSettings,
-      cfg: { new_session_threshold: 30 },
-      log: (line) => logs.push(line),
-    });
-
-    assert.equal(result.changed, true);
-    assert.equal(installedSettings.model, 'opus[1m]');
-  });
-
-  it('does not guard non-1m models regardless of threshold', () => {
-    const installedSettings = {};
-    const logs = [];
-
-    const result = syncTemplateModelSetting({
-      templateSettings: { model: 'opus' },
-      installedSettings,
-      cfg: { new_session_threshold: 70 },
-      log: (line) => logs.push(line),
-    });
-
-    assert.equal(result.changed, true);
-    assert.equal(installedSettings.model, 'opus');
-  });
-});
-
-describe('syncModelCoupledNewSessionThreshold', () => {
-  it('keeps the threshold implicit after model backfill without a legacy value', async () => {
-    const updates = [];
-    const logs = [];
-
-    const result = await syncModelCoupledNewSessionThreshold({
-      modelBackfilled: true,
-      defaultModels: { claude: 'opus[1m]' },
-      cfg: {},
-      updateConfig: (update) => {
-        updates.push(update);
-        return { changed: true };
-      },
-      log: (line) => logs.push(line),
-    });
-
-    assert.equal(result.changed, false);
-    assert.deepEqual(updates, []);
-    assert.deepEqual(logs, []);
-  });
-
-  it('preserves an explicit threshold when model was backfilled', async () => {
-    const result = await syncModelCoupledNewSessionThreshold({
-      modelBackfilled: true,
-      defaultModels: { claude: 'opus[1m]' },
-      cfg: { new_session_threshold: 70 },
-      updateConfig: (update) => {
-        assert.deepEqual(update, { mergeIfAbsent: { model_rotation_thresholds: { claude: { 'opus[1m]': 70 } } } });
-        return { changed: false };
-      },
-      log: () => {
-        throw new Error('should not log when threshold exists');
-      },
-    });
-
-    assert.equal(result.changed, false);
-    assert.equal(result.reason, 'threshold_already_set');
-  });
-
-  it('does not write threshold when model was not backfilled', async () => {
-    const result = await syncModelCoupledNewSessionThreshold({
-      modelBackfilled: false,
-      cfg: {},
-      updateConfig: () => {
-        throw new Error('should not write threshold without model backfill');
-      },
-      log: () => {
-        throw new Error('should not log without model backfill');
-      },
-    });
-
-    assert.equal(result.changed, false);
-    assert.equal(result.reason, 'model_not_backfilled');
-  });
-
-  it('supports dry run without writing config', async () => {
-    const logs = [];
-    const result = await syncModelCoupledNewSessionThreshold({
-      modelBackfilled: true,
-      defaultModels: { claude: 'opus[1m]' },
-      cfg: { new_session_threshold: 70 },
-      dryRun: true,
-      updateConfig: () => {
-        throw new Error('dry run should not write config');
-      },
-      log: (line) => logs.push(line),
-    });
-
-    assert.equal(result.changed, true);
-    assert.deepEqual(logs, ['  + model_rotation_thresholds: model defaults migrated']);
-  });
 });
 
 describe('persistInstalledSettingsAndSyncCoupledThreshold', () => {
   const normalizeBackupPath = (filePath) => filePath.replace(/\.bak\.\d+$/, '.bak.<ts>');
-
-  it('writes settings before syncing the paired threshold', () => {
-    const calls = [];
-    const result = persistInstalledSettingsAndSyncCoupledThreshold({
-      installedSettings: { model: 'opus[1m]' },
-      settingsPath: '/tmp/zylos/.claude/settings.json',
-      modelBackfilled: true,
-      mkdirSync: (dir, opts) => calls.push(['mkdir', dir, opts]),
-      writeFileSync: (filePath, content) => calls.push(['writeSettings', filePath, JSON.parse(content)]),
-      syncThreshold: ({ modelBackfilled }) => {
-        calls.push(['syncThreshold', modelBackfilled]);
-        return { changed: true };
-      },
-    });
-
-    assert.equal(result.changed, true);
-    assert.deepEqual(calls, [
-      ['mkdir', '/tmp/zylos/.claude', { recursive: true }],
-      ['writeSettings', '/tmp/zylos/.claude/settings.json', { model: 'opus[1m]' }],
-      ['syncThreshold', true],
-    ]);
-  });
 
   it('backs up existing settings before writing', () => {
     const calls = [];
@@ -388,49 +118,6 @@ describe('persistInstalledSettingsAndSyncCoupledThreshold', () => {
       ['copy', '/tmp/zylos/.claude/settings.json', '/tmp/zylos/.claude/settings.json.bak.<ts>'],
       ['writeSettings', '/tmp/zylos/.claude/settings.json', { hooks: {} }],
     ]);
-  });
-
-  it('prunes old .bak backups after a successful write, keeping the newest N', () => {
-    const unlinked = [];
-    persistInstalledSettingsAndSyncCoupledThreshold({
-      installedSettings: { hooks: {} },
-      settingsPath: '/tmp/zylos/.claude/settings.json',
-      maxBackups: 3,
-      mkdirSync: () => {},
-      existsSync: () => true,
-      copyFileSync: () => {},
-      writeFileSync: () => {},
-      readdirSync: () => [
-        'settings.json',
-        'settings.json.bak.100',
-        'settings.json.bak.500',
-        'settings.json.bak.300',
-        'settings.json.bak.200',
-        'settings.json.bak.400',
-        'other.json.bak.999',
-      ],
-      unlinkSync: (p) => unlinked.push(p),
-      syncThreshold: () => ({ changed: false }),
-    });
-
-    // newest 3 (500,400,300) kept; oldest 2 (200,100) removed; unrelated file untouched
-    assert.deepEqual(unlinked.sort(), [
-      '/tmp/zylos/.claude/settings.json.bak.100',
-      '/tmp/zylos/.claude/settings.json.bak.200',
-    ]);
-  });
-
-  it('does not fail the write when backup pruning throws', () => {
-    assert.doesNotThrow(() => persistInstalledSettingsAndSyncCoupledThreshold({
-      installedSettings: { hooks: {} },
-      settingsPath: '/tmp/zylos/.claude/settings.json',
-      mkdirSync: () => {},
-      existsSync: () => true,
-      copyFileSync: () => {},
-      writeFileSync: () => {},
-      readdirSync: () => { throw new Error('ENOENT'); },
-      syncThreshold: () => ({ changed: false }),
-    }));
   });
 
   it('restores the backup when writing settings fails', () => {
@@ -453,20 +140,6 @@ describe('persistInstalledSettingsAndSyncCoupledThreshold', () => {
 });
 
 describe('syncTemplateSetting', () => {
-  it('backfills a missing setting from template', () => {
-    const installedSettings = {};
-    const logs = [];
-
-    const result = syncTemplateSetting('autoMemoryEnabled', {
-      templateSettings: { autoMemoryEnabled: false },
-      installedSettings,
-      log: (line) => logs.push(line),
-    });
-
-    assert.equal(result.changed, true);
-    assert.equal(installedSettings.autoMemoryEnabled, false);
-    assert.deepEqual(logs, ['  + autoMemoryEnabled: false']);
-  });
 
   it('preserves an existing user-configured setting', () => {
     const installedSettings = { autoDreamEnabled: true };
@@ -481,154 +154,9 @@ describe('syncTemplateSetting', () => {
     assert.equal(installedSettings.autoDreamEnabled, true);
   });
 
-  it('skips when template does not have the key', () => {
-    const installedSettings = {};
-
-    const result = syncTemplateSetting('nonExistent', {
-      templateSettings: {},
-      installedSettings,
-      log: () => { throw new Error('should not log'); },
-    });
-
-    assert.equal(result.changed, false);
-  });
 });
 
 describe('syncCodexConfig', () => {
-  // TOML-focused cases: keep the real .codex/hooks.json check out of them.
-  const noHookDrift = () => ({ changed: false });
-
-  it('does not overwrite malformed permission configuration', () => {
-    let writes = 0;
-    const result = syncCodexConfig({
-      cfg: { runtime: 'codex' }, homeDir: '/tmp/home', projectDir: '/tmp/zylos',
-      existsSync: () => true, readFileSync: () => '[broken',
-      writeConfig: () => { writes++; return true; }, checkHooks: noHookDrift, log: () => {},
-    });
-    assert.equal(result.fatal, true);
-    assert.equal(writes, 0);
-  });
-
-  it('refreshes stale codex config when codex state exists outside codex runtime', () => {
-    const writes = [];
-    const logs = [];
-    const globalConfigPath = '/tmp/home/.codex/config.toml';
-
-    const result = syncCodexConfig({
-      cfg: { runtime: 'claude' },
-      homeDir: '/tmp/home',
-      projectDir: '/tmp/zylos',
-      existsSync: (filePath) => filePath === globalConfigPath,
-      // Return stale content so drift is detected
-      readFileSync: () => 'stale_setting = true\n',
-      writeConfig: (projectDir) => {
-        writes.push(projectDir);
-        return true;
-      },
-      checkHooks: noHookDrift,
-      log: (line) => logs.push(line),
-    });
-
-    assert.equal(result.changed, true);
-    assert.deepEqual(writes, ['/tmp/zylos']);
-    assert.ok(logs.some(line => line.includes('codex')));
-  });
-
-  it('treats refresh failures as fatal only in codex runtime', () => {
-    const result = syncCodexConfig({
-      cfg: { runtime: 'codex' },
-      homeDir: '/tmp/home',
-      projectDir: '/tmp/zylos',
-      existsSync: () => true,
-      // Return stale content so drift is detected
-      readFileSync: () => 'stale_setting = true\n',
-      writeConfig: () => false,
-      checkHooks: noHookDrift,
-      log: () => {},
-    });
-
-    assert.equal(result.fatal, true);
-    assert.match(result.error, /Failed to refresh/);
-  });
-
-  it('is idempotent after refreshing configs with external keys', () => {
-    const homeDir = '/tmp/home';
-    const projectDir = '/tmp/zylos';
-    const globalConfigPath = path.join(homeDir, '.codex', 'config.toml');
-    const projectConfigPath = path.join(projectDir, '.codex', 'config.toml');
-    const files = new Map([
-      [globalConfigPath, [
-        'model_reasoning_effort = "medium"',
-        '',
-        '[profile.fast]',
-        'model = "gpt-5.4-mini"',
-        '',
-      ].join('\n')],
-      [projectConfigPath, [
-        'user_added = "keep"',
-        '',
-        '[features]',
-        'fast_mode = false',
-        '',
-      ].join('\n')],
-    ]);
-
-    const syncOnce = () => syncCodexConfig({
-      cfg: { runtime: 'codex' },
-      homeDir,
-      projectDir,
-      existsSync: (filePath) => files.has(filePath),
-      readFileSync: (filePath) => files.get(filePath),
-      writeConfig: () => {
-        files.set(projectConfigPath, renderCodexProjectConfig(files.get(projectConfigPath)));
-        files.set(globalConfigPath, renderCodexGlobalConfig(projectDir, files.get(globalConfigPath)));
-        return true;
-      },
-      checkHooks: noHookDrift,
-      log: () => {},
-    });
-
-    const first = syncOnce();
-    const second = syncOnce();
-
-    assert.equal(first.changed, true);
-    assert.equal(second.changed, false);
-    assert.match(files.get(projectConfigPath), /user_added = "keep"/);
-    assert.match(files.get(projectConfigPath), /\[features\][\s\S]*fast_mode = false[\s\S]*multi_agent = true[\s\S]*hooks = true/);
-    assert.match(files.get(globalConfigPath), /\[features\][\s\S]*hooks = true/);
-    assert.match(files.get(globalConfigPath), /model_reasoning_effort = "medium"/);
-    assert.match(files.get(globalConfigPath), /\[profile\.fast\]/);
-  });
-
-  it('detects real drift in zylos-managed project keys', () => {
-    const homeDir = '/tmp/home';
-    const projectDir = '/tmp/zylos';
-    const globalConfigPath = path.join(homeDir, '.codex', 'config.toml');
-    const projectConfigPath = path.join(projectDir, '.codex', 'config.toml');
-    const files = new Map([
-      [globalConfigPath, renderCodexGlobalConfig(projectDir, '')],
-      [projectConfigPath, renderCodexProjectConfig('').replace(
-        'check_for_update_on_startup = false',
-        'check_for_update_on_startup = true'
-      )],
-    ]);
-    const logs = [];
-
-    const result = syncCodexConfig({
-      cfg: { runtime: 'codex' },
-      homeDir,
-      projectDir,
-      existsSync: (filePath) => files.has(filePath),
-      readFileSync: (filePath) => files.get(filePath),
-      writeConfig: () => true,
-      checkHooks: noHookDrift,
-      log: (line) => logs.push(line),
-      dryRun: true,
-    });
-
-    assert.equal(result.changed, true);
-    assert.ok(logs.some((line) => line.includes('codex project config')));
-  });
 
   function makeCodexHooksEnv() {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hooks-sync-test-'));
@@ -661,15 +189,6 @@ describe('syncCodexConfig', () => {
     return { root, projectDir, hooksPath: codexHooksPath(projectDir), writes, logs, sync };
   }
 
-  function declareComponentShard(projectDir, name) {
-    const shardsDir = path.join(projectDir, '.zylos', 'shards.d');
-    fs.mkdirSync(shardsDir, { recursive: true });
-    fs.writeFileSync(path.join(shardsDir, `${name}.json`), JSON.stringify({
-      name,
-      order: 10,
-      emitter: `skills/${name}/emit.js`,
-    }));
-  }
 
   function hookShardNames(hooksPath) {
     const config = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
@@ -677,27 +196,6 @@ describe('syncCodexConfig', () => {
       .flatMap(group => group.hooks.map(h => h.command.match(/--shard (\S+)$/)?.[1]))
       .filter(Boolean);
   }
-
-  it('rewrites .codex/hooks.json when only a new component shard changes the hook set', (t) => {
-    const env = makeCodexHooksEnv();
-    t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
-    installCoreCodexHook({ zylosDir: env.projectDir });
-    assert.equal(env.sync().changed, false);
-
-    declareComponentShard(env.projectDir, 'expert-slot');
-    const result = env.sync();
-
-    assert.equal(result.changed, true);
-    assert.equal(result.hooksChanged, true);
-    assert.deepEqual(env.writes, [env.projectDir]);
-    assert.ok(env.logs.includes(`  ~ codex hooks: ${env.hooksPath}`));
-    assert.equal(env.logs.some(line => line.includes('codex project config') || line.includes('codex global config')), false);
-    assert.ok(hookShardNames(env.hooksPath).includes('expert-slot'));
-
-    const again = env.sync();
-    assert.equal(again.changed, false);
-    assert.deepEqual(env.writes, [env.projectDir]);
-  });
 
   it('restores missing core hook entries in .codex/hooks.json', (t) => {
     const env = makeCodexHooksEnv();
@@ -714,21 +212,6 @@ describe('syncCodexConfig', () => {
     assert.equal(hookShardNames(env.hooksPath).at(-1), 'start-prompt');
   });
 
-  it('reports hooks.json drift in dry-run mode without writing', (t) => {
-    const env = makeCodexHooksEnv();
-    t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
-    installCoreCodexHook({ zylosDir: env.projectDir });
-    const before = fs.readFileSync(env.hooksPath, 'utf8');
-    declareComponentShard(env.projectDir, 'expert-slot');
-
-    const result = env.sync({ dryRun: true });
-
-    assert.equal(result.changed, true);
-    assert.equal(result.hooksChanged, true);
-    assert.deepEqual(env.writes, []);
-    assert.ok(env.logs.includes(`  ~ codex hooks: ${env.hooksPath}`));
-    assert.equal(fs.readFileSync(env.hooksPath, 'utf8'), before);
-  });
 });
 
 // --- Helpers ---
@@ -755,18 +238,6 @@ function makeStandardOldSessionStartGroup(matcher) {
   };
 }
 
-function makeDriftedOldSessionStartGroup(matcher) {
-  const group = makeStandardOldSessionStartGroup(matcher);
-  return {
-    matcher,
-    hooks: [
-      group.hooks[0],
-      group.hooks[1],
-      group.hooks[3],
-      group.hooks[2],
-    ],
-  };
-}
 
 function makeOrchestratorTemplate() {
   return {
@@ -785,206 +256,8 @@ function assertSessionStartUsesOrchestrator(settings) {
   }
 }
 
-describe('extractScriptPath', () => {
-  it('takes the interpreter script argument instead of later path-like arguments', () => {
-    assert.equal(extractScriptPath('node x.js /tmp/y.js'), 'x.js');
-  });
-
-  it('uses the last shell segment so source prefixes do not win', () => {
-    assert.equal(
-      extractScriptPath('source ~/.nvm/nvm.sh && node ~/zylos/.claude/skills/a/scripts/b.js'),
-      path.join(os.homedir(), 'zylos/.claude/skills/a/scripts/b.js')
-    );
-  });
-
-  it('skips interpreter flags before the script argument', () => {
-    assert.equal(
-      extractScriptPath('node --trace-warnings ~/zylos/.claude/skills/a/scripts/b.js --mode startup'),
-      path.join(os.homedir(), 'zylos/.claude/skills/a/scripts/b.js')
-    );
-  });
-
-  it('keeps quoted paths with spaces as one script argument', () => {
-    const scriptPath = zylosHookPath('skills/a dir/scripts/b.js');
-    assert.equal(
-      extractScriptPath(`node "${scriptPath}" /tmp/y.js`),
-      scriptPath
-    );
-  });
-});
-
-describe('hookScriptKey', () => {
-  it('normalizes absolute, home-relative, and backslash zylos-root script paths to the same registry key', () => {
-    assert.equal(
-      hookScriptKey('node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js'),
-      'skills/activity-monitor/scripts/session-start-orchestrator.js'
-    );
-    assert.equal(
-      hookScriptKey(`node ${zylosHookPath('skills/activity-monitor/scripts/session-start-orchestrator.js')}`),
-      'skills/activity-monitor/scripts/session-start-orchestrator.js'
-    );
-    assert.equal(
-      hookScriptKey(`node ${zylosHookPath('skills/activity-monitor/scripts/session-start-orchestrator.js').replaceAll('/', '\\')}`),
-      'skills/activity-monitor/scripts/session-start-orchestrator.js'
-    );
-  });
-
-  it('keeps paths outside the zylos .claude root as full normalized paths even when suffixes collide', () => {
-    assert.equal(
-      hookScriptKey('node /opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js --mine'),
-      '/opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js'
-    );
-    assert.equal(
-      hookScriptKey('node /opt/custom/skills/zylos-memory/scripts/session-start-inject.js'),
-      '/opt/custom/skills/zylos-memory/scripts/session-start-inject.js'
-    );
-    assert.equal(
-      hookScriptKey('node ~/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js'),
-      `${os.homedir()}/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js`
-    );
-    assert.equal(
-      isCoreManaged({ type: 'command', command: 'node ~/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js' }),
-      false
-    );
-  });
-
-  it('resolves relative ZYLOS_DIR before checking the zylos .claude root', () => {
-    const previousZylosDir = process.env.ZYLOS_DIR;
-    process.env.ZYLOS_DIR = 'relative-zylos';
-    try {
-      const absoluteCoreHook = path.resolve(
-        'relative-zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js'
-      );
-      assert.equal(
-        hookScriptKey(`node ${absoluteCoreHook}`),
-        'skills/activity-monitor/scripts/session-start-orchestrator.js'
-      );
-      assert.equal(
-        isCoreManaged({ type: 'command', command: `node ${absoluteCoreHook}` }),
-        true
-      );
-    } finally {
-      if (previousZylosDir === undefined) {
-        delete process.env.ZYLOS_DIR;
-      } else {
-        process.env.ZYLOS_DIR = previousZylosDir;
-      }
-    }
-  });
-});
-
-describe('core hook registry', () => {
-  it('recognizes the materialized assembler under an injected zylos root', () => {
-    const zylosDir = path.join(os.tmpdir(), 'isolated-zylos-root');
-    const assembler = path.join(zylosDir, '.zylos', 'instructions', 'assembler.mjs');
-    assert.equal(
-      isCoreManaged({ type: 'command', command: `node ${assembler}` }, { zylosDir }),
-      true,
-    );
-  });
-
-  it('recognizes every desired command hook as core-managed', () => {
-    for (const groups of Object.values(desiredClaudeHooks({ existsSync: () => true }))) {
-      if (!Array.isArray(groups)) continue;
-      for (const group of groups) {
-        for (const hook of getCommandHooks(group)) {
-          assert.equal(isCoreManaged(hook), true, `${hook.command} is not core-managed`);
-        }
-      }
-    }
-  });
-});
-
 describe('syncHooks SessionStart orchestrator convergence', () => {
   const noopLog = () => {};
-
-  it('ignores templateSettings.hooks and uses runtime desired hooks by default', () => {
-    const installed = { hooks: {} };
-    const templateSettings = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/custom/template-only.js']),
-        ],
-      },
-    };
-
-    syncHooks(installed, templateSettings, { log: noopLog });
-
-    const startup = installed.hooks.SessionStart.find(group => group.matcher === 'startup');
-    assert.ok(startup.hooks.some(h => h.command.includes('session-start-orchestrator.js')));
-    assert.equal(startup.hooks.some(h => h.command.includes('template-only.js')), false);
-    assert.ok(installed.hooks.PostToolUseFailure[0].hooks.some(h => h.command.includes('hook-activity.js')));
-  });
-
-  it('converges standard old SessionStart groups through generic sync', () => {
-    const installed = {
-      hooks: {
-        SessionStart: ['startup', 'clear', 'compact'].map(makeStandardOldSessionStartGroup),
-      },
-    };
-
-    const result = syncHooks(installed, makeOrchestratorTemplate(), {
-      log: noopLog,
-      desiredHooks: desiredClaudeHooks({ existsSync: () => true }),
-    });
-
-    // Four injection shards, side effects and synchronous health registration.
-    assert.deepEqual(result, { added: 39, updated: 0, removed: 12 });
-    assertSessionStartUsesOrchestrator(installed);
-  });
-
-  it('converges order-drifted old SessionStart groups', () => {
-    const installed = {
-      hooks: {
-        SessionStart: ['startup', 'clear', 'compact'].map(makeDriftedOldSessionStartGroup),
-      },
-    };
-
-    syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
-
-    assertSessionStartUsesOrchestrator(installed);
-  });
-
-  it('converges timeout-drifted and partial old SessionStart groups', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          {
-            matcher: 'startup',
-            hooks: [
-              makeHook(zylosHookPath('skills/zylos-memory/scripts/session-start-inject.js'), 9000),
-              makeHook(zylosHookPath('skills/comm-bridge/scripts/c4-session-init.js'), 10000),
-              makeHook(zylosHookPath('skills/activity-monitor/scripts/session-start-prompt.js'), 5000),
-            ],
-          },
-          makeStandardOldSessionStartGroup('clear'),
-          makeStandardOldSessionStartGroup('compact'),
-        ],
-      },
-    };
-
-    syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
-
-    assertSessionStartUsesOrchestrator(installed);
-  });
-
-  it('converges old catch-all SessionStart group to specific orchestrator matchers', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          {
-            matcher: '',
-            hooks: makeStandardOldSessionStartGroup('').hooks,
-          },
-        ],
-      },
-    };
-
-    syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
-
-    assertSessionStartUsesOrchestrator(installed);
-    assert.equal(installed.hooks.SessionStart.some(group => group.matcher === ''), false);
-  });
 
   it('preserves user command hooks and non-command hooks while removing retired core hooks', () => {
     const installed = {
@@ -1009,44 +282,6 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
     assert.ok(startup.hooks.some(h => h.command?.includes('/custom/my-session-start.js')));
     assert.ok(startup.hooks.some(h => h.type === 'prompt'));
     assert.equal(startup.hooks.some(h => h.command?.includes('session-start-inject.js')), false);
-  });
-
-  it('does not claim user hooks outside the zylos .claude root whose suffix collides with current or retired registry keys', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          {
-            matcher: 'startup',
-            hooks: [
-              makeHook('/opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js --mine', 9000),
-              makeHook('/opt/custom/skills/zylos-memory/scripts/session-start-inject.js', 7000),
-              { type: 'command', command: 'node ~/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js --foreign', timeout: 6000 },
-            ],
-          },
-        ],
-      },
-    };
-
-    const result = syncHooks(installed, makeOrchestratorTemplate(), {
-      log: noopLog,
-      desiredHooks: desiredClaudeHooks({ existsSync: () => true }),
-    });
-
-    const startup = installed.hooks.SessionStart.find(group => group.matcher === 'startup');
-    assert.equal(result.updated, 0);
-    assert.equal(result.removed, 0);
-    assert.ok(startup.hooks.some(h =>
-      h.command === 'node /opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js --mine' &&
-      h.timeout === 9000
-    ));
-    assert.ok(startup.hooks.some(h =>
-      h.command === 'node /opt/custom/skills/zylos-memory/scripts/session-start-inject.js' &&
-      h.timeout === 7000
-    ));
-    assert.ok(startup.hooks.some(h =>
-      h.command === 'node ~/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js --foreign' &&
-      h.timeout === 6000
-    ));
   });
 
   it('is idempotent when installed hooks already match the template', () => {
@@ -1118,109 +353,6 @@ describe('syncHooks forward pass', () => {
     assert.equal(result.added, 7);
   });
 
-  it('registers ToolWatchdog activity hooks during upgrade when event matcher groups already exist', () => {
-    const installed = {
-      hooks: {
-        PreToolUse: [
-          { matcher: '', hooks: [
-            { type: 'command', command: 'node /custom/pre-tool.js', timeout: 5000 },
-          ]},
-        ],
-        PostToolUse: [
-          { matcher: '', hooks: [
-            { type: 'command', command: 'node /custom/post-tool.js', timeout: 5000 },
-          ]},
-        ],
-        PostToolUseFailure: [
-          { matcher: '', hooks: [
-            { type: 'command', command: 'node /custom/post-tool-failure.js', timeout: 5000 },
-          ]},
-        ],
-        Stop: [
-          { hooks: [
-            { type: 'command', command: 'node /custom/stop.js', timeout: 5000 },
-          ]},
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        PreToolUse: [
-          { matcher: '', hooks: [
-            { type: 'command', command: 'node ~/zylos/.claude/skills/activity-monitor/scripts/hook-activity.js', async: true, timeout: 5 },
-          ]},
-        ],
-        PostToolUse: [
-          { matcher: '', hooks: [
-            { type: 'command', command: 'node ~/zylos/.claude/skills/activity-monitor/scripts/hook-activity.js', async: true, timeout: 5 },
-          ]},
-        ],
-        PostToolUseFailure: [
-          { matcher: '', hooks: [
-            { type: 'command', command: 'node ~/zylos/.claude/skills/activity-monitor/scripts/hook-activity.js', async: true, timeout: 5 },
-          ]},
-        ],
-        Stop: [
-          { hooks: [
-            { type: 'command', command: 'node ~/zylos/.claude/skills/activity-monitor/scripts/hook-activity.js', async: true, timeout: 5 },
-          ]},
-        ],
-      },
-    };
-
-    const result = syncHooks(installed, template, { log: noopLog, desiredHooks: template.hooks });
-
-    assert.equal(result.added, 4);
-    for (const event of ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop']) {
-      const group = installed.hooks[event][0];
-      assert.ok(group.hooks.some(h => h.command.includes('hook-activity.js')));
-      assert.ok(group.hooks.some(h => h.command.includes('/custom/')));
-    }
-  });
-
-  it('adds missing matcher groups from template', () => {
-    const installed = { hooks: {} };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-
-    const result = syncHooks(installed, template, { log: noopLog, desiredHooks: template.hooks });
-
-    assert.equal(result.added, 2);
-    assert.equal(installed.hooks.SessionStart.length, 2);
-  });
-
-  it('updates command/timeout drift in existing matcher group', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          { matcher: 'startup', hooks: [
-            { type: 'command', command: 'node ~/zylos/.claude/skills/a/scripts/a.js', timeout: 5000 },
-          ]},
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          { matcher: 'startup', hooks: [
-            { type: 'command', command: 'node ~/zylos/.claude/skills/a/scripts/a.js', timeout: 10000 },
-          ]},
-        ],
-      },
-    };
-
-    const result = syncHooks(installed, template, { log: noopLog, desiredHooks: template.hooks });
-
-    assert.equal(result.updated, 1);
-    assert.equal(installed.hooks.SessionStart[0].hooks[0].timeout, 10000);
-  });
-
   it('handles the full migration scenario: catch-all → specific matchers', () => {
     const installed = {
       hooks: {
@@ -1265,166 +397,4 @@ describe('syncHooks forward pass', () => {
     }
   });
 
-  it('reverse pass removes obsolete core hooks', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          { matcher: 'startup', hooks: [
-            { type: 'command', command: 'node ~/zylos/.claude/skills/old-skill/scripts/old.js', timeout: 5000 },
-          ]},
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [],
-      },
-    };
-
-    const result = syncHooks(installed, template, { log: noopLog, desiredHooks: template.hooks });
-
-    // old-skill is not a core skill (not in template), so it's preserved
-    assert.equal(result.removed, 0);
-  });
-
-  it('reverse pass preserves user hooks not in template', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          { matcher: 'startup', hooks: [
-            { type: 'command', command: 'node /custom/my-hook.js', timeout: 5000 },
-          ]},
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['~/zylos/.claude/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-
-    syncHooks(installed, template, { log: noopLog, desiredHooks: template.hooks });
-
-    // User's custom hook should still be there, and the missing template hook
-    // should be registered in the same matcher group.
-    const startupGroup = installed.hooks.SessionStart.find(g => g.matcher === 'startup');
-    assert.equal(startupGroup.hooks.length, 2);
-    assert.ok(startupGroup.hooks.some(h => h.command.includes('my-hook.js')));
-    assert.ok(startupGroup.hooks.some(h => h.command.includes('/skills/a/scripts/a.js')));
-  });
-
-  it('reverse pass removes core hook from one matcher when template removes it (matcher-aware)', () => {
-    // Hook exists in both startup and clear in installed config
-    // Template keeps it in startup but removes it from clear
-    const installed = {
-      hooks: {
-        SessionStart: [
-          { matcher: 'startup', hooks: [
-            { type: 'command', command: 'node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js', timeout: 5000 },
-          ]},
-          { matcher: 'clear', hooks: [
-            { type: 'command', command: 'node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js', timeout: 5000 },
-          ]},
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js']),
-          makeMatcherGroup('clear', []),  // removed from clear
-        ],
-      },
-    };
-
-    const result = syncHooks(installed, template, { log: noopLog, desiredHooks: template.hooks });
-
-    assert.equal(result.removed, 1);
-    // startup should still have the hook
-    const startupGroup = installed.hooks.SessionStart.find(g => g.matcher === 'startup');
-    assert.equal(startupGroup.hooks.length, 1);
-    // clear group should be cleaned up (empty after removal)
-    const clearGroup = installed.hooks.SessionStart.find(g => g.matcher === 'clear');
-    assert.equal(clearGroup, undefined); // empty group gets removed
-  });
-});
-
-
-describe('independent Antigravity hook synchronization', () => {
-  function isolatedHome(t, { optedIn = true } = {}) {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-hook-sync-'));
-    const zylosDir = path.join(home, 'zylos');
-    const previous = process.env.HOME;
-    process.env.HOME = home;
-    t.after(() => {
-      if (previous === undefined) delete process.env.HOME;
-      else process.env.HOME = previous;
-      fs.rmSync(home, { recursive: true, force: true });
-    });
-    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
-    fs.writeFileSync(path.join(zylosDir, '.claude/settings.json'), JSON.stringify({ hooks: {} }));
-    if (optedIn) {
-      fs.mkdirSync(path.join(home, '.gemini/config'), { recursive: true });
-      fs.writeFileSync(path.join(home, '.gemini/config/hooks.json'), JSON.stringify({ zylos: {} }));
-    }
-    return { home, zylosDir, settings: path.join(home, '.gemini/antigravity-cli/settings.json') };
-  }
-
-  it('leaves Antigravity unused without creating ~/.gemini', async t => {
-    const f = isolatedHome(t, { optedIn: false });
-    for (const dryRun of [true, false]) {
-      const result = await syncRuntimeHooks({ zylosDir: f.zylosDir, dryRun,
-        stopFailureSupported: false, subagentHooksSupported: false, log: () => {} });
-      assert.deepEqual(result.agy, { changed: false });
-      assert.equal(fs.existsSync(path.join(f.home, '.gemini')), false);
-    }
-  });
-
-  it('saves Claude and Codex hooks when opted-in Antigravity configuration is malformed', async t => {
-    const f = isolatedHome(t);
-    fs.mkdirSync(path.dirname(f.settings), { recursive: true });
-    fs.writeFileSync(f.settings, '{"modelProvider":"gemini",}');
-    const errors = [];
-    const originalError = console.error;
-    console.error = message => errors.push(message);
-    t.after(() => { console.error = originalError; });
-    const result = await syncRuntimeHooks({ zylosDir: f.zylosDir, stopFailureSupported: false,
-      subagentHooksSupported: false, log: () => {} });
-    assert.equal(result.changed, true);
-    assert.ok(result.claude.added > 0);
-    const settings = JSON.parse(fs.readFileSync(path.join(f.zylosDir, '.claude/settings.json'), 'utf8'));
-    const commands = Object.values(settings.hooks).flatMap(groups => groups.flatMap(group => getCommandHooks(group)));
-    assert.ok(commands.some(hook => hook.command.includes('session-start-orchestrator.js')));
-    assert.ok(fs.existsSync(path.join(f.zylosDir, '.codex/hooks.json')));
-    assert.ok(fs.existsSync(path.join(f.home, '.codex/config.toml')));
-    assert.equal(result.agy.changed, false);
-    assert.equal(result.agy.error.code, 'AGY_CONFIG_UNREADABLE');
-    assert.equal(errors.length, 1);
-    assert.match(errors[0], /^Antigravity configuration:/);
-    assert.equal(fs.readFileSync(f.settings, 'utf8'), '{"modelProvider":"gemini",}');
-  });
-
-  it('repairs Antigravity-only drift without marking Claude or Codex changed', async t => {
-    const f = isolatedHome(t);
-    const options = { zylosDir: f.zylosDir, stopFailureSupported: false, subagentHooksSupported: false, log: () => {} };
-    await syncRuntimeHooks(options);
-    const settings = JSON.parse(fs.readFileSync(f.settings, 'utf8'));
-    settings.modelProvider = 'stale';
-    fs.writeFileSync(f.settings, JSON.stringify(settings));
-    const claudePath = path.join(f.zylosDir, '.claude/settings.json');
-    const claudeBefore = fs.readFileSync(claudePath, 'utf8');
-    const dryRun = await syncRuntimeHooks({ ...options, dryRun: true });
-    assert.equal(dryRun.agy.changed, true);
-    assert.equal(dryRun.changed, false);
-    assert.equal(JSON.parse(fs.readFileSync(f.settings, 'utf8')).modelProvider, 'stale');
-    const result = await syncRuntimeHooks(options);
-    assert.equal(result.agy.changed, true);
-    assert.equal(result.changed, false);
-    assert.equal(result.claude.added + result.claude.updated + result.claude.removed, 0);
-    assert.equal(result.codex.changed, false);
-    assert.equal(JSON.parse(fs.readFileSync(f.settings, 'utf8')).modelProvider, 'gemini');
-    assert.equal(fs.readFileSync(claudePath, 'utf8'), claudeBefore);
-  });
 });

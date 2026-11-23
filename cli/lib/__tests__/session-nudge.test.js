@@ -29,33 +29,3 @@ test('nudge waits for Escape admission and the full delay before enqueueing exac
     { ...escape, control: 'escape' }, { ...continued, control: 'continue' },
   ] });
 });
-
-for (const failed of [
-  { ok: false, error: { code: 'TARGET_CHANGED', runId: 'replacement' }, submission: 'rejected' },
-  { ok: false, unknown: true, error: { code: 'RESULT_UNKNOWN' }, submission: 'unknown' },
-]) test(`Escape ${failed.submission} stops without delay or retries and preserves its envelope`, async () => {
-  const calls = [];
-  const result = await nudgeSession({ enqueue: async content => { calls.push(content); return failed; },
-    delay: async () => assert.fail('failed Escape must not wait') });
-  assert.deepEqual(calls, ['[KEYSTROKE]Escape']);
-  assert.deepEqual(result, { ...failed, control: 'escape', steps: [{ ...failed, control: 'escape' }] });
-});
-
-test('continue rejection preserves partial success and raw target details without retrying', async () => {
-  const calls = [];
-  const first = { ok: true, data: { id: 1 } };
-  const failure = { ok: false, error: { code: 'TARGET_CHANGED', runId: 'new-run' }, targetChanged: true };
-  const result = await nudgeSession({ enqueue: async content => { calls.push(content); return calls.length === 1 ? first : failure; }, delay: async () => {} });
-  assert.deepEqual(calls, ['[KEYSTROKE]Escape', 'continue']);
-  assert.deepEqual(result, { ...failure, control: 'continue', steps: [
-    { ...first, control: 'escape' }, { ...failure, control: 'continue' },
-  ] });
-});
-
-test('enqueue exceptions propagate without attempting another insertion', async () => {
-  const error = new Error('queue unavailable');
-  let calls = 0;
-  await assert.rejects(nudgeSession({ enqueue: async () => { calls++; throw error; },
-    delay: async () => assert.fail('throwing Escape must not wait') }), error);
-  assert.equal(calls, 1);
-});

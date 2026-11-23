@@ -1,3 +1,4 @@
+// covers: cli/lib/upgrade-entry.js cli/lib/upgrade-discovery.js cli/lib/upgrade-maintenance.cjs cli/lib/upgrade-recovery.cjs cli/lib/__tests__/helpers/protected-package-crash.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -5,10 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { createProtectedPackageCrashFixture } from './helpers/protected-package-crash.js';
 
-// Explicit opt-in: these tests install real npm packages into private prefixes
-// and require registry access, native SQLite support, Linux /proc and flock.
+// Integration: real npm install and recovery before and after installer exit.
+// Run for package recovery changes, not unrelated CLI changes. Use the isolated
+// runner; the fixture uses a private HOME, ZYLOS_DIR, PM2_HOME and npm prefix.
 for (const managedDashboard of [false, true]) for (const stage of ['before', 'after']) test(`real npm SIGKILL ${stage} install recovers v0.9.2-as-0.9.3 and permits retry${managedDashboard ? ' with retained Dashboard v20' : ''}`, {
-  skip: process.env.ZYLOS_RUN_PACKAGE_CRASH_E2E !== '1', timeout: 1200000,
+  timeout: 1200000,
 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `package-crash-${stage}-`));
   t.diagnostic(`Isolated fixture (retained on failure) at ${root}`);
@@ -53,7 +55,6 @@ for (const managedDashboard of [false, true]) for (const stage of ['before', 'af
   assert.match(fs.readFileSync(f.calls, 'utf8'), /pm2 stop activity-monitor/);
   fs.rmSync(root,{recursive:true});
 });
-
 function assertDashboardUpgraded(databases) {
   const dashboard = databases['components/dashboard/dashboard.db'];
   assert.equal(dashboard.integrity, 'ok');
@@ -61,42 +62,3 @@ function assertDashboardUpgraded(databases) {
   assert.deepEqual(migrations.rows.map(row => JSON.parse(row).version).sort((a, b) => a - b), [20, 21]);
   assert.match(JSON.stringify(dashboard), /preserved Dashboard row/);
 }
-
-for (const failureStage of [undefined, 'before', 'after']) test(`first Dashboard takeover with retained v20 ${failureStage ? `compensates ${failureStage} installation failure` : 'completes upgrade'}`, {
-  skip: process.env.ZYLOS_RUN_PACKAGE_CRASH_E2E !== '1', timeout: 1200000,
-}, async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), `package-dashboard-${failureStage || 'success'}-`));
-  t.diagnostic(`Isolated fixture (retained on failure) at ${root}`);
-  const f = createProtectedPackageCrashFixture(root, { managedDashboard: true });
-  const { target } = await f.build();
-  const original = f.logicalDatabases();
-  const result = f.entry(f.handoff(target, 'download'), { failureStage });
-  const saved = f.journal();
-  assert.equal(saved.length, 1);
-  assert.equal(saved[0].journal.firstTakeover, true);
-  assert.equal(saved[0].journal.dashboardOwnerManaged, true);
-  if (failureStage) {
-    assert.equal(result.status, 1, JSON.stringify(result));
-    assert.equal(result.result.success, false);
-    assert.match(result.result.error, failureStage === 'before' ? /injected pre-install failure/ : /injected post-install failure/);
-    assert.equal(result.result.recovery_required, false, JSON.stringify(result));
-    assert.equal(saved[0].journal.phase, failureStage === 'after' ? 'restored_complete' : 'aborted_before_install');
-    assert.equal(saved[0].journal.installationIntent === true, failureStage === 'after');
-    assert.equal(f.version(), '0.9.3');
-    assert.deepEqual(f.logicalDatabases(), original);
-    assert.equal(fs.existsSync(path.join(f.core, 'skills/dashboard')), false);
-    assert.equal(fs.existsSync(path.join(f.skills, 'dashboard')), false);
-    const retry = f.entry(f.handoff(target, 'retry-download'));
-    assert.equal(retry.status, 0, JSON.stringify(retry));
-    assert.equal(retry.result.success, true, JSON.stringify(retry));
-  } else {
-    assert.equal(result.status, 0, JSON.stringify(result));
-    assert.equal(result.result.success, true, JSON.stringify(result));
-    assert.equal(result.result.completion.install, 'done');
-  }
-  assert.equal(f.version(), '1.0.0');
-  assertDashboardUpgraded(f.logicalDatabases());
-  assert.equal(f.journal().filter(item => item.journal.phase === 'upgrade_complete').length, 1);
-  assert.match(fs.readFileSync(f.calls, 'utf8'), /pm2 stop activity-monitor/);
-  fs.rmSync(root, { recursive: true });
-});

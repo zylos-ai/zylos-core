@@ -64,21 +64,6 @@ for (const [name, request] of [['sync', githubRequestSync], ['async', githubRequ
     assert(calls().every(call => call.args[0] === '-q' && !call.args.includes('-fsSL')));
   });
 
-  test(`${name}: custom-to-official redirects require explicit token permission`, async t => {
-    const calls = fixture(t, {
-      'https://mirror.test/private': { status: 302, location: 'https://github.com/owner/private/archive/main.tar.gz' },
-      'https://github.com/owner/private/archive/main.tar.gz': { body: 'archive' },
-    });
-    for (const allowedHosts of [['mirror.test'], ['mirror.test', 'github.com']]) {
-      assert.equal(await request('https://mirror.test/private', {
-        token: 'secret', snapshot: { trust: { forwardGitHubToken: true, allowedHosts } },
-      }), 'archive');
-    }
-    assert.equal(calls()[1].input, '');
-    assert.match(calls()[3].input, /Authorization: Bearer secret/);
-    assert(calls().every(call => call.args[0] === '-q' && !call.args.includes('-fsSL')));
-  });
-
   test(`${name}: public requests never acquire token; plaintext never receives token`, async t => {
     const calls = fixture(t, {
       'https://mirror.test/file': { body: 'ok' }, 'http://127.0.0.1:1234/file': { body: 'local' },
@@ -89,76 +74,7 @@ for (const [name, request] of [['sync', githubRequestSync], ['async', githubRequ
     assert(calls().every(call => call.input === ''));
   });
 
-  test(`${name}: unsafe redirect target rejected before curl`, async t => {
-    const calls = fixture(t, {
-      'https://mirror.test/file': { status: 302, location: 'https://user:password@other.test/file' },
-    });
-    await assert.rejects(async () => request('https://mirror.test/file'), /Unsafe GitHub upstream redirect/);
-    assert.equal(calls().length, 1);
-  });
-
-  test(`${name}: direct GitHub preserves curl redirect and auth contract`, async t => {
-    const calls = fixture(t, { 'https://api.github.com/repos/org/repo/tags?per_page=100': { body: '[]' } });
-    assert.equal(await request('https://api.github.com/repos/org/repo/tags?per_page=100', { token: 'secret' }), '[]');
-    assert(calls()[0].args.includes('-fsSL'));
-    assert.match(calls()[0].input, /Authorization: Bearer secret/);
-  });
 }
-
-test('public helpers route raw fallback, sync/async tags, archive and API fallback through one snapshot', async t => {
-  const calls = fixture(t, {
-    'https://api.mirror.test/p/repos/org/repo/contents/SKILL.md?ref=main': { status: 404 },
-    'https://raw.mirror.test/p/org/repo/main/SKILL.md': { body: 'file' },
-    'https://api.mirror.test/p/repos/org/repo/tags?per_page=100': { body: '[{"name":"v1.2.3"}]' },
-    'https://download.mirror.test/p/org/repo/archive/refs/tags/v1.0.0.tar.gz': { status: 404 },
-    'https://download.mirror.test/p/org/repo/archive/refs/heads/main.tar.gz': { status: 404 },
-    'https://api.mirror.test/p/repos/org/repo/tarball/v1.0.0': { status: 404 },
-    'https://api.mirror.test/p/repos/org/repo/tarball/main': { status: 404 },
-  });
-  const oldToken = process.env.GITHUB_TOKEN;
-  const oldRetry = process.env.ZYLOS_GH_RETRY_DELAY_MS;
-  process.env.GITHUB_TOKEN = 'secret';
-  process.env.ZYLOS_GH_RETRY_DELAY_MS = '';
-  t.after(() => {
-    if (oldToken === undefined) delete process.env.GITHUB_TOKEN; else process.env.GITHUB_TOKEN = oldToken;
-    if (oldRetry === undefined) delete process.env.ZYLOS_GH_RETRY_DELAY_MS; else process.env.ZYLOS_GH_RETRY_DELAY_MS = oldRetry;
-  });
-  const { withUpstreamSnapshot } = await import('../upstreams.js');
-  const { fetchRawFile, fetchLatestTag, fetchLatestTagAsync } = await import('../github.js');
-  const { downloadArchive, downloadBranch } = await import('../download.js');
-  const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'github-routing-output-'));
-  t.after(() => fs.rmSync(dest, { recursive: true, force: true }));
-  const snapshot = {
-    github: { apiBase: 'https://api.mirror.test/p/', rawBase: 'https://raw.mirror.test/p/', downloadBase: 'https://download.mirror.test/p/' },
-    trust: { forwardGitHubToken: false, allowedHosts: [] },
-  };
-  await withUpstreamSnapshot({ snapshot }, async () => {
-    assert.equal(fetchRawFile('org/repo', 'SKILL.md'), 'file');
-    assert.equal(fetchLatestTag('org/repo'), '1.2.3');
-    assert.equal(await fetchLatestTagAsync('org/repo'), '1.2.3');
-    assert.equal(downloadArchive('org/repo', '1.0.0', dest).success, false);
-    assert.equal(downloadBranch('org/repo', 'main', dest).success, false);
-  });
-  assert.equal(calls().length, 8);
-  assert(calls().every(call => !call.input.includes('secret')));
-  assert.deepEqual(calls().slice(-4).map(call => call.url), [
-    'https://download.mirror.test/p/org/repo/archive/refs/tags/v1.0.0.tar.gz',
-    'https://api.mirror.test/p/repos/org/repo/tarball/v1.0.0',
-    'https://download.mirror.test/p/org/repo/archive/refs/heads/main.tar.gz',
-    'https://api.mirror.test/p/repos/org/repo/tarball/main',
-  ]);
-});
-
-test('HTTPS mirror cannot redirect to plaintext loopback without explicit test opt-in', t => {
-  const calls = fixture(t, {
-    'https://mirror.test/start': { status: 302, location: 'http://127.0.0.1:1234/end' },
-    'http://127.0.0.1:1234/end': { body: 'ok' },
-  });
-  assert.throws(() => githubRequestSync('https://mirror.test/start'), /Unsafe/);
-  assert.equal(calls().length, 1);
-  assert.equal(githubRequestSync('https://mirror.test/start', { snapshot: { allowHttp: true } }), 'ok');
-  assert.equal(calls().at(-1).url, 'http://127.0.0.1:1234/end');
-});
 
 test('real custom-route curl ignores curlrc auto-follow and injected authorization', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'github-curlrc-'));

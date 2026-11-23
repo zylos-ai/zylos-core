@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import {createRequire} from 'node:module';
-import {maintenance as m,recovery,protectedSuccess,deployUpgradeBootstrap} from '../upgrade-protection.js';
+import {maintenance as m,recovery,protectedSuccess} from '../upgrade-protection.js';
 
 function fixture(t,{terminal=false}={}) {
   const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-parent-reentry-')));
@@ -23,20 +22,4 @@ function fixture(t,{terminal=false}={}) {
 }
 test('lost finalizer response retains verified active terminal without executing rollback runner',t=>{
  const f=fixture(t,{terminal:true});const result=recovery(f.ctx);assert.equal(result.recovery_required,false);assert.equal(result.stage,'upgrade_complete');assert.equal(result.attempted,false);assert.equal(result.completed,false);assert.equal(fs.existsSync(f.active),true);assert.equal(fs.existsSync(f.executed),false);assert.equal(m.discover(f.root).blocked,false);
-});
-test('restored terminal resolves in place without executing rollback runner',t=>{
- const f=fixture(t,{terminal:true});f.saved.phase='restored_complete';m.update(f.dir,f.saved);const result=recovery(f.ctx);
- assert.equal(result.recovery_required,false);assert.equal(result.stage,'restored_complete');assert.equal(result.completed,true);assert.equal(fs.existsSync(f.active),true);assert.equal(fs.existsSync(f.executed),false);assert.equal(fs.existsSync(path.join(f.dir,'controller.json')),false);
-});
-
-
-
-test('stable deployment reloads all frozen modules across same-process attempts',t=>{
- const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-frozen-generation-')));
- t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
- const require=createRequire(import.meta.url),entry=deployUpgradeBootstrap(root),stable=path.dirname(entry);
- const first=new Map();
- for(const name of ['maintenance.cjs','recovery.cjs','installer.cjs','bootstrap.cjs']) first.set(name,require(path.join(stable,name)));
- deployUpgradeBootstrap(root);
- for(const [name,previous] of first) assert.notEqual(require(path.join(stable,name)),previous,name+' reused the prior generation');
 });

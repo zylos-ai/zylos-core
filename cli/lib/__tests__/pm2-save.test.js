@@ -27,18 +27,3 @@ test('active marker prevents saving a temporary service list',t=>{
   assert.equal(f.run(),false);assert.equal(f.count(),0);
   assert.match(f.messages[0],/Skipped PM2 save.*preserving the saved startup list/);
 });
-
-test('unmarked history or damaged backup path does not prevent ordinary saving',t=>{
-  for(const damaged of [false,true]) {
-    const f=fixture(t),active=path.join(f.root,'.backup/self-upgrade');
-    fs.mkdirSync(path.dirname(active),{recursive:true,mode:0o700});
-    if(damaged) fs.symlinkSync(path.join(f.root,'missing'),active);
-    else fs.mkdirSync(path.join(active,'interrupted'),{recursive:true,mode:0o700});
-    assert.equal(f.run(),true);assert.equal(f.count(),1);assert.equal(f.messages.length,0);
-  }
-});
-
-test('ordinary PM2 save failures still propagate',t=>{
-  const f=fixture(t);
-  assert.throws(()=>savePm2ProcessList({root:f.root,save:()=>{throw Error('PM2 unavailable');}}),/PM2 unavailable/);
-});

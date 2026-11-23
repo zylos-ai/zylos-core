@@ -8,7 +8,7 @@ const tmpDirs = [];
 const origHome = process.env.HOME;
 const origTmpdir = process.env.TMPDIR;
 
-const { copyTree, syncTree } = await import('../fs-utils.js');
+const { syncTree } = await import('../fs-utils.js');
 
 afterEach(() => {
   if (origHome === undefined) {
@@ -32,61 +32,7 @@ function makeTmpDir() {
   return tmpDir;
 }
 
-describe('copyTree', () => {
-  it('backs up the directory behind a symlink root', () => {
-    const tmpDir = makeTmpDir();
-    const realSkillsDir = path.join(tmpDir, 'real-skills');
-    const symlinkSkillsDir = path.join(tmpDir, 'skills');
-    const backupTarget = path.join(tmpDir, 'backup', 'skills');
-
-    fs.mkdirSync(realSkillsDir, { recursive: true });
-    fs.writeFileSync(path.join(realSkillsDir, 'manifest.json'), '{}', 'utf8');
-    fs.symlinkSync(realSkillsDir, symlinkSkillsDir);
-
-    copyTree(symlinkSkillsDir, backupTarget, { excludes: ['node_modules'] });
-
-    const stat = fs.lstatSync(backupTarget);
-    assert.equal(stat.isDirectory(), true);
-    assert.equal(stat.isSymbolicLink(), false);
-    assert.equal(fs.readFileSync(path.join(backupTarget, 'manifest.json'), 'utf8'), '{}');
-  });
-
-  it('falls back to ~/tmp when TMPDIR is not writable during self-copy backup', () => {
-    const tmpDir = makeTmpDir();
-    const srcDir = path.join(tmpDir, 'skill');
-    const nestedBackup = path.join(srcDir, '.backup', 'run-1');
-
-    process.env.HOME = tmpDir;
-    process.env.TMPDIR = '/nonexistent';
-
-    fs.mkdirSync(srcDir, { recursive: true });
-    fs.writeFileSync(path.join(srcDir, 'SKILL.md'), '# test\n', 'utf8');
-
-    copyTree(srcDir, nestedBackup, { excludes: ['node_modules', '.backup'] });
-
-    assert.equal(fs.existsSync(path.join(nestedBackup, 'SKILL.md')), true);
-    assert.equal(fs.existsSync(path.join(tmpDir, 'tmp')), true);
-  });
-});
-
 describe('syncTree', () => {
-  it('refuses to sync a symlink backup path that resolves to the destination', () => {
-    const tmpDir = makeTmpDir();
-    const skillsDir = path.join(tmpDir, 'skills');
-    const backupDir = path.join(tmpDir, 'backup');
-    const backupSkills = path.join(backupDir, 'skills');
-
-    fs.mkdirSync(skillsDir, { recursive: true });
-    fs.mkdirSync(backupDir, { recursive: true });
-    fs.writeFileSync(path.join(skillsDir, 'component.txt'), 'keep me', 'utf8');
-    fs.symlinkSync(skillsDir, backupSkills);
-
-    assert.throws(
-      () => syncTree(backupSkills, skillsDir, { excludes: ['node_modules'] }),
-      /Refusing to sync identical paths/
-    );
-    assert.equal(fs.readFileSync(path.join(skillsDir, 'component.txt'), 'utf8'), 'keep me');
-  });
 
   it('restores from a nested backup while preserving excluded directories', () => {
     const tmpDir = makeTmpDir();

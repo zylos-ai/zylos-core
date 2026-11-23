@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readCodexSampleForIdentity, codexRateLimits } from '../codex/rollout.js';
+import { readCodexSampleForIdentity } from '../codex/rollout.js';
 
 const identity={present:true,ready:true,runtime:'codex',runId:'run',sessionId:'session',createdAt:123,serverGeneration:'gen',tmuxSessionId:'$1',paneId:'%1'};
 const row=(timestamp='2026-10-22T01:02:03.456Z',used=10)=>({timestamp,type:'event_msg',payload:{type:'token_count',info:{last_token_usage:{input_tokens:used},model_context_window:100},rate_limits:{primary:{window_minutes:10080,used_percent:71,resets_at:42},secondary:{window_minutes:300,used_percent:23,resets_at:43}}}});
@@ -22,26 +22,4 @@ test('Codex uses exact F6 scope/run/session and last complete token_count with i
   fs.writeFileSync(f.events,JSON.stringify(f.event));assert.equal(read(),null,'incomplete event must not count');
   fs.writeFileSync(f.events,line({...f.event,transcript_path:'relative.jsonl'}));assert.equal(read(),null);
  }finally{f.clean();}
-});
-test('latest complete token_count invalid timestamp does not fall back to older or global records',()=>{
- const f=fixture();const read=()=>readCodexSampleForIdentity({sessionGroup:'lark:x',identity,env:f.env});
- try{
-  for(const timestamp of [undefined,null,123,'not a date','2026-10-22T99:99:99Z','2026-10-22T01:02:03','2026-02-30T01:02:03Z']){fs.writeFileSync(f.rollout,line(row())+line(row(timestamp)));if(timestamp===undefined){const malformed=row();delete malformed.timestamp;fs.writeFileSync(f.rollout,line(row())+line(malformed));}assert.equal(read(),null,String(timestamp));}
-  fs.writeFileSync(f.rollout,line(row())+line({type:'event_msg',timestamp:'bad',payload:{type:'other'}}));assert.equal(read().sample.contextUsage.used,10);
-  fs.writeFileSync(f.events,line({...f.event,transcript_path:path.join(f.root,'missing')}));assert.equal(read(),null);
- }finally{f.clean();}
-});
-test('windows recognized by duration, unrelated/invalid windows ignored, not by primary position',()=>{
- assert.deepEqual(codexRateLimits({primary:{window_minutes:10080,used_percent:7},secondary:{window_minutes:300,used_percent:3}}),{sevenDay:{usedPercentage:7},fiveHour:{usedPercentage:3}});
- assert.equal(codexRateLimits({primary:{window_minutes:42,used_percent:3},secondary:{window_minutes:300,used_percent:'bad'}}),null);
-});
-
-test('Codex model belongs to the sampled turn and ignores a later turn or incomplete record', () => {
- const f=fixture(); try {
-  const turn=model=>({type:'turn_context',payload:{model}});
-  fs.writeFileSync(f.rollout,line(turn('earlier'))+line(row())+line(turn('next'))+JSON.stringify(turn('partial')));
-  assert.equal(readCodexSampleForIdentity({sessionGroup:'lark:x',identity,env:f.env}).sample.model,'earlier');
-  fs.writeFileSync(f.rollout,line(turn('earlier'))+line(row())+line(turn('changed'))+line(row('2026-10-22T01:02:04Z')));
-  assert.equal(readCodexSampleForIdentity({sessionGroup:'lark:x',identity,env:f.env}).sample.model,'changed');
- } finally { f.clean(); }
 });

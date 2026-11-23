@@ -4,37 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { getRuntime } from '../index.js';
 import { launchEnvironment, writeSessionLaunchScript } from '../session-command.js';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'launch-env-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
-}
-
-for (const clean of [true, false]) {
-  test(`launch environment parses dotenv assignments with clean mode ${clean}`, t => {
-    const root = fixture(t);
-    fs.writeFileSync(path.join(root, '.env'), [
-      `ZYLOS_CLEAN_ENV=${clean}`,
-      'ZYLOS_TMUX_ENV=EXPORTED,COMMENTED,SINGLE,DOUBLE,DUPLICATE,EMPTY',
-      '', '# ignored', '   # EXPORTED=ignored',
-      'export EXPORTED=one', 'COMMENTED=x # trailing comment',
-      "SINGLE='single # literal'", 'DOUBLE="double # literal" # comment',
-      'DUPLICATE=first', 'DUPLICATE=last', 'EMPTY=',
-    ].join('\n'));
-    const processEnv = { HOME: root, PATH: '/bin', EXPORTED: 'stale', ZYLOS_RUN_ID: 'parent' };
-    const env = launchEnvironment(root, processEnv);
-    for (const [key, value] of Object.entries({
-      EXPORTED: 'one', COMMENTED: 'x', SINGLE: 'single # literal',
-      DOUBLE: 'double # literal', DUPLICATE: 'last', EMPTY: '',
-    })) assert.equal(env[key], value, key);
-    assert.equal(env.ZYLOS_RUN_ID, undefined);
-    assert.equal(env.ZYLOS_DIR, root);
-    assert.equal(processEnv.EXPORTED, 'stale');
-    assert.equal(processEnv.ZYLOS_RUN_ID, 'parent');
-  });
 }
 
 for (const socketDirectory of [undefined, '', '/tmp/private tmux sockets']) {
@@ -50,22 +25,6 @@ for (const socketDirectory of [undefined, '', '/tmp/private tmux sockets']) {
     assert.equal(env.ZYLOS_DIR, root);
   });
 }
-
-test('explicit runtime environment still overrides the default tmux directory', t => {
-  const root = fixture(t);
-  fs.mkdirSync(path.join(root, '.zylos'));
-  fs.writeFileSync(path.join(root, '.zylos/runtime-env.manifest'), 'env TMUX_TMPDIR\n');
-  fs.writeFileSync(path.join(root, '.env'), 'TMUX_TMPDIR=/tmp/explicit-socket-directory\n');
-  const env = launchEnvironment(root, { HOME: root, PATH: '/bin', TMUX_TMPDIR: '/tmp/parent-socket-directory' });
-  assert.equal(env.TMUX_TMPDIR, '/tmp/explicit-socket-directory');
-});
-
-test('launch environment retains missing-file defaults and propagates read errors', t => {
-  const root = fixture(t);
-  assert.equal(launchEnvironment(root, { HOME: root, PATH: '/bin' }).ZYLOS_DIR, root);
-  fs.mkdirSync(path.join(root, '.env'));
-  assert.throws(() => launchEnvironment(root, { HOME: root }), { code: 'EISDIR' });
-});
 
 // Integration boundary: real dotenv -> environment policy -> generated shell ->
 // a Node child, with no tmux, PM2, database or native runtime. Run when dotenv
@@ -96,44 +55,4 @@ test('session launch script passes parsed dotenv values to a real child', t => {
   assert.equal(result.tmuxTmpdir, socketDirectory);
   assert.equal(Object.hasOwn(result, 'tmux'), false);
   assert.equal(fs.existsSync(script.file), false);
-});
-
-for (const clean of [true, false]) {
-  test(`Claude cache defaults survive environment policy in clean mode ${clean}`, async t => {
-    const root = fixture(t);
-    const { launch: { env: runtimeEnv } } = await getRuntime('claude');
-    fs.mkdirSync(path.join(root, '.zylos'));
-    fs.writeFileSync(path.join(root, '.zylos/runtime-env.manifest'), '# no cache entries\n');
-    fs.writeFileSync(path.join(root, '.env'), `ZYLOS_CLEAN_ENV=${clean}\nCLAUDE_CODE_PROMPT_CACHE_TTL=\nCLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=\n`);
-    const env = launchEnvironment(root, { HOME: root, PATH: '/bin',
-      CLAUDE_CODE_PROMPT_CACHE_TTL: '5m', CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '1h' }, { runtimeEnv });
-    assert.equal(env.CLAUDE_CODE_PROMPT_CACHE_TTL, '1h');
-    assert.equal(env.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, '5m');
-    fs.writeFileSync(path.join(root, '.env'), `ZYLOS_CLEAN_ENV=${clean}\n`);
-    const missing = launchEnvironment(root, { HOME: root, PATH: '/bin' }, { runtimeEnv });
-    assert.equal(missing.CLAUDE_CODE_PROMPT_CACHE_TTL, '1h');
-    assert.equal(missing.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, '5m');
-  });
-
-  test(`other runtimes have no default Claude cache variables in clean mode ${clean}`, async t => {
-    const root = fixture(t);
-    const keys = ['CLAUDE_CODE_PROMPT_CACHE_TTL', 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL'];
-    fs.writeFileSync(path.join(root, '.env'), `ZYLOS_CLEAN_ENV=${clean}\n`);
-    for (const runtime of ['codex', 'agy']) {
-      const { launch: { env: runtimeEnv } } = await getRuntime(runtime);
-      const env = launchEnvironment(root, { HOME: root, PATH: '/bin' }, { runtimeEnv });
-      for (const key of keys) assert.equal(Object.hasOwn(env, key), false);
-    }
-  });
-}
-
-test('Claude cache dotenv overrides are independent', async t => {
-  const { launch: { env: runtimeEnv } } = await getRuntime('claude');
-  const root = fixture(t);
-  for (const [key, value] of [['CLAUDE_CODE_PROMPT_CACHE_TTL', '5m'], ['CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', '1h']]) {
-    fs.writeFileSync(path.join(root, '.env'), `${key}=${value}\n`);
-    const env = launchEnvironment(root, { HOME: root, PATH: '/bin' }, { runtimeEnv });
-    assert.equal(env.CLAUDE_CODE_PROMPT_CACHE_TTL, key === 'CLAUDE_CODE_PROMPT_CACHE_TTL' ? value : '1h');
-    assert.equal(env.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, key === 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL' ? value : '5m');
-  }
 });

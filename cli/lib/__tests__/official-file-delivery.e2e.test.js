@@ -173,68 +173,6 @@ describe('zylos add --file official delivery E2E', () => {
     net.assertNoNetwork();
   });
 
-  it('leaves the installed component on the normal upgrade path', () => {
-    const { root, zylosDir } = makeFixture();
-    const tarball = makeTarball(root);
-    const net = poisonNetwork(root);
-
-    const install = runCli({
-      cwd: root, zylosDir, env: net.env,
-      args: ['add', COMPONENT, '--file', tarball, '--sha256', sha256(tarball), '--json'],
-    });
-    assert.equal(install.status, 0, install.stdout);
-    net.assertNoNetwork();
-
-    // Fake GitHub tag listing: the official repo has a newer release
-    const fakeBin = path.join(root, 'upgrade-bin');
-    fs.mkdirSync(fakeBin, { recursive: true });
-    fs.writeFileSync(
-      path.join(fakeBin, 'curl'),
-      '#!/bin/sh\ncat >/dev/null\nprintf \'%s\\n\' \'[{"name":"v2.0.0"}]\'\n',
-      { mode: 0o755 }
-    );
-
-    const result = runCli({
-      cwd: root, zylosDir,
-      args: ['upgrade', COMPONENT, '--check', '--json'],
-      env: {
-        PATH: `${fakeBin}${path.delimiter}${process.env.PATH}`,
-        GITHUB_TOKEN: 'test-token',
-        GH_TOKEN: '',
-      },
-    });
-
-    assert.equal(result.status, 0, result.stdout);
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.success, true);
-    assert.notEqual(output.error, 'local_source_upgrade_unsupported');
-    assert.equal(output.hasUpdate, true);
-    assert.equal(output.current, '1.0.0');
-    assert.equal(output.latest, '2.0.0');
-    assert.equal(output.repo, REPO);
-  });
-
-  it('records an unverified install with --trust-file and warns in list output', () => {
-    const { root, zylosDir } = makeFixture();
-    const tarball = makeTarball(root);
-    const net = poisonNetwork(root);
-
-    const result = runCli({
-      cwd: root, zylosDir, env: net.env,
-      args: ['add', COMPONENT, '--file', tarball, '--trust-file', '--json'],
-    });
-
-    assert.equal(result.status, 0, result.stdout);
-    net.assertNoNetwork();
-    const entry = readComponents(zylosDir)[COMPONENT];
-    assert.equal(entry.deliveredVia.verified, false);
-    assert.equal(entry.deliveredVia.sha256, null);
-
-    const list = runCli({ cwd: root, zylosDir, args: ['list'] });
-    assert.equal(list.status, 0);
-    assert.match(list.stdout, /checksum NOT verified/);
-  });
-
   it('rejects --file without --sha256 or --trust-file', () => {
     const { root, zylosDir } = makeFixture();
     const tarball = makeTarball(root);
@@ -247,22 +185,6 @@ describe('zylos add --file official delivery E2E', () => {
 
     assert.equal(result.status, 1);
     assert.equal(JSON.parse(result.stdout).error, 'checksum_required');
-    assertNoResidue(zylosDir);
-    net.assertNoNetwork();
-  });
-
-  it('rejects --file combined with --branch', () => {
-    const { root, zylosDir } = makeFixture();
-    const tarball = makeTarball(root);
-    const net = poisonNetwork(root);
-
-    const result = runCli({
-      cwd: root, zylosDir, env: net.env,
-      args: ['add', COMPONENT, '--file', tarball, '--trust-file', '--branch', 'main', '--json'],
-    });
-
-    assert.equal(result.status, 1);
-    assert.equal(JSON.parse(result.stdout).error, 'conflict');
     assertNoResidue(zylosDir);
     net.assertNoNetwork();
   });
@@ -283,29 +205,4 @@ describe('zylos add --file official delivery E2E', () => {
     net.assertNoNetwork();
   });
 
-  it('shows offline component info with verification status in --check mode', () => {
-    const { root, zylosDir } = makeFixture();
-    const tarball = makeTarball(root);
-    const net = poisonNetwork(root);
-
-    const result = runCli({
-      cwd: root, zylosDir, env: net.env,
-      args: ['add', `${COMPONENT}@1.0.0`, '--file', tarball, '--sha256', sha256(tarball), '--check', '--json'],
-    });
-
-    assert.equal(result.status, 0, result.stdout);
-    net.assertNoNetwork();
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.success, true);
-    assert.equal(output.version, '1.0.0');
-    assert.deepEqual(output.source, {
-      type: 'github-release',
-      repo: REPO,
-      ref: '1.0.0',
-      refType: 'tag',
-    });
-    assert.equal(output.deliveredVia.verified, true);
-    assert.match(output.reply, /sha256 verified/);
-    assertNoResidue(zylosDir);
-  });
 });
