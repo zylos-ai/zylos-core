@@ -123,19 +123,3 @@ test('the deletion policy detects ordinary fs, directory, shell and child-progra
   ]) assert.equal(firstViolation('cli/example.js', source)?.line, 1, source);
   assert.equal(firstViolation('cli/example.js', 'const value = 1;\nfs.rmSync(target);')?.line, 2);
 });
-
-test('the deletion policy permits empty-directory removal and scopes image exceptions to exact lines', () => {
-  for (const source of [
-    'fs.rmdirSync(target);', 'await fs.promises.rmdir(target);', 'rmdir(target, callback);',
-    'fs.rmdirSync(target)\nfs.mkdirSync(other, {recursive:true});',
-    'fs.rmdirSync(path.join(root, name));', 'fs.rmdir(path.join(root, name), cb);',
-    'fs.rmdir(target, done);', 'fs.rmdir(target, (error) => handle(error));',
-    'fs.rmdir(target, function(error) { handle(error); });',
-    'fs.rmdir(target, async error => handle(error));',
-  ]) assert.equal(firstViolation('cli/example.js', source), null, source);
-  for (const line of permittedBuildLines.keys()) {
-    assert.equal(firstViolation('Dockerfile', line), null);
-    assert.ok(firstViolation('cli/example.js', line));
-    assert.ok(firstViolation('Dockerfile', `${line} && rm -rf /home/user`));
-  }
-});

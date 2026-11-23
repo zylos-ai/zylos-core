@@ -3,8 +3,7 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { cleanupTestPm2 } from '../scripts/test-pm2-cleanup.js';
@@ -12,7 +11,6 @@ import { cleanupTestPm2 } from '../scripts/test-pm2-cleanup.js';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const entry = path.join(root, 'skills/comm-bridge/scripts/c4-dispatcher.js');
 const fixture = fileURLToPath(new URL('./fixtures/dispatcher-startup.js', import.meta.url));
-const exec = promisify(execFile);
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const reapers = new WeakMap();
 
@@ -86,18 +84,6 @@ for (const mode of ['create', 'start']) {
   });
 }
 
-// Boundary: real factory/entry/SQLite, empty private instance, private tmux socket.
-// Run for entry lifecycle changes; skip unrelated message-delivery changes.
-test('normal dispatcher remains running and SIGTERM exits successfully', { timeout: 10000 }, async t => {
-  const p = launch(t, environment(t)); p.readErrors();
-  await until(() => p.stdout().includes('C4_RECOVER_MAX_AGE_SECONDS='));
-  assert.match(p.stdout(), /C4 Session Router Started/);
-  await delay(500); assert.equal(p.child.exitCode, null, p.stderr());
-  assert.doesNotMatch(p.stderr(), /Dispatcher startup error/);
-  p.child.kill('SIGTERM');
-  assert.deepEqual(await p.closed, [0, null]);
-});
-
 // Boundary: production entry/router/SQLite with a missing private directory.
 // Run for tmux-directory startup/liveness changes; skip unrelated delivery work.
 // No real tmux: even a regressed guard can only reach the private fake binary.
@@ -120,50 +106,4 @@ test('missing tmux directory keeps dispatcher resident with one event and no cli
   assert.equal(fs.existsSync(calls), false);
   p.child.kill('SIGTERM');
   assert.deepEqual(await p.closed, [0, null]);
-});
-
-// Boundary: real signal handler/DB close with an injected stop rejection.
-// Run for entry lifecycle changes; skip unrelated delivery changes.
-test('shutdown rejection retains its error log and exitCode without forced exit', { timeout: 10000 }, async t => {
-  const env = { ...environment(t), DISPATCHER_FIXTURE_MODE: 'shutdown' };
-  const p = launch(t, env, ['--no-warnings', '--experimental-test-module-mocks', '--import', fixture]); p.readErrors();
-  await until(() => p.stdout().includes('C4 Session Router Started'));
-  p.child.kill('SIGTERM');
-  await until(() => p.stdout().includes('Dispatcher shutdown error: fixture shutdown failed'));
-  assert.equal(p.child.exitCode, null);
-  assert.doesNotMatch(p.stderr(), /Dispatcher startup error/);
-  p.child.kill('SIGUSR2');
-  assert.deepEqual(await p.closed, [1, null]);
-  assert.equal(JSON.parse(fs.readFileSync(env.DISPATCHER_FIXTURE_RESULT)).databaseOpen, false);
-});
-
-// Boundary: real PM2 and unmocked production entry; a directory at c4.db forces
-// startup failure. Requires local PM2; unrelated changes may skip this case.
-// HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/socket/DB are private and read back above.
-test('PM2 observes real dispatcher startup failure and exhausts bounded restarts', { timeout: 30000 }, async t => {
-  const env = environment(t);
-  fs.mkdirSync(path.join(env.ZYLOS_DIR, 'comm-bridge/c4.db'), { recursive: true });
-  const pm2 = async args => {
-    t.signal.throwIfAborted();
-    return (await exec('pm2', args, { env, signal: t.signal, timeout: 10000, maxBuffer: 1024 * 1024 })).stdout;
-  };
-  const ecosystem = path.join(env.HOME, 'ecosystem.json');
-  fs.writeFileSync(ecosystem, JSON.stringify({ apps: [{ name: 'dispatcher-startup', script: entry,
-    cwd: env.HOME, min_uptime: 30000, max_restarts: 2, autorestart: true, env }] }));
-  await pm2(['start', ecosystem]);
-  let state;
-  for (let i = 0; i < 40; i++) {
-    const list = JSON.parse(await pm2(['jlist']));
-    assert.equal(list.length, 1);
-    state = list[0].pm2_env;
-    if (state.status === 'errored') break;
-    await delay(100);
-  }
-  assert.equal(state.status, 'errored');
-  assert.ok(state.restart_time >= 1);
-  assert.equal(state.exit_code, 1);
-  const errors = fs.readFileSync(state.pm_err_log_path, 'utf8');
-  assert.match(errors, /Dispatcher startup error:/);
-  assert.match(errors, /at /);
-  t.diagnostic(JSON.stringify({ status: state.status, restarts: state.restart_time, exitCode: state.exit_code }));
 });

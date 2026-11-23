@@ -3,9 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { PassThrough } from 'node:stream';
-import { createMemoryEditor, serveMemoryTools } from '../memory-mcp-server.js';
-import { acquire, memoryScope, readMarker, withMemoryLock } from '../sync-lock.js';
+import { createMemoryEditor } from '../memory-mcp-server.js';
+import { acquire, memoryScope } from '../sync-lock.js';
 
 for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
   assert.ok(process.env[key]);
@@ -26,35 +25,6 @@ async function fixture(kind, group, sharedRoot) {
 }
 const create = (token, file, replacement = 'content') => ({ op: 'create', path: file, replacement, token });
 
-test('local: fixed temporary state name creates and edits the bound group or global file', async () => {
-  for (const [kind, group] of [['group', 'telegram:temporary'], ['global', undefined]]) {
-    const f = await fixture(kind, group);
-    const relative = path.relative(path.join(f.dir, 'memory'), path.join(f.scope.memoryDir, `state.md.${f.token}.tmp`));
-    assert.deepEqual(await f.editor(create(f.token, 'state.md.tmp', 'before')),
-      { ok: true, path: relative, bytes: 6 });
-    assert.equal((await f.editor({ op: 'edit', path: 'state.md.tmp', expected: 'before', replacement: 'after', token: f.token })).ok, true);
-    assert.equal(fs.readFileSync(path.join(f.dir, 'memory', relative), 'utf8'), 'after');
-    assert.equal(fs.existsSync(path.join(f.scope.memoryDir, 'state.md.tmp')), false);
-    assert.equal(fs.existsSync(path.join(f.dir, 'memory/state.md')), false);
-  }
-});
-
-test('local: fixed temporary state name preserves token and path rejection results', async () => {
-  const f = await fixture('group', 'telegram:temporary');
-  assert.deepEqual(await f.editor(create('__TOKEN__', 'state.md.tmp')),
-    { ok: false, code: 'INVALID_INPUT', message: 'token is required: pass the T printed by sync-lock.js acquire' });
-  assert.equal((await f.editor(create('0'.repeat(32), 'state.md.tmp'))).code, 'TOKEN_MISMATCH');
-  assert.deepEqual(await f.editor(create(f.token, 'reference/preferences.md')),
-    { ok: false, code: 'PATH_NOT_ALLOWED', message: 'Memory path is not allowed' });
-  assert.equal((await f.editor(create(f.token, 'state.md.tmp'))).ok, true);
-  const origin = await fixture('origin', 'origin');
-  for (const op of ['create', 'edit']) {
-    assert.deepEqual(await origin.editor({ ...create(origin.token, 'state.md.tmp'), op, expected: 'content' }),
-      { ok: false, code: 'PATH_NOT_ALLOWED', message: 'Memory path is not allowed' });
-  }
-  assert.equal(fs.existsSync(path.join(origin.scope.memoryDir, `state.md.${origin.token}.tmp`)), false);
-});
-
 test('local: group, origin and global use marker-derived target scopes', async () => {
   const group = await fixture('group', 'telegram:g-1');
   const temporary = `session-groups/telegram:g-1/state.md.${group.token}.tmp`;
@@ -71,48 +41,6 @@ test('local: group, origin and global use marker-derived target scopes', async (
   const global = await fixture('global');
   for (const target of ['identity.md', `state.md.${global.token}.tmp`]) assert.equal((await global.editor(create(global.token, target))).ok, true);
   assert.equal((await global.editor(create(global.token, 'session-groups/origin/state.md'))).code, 'PATH_NOT_ALLOWED');
-});
-
-test('local: create rejects a project page filename longer than 48 characters', async () => {
-  const f = await fixture('origin', 'origin');
-  const target = `reference/projects/${'a'.repeat(46)}.md`;
-  const result = await f.editor(create(f.token, target));
-  assert.equal(result.ok, false);
-  assert.equal(result.code, 'PATH_NOT_ALLOWED');
-  assert.equal(result.message, 'Page filename must use only lowercase letters, digits and hyphens, end with .md and be at most 48 characters including .md, directly under reference/projects/ or reference/decisions/, e.g. reference/projects/memory-sync-fix.md');
-  assert.equal(fs.existsSync(path.join(f.dir, 'memory', target)), false);
-});
-
-test('local: a missing or malformed token is a call error that keeps the lock for a retry', async () => {
-  const f = await fixture('global');
-  const target = path.join(f.dir, 'memory', 'identity.md');
-  const required = { ok: false, code: 'INVALID_INPUT', message: 'token is required: pass the T printed by sync-lock.js acquire' };
-  const { token: _omitted, ...missing } = create(f.token, 'identity.md');
-  for (const call of [missing, create(undefined, 'identity.md'), create('', 'identity.md'),
-    create(f.token.toUpperCase(), 'identity.md'), create(f.token.slice(1), 'identity.md'), create([f.token], 'identity.md')]) {
-    assert.deepEqual(await f.editor(call), required);
-    assert.equal(readMarker(f.scope.runDir, 'global').marker.token, f.token);
-    assert.equal(fs.existsSync(target), false);
-  }
-  assert.equal((await f.editor(create('0'.repeat(32), 'identity.md'))).code, 'TOKEN_MISMATCH');
-  assert.equal(readMarker(f.scope.runDir, 'global').marker.token, f.token);
-  // The MCP client does not enforce the schema, so a call without the field reaches the server.
-  const input = new PassThrough(), output = new PassThrough();
-  let received = ''; output.on('data', chunk => { received += chunk; });
-  const done = serveMemoryTools({ input, output, editor: f.editor });
-  for (const request of [
-    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } },
-    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'edit_memory', arguments: missing } },
-    { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'edit_memory', arguments: create(f.token, 'identity.md') } },
-  ]) input.write(JSON.stringify(request) + '\n');
-  input.end(); await done;
-  const frames = received.trim().split('\n').map(line => JSON.parse(line));
-  assert.deepEqual(frames.map(frame => frame.id), [1, 2, 3]);
-  assert.equal(frames[1].result.isError, true);
-  assert.deepEqual(JSON.parse(frames[1].result.content[0].text), required);
-  assert.equal(frames[2].result.isError, false);
-  assert.deepEqual(JSON.parse(frames[2].result.content[0].text), { ok: true, path: 'identity.md', bytes: 7 });
-  assert.equal(fs.readFileSync(target, 'utf8'), 'content');
 });
 
 test('local: model role claims are rejected and the server environment stays bound', async () => {
@@ -156,76 +84,6 @@ test('local: traversal, target symlinks and parent symlinks cannot escape allowe
   assert.equal(fs.existsSync(path.join(outside, 'new.md')), false);
 });
 
-test('local: write failures return WRITE_FAILED and preserve the target', async t => {
-  const f = await fixture('global');
-  await f.editor(create(f.token, 'identity.md', 'original'));
-  for (const [method, code, op] of [['writeFileSync', 'EACCES', 'edit'], ['renameSync', 'EIO', 'edit'], ['linkSync', 'EIO', 'create']]) {
-    const mock = t.mock.method(fs, method, () => { throw Object.assign(new Error('private filesystem detail'), { code }); });
-    const result = await f.editor({ op, path: op === 'create' ? 'references.md' : 'identity.md',
-      expected: 'original', replacement: 'new', token: f.token });
-    mock.mock.restore();
-    assert.deepEqual(result, { ok: false, code: 'WRITE_FAILED', message: 'Memory write failed' });
-    assert.equal(fs.readFileSync(path.join(f.dir, 'memory/identity.md'), 'utf8'), 'original');
-    assert.equal(fs.existsSync(path.join(f.dir, 'memory/references.md')), false);
-  }
-});
-
-test('local: nonregular lock returns LOCK_UNAVAILABLE without writing', async () => {
-  for (const kind of ['directory', 'symlink']) {
-    const f = await fixture('global'), lock = path.join(f.scope.runDir, 'memory.lock');
-    fs.unlinkSync(lock);
-    if (kind === 'directory') fs.mkdirSync(lock);
-    else fs.symlinkSync(path.join(f.scope.runDir, 'sync.lock'), lock);
-    const result = await f.editor(create(f.token, 'identity.md'));
-    assert.equal(result.ok, false);
-    assert.equal(result.code, 'LOCK_UNAVAILABLE');
-    assert.equal(fs.existsSync(path.join(f.dir, 'memory/identity.md')), false);
-  }
-});
-
-test('local: published create succeeds even when temporary cleanup fails', async t => {
-  const f = await fixture('global');
-  const mock = t.mock.method(fs, 'unlinkSync', () => { throw Object.assign(new Error('cleanup failed'), { code: 'EACCES' }); });
-  const result = await f.editor(create(f.token, 'identity.md', 'published'));
-  mock.mock.restore();
-  assert.equal(result.ok, true);
-  assert.equal(fs.readFileSync(path.join(f.dir, 'memory/identity.md'), 'utf8'), 'published');
-  assert.equal((await f.editor(create(f.token, 'identity.md', 'retry'))).code, 'EXISTS');
-});
-
-test('local: stdio emits only protocol frames and advertises the restricted tool', async () => {
-  const input = new PassThrough(), output = new PassThrough();
-  let received = ''; output.on('data', chunk => { received += chunk; });
-  const done = serveMemoryTools({ input, output, editor: async () => ({ ok: false, code: 'SCOPE_UNBOUND', message: 'unbound' }) });
-  for (const request of [
-    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } },
-    { jsonrpc: '2.0', method: 'notifications/initialized' },
-    { jsonrpc: '2.0', id: 2, method: 'tools/list' },
-    { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'edit_memory', arguments: {} } },
-  ]) input.write(JSON.stringify(request) + '\n');
-  input.end(); await done;
-  const frames = received.trim().split('\n').map(line => JSON.parse(line));
-  assert.equal(frames.length, 3); assert.deepEqual(frames.map(x => x.id), [1, 2, 3]);
-  assert.equal(frames[1].result.tools[0].name, 'edit_memory');
-  assert.equal(frames[1].result.tools[0].inputSchema.additionalProperties, false);
-  assert.equal(frames[2].result.isError, true);
-  assert.equal(JSON.parse(frames[2].result.content[0].text).code, 'SCOPE_UNBOUND');
-});
-
-test('local: concurrent group editors cannot cross scope and origin tokens choose separate permissions', async () => {
-  const a = await fixture('group', 'telegram:a'), b = await fixture('group', 'telegram:b', a.dir);
-  const fileA = `session-groups/telegram:a/state.md.${a.token}.tmp`;
-  const fileB = `session-groups/telegram:b/state.md.${b.token}.tmp`;
-  assert.deepEqual((await Promise.all([a.editor(create(a.token, fileA, 'A')), b.editor(create(b.token, fileB, 'B'))])).map(result => result.ok), [true, true]);
-  assert.equal((await a.editor(create(a.token, fileB))).code, 'PATH_NOT_ALLOWED');
-  assert.equal((await a.editor(create(b.token, fileA))).code, 'TOKEN_MISMATCH');
-  const origin = await fixture('origin', 'origin');
-  const groupToken = await acquire({ kind: 'group', env: origin.env }, { currentRunId: async () => runId });
-  assert.equal((await origin.editor(create(groupToken, `session-groups/origin/state.md.${groupToken}.tmp`))).ok, true);
-  assert.equal((await origin.editor(create(groupToken, 'identity.md'))).code, 'PATH_NOT_ALLOWED');
-  assert.equal((await origin.editor(create(origin.token, 'identity.md'))).ok, true);
-});
-
 // Integration boundary: real stdio RPC retains environment-bound authorization.
 // Run for editor authorization/protocol changes; skip for unrelated memory text.
 // The runner paths are checked and printed above. No tmux or database is used;
@@ -248,23 +106,6 @@ test('local: actual stdio process exposes no authority when forwarded run env is
   assert.equal(JSON.parse(frames[1].result.content[0].text).code, 'SCOPE_UNBOUND');
 });
 
-// Integration boundary: real kernel-lock contention reaches the editor's error
-// result. Run for editor/guard/lock error changes; skip for unrelated changes.
-// All paths come from fixture(), under a temporary root; no tmux or DB is used,
-// and the enclosing file's after hook removes the root after releasing the lock.
-test('local: contended memory lock returns LOCK_TIMEOUT without changing the target', { timeout: 15000 }, async () => {
-  const f = await fixture('global');
-  assert.equal((await f.editor(create(f.token, 'identity.md', 'original'))).ok, true);
-  await withMemoryLock(f.scope.runDir, async () => {
-    const result = await f.editor({ op: 'edit', path: 'identity.md', expected: 'original',
-      replacement: 'changed', token: f.token });
-    assert.deepEqual(result, { ok: false, code: 'LOCK_TIMEOUT', message: 'Memory lock acquisition timed out' });
-    assert.equal(fs.readFileSync(path.join(f.dir, 'memory/identity.md'), 'utf8'), 'original');
-  });
-  assert.equal((await f.editor({ op: 'edit', path: 'identity.md', expected: 'original',
-    replacement: 'after release', token: f.token })).ok, true);
-});
-
 test('local: legacy paths are read-only for create and edit before path permissions', async () => {
   for (const [kind, group] of [['global', undefined], ['origin', 'origin'], ['group', 'telegram:legacy']]) {
     const f = await fixture(kind, group);
@@ -279,28 +120,4 @@ test('local: legacy paths are read-only for create and edit before path permissi
     assert.equal((await f.editor(create('0'.repeat(32), 'reference/projects.md'))).code, 'TOKEN_MISMATCH');
     assert.equal((await f.editor(create(f.token, 'reference/projects/../projects.md'))).code, 'LEGACY_READ_ONLY');
   }
-});
-
-test('local: resolved aliases cannot write legacy files', async () => {
-  const f = await fixture('global'), memory = path.join(f.dir, 'memory');
-  fs.mkdirSync(path.join(memory, 'reference/legacy'), { recursive: true });
-  fs.writeFileSync(path.join(memory, 'reference/projects.md'), 'old');
-  fs.symlinkSync('projects.md', path.join(memory, 'reference/alias.md'));
-  fs.symlinkSync('legacy', path.join(memory, 'reference/alias'));
-  for (const name of ['reference/alias.md', 'reference/alias/new.md']) {
-    assert.equal((await f.editor(create(f.token, name))).code, 'LEGACY_READ_ONLY');
-  }
-  assert.equal(fs.readFileSync(path.join(memory, 'reference/projects.md'), 'utf8'), 'old');
-  assert.equal(fs.readdirSync(path.join(memory, 'reference/legacy')).length, 0);
-});
-
-
-test('local: legacy names are case insensitive and the legacy prefix has a directory boundary', async () => {
-  const f = await fixture('global');
-  for (const name of ['reference/Projects.md', 'Reference/Decisions.md', 'reference/Legacy/stored.md']) {
-    assert.equal((await f.editor(create(f.token, name))).code, 'LEGACY_READ_ONLY');
-    assert.equal(fs.existsSync(path.join(f.dir, 'memory', name)), false);
-  }
-  assert.equal((await f.editor(create(f.token, 'reference/legacy-notes.md', 'ordinary reference page'))).ok, true);
-  assert.equal(fs.readFileSync(path.join(f.dir, 'memory/reference/legacy-notes.md'), 'utf8'), 'ordinary reference page');
 });

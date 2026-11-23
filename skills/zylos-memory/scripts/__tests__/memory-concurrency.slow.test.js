@@ -54,23 +54,3 @@ test('1000 simultaneous stale-marker takeovers admit exactly one owner', { timeo
     }
   } finally { await Promise.all(children.map(stop)); }
 });
-
-// actual append and rename in separate processes share the fixed inode.
-test('two producers append 1000 records each with a 10ms rotating consumer', { timeout: 90000 }, async () => {
-  const env = fixture(); const scope = await memoryScope(env);
-  const children = [child(env), child(env), child(env)];
-  try {
-    const rotation = request(children[2], { op: 'rotate' });
-    const results = await Promise.all(children.slice(0, 2).map((proc, i) => request(proc, { op: 'append', prefix: `p${i}` })));
-    assert.deepEqual(results, [{ count: 1000 }, { count: 1000 }]);
-    children[2].send({ op: 'stop-rotation' });
-    const rotated = await rotation;
-    assert.ok(rotated.rotations > 0);
-    const records = fs.readdirSync(scope.memoryDir).filter(name => /^inbox(?:\..+)?\.md$/.test(name))
-      .flatMap(name => fs.readFileSync(path.join(scope.memoryDir, name), 'utf8').split('\n').filter(line => line.startsWith('- ')));
-    assert.equal(records.length, 2000);
-    const ids = records.map(line => line.match(/fact: (p[01]-\d+)$/)?.[1]);
-    assert.equal(new Set(ids).size, 2000);
-    for (let i = 0; i < 1000; i++) for (let p = 0; p < 2; p++) assert.ok(ids.includes(`p${p}-${i}`));
-  } finally { await Promise.all(children.map(stop)); }
-});

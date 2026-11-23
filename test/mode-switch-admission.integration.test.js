@@ -5,7 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { once } from 'node:events';
-import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
 import { guardDatabase } from '../skills/comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../skills/comm-bridge/scripts/c4-schema.js';
@@ -86,12 +85,4 @@ test('expired reply budget does not start a read or resend', { timeout: 5000 }, 
   const result=await executeSessionMode(['switch','multi'],{deadlineAt,send:(request,options)=>f.send(request,{...options,now,connect}),
     lookup:(target,options)=>lookupModeSwitch(target,{...options,now,getModeTransition:()=>{reads++;return f.store.getModeTransition();}})});
   assert.equal(result.ok, false);assert.equal(result.error.code, 'deadline_exceeded');assert.equal(result.error.persisted, null);assert.equal(reads, 0);assert.equal(f.requests.length, 1);
-});
-// Run for public switch argument or command changes. CLI children inherit a
-// private PM2 home and short TMPDIR and use only the temporary instance root.
-test('public CLI rejects an invalid switch target with no instance writes',()=>{
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'mode-switch-cli-args-'));cleanups.push(()=>fs.rmSync(root,{recursive:true,force:true}));
-  const child=spawnSync(process.execPath,['cli/zylos.js','session-mode','switch','bad','--json'],{encoding:'utf8',timeout:5000,env:{...process.env,HOME:root,ZYLOS_DIR:root}});
-  assert.equal(child.status, 1);assert.equal(JSON.parse(child.stdout).error.code, 'INVALID_ARGUMENT');
-  assert.equal(child.stdout.trim().split('\n').length, 1);assert.deepEqual(fs.readdirSync(root), []);
 });

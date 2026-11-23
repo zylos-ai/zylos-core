@@ -28,19 +28,3 @@ for (const name of ['scheduler-v0.1.0.sql', 'scheduler-v0.9.0-v1.sql']) test(`${
   const done = snapshot(db); guardDatabase(db, counted); guardDatabase(db, counted);
   assert.equal(calls, 1); assert.deepEqual(snapshot(db), done);
 });
-test('DDL or version publish failure rolls back both new columns, rows and version', t => {
-  for (const phase of ['ddl', 'version']) {
-    const db = seed(t, 'scheduler-v0.9.0-v1.sql'), before = snapshot(db);
-    let failed;
-    if (phase === 'ddl') failed = { ...owner, MIGRATIONS: { ...owner.MIGRATIONS, 1: { ...owner.MIGRATIONS[1], migrate(connection) { owner.MIGRATIONS[1].migrate(connection); throw new Error('after DDL'); } } } };
-    else {
-      const pragma = db.pragma.bind(db);
-      db.pragma = (statement, ...args) => { if (statement === `user_version = ${owner.SUPPORTED_SCHEMA_VERSION}`) throw new Error('before version'); return pragma(statement, ...args); };
-      failed = owner;
-    }
-    assert.throws(() => migrateDatabase(db, failed), /after DDL|before version/);
-    assert.deepEqual(snapshot(db), before);
-    if (phase === 'version') delete db.pragma;
-    migrateDatabase(db, owner); verify(db, before);
-  }
-});

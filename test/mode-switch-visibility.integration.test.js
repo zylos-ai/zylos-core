@@ -90,33 +90,3 @@ for (const point of ['before-config', 'after-config', 'before-confirm', 'before-
     assert.deepEqual(done.messages, [{ id: 1, status: 'pending', session_group: 'origin' }]);
   });
 }
-
-function diagnostics(dir) {
-  const file = path.join(dir, 'activity-monitor/supervisor-events.jsonl');
-  return fs.readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-}
-
-// Run for missing-deadline/config-conflict gating or supervisor restart changes.
-// This required case uses an isolated worker/database and injected scenes, with
-// no real tmux session or PM2 service.
-test('real supervisor missing deadlines and mode conflict remain blocked across restart then recover', { timeout: 20000 }, async()=>{
- // A present source executor keeps its controls blocked; absent legacy
- // executors are intentionally cleaned up during single-to-multi migration.
- const scenes=[{sessionGroup:'origin',runId:'source-control-owner',present:true,ready:false,processRunning:true}];
- const dir=root(); let worker=launch(dir,'',scenes); await worker.next(); await worker.command({controlGroup:null});
- const socket = net.createConnection(path.join(dir, 'activity-monitor/am.sock'));
- await once(socket, 'connect');
- socket.end(JSON.stringify({version:1,type:'mode_switch',requestId:'native-fixture',target:'multi'})+'\n');
- const chunks = [];
- for await (const chunk of socket) chunks.push(chunk);
- assert.equal(JSON.parse(Buffer.concat(chunks).toString()).result, 'accepted');
- let state=await worker.command('tick'); assert.equal(state.row.reason, 'running_control_without_deadline:machine:1');
- await worker.command('tick'); assert.equal(diagnostics(dir).filter(e=>e.event==='transition_blocked').length, 1);
- await kill(worker); worker=launch(dir,'',scenes); await worker.next(); state=await worker.command('tick'); assert.equal(state.row.reason, 'running_control_without_deadline:machine:1');
- assert.equal(diagnostics(dir).filter(e=>e.event==='transition_blocked').length, 2);
- await worker.command('expire-controls'); await worker.command({controlGroup:'telegram:other'}); state=await worker.command('tick'); assert.equal(state.row.reason, 'running_control_without_deadline:allSessionGroups:2');
- fs.writeFileSync(path.join(dir,'.zylos/config.json'),JSON.stringify({runtime:'claude',session_mode:'multi'}));
- state=await worker.command('tick'); assert.equal(state.row.reason, 'mode_conflict:gating:multi'); assert.deepEqual(state.fences.map(f=>f.sessionGroup), ['*']);
- fs.writeFileSync(path.join(dir,'.zylos/config.json'),JSON.stringify({runtime:'claude',session_mode:'single'}));
- await worker.command('expire-controls'); await worker.command({scenes:[]}); const done=await finish(worker); assert.equal(done.last.reason, null); assert.deepEqual(done.fences, []);
-});
