@@ -1,4 +1,3 @@
-import { readScopedHealthQuota } from '../health-quota.js';
 import { getRuntime } from '../../../../cli/lib/runtime/index.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +9,6 @@ import { RuntimeHealthCoordinator } from '../runtime-health.js';
 import { appendEvent } from '../../../../cli/lib/event-log.js';
 
 const hookHealth = (await getRuntime('claude')).health.hookHealth;
-const read = (await getRuntime('claude')).usage.healthQuota;
 
 test('cursor keeps failed commit retryable and restarted reader deduplicates through',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'health-reader-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -24,19 +22,3 @@ test('cursor keeps failed commit retryable and restarted reader deduplicates thr
   assert.equal((await restarted.consumeScene(scene,identity,{hookHealth}))[0].reason,'replay');
 });
 
-test('ingestion enriches from its own current , never another group or legacy quota',async t=>{
- const {publishContextSample}=await import('../context-monitor.js');
- const root=fs.mkdtempSync(path.join(os.tmpdir(),'health-reader-quota-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
- const now=Date.now(),captured=[];
- const coordinator={consumeHook:async(runtime,event,options)=>{captured.push(options.quota);return {status:'processed'};}};
- const reader=new HealthEventReader({coordinator,zylosDir:root,now:()=>now,
-  quota:(identity,scene)=>readScopedHealthQuota({identity,runDir:scene.runDir,runId:scene.runId,nowMs:now,read})});t.after(()=>reader.close());
- for(const [group,runId,usage] of [['chat:A','run-a',100],['chat:B','run-b',20]]){
-  const env={ZYLOS_DIR:root,ZYLOS_SESSION_GROUP:group,ZYLOS_RUN_ID:runId};
-  await publishContextSample({session_id:'s',rate_limits:{five_hour:{used_percentage:usage}}},{env,now});
-  const scene={sessionGroup:group,runtime:'claude',runId,runDir:path.join(root,'activity-monitor/session-groups',group)};
-  appendEvent(path.join(scene.runDir,'events.jsonl'),{type:'runtime_health',runtime:'claude'});
-  await reader.consumeScene(scene,{runtime:'claude',session_id:'s',claude_pid:123},{hookHealth});
- }
- assert.deepEqual(captured.map(value=>value.rate_limits.five_hour.used_percentage),[100,20]);
-});

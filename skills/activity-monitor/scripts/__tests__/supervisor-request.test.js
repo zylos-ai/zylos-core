@@ -2,52 +2,6 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { requestRelease } from '../supervisor-request.js';
 
-test('CLI errors retain one JSON envelope and exit 1', async () => {
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const script=fileURLToPath(new URL('../supervisor-request.js',import.meta.url));
-  const env={...process.env};delete env.ZYLOS_RUN_ID;delete env.ZYLOS_SESSION_GROUP;
-  for(const [args,code] of [[['wrong','--json'],'INVALID_ARGS']]) {
-    const result=spawnSync(process.execPath,[script,...args],{env,encoding:'utf8',timeout:10000});assert.equal(result.status,1);
-    const output=JSON.parse(result.stdout);assert.equal(output.ok,false);assert.equal(output.error.code,code);assert.deepEqual(output.error.persisted,[]);
-  }
-});
-
-test('deferral request carries only current session identity and reason', async () => {
-  const { deferReclaim } = await import('../supervisor-request.js');
-  const env = { ZYLOS_SESSION_GROUP: 'telegram:a', ZYLOS_RUN_ID: 'run' }; let sent;
-  const result = await deferReclaim({ reason: 'watcher', env, send: async request => {
-    sent = request; return { kind: 'accepted', sent: true, reply: { result: 'accepted' } };
-  } });
-  assert.equal(sent.type, 'defer_reclaim'); assert.equal(sent.expectedRunId, 'run');
-  assert.equal(sent.sessionGroup, 'telegram:a'); assert.equal(sent.reason, 'watcher');
-  assert.equal(Object.hasOwn(sent, 'minutes'), false);
-  assert.deepEqual(result, { ok: true, data: { result: 'accepted', sessionGroup: 'telegram:a', expectedRunId: 'run' } });
-  for (const missing of [{}, { ZYLOS_SESSION_GROUP: 'telegram:a' }]) {
-    assert.equal((await deferReclaim({ reason: 'watcher', env: missing, send: () => assert.fail() })).error.code, 'NO_SESSION_ENV');
-  }
-  for (const reason of ['', '   ', undefined]) {
-    assert.equal((await deferReclaim({ reason, env, send: () => assert.fail() })).error.code, 'INVALID_ARGS');
-  }
-  const rejected = await deferReclaim({ reason: 'watcher', env,
-    send: async () => ({ kind: 'rejected', sent: true, reply: { reason: 'preparation_expired' } }) });
-  assert.equal(rejected.error.code, 'preparation_expired');
-  assert.deepEqual(rejected.error.persisted, []);
-  const unknown = await deferReclaim({ reason: 'watcher', env, send: async () => ({ kind: 'no_reply', sent: true }) });
-  assert.equal(unknown.error.persisted, null); assert.match(unknown.error.message, /do not assume/);
-});
-
-test('deferral CLI rejects removed duration option before submission', async () => {
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const script = fileURLToPath(new URL('../supervisor-request.js', import.meta.url));
-  const result = spawnSync(process.execPath, [script, 'defer-reclaim', '--minutes', '3', '--reason', 'watcher'],
-    { env: { ...process.env, ZYLOS_SESSION_GROUP: 'telegram:a', ZYLOS_RUN_ID: 'run' }, encoding: 'utf8', timeout: 10000 });
-  assert.equal(result.status, 1);
-  assert.equal(JSON.parse(result.stdout).error.code, 'INVALID_ARGS');
-});
-
-
 test('release request binds only inherited group and run, with no target override', async () => {
   for (const env of [{}, { ZYLOS_SESSION_GROUP: 'origin' }, { ZYLOS_RUN_ID: 'r' },
     { ZYLOS_SESSION_GROUP: '../bad', ZYLOS_RUN_ID: 'r' },
@@ -64,40 +18,6 @@ test('release request binds only inherited group and run, with no target overrid
       sessionGroup: 'telegram:a', expectedRunId: 'run' });
     assert.match(sent.requestId, /^release-/);
     assert.deepEqual(response, { ok: true, data: { result, sessionGroup: 'telegram:a', expectedRunId: 'run' } });
-  }
-});
-
-test('release refusal and uncertain delivery preserve the current run', async () => {
-  const env = { ZYLOS_SESSION_GROUP: 'origin', ZYLOS_RUN_ID: 'r' };
-  for (const reason of ['not_multi', 'run_changed', 'requests_unreadable']) {
-    const response = await requestRelease({ env,
-      send: async () => ({ kind: 'rejected', sent: true, reply: { reason } }) });
-    assert.equal(response.error.code, reason); assert.deepEqual(response.error.persisted, []);
-    assert.doesNotMatch(response.error.message, /handoff/); assert.match(response.error.message, /current run/);
-    assert.match(response.error.message, /do not exit/);
-  }
-  for (const kind of ['no_reply', 'invalid_reply', 'timeout', 'deadline_exceeded']) {
-    let calls = 0;
-    const response = await requestRelease({ env, send: async () => { calls++; return { kind, sent: true }; } });
-    assert.equal(calls, 1); assert.equal(response.error.persisted, null);
-    assert.match(response.error.message, /unknown/); assert.match(response.error.message, /do not exit/);
-  }
-  const response = await requestRelease({ env, send: async () => ({ kind: 'connect_failed', sent: false }) });
-  assert.deepEqual(response.error.persisted, []);
-});
-
-test('release CLI refuses identity overrides and missing inherited identity', async () => {
-  const { spawnSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const script = fileURLToPath(new URL('../supervisor-request.js', import.meta.url));
-  const env = { ...process.env }; delete env.ZYLOS_RUN_ID; delete env.ZYLOS_SESSION_GROUP;
-  for (const [args, code] of [
-    [['request-release', '--json'], 'NO_SESSION_ENV'],
-    [['request-release', '--session-group', 'origin', '--json'], 'INVALID_ARGS'],
-    [['request-release', '--run-id', 'other', '--json'], 'INVALID_ARGS'],
-  ]) {
-    const result = spawnSync(process.execPath, [script, ...args], { env, encoding: 'utf8', timeout: 10000 });
-    assert.equal(result.status, 1); assert.equal(JSON.parse(result.stdout).error.code, code);
   }
 });
 

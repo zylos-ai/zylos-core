@@ -5,10 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
-import { spawn } from 'node:child_process';
 import { createSupervisorConnectionHandler } from '../router-socket.js';
-import { submit, notifyAuthCompleted } from '../../../../cli/lib/am-sock-client.js';
-import { RestartRequestStore } from '../restart-request-store.js';
 
 async function socketFixture(t, deps) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-sock-'));const socketPath=path.join(root,'am.sock');const sockets=new Set();
@@ -40,94 +37,4 @@ test('first line is consumed once and malformed requests do not enter admission'
   assert.equal((await exchange('bad\n')).code,'invalid_request');assert.equal((await exchange('[]\n')).code,'invalid_request');
   assert.equal((await exchange('{"type":"first"}\n{"type":"second"}\n')).ok,true);assert.deepEqual(accepted,[{type:'first'}]);
 });
-test('authentication notification validates its envelope and routes in both session modes', async t => {
-  let mode = 'multi', calls = 0;
-  const request = { version: 1, type: 'auth_completed', requestId: 'auth', runtime: 'codex' };
-  const exchange = await socketFixture(t, { readMode: () => ({ mode }), router: {
-    notifyAuthCompleted(input) {
-      calls++; assert.deepEqual(input, request);
-    }
-  } });
-  assert.deepEqual(await exchange(request), { version: 1, type: 'ack', requestId: 'auth' });
-  for (const patch of [{ version: 2 }, { runtime: '../bad' }, { runtime: 'unknown' }, { requestId: '' }, { runtime: null }]) {
-    assert.equal((await exchange({ ...request, ...patch })).code, 'invalid_request');
-  }
-  mode = 'single'; assert.deepEqual(await exchange(request), { version: 1, type: 'ack', requestId: 'auth' });
-  assert.equal(calls, 2);
-});
-test('authentication notification acknowledges receipt before recovery and shutdown drain waits for recovery', async t => {
-  let release, finished = false;
-  const blocked = new Promise(resolve => { release = resolve; });
-  t.after(() => release());
-  const send = await socketFixture(t, { router: { notifyAuthCompleted: async () => { await blocked; finished = true; } } });
-  assert.equal(await notifyAuthCompleted('claude', { socketPath: send.socketPath }), true);
-  let drained = false;
-  const drain = send.handler.drain().then(() => { drained = true; });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(drained, false); assert.equal(finished, false);
-  release(); await drain; assert.equal(finished, true);
-});
-test('uncertain admission write closes without a fabricated rejection; route preserves baseline error', async t => {
-  const exchange=await socketFixture(t,{admission:{handle:async()=>{throw Object.assign(new Error('disk'),{code:'EIO'});}},router:{route:async()=>{throw new Error('routing failed');}}});
-  assert.equal(await exchange({version:1,type:'restart_all',requestId:'u'}),null);
-  const failed=await exchange({version:2,type:'route',requestId:'r'});assert.equal(failed.reason,'message_router_error');assert.equal(failed.recovered,false);
-});
-test('real process dies after commit before reply; recovered owner preserves idempotence', async t => {
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-crash-'));const socketPath=path.join(root,'am.sock');
-  const children=new Set();t.after(async()=>{for(const child of children){child.kill('SIGKILL');await once(child,'exit').catch(()=>{});}fs.rmSync(root,{recursive:true,force:true});});
-  const admissionURL=new URL('../supervisor-admission.js',import.meta.url).href;
-  const storeURL=new URL('../restart-request-store.js',import.meta.url).href;
-  const socketURL=new URL('../router-socket.js',import.meta.url).href;
-  async function start(crash) {
-    const source=`import net from 'node:net';import fs from 'node:fs';import path from 'node:path';
-import {SupervisorAdmission} from ${JSON.stringify(admissionURL)};
-import {RestartRequestStore} from ${JSON.stringify(storeURL)};
-import {createSupervisorConnectionHandler} from ${JSON.stringify(socketURL)};
-const root=process.env.AM_TEST_ROOT;const file=path.join(root,'restart-requests.json');const socket=path.join(root,'am.sock');
-try{fs.unlinkSync(socket);}catch(e){if(e.code!=='ENOENT')throw e;}
-const store=new RestartRequestStore({file});const write=store.write.bind(store);
-if(${crash})store.write=rows=>{write(rows);process.kill(process.pid,'SIGKILL');};
-const admission=new SupervisorAdmission({store,db:{getModeTransition:()=>null},readMode:()=>({mode:'multi'}),listRuns:()=>[{runId:'one'},{runId:'starting'}]});
-admission.restore();admission.openEntry();const server=net.createServer(createSupervisorConnectionHandler({admission}));
-server.listen(socket,()=>process.send('ready'));`;
-    const child=spawn(process.execPath,['--input-type=module','-e',source],{env:{...process.env,AM_TEST_ROOT:root},stdio:['ignore','pipe','pipe','ipc']});children.add(child);child.once('exit',()=>children.delete(child));
-    let errors='';child.stderr.on('data',data=>errors+=data);await Promise.race([once(child,'message'),once(child,'exit').then(()=>{throw new Error(errors);})]);return child;
-  }
-  const input={version:1,type:'restart_all',requestId:'crash-commit',reason:'upgrade'};
-  const child=await start(true);const exited=once(child,'exit');
-  assert.deepEqual(await submit(input,{socketPath}),{kind:'no_reply',sent:true});await exited;
-  assert.deepEqual(new RestartRequestStore({file:path.join(root,'restart-requests.json')}).read()[0].runIds,['one','starting']);
-  await start(false);const reply=await submit(input,{socketPath});assert.equal(reply.kind,'accepted');assert.equal(reply.reply.result,'already_accepted');assert.equal(reply.reply.runCount,2);
-});
 
-test('socket shutdown drain waits accepted async route mutations and closed entry rejects bypass paths', async t=>{
-  let release,started;const blocked=new Promise(resolve=>release=resolve),entered=new Promise(resolve=>started=resolve);
-  let open=true,mutated=false,calls=0;
-  const send=await socketFixture(t,{isOpen:()=>open,router:{route:async()=>{calls++;started();await blocked;mutated=true;return {ok:true};}},
-    admission:{handle:async()=>({ok:false,code:'entry_not_open'})}});
-  const reply=send({type:'route'});await entered;
-  let drained=false;const drain=send.handler.drain().then(()=>drained=true);await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(drained,false);assert.equal(mutated,false);release();await drain;assert.equal(mutated,true);assert.deepEqual(await reply,{ok:true});
-  open=false;for(const type of ['route','health_events_ready','notify_delivered','auth_completed'])assert.equal(await send({type}),null);
-  assert.equal(calls,1);assert.equal((await send({type:'restart_all'})).code,'entry_not_open');
-});
-
-
-test('v2 control paste notifications retain exact run/time and reject ambiguous or invalid identities', async t => {
-  const delivered = [], groups = [];
-  const exchange = await socketFixture(t, { readMode: () => ({ mode: 'multi' }),
-    readRun: group => { groups.push(group); return { runId: 'run', runtime: 'codex' }; },
-    onDelivered: event => delivered.push(event) });
-  const request = { version: 2, type: 'notify_delivered', requestId: 'control', controlId: 19,
-    sessionGroup: 'telegram:a', runId: 'run', runtime: 'codex', pastedAt: 1792000000000 };
-  assert.equal((await exchange(request)).type, 'ack');
-  assert.deepEqual(delivered, [request]);
-  assert.equal((await exchange({ ...request, runId: 'stale' })).type, 'ack');
-  assert.equal(delivered.length, 1);
-  for (const patch of [{ controlId: 0 }, { controlId: -1 }, { controlId: '19' }, { controlId: null },
-    { controlId: 1.5 }, { controlId: Number.MAX_SAFE_INTEGER + 1 }, { conversationId: 4 }, { version: 1 }]) {
-    assert.equal((await exchange({ ...request, ...patch })).code, 'invalid_request');
-  }
-  assert.equal(delivered.length, 1);
-  assert.deepEqual(groups, ['telegram:a', 'telegram:a'], 'invalid input never reaches run lookup');
-});

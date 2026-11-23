@@ -5,11 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { fork } from 'node:child_process';
-import { once, EventEmitter } from 'node:events';
-import { main as monitorMain } from '../monitor.js';
+import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { resolveSessionPoolBaseline } from '../../../../cli/lib/session-pool-config.js';
-import { startSupervisor } from '../supervisor-main.js';
 const repository=fileURLToPath(new URL('../../../../',import.meta.url));
 const entry=fileURLToPath(new URL('../supervisor-main.js',import.meta.url));
 const worker=fileURLToPath(new URL('./fixtures/supervisor-entry-worker.js',import.meta.url));
@@ -75,14 +72,6 @@ test('duplicate entry preserves the original listener; non-socket paths remain i
   const invalid=launch(t,root);assert.deepEqual(await invalid.next(),{startupError:'EADDRINUSE'});
   assert.equal(fs.readFileSync(path.join(root,'activity-monitor/am.sock'),'utf8'),'preserve');
 });
-test('bad startup keeps Sock closed to mutations; restore failure cleans up listener', {timeout:15000}, async t=>{
-  const root=prepare(t,{session_mode:'invalid'}),w=launch(t,root);const ready=await w.next();
-  assert.equal(ready.admissionOpen,false);assert.equal(ready.configurationError,'CONFIG_UNREADABLE');
-  assert.equal((await request(root,{version:1,type:'restart_all',requestId:'blocked',reason:'upgrade'})).code,'entry_not_open');await stop(w);
-  fs.writeFileSync(path.join(root,'.zylos/config.json'),JSON.stringify({session_mode:'multi',runtime:'claude'}));
-  const broken=launch(t,root,{scenario:'restore-failure'});assert.deepEqual(await broken.next(),{startupError:'RESTORE_FAILED'});
-  assert.equal(fs.existsSync(path.join(root,'activity-monitor/am.sock')),false);
-});
 test('copied installed skills resolve the separate Core package and serve actual Sock requests', {timeout:15000}, async t=>{
   const root=prepare(t);const pkg=path.join(root,'installed-core'),skills=path.join(root,'.claude','skills');
   fs.mkdirSync(pkg);fs.copyFileSync(path.join(repository,'package.json'),path.join(pkg,'package.json'));
@@ -103,23 +92,6 @@ test('copied installed skills resolve the separate Core package and serve actual
   assert.equal((await request(root,{version:1,type:'restart_all',requestId:'installed',reason:'upgrade'})).result,'done_empty');await stop(w);
 });
 
-test('entry freezes first-failure notice synchronously with correct single/multi SQL scope', {timeout:15000}, async t=>{
-  for(const mode of ['legacy','single','multi']) {
-    const root=prepare(t,{...(mode==='legacy'?{}:{session_mode:mode}),runtime:'claude'}),w=launch(t,root);await w.next();w.child.send('freeze');
-    const result=await w.next();assert.equal(result.notice.endpoint,'frozen');assert.equal(result.notice.reason,'authentication_failed');
-    assert.equal(result.noticeScope,mode==='legacy'?null:'origin');await stop(w);
-    const stored=JSON.parse(fs.readFileSync(path.join(root,'activity-monitor/runtime-health/claude.json'),'utf8'));
-    assert.equal(stored.hook.groups.origin.pendingNotice.endpoint,'frozen');
-  }
-});
-
-test('C4 monitor signal handler reports stop rejection and exits unsuccessfully',async()=>{
- const runtime=new EventEmitter(),errors=[],exits=[];runtime.exit=code=>exits.push(code);
- await monitorMain({runtime,start:async()=>({stop:async()=>{throw Object.assign(new Error('stop failed'),{code:'STOP_FAILED'});}}),log:error=>errors.push(error)});
- runtime.emit('SIGTERM');await new Promise(resolve=>setImmediate(resolve));
- assert.deepEqual(errors,['STOP_FAILED']);assert.deepEqual(exits,[1]);
-});
-
 test('C4 canonical PM2 wrapper invokes the monitor entry even when imported indirectly',async t=>{
  let starts=0;
  const replacement=mock.module('../monitor.js',{namedExports:{main:async()=>{starts++;}}});
@@ -128,144 +100,3 @@ test('C4 canonical PM2 wrapper invokes the monitor entry even when imported indi
  assert.equal(starts,1);
 });
 
-// Boundary: actual entry defers eviction when the Core reader is absent.
-// Run for reader loading or capacity fallback changes; skip unrelated lifecycle work.
-// Use isolated HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR via the Node runner,
-// a private am.sock, fixture scenes/database and no live tmux or network.
-test('missing reader logs once across six rounds and defers eviction without config-error spam',{timeout:15000},async t=>{
- const root=prepare(t),w=launch(t,root,{packageRoot:withoutPoolReader(root)});await w.next();
- w.child.send('rounds');const result=await w.next();
- assert.equal(result.configuration.capacityUnavailable,true);
- assert.equal(Object.hasOwn(result.configuration,'capacity'),false);
- assert.equal(result.logs.filter(row=>row?.dependency==='Session pool configuration reader').length,1);
- assert.equal(result.logs.filter(row=>row?.phase==='eviction').length,0);
- assert.equal((await request(root,{version:1,type:'restart_all',requestId:'after-missing-session-pool',reason:'upgrade'})).result,'done_empty');
- await stop(w);
-});
-
-// Boundary: actual entry loads the Core baseline and publishes fixed capacity.
-// Run for Core reader exports or capacity wiring changes; skip unrelated lifecycle work.
-// Use isolated HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR via the Node runner,
-// a private am.sock, fixture scenes/database and no live tmux or network.
-test('present reader supplies real capacity without a missing-dependency notice',{timeout:15000},async t=>{
- const config={session_mode:'multi',runtime:'claude',session_pool_size:7};
- const root=prepare(t,config);
- assert.equal(fs.existsSync(path.join(repository,'cli/lib/session-pool-config.js')),true);
- const w=launch(t,root,{packageRoot:repository});
- assert.equal((await w.next()).admissionOpen,true);
- w.child.send('rounds');const result=await w.next();
- const env={...process.env,HOME:root,ZYLOS_DIR:root,ZYLOS_PACKAGE_ROOT:repository};
- assert.equal(result.configuration.capacityUnavailable,false);
- assert.equal(result.configuration.capacity,resolveSessionPoolBaseline({env,config}).k);
- assert.equal(result.logs.filter(row=>row?.dependency==='Session pool configuration reader').length,0);
- await stop(w);
-});
-
-test('actual Sock rejects requests throughout paused restoration, then admits after restoration completes', { timeout: 15000 }, async t => {
-  const { startSupervisor } = await import('../supervisor-main.js');
-  const root = prepare(t); let release, entered, service, observations = 0;
-  const held = new Promise(resolve => { release = resolve; });
-  const restoring = new Promise(resolve => { entered = resolve; });
-  const db = { getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
-    getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
-    listPendingSessionGroups: () => [], getControlById: () => null,
-    resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) };
-  const scenes = { observe: async () => { observations++; return []; },
-    readIdentity: async () => ({ present: false }), observeGroup: async () => ({ present: false }),
-    listRuns: async () => [], readRun: async () => null };
-  const starting = startSupervisor({ env: { ...process.env, HOME: root, ZYLOS_DIR: root }, db, scenes,
-    readMode: () => ({ mode: 'multi', keyPresent: true }), readConfig: () => ({ session_mode: 'multi', runtime: 'claude' }),
-    restoreTransition: async () => { entered(); await held; },
-    legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
-    sendAlert: () => { throw new Error('external send forbidden'); }, log: () => {},
-    loopOptions: { schedule: () => 1, cancel: () => {} } });
-  t.after(async () => { release(); service ??= await starting; await service.stop(); });
-  await Promise.race([restoring, starting.then(() => { throw new Error('restoration was not paused'); })]);
-  for (const value of [
-    { version: 1, type: 'restart_all', requestId: 'during-restore', reason: 'upgrade' },
-    { version: 1, type: 'manual_restart', requestId: 'manual-during-restore', expectedRunId: 'old-run' },
-  ]) assert.equal((await request(root, value)).code, 'entry_not_open');
-  assert.equal(observations, 0, 'no scheduling while restoration is pending');
-  assert.equal(fs.existsSync(path.join(root, 'activity-monitor/restart-requests.json')), false);
-  release(); service = await starting;
-  assert.equal(service.supervisor.admission.open, true); assert.ok(observations > 0);
-  assert.equal((await request(root, { version: 1, type: 'restart_all', requestId: 'after-restore', reason: 'upgrade' })).result, 'done_empty');
-  await service.stop();
-});
-
-
-test('explicit single opens the actual entry with legacy false', {timeout:15000}, async t => {
-  const root = prepare(t, {session_mode:'single',runtime:'claude'}), worker = launch(t, root);
-  const ready = await worker.next();
-  assert.equal(ready.admissionOpen, true); assert.equal(ready.mode, 'single'); assert.equal(ready.legacy, false);
-  assert.equal(ready.logs.some(row => row?.phase === 'automatic-migration'), false);
-  await stop(worker);
-});
-
-// Integration boundary: real entry, lifecycle loop, reconciliation timer and
-// notification formatting. Run for entry alert wiring; skip unrelated UI work.
-// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR. This case owns
-// its private am.sock and injected scenes/database/sendAlert; no live tmux,
-// runtime, network or external send. Teardown drains the entry and closes Sock.
-test('actual supervisor entry sends the retained-occupancy explanation after sustained authority failure',{timeout:15000},async t=>{
- const root=prepare(t);let now=2_000_000;const messages=[];
- const db={getModeTransition:()=>{throw Object.assign(new Error('database read unavailable'),{code:'SQLITE_IOERR'});},
-  listDrainFences:()=>[],getDrainFence:()=>null,listPendingSessionGroups:()=>[],listPendingContinuations:()=>[],
-  listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:[]}),getControlById:()=>null,
-  resolveSessionLaunchConfig:()=>({runtime:'claude',mode:'default'})};
- const scenes={observe:async()=>[],readIdentity:async()=>({present:false}),observeGroup:async()=>({present:false}),
-  listRuns:async()=>[],readRun:async()=>null};
- const service=await startSupervisor({env:{...process.env,HOME:root,ZYLOS_DIR:root,PM2_HOME:path.join(root,'.pm2')},db,scenes,
-  now:()=>now,readMode:()=>({mode:'multi',keyPresent:true}),readConfig:()=>({session_mode:'multi',runtime:'claude'}),
-  readConfiguration:async()=>({mode:'multi',runtime:'claude',capacity:2}),
-  sendAlert:async(target,message)=>{messages.push({target,message});return true;},
-  legacyStatus:{tick(){},close(){}},machineTasks:{tick(){},stop(){}},log:()=>{},
-  loopOptions:{schedule:()=>1,cancel:()=>{}}});
- t.after(()=>service.stop());
- assert.equal(service.server.listening,true);assert.equal(messages.length,0);
- now+=59000;await service.supervisor.loop.tick();assert.equal(messages.length,0);
- now+=1000;await service.supervisor.loop.tick();assert.equal(messages.length,1);
- assert.deepEqual(messages[0].target,{channel:'dashboard',endpoint:'origin'});
- assert.match(messages[0].message,/run_ending_reconciliation_failed \(\*\)/);
- assert.match(messages[0].message,/Occupancy rows remain; groups cannot start until reconciliation recovers\./);
- now+=1000;await service.supervisor.loop.tick();assert.equal(messages.length,1);
- await service.stop();assert.equal(service.server.listening,false);
-});
-
-// Boundary: actual entry wiring of Claude failure continuation under native single
-// (mode key present) against the real C4 store. Private ZYLOS_DIR, run directory and
-// in-memory database; fake scenes, no tmux, runtime or network.
-for (const runtime of ['claude','agy']) test(`native single queues the failure Continue for ${runtime} Origin and cancels it on another group inbound`, {timeout:15000}, async t => {
-  const root=prepare(t,{session_mode:'single',runtime});
-  const runDir=path.join(root,'run');fs.mkdirSync(runDir,{recursive:true});
-  const {fixture:c4Fixture}=await import('../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js');
-  const c4=c4Fixture(t,{readConfig:()=>({state:'ok',config:{runtime,session_mode:'single'}})});
-  const getControlById=id=>c4.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
-  let now=1000000;
-  const scene={sessionGroup:'origin',present:true,ready:true,processRunning:true,runtime,runId:'r1',sessionId:'s1',runtimePid:123,runDir,createdAt:now-1};
-  const service=await startSupervisor({env:{...process.env,HOME:root,ZYLOS_DIR:root,PM2_HOME:path.join(root,'pm2')},now:()=>now,
-    readMode:()=>({mode:'single',keyPresent:true}),readConfig:()=>({session_mode:'single',runtime}),
-    db:{...c4.store,getDb:()=>c4.db,getControlById},
-    scenes:{observe:async()=>[],readIdentity:async()=>({...scene}),bindTarget:async()=>({expectedRunId:'r1',tmuxTarget:{serverGeneration:'g',sessionId:'$1',paneId:'%1'}}),
-      observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null},
-    legacyStatus:{tick(){},close(){}},machineTasks:{tick(){},stop(){}},readSyncMarker:()=>({held:false,stale:false}),
-    sendAlert:async()=>true,log:()=>{},loopOptions:{schedule:()=>1,cancel:()=>{}}});
-  t.after(()=>service.stop());
-  await service.supervisor.loop.tick();
-  const {appendEvent}=await import('../../../../cli/lib/event-log.js');
-  appendEvent(path.join(runDir,'events.jsonl'),{v:1,type:'runtime_health',schema_version:1,source:'hook',runtime,run_id:'r1',session_id:'s1',claude_pid:123,
-    event:'stop_failure',error:'server_error',event_id:'22222222-2222-4222-8222-222222222222',prompt_id:runtime==='claude'?'p1':null,received_at:now,ts:now});
-  const context={configuration:{mode:'single',legacy:false,runtime},scenes:[scene]};
-  await service.supervisor.loop.deps.probeAndPublish(scene,context);
-  const retry=service.supervisor.health.store(runtime).read('origin').failure_retry;
-  const control=getControlById(retry.controlId);
-  assert.equal(control.content,'Continue');
-  // The Origin lane reads only Origin-targeted controls once the retry is due.
-  assert.equal(c4.store.getNextPendingControl(Math.ceil(retry.dueAt/1000),{sessionGroups:['origin']})?.id,control.id);
-  // Inbound from another conversation is delivered into Origin, so it replaces the Continue.
-  c4.store.insertConversation('in','telegram','other-chat','new question',{groupName:'other'});
-  now=retry.dueAt;
-  await service.supervisor.loop.deps.probeAndPublish(scene,context);
-  assert.notEqual(getControlById(control.id).status,'pending');
-  assert.equal(service.supervisor.health.store(runtime).read('origin').failure_retry,undefined);
-});

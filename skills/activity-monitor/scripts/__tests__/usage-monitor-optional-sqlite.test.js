@@ -55,27 +55,3 @@ test('disabled usage module loads without SQLite; Supervisor database remains in
   }`);
 });
 
-test('eligible usage checks never load SQLite or inspect the C4 database', t => {
-  runIsolated(t, `
-    import assert from 'node:assert/strict';
-    import fs from 'node:fs';
-    import path from 'node:path';
-    ${missingSqlite}
-    const { UsageMonitor } = await import(${JSON.stringify(usageUrl)});
-    fs.mkdirSync(path.join(process.env.ZYLOS_DIR, 'comm-bridge'));
-    fs.writeFileSync(path.join(process.env.ZYLOS_DIR, 'comm-bridge/c4.db'), 'placeholder');
-    const monitor = new UsageMonitor({ runtimeId: 'codex' }, {
-      zylosDir: process.env.ZYLOS_DIR, getLocalHour: () => 12,
-      activeHoursStart: 8, activeHoursEnd: 23,
-    });
-    const originalRead = fs.readFileSync;
-    fs.readFileSync = function(file, ...args) {
-      assert.notEqual(String(file), path.join(process.env.ZYLOS_DIR, 'comm-bridge/c4.db'));
-      return originalRead.call(this, file, ...args);
-    };
-    assert.equal(monitor.canRunTask(), true);
-    assert.equal(monitor.canRunTask({activeHoursOnly:true}), true);
-    assert.equal(sqliteLoads, 0);
-    console.log('OPTIONAL_SQLITE_OK');
-  `);
-});

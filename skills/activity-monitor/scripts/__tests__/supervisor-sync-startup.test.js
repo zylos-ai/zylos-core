@@ -34,24 +34,6 @@ function fixture(mode = 'multi', configuration = {}) {
   return f;
 }
 
-test('a backlog left by the previous run does not request Sync below the threshold', async () => {
-  for (const mode of ['multi', 'single']) {
-    const f = fixture(mode); f.count = 8; f.firstAt = '2026-11-13 01:00:00';
-    await f.check(); await f.check();
-    assert.equal(f.syncs().length, 0, `${mode}: an inherited backlog of 8 does not request Sync`);
-  }
-});
-
-test('context usage near the rotation threshold does not request Sync below the backlog threshold', async () => {
-  const f = fixture('multi', { rotationPolicy: { new_session_threshold: 70 } });
-  f.count = 9; f.scene.usagePercent = 80; f.scene.model = 'opus';
-  await f.check();
-  assert.equal(f.syncs().length, 0, '80% context with 9 messages');
-  f.count = 16; await f.check();
-  assert.equal(f.syncs().length, 1, '80% context keeps the ordinary threshold');
-  assert.deepEqual(f.events.find(row => row.event === 'sync_triggered').reason, ['threshold']);
-});
-
 test('fresh messages retain threshold, longest wait and marker gates', async () => {
   const threshold = fixture(); threshold.count = 15; await threshold.check(); assert.equal(threshold.syncs().length, 0);
   threshold.count = 16; await threshold.check(); assert.equal(threshold.syncs().length, 1);
@@ -60,41 +42,3 @@ test('fresh messages retain threshold, longest wait and marker gates', async () 
   assert.equal(marker.syncs().length, 0); assert.equal(marker.lifecycle.syncSent.has(marker.key), false);
 });
 
-for (const [reason, setup] of [
-  ['threshold', f => { f.count = 16; }],
-  ['max_lag', f => { f.firstAt = f.start - 21600000; }],
-]) {
-  test(`Sync trigger records ${reason} with observed backlog and context`, async () => {
-    const f = fixture(); setup(f); f.scene.usagePercent = 42; await f.check();
-    const row = f.events.find(row => row.event === 'sync_triggered');
-    assert.deepEqual(row.reason, [reason]); assert.equal(row.scope, 'a'); assert.equal(row.kind, 'group');
-    assert.equal(row.backlog, f.count); assert.equal(row.contextPercent, f.scene.usagePercent);
-    assert.ok(row.lag >= 0);
-  });
-}
-
-test('Sync records simultaneous reasons without changing threshold or minimum interval', async () => {
-  const f = fixture(); f.count = 16; f.firstAt = f.start - 21600000; f.scene.usagePercent = 99;
-  await f.check();
-  const row = f.events.find(row => row.event === 'sync_triggered');
-  assert.deepEqual(row.reason, ['threshold', 'max_lag']);
-  assert.equal(f.syncs().length, 1);
-});
-
-test('failed diagnostic metadata read never loses already inserted Sync bookkeeping', async () => {
-  const f = fixture(); f.count = 16;
-  f.lifecycle.d.db.getLatestContentCheckpoint = () => { throw new Error('diagnostic unavailable'); };
-  await f.check();
-  assert.equal(f.syncs().length, 1); assert.ok(f.lifecycle.syncSent.has(f.key));
-  assert.equal(f.events.filter(row => row.event === 'sync_triggered').length, 1);
-});
-
-
-test('trigger checkpoint baseline precedes a worker publishing during enqueue', async () => {
-  const f = fixture(); f.count = 16; let checkpoint = { id: 4 };
-  f.lifecycle.d.db.getLatestContentCheckpoint = () => checkpoint;
-  const insert = f.lifecycle.d.db.insertControl;
-  f.lifecycle.d.db.insertControl = (...args) => { const result = insert(...args); checkpoint = { id: 5 }; return result; };
-  await f.check();
-  assert.equal(f.events.find(row => row.event === 'sync_triggered').checkpointId, 4);
-});

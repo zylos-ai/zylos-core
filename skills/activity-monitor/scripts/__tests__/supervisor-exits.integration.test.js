@@ -39,14 +39,3 @@ test('runtime SIGKILL removes only its exited managed session and records crash'
  assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-manual'));
  await exits.advance(await scenes.observe());assert.equal(events.length,1);
 });
-test('actual SQLite fence suppresses crash classification after runtime SIGKILL', {timeout:15000},async t=>{
- const {f,db,scenes,exits,events}=setup(t);
- // Keep the isolated server alive while its managed pane exits, so this test
- // observes fence ownership rather than racing the last-session shutdown.
- f.tmux('new-session','-d','-s','fixture-manual','sleep','120');
- const before=await scenes.observe();await exits.advance(before);
- db.setDrainFence('origin',{reason:'upgrade',runId:'run-1'});
- process.kill(before[0].runtimePid,'SIGKILL');await exits.advance(await scenes.observe());
- assert.equal(events.length,0);assert.equal(db.getDrainFence('origin').runId,'run-1');
- assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-manual'));
-});

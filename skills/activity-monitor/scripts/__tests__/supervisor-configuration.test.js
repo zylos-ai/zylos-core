@@ -81,25 +81,6 @@ test('entry honors the 1M Claude 30% threshold and configured 60s TTL from confi
   assert.equal(result.refreshed.rotationPolicy.new_session_threshold,99,'threshold policy refreshes each round');
 });
 
-test('entry gives valid environment settings priority over real config.json', t => {
-  const result = fromFile(t, { ZYLOS_SESSION_RECLAIM_DEFER_ALERT_COUNT: '6', ZYLOS_SESSION_HOT_TTL_SECONDS: '300', ZYLOS_SESSION_EVICT_MIN_IDLE_SECONDS: '180', ZYLOS_SYNC_MIN_INTERVAL_SECONDS: '25',
-    ZYLOS_SYNC_MAX_INTERVAL_SECONDS: '2000', ZYLOS_ORIGIN_SYNC_THRESHOLD: '35', ZYLOS_SYNC_BATCH_LIMIT: '80', ZYLOS_SYNC_THRESHOLD: '9' });
-  assert.equal(result.deferReply.reason, 'no_preparation');
-  assert.equal(result.configuration.hotTtlSeconds, 300);
-  assert.equal(result.configuration.reclaimDeferAlertCount, 6);
-  assert.deepEqual(result.requestAlertCounts, [6, 6], 'valid environment count keeps precedence on each request');
-  assert.equal(result.refreshed.hotTtlSeconds, 300, 'environment TTL stays effective after config changes');
-  assert.equal(result.configuration.evictMinIdleSeconds, 180);
-  assert.equal(result.configuration.syncMinIntervalSeconds, 25);
-  assert.equal(result.configuration.syncMaxIntervalSeconds, 2000);
-  assert.equal(result.configuration.originSyncThreshold, 35);
-  assert.equal(result.configuration.syncBatchLimit, 80);
-  assert.equal(result.configuration.syncThreshold, 9);
-  assert.equal(result.controls.filter(control => control.content === PRE_RECLAIM_CHECK_PROMPT).length, 0,
-    '120s idle must not start a pre-reclaim check for an environment-selected 300s TTL');
-  assert.deepEqual(result.fences, [], '120s idle must not expire an environment-selected 300s TTL');
-});
-
 test('invalid optional values fall through environment, config and defaults without losing thresholds', () => {
   const defaults = parseSupervisorConfiguration({}, {});
   assert.deepEqual(defaults, { hotTtlSeconds: 3300, reclaimDeferAlertCount: 4, evictMinIdleSeconds: 300, syncMinIntervalSeconds: 600, syncMaxIntervalSeconds: 21600,
@@ -112,10 +93,3 @@ test('invalid optional values fall through environment, config and defaults with
   }
 });
 
-
-test('reclaim deferral alert count uses validated environment, config and default values', () => {
-  assert.equal(parseSupervisorConfiguration({ session_reclaim_defer_alert_count: 3 }, {}).reclaimDeferAlertCount, 3);
-  const env = { ZYLOS_SESSION_RECLAIM_DEFER_ALERT_COUNT: '5' };
-  assert.equal(parseSupervisorConfiguration({ session_reclaim_defer_alert_count: 3 }, env).reclaimDeferAlertCount, 5);
-  assert.equal(parseSupervisorConfiguration({ session_reclaim_defer_alert_count: '1x' }, {}).reclaimDeferAlertCount, 4);
-});

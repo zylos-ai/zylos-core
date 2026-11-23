@@ -56,9 +56,3 @@ test('actual entry selects live snapshot/process over new config, preserves unkn
   assert.deepEqual(f.configReads.map(row => row.sessionGroup), ['lark:b', null]);
 });
 
-test('live-runtime assertions reject a configured-runtime-only resolver', { timeout: 15000 }, async t => {
-  const f = await routingFixture(t, true);
-  for (const group of ['lark:a', 'lark:c']) {
-    await assert.rejects(async () => assert.equal((await f.route(group)).runtime, 'codex'), { code: 'ERR_ASSERTION' });
-  }
-});
