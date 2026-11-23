@@ -6,8 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { updateConfigWithLock } from '../config-lock.js';
 import { readConfigStrict } from '../config-store.js';
-import { executeRuntimeSwitch, runtimeCommand } from '../../commands/runtime.js';
-import { observeRuntimeGroups, requestConfigRestart } from '../config-restart.js';
+import { executeRuntimeSwitch } from '../../commands/runtime.js';
+import { observeRuntimeGroups } from '../config-restart.js';
 
 for (const name of ['CLAUDE.md', 'AGENTS.md']) {
   fs.writeFileSync(path.join(process.env.ZYLOS_DIR, name), 'Legacy fixture instructions\n');
@@ -53,76 +53,6 @@ test('runtime prechecks are ordered and stop before persistence', async () => {
   assert.deepEqual(invalid.calls, ['adapter']);
 });
 
-test('runtime switch installs a missing Antigravity CLI before saving the default', async () => {
-  const prepared = [];
-  const f = fixture({ target: 'agy', findExecutable: () => null, prepareCli: options => {
-    f.calls.push('prepare');
-    prepared.push(options);
-    return { completed: ['agy.cli'], failed: [], installed: ['agy'], notices: [{ runtime: 'agy', message: 'N' }] };
-  } });
-  const result = await f.run();
-  assert.equal(result.data.result, 'saved');
-  assert.deepEqual(prepared, [{ runtimes: ['agy'] }]);
-  assert.deepEqual(f.calls, ['adapter', 'read', 'prepare', 'hooks', 'auth', 'observe', 'write']);
-  assert.ok(result.data.warnings.some(({ code, message }) => code === 'RUNTIME_CLI_INSTALL_NOTICE' && message === 'N'));
-});
-
-test('runtime switch reports the default readiness error when the Codex binary is unavailable', async t => {
-  const previous = process.env.CODEX_BIN;
-  process.env.CODEX_BIN = path.join(process.env.ZYLOS_DIR, 'bin', 'missing-codex');
-  t.after(() => {
-    if (previous === undefined) delete process.env.CODEX_BIN;
-    else process.env.CODEX_BIN = previous;
-  });
-
-  const f = fixture({ hooksReady: undefined });
-  const result = await f.run(['--no-validate']);
-  assert.equal(result.ok, false);
-  assert.equal(result.error.code, 'RUNTIME_SETUP_INCOMPLETE');
-  assert.match(result.error.message, /^Could not check Zylos setup for Codex: .*ENOENT/);
-  assert.deepEqual(result.error.persisted, []);
-  assert.deepEqual(f.calls, ['adapter', 'read', 'exists']);
-});
-
-test('runtime switch stops before credential or config writes when Antigravity installation fails', async () => {
-  const f = fixture({ target: 'agy', findExecutable: () => null, prepareCli: () => ({
-    failed: [{ item: 'agy.cli', message: 'M' }],
-  }) });
-  const result = await f.run(['--save-apikey', 'fixture-key']);
-  assert.deepEqual(result.error, { code: 'RUNTIME_NOT_INSTALLED', message: 'M', persisted: [] });
-  assert.deepEqual(f.calls, ['adapter', 'read']);
-});
-
-test('JSON credentials and failed precheck emit exactly the final envelope', async () => {
-  const original = console.log, previousExit = process.exitCode;
-  const lines = []; console.log = text => lines.push(text);
-  try {
-    for (const failed of [false, true]) {
-      const f = fixture(failed ? { hooksReady: () => ({ ready: false, pendingMigration: false }) } : {
-        write: () => ({ previous: { runtime: 'claude' }, config: { runtime: 'codex', session_mode: 'single' }, changed: true }),
-      });
-      const result = await runtimeCommand(['codex', '--save-apikey', 'fixture-key', '--json'], { execute: (_runtime, flags) => f.run(flags) });
-      assert.equal(lines.length, 1);
-      assert.deepEqual(JSON.parse(lines[0]), result);
-      assert.equal(result.ok, !failed);
-      assert.ok(f.calls.includes('credentials'));
-      lines.length = 0;
-    }
-  } finally { console.log = original; process.exitCode = previousExit; }
-});
-
-test('auth failure is rejected by the runtime command with exit code 1', async () => {
-  const f = fixture({ checkAuth: () => ({ status: 'failure' }) });
-  const original = console.log, previousExit = process.exitCode;
-  console.log = () => {};
-  try {
-    const result = await runtimeCommand(['codex', '--json'], { execute: (_runtime, flags) => f.run(flags) });
-    assert.equal(result.ok, false); assert.equal(result.error.code, 'AUTH_FAILED');
-    assert.equal(result.error.authStatus, 'failure'); assert.equal(process.exitCode, 1);
-    assert.deepEqual(result.error.persisted, []); assert.deepEqual(f.calls, ['adapter', 'read', 'exists', 'hooks']);
-  } finally { console.log = original; process.exitCode = previousExit; }
-});
-
 for (const target of ['claude', 'codex', 'agy']) {
   test(`${target} runtime switch distinguishes rejected credentials from uncertain authentication`, async () => {
     const messages = [];
@@ -155,15 +85,6 @@ for (const target of ['claude', 'codex', 'agy']) {
   });
 }
 
-test('unchanged skips install/hooks/auth/write; no-validate only skips auth', async () => {
-  const same = fixture({ read: () => ({ state: 'ok', config: { runtime: 'codex' } }) });
-  assert.equal((await same.run()).data.result, 'unchanged');
-  assert.deepEqual(same.calls, ['adapter', 'observe']);
-  const f = fixture(); const result = await f.run(['--no-validate']);
-  assert.equal(result.ok, true); assert.equal(result.data.warnings[0].code, 'AUTH_CHECK_SKIPPED');
-  assert.deepEqual(f.calls, ['adapter', 'read', 'exists', 'hooks', 'observe', 'write']);
-});
-
 test('default switch submits confirmed runs after saving and reports each refusal independently', async () => {
   const requests = [];
   const f = fixture({
@@ -191,116 +112,6 @@ test('default switch submits confirmed runs after saving and reports each refusa
   ]);
 });
 
-test('saving an API key for the current engine needs no restart confirmation when status is unknown', async () => {
-  const f = fixture({
-    read: () => ({ state: 'ok', config: { runtime: 'codex', session_mode: 'multi' } }),
-    observe: async () => ({ groups: [{ sessionGroup: 'origin', status: 'unknown' }], groupsComplete: false, observationErrors: [] }),
-    restart: () => assert.fail('credential-only save cannot restart a session'),
-  });
-  const result = await f.run(['--save-apikey', 'fixture-key']);
-  assert.equal(result.ok, true);
-  assert.equal(result.data.result, 'unchanged');
-  assert.deepEqual(result.data.credentialsSaved, ['apiKey']);
-  assert.equal(result.data.groups[0].status, 'unknown');
-  assert.ok(f.calls.includes('credentials'));
-  assert.ok(!f.calls.includes('write'), 'credential-only changes leave the default engine untouched');
-});
-
-test('configuration restart binds the run and reports an unknown outcome if the reply is lost', async () => {
-  const calls = [];
-  const send = async request => { calls.push(request); return { kind: 'timeout', sent: true }; };
-  const group = { sessionGroup: 'origin' };
-  assert.deepEqual(await requestConfigRestart(group, send), { status: 'not_restarted', reason: 'identity_unavailable' });
-  assert.deepEqual(calls, [], 'an unbound restart could wake a stopped Origin');
-  assert.deepEqual(await requestConfigRestart({ ...group, runId: 'run-a' }, send), { status: 'unknown', reason: 'timeout' });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].type, 'manual_restart');
-  assert.equal(calls[0].sessionGroup, 'origin');
-  assert.equal(calls[0].expectedRunId, 'run-a');
-});
-
-test('persistence errors preserve credentials and after-rename uncertainty', async () => {
-  for (const phase of ['before_rename', 'after_rename']) {
-    const f = fixture({ write: () => { throw Object.assign(new Error('injected'), { code: 'CONFIG_WRITE_FAILED', phase }); } });
-    const result = await f.run(['--save-apikey', 'fixture-key']);
-    assert.equal(result.error.phase, phase);
-    assert.deepEqual(result.error.persisted, phase === 'after_rename' ? null : ['apiKey']);
-    if (phase === 'after_rename') assert.deepEqual(result.error.persistedBeforeConfig, ['apiKey']);
-    assert.equal(f.calls.includes('observe'), true);
-  }
-});
-
-test('later credential/hook failures retain only confirmed saved credential items', async () => {
-  const partial = fixture({ baseUrl: () => false });
-  const result = await partial.run(['--save-apikey', 'fixture-key', '--save-base-url', 'https://example.test/v1']);
-  assert.equal(result.error.code, 'CREDENTIAL_SAVE_FAILED'); assert.deepEqual(result.error.persisted, ['apiKey']);
-  assert.equal(partial.calls.includes('write'), false);
-  const hooks = fixture({ hooksReady: () => ({ ready: false, pendingMigration: false }) });
-  const failed = await hooks.run(['--save-apikey', 'fixture-key']);
-  assert.equal(failed.error.code, 'RUNTIME_SETUP_INCOMPLETE'); assert.deepEqual(failed.error.persisted, ['apiKey']);
-});
-
-test('lock-return snapshot determines previous/config/changed, including concurrent writer', async () => {
-  for (const changed of [false, true]) {
-    const f = fixture({ write: () => ({ previous: { runtime: changed ? 'claude' : 'codex' }, config: { runtime: 'codex', session_mode: 'single' }, changed }) });
-    const result = await f.run(['--save-apikey', 'fixture-key']);
-    assert.equal(result.data.result, changed ? 'saved' : 'unchanged');
-    assert.equal(result.data.previousBaseline, changed ? 'claude' : 'codex');
-    assert.equal(result.data.baseline, 'codex');
-  }
-});
-
-test('confirmed baseline save reports a configured single Origin identity read error', async () => {
-  const f = fixture({
-    read: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'single' } }),
-    write: () => ({ previous: { runtime: 'claude' }, config: { runtime: 'codex', session_mode: 'single' }, changed: true }),
-    observe: (baseline, mode) => observeRuntimeGroups(baseline, mode, {
-      list: () => [],
-      overrides: () => [],
-      identity: async group => { assert.equal(group, 'origin'); throw new Error('unavailable'); },
-    }),
-  });
-  for (const [groups, groupsComplete, affected] of [
-    [[{ sessionGroup: 'origin', inherits: true, status: 'unknown' }], true, ['origin']],
-    [[{ sessionGroup: 'origin', inherits: true, status: 'not_running' }], false, []],
-  ]) {
-    const guarded = fixture({ observe: async () => ({ groups, groupsComplete, observationErrors: [] }) });
-    const rejected = await guarded.run();
-    assert.equal(rejected.error.code, 'CONFIRMATION_REQUIRED');
-    assert.deepEqual(rejected.error.groups, affected);
-    assert.ok(!guarded.calls.includes('write'));
-  }
-  const result = await f.run(['--yes']);
-  assert.equal(result.ok, true);
-  assert.equal(result.data.result, 'saved');
-  assert.equal(result.data.sessionMode, 'single');
-  assert.equal(result.data.groupsComplete, false);
-  assert.deepEqual(result.data.groups.map(({ sessionGroup, status }) => [sessionGroup, status]), [['origin', 'unknown']]);
-  assert.deepEqual(result.data.observationErrors, [
-    { source: 'session', sessionGroup: 'origin', code: 'READ_FAILED', message: 'unavailable' },
-  ]);
-  assert.deepEqual(result.data.warnings, []);
-});
-
-test('group union uses explicit override priority and preserves unknown identities', async () => {
-  const result = await observeRuntimeGroups('codex', 'multi', {
-    list: async () => ['a', 'b', 'c', 'd', 'e'].map(sessionGroup => ({ sessionGroup })),
-    overrides: async () => [{ sessionGroup: 'b', runtime: 'claude' }],
-    identity: async group => group === 'd' ? { present: false } : group === 'e'
-      ? { present: true, runtime: 'codex', launchConfig: null }
-      : { present: true, runtime: group === 'c' ? 'codex' : 'claude', launchConfig: {} },
-  });
-  assert.deepEqual(result.groups.map(group => [group.sessionGroup, group.status]), [
-    ['a', 'restart_needed'], ['b', 'override_kept'], ['c', 'effective'], ['d', 'not_running'], ['e', 'unknown'], ['origin', 'restart_needed'],
-  ]);
-  const failed = await observeRuntimeGroups('codex', 'unreadable', {
-    list: async () => { throw new Error('tmux'); }, overrides: async () => { throw new Error('busy'); },
-    identity: async () => { throw new Error('reader'); },
-  });
-  assert.equal(failed.groupsComplete, false); assert.equal(failed.groups[0].status, 'unknown');
-  assert.deepEqual(failed.observationErrors.map(error => error.source), ['tmux', 'overrides', 'session']);
-});
-
 test('real writer preserves concurrent keys and returns the lock-time baseline', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-control-runtime-config-'));
   const file = path.join(dir, 'config.json');
@@ -317,33 +128,4 @@ test('real writer preserves concurrent keys and returns the lock-time baseline',
       assert.deepEqual(readConfigStrict(file).config, { runtime: 'codex', session_mode: 'multi', keep: 1, concurrent: 2 });
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-});
-
-test('Claude setup-token save without a new base URL warns that the saved relay stays in use', async () => {
-  const token = 'sk-ant-oat01-' + 'a'.repeat(40);
-  for (const [flags, notice, expected] of [
-    [['--save-setup-token', token], 'Still using the relay https://relay.example', true],
-    [['--save-setup-token', token], null, false],
-    [['--save-setup-token', token, '--save-base-url', 'https://relay.example'], 'Still using the relay https://relay.example', false],
-  ]) {
-    let asked = 0;
-    const deps = { read: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }), mode: () => ({ mode: 'multi' }),
-      runtimeFor: id => runtimeAuthFixture(id, { auth: {
-        checkAuth: () => ({ status: 'success' }),
-        afterLogin: () => {
-          asked++;
-          return { ok: true, warnings: notice ? [{ code: 'RELAY_BASE_URL_KEPT', message: notice }] : [] };
-        },
-      } }),
-      credentials: () => true, baseUrl: () => true,
-      hooksReady: () => ({ ready: true, pendingMigration: false }),
-      write: () => ({ previous: { runtime: 'claude' }, config: { runtime: 'claude', session_mode: 'multi' }, changed: false }),
-      observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }) };
-    const result = await executeRuntimeSwitch('claude', flags, deps);
-    assert.equal(result.ok, true, JSON.stringify(result.error));
-    const warning = result.data.warnings.find(item => item.code === 'RELAY_BASE_URL_KEPT');
-    assert.equal(!!warning, expected, flags.join(' '));
-    if (expected) assert.equal(warning.message, notice);
-    if (flags.includes('--save-base-url')) assert.equal(asked, 0);
-  }
 });

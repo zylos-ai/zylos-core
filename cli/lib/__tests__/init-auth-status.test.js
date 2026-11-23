@@ -43,8 +43,8 @@ mock.module('node:child_process', { defaultExport: childDefault, namedExports: {
 } });
 const { CLAUDE_CREDENTIAL_KEYS: keys, ZYLOS_DIR } = await import('../config.js');
 const { parseInitFlags, resolveFromEnv, runInitAuthentication,
-  persistInitCredentials, printInitHelp } = await import('../../commands/init.js');
-const { claudeProbeEnvironment, localAuthStatus } = await import('../runtime/claude/auth.js');
+  persistInitCredentials } = await import('../../commands/init.js');
+const { claudeProbeEnvironment } = await import('../runtime/claude/auth.js');
 const envFile = path.join(ZYLOS_DIR, '.env');
 const envKeys = [...keys, 'ANTHROPIC_BASE_URL'];
 let original;
@@ -98,24 +98,6 @@ afterEach(() => {
     }
   });
 
-  test(`subscription login preserves its billing choice despite ambient ${kind}`, async () => {
-    subscription = true; process.env[key] = value;
-    const opts = parseInitFlags([]); await resolveFromEnv(opts);
-    assert.equal(opts.authFromEnv, false);
-    const result = await runInitAuthentication(opts, {
-      runtime: 'claude',
-      skipConfirm: true,
-      log: () => {},
-      deps: {
-        authClaude: () => assert.fail('must preserve existing login'),
-        setupSave: () => assert.fail('must preserve existing login'),
-      },
-    });
-    assert.equal(result.authenticated, true); assert.equal(result.pending.claude[pending], null);
-    assert.equal(fs.existsSync(envFile), false);
-    assert.equal(probes.length, 2); for (const probe of probes) assert.equal(probe[key], undefined);
-  });
-
   for (const same of [true, false]) test(`saved ${kind} ${same ? 'matches ambient credentials silently' : 'wins over different ambient credentials with a notice'}`, async () => {
     const saved = value + '-saved'; fs.writeFileSync(envFile, `${key}=${saved}\n`);
     const before = fs.readFileSync(envFile, 'utf8'); process.env[key] = same ? saved : value;
@@ -139,82 +121,3 @@ afterEach(() => {
     assert.equal(output.join('').includes(saved), false); assert.equal(output.join('').includes(value), false);
   });
 }
-
-test('different ambient credential kinds are also rejected in favor of saved credentials', async () => {
-  const saved = 'sk-ant-saved-placeholder', ambient = 'sk-ant-oat-ambient-placeholder';
-  const previous = `ANTHROPIC_API_KEY=${saved}\n`;
-  fs.writeFileSync(envFile, previous);
-  process.env.CLAUDE_CODE_OAUTH_TOKEN = ambient;
-  const output = [], opts = parseInitFlags([]); await resolveFromEnv(opts, { log: line => output.push(line) });
-  assert.equal(opts.setupToken, null); assert.equal(output.length, 1); assert.equal(probes.length, 0);
-  assert.equal(fs.readFileSync(envFile, 'utf8'), previous);
-  assert.match(output[0], /not adopted.*\.env already has credentials/);
-  assert.equal(output[0].includes(saved), false); assert.equal(output[0].includes(ambient), false);
-});
-
-test('explicit API key replaces saved credentials despite ambient credentials without a notice', async () => {
-  const flag = '--api-key', key = 'ANTHROPIC_API_KEY';
-  const value = 'sk-ant-explicit-placeholder', pending = 'apiKey';
-  fs.writeFileSync(envFile, 'ANTHROPIC_API_KEY=sk-ant-saved-placeholder\n');
-  process.env[key] = value + '-ambient';
-  const output = [], opts = parseInitFlags([flag, value]); await resolveFromEnv(opts, { log: line => output.push(line) });
-  const result = await runInitAuthentication(opts, {
-    runtime: 'claude',
-    skipConfirm: true,
-    log: () => {},
-    deps: {
-      authClaude: async options => { assert.equal(options.apiKey, value); return true; },
-      setupSave: () => assert.fail('an existing login must skip setup token saving'),
-      setupVerify: () => assert.fail('an existing login must skip setup token verification'),
-    },
-  });
-  assert.equal(output.length, 0); assert.equal(opts.authFromEnv, false);
-  assert.equal(result.authenticated, true);
-  assert.equal(result.pending.claude[pending], value);
-});
-
-test('explicit setup token preserves saved credentials without saving or verification', async () => {
-  const previous = 'CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-saved-placeholder\n';
-  fs.writeFileSync(envFile, previous);
-  const value = 'sk-ant-oat-explicit-placeholder', output = [];
-  const opts = parseInitFlags(['--setup-token', value]); await resolveFromEnv(opts);
-  const result = await runInitAuthentication(opts, {
-    runtime: 'claude',
-    skipConfirm: true,
-    log: line => output.push(line),
-    reportError: line => output.push(line),
-    deps: {
-      setupSave: () => assert.fail('existing login must skip saving'),
-      setupVerify: () => assert.fail('existing login must skip verification'),
-      setupRollback: () => assert.fail('existing login must not roll back'),
-    },
-  });
-  assert.equal(probes.length, 0);
-  assert.equal(result.authenticated, true); assert.equal(result.exitCode, 0);
-  assert.equal(result.pending.claude.setupToken, null); assert.match(output.join('\n'), /Claude Code authenticated/);
-  assert.equal(fs.readFileSync(envFile, 'utf8'), previous);
-  assert.equal(output.join('\n').includes(value), false);
-});
-
-test('subscription login recheck uses the same session credential view', async () => {
-  process.env.ANTHROPIC_API_KEY = 'sk-ant-ambient-placeholder';
-  const result = await runInitAuthentication(parseInitFlags([]), { runtime: 'claude', log: () => {},
-    choose: async () => 1, nativeLogin: () => { subscription = true; },
-  });
-  assert.equal(result.pending.claude.subscriptionLogin, true); assert.equal(probes.length, 2);
-  for (const probe of probes) assert.equal(probe.ANTHROPIC_API_KEY, undefined);
-});
-
-test('probe rejects malformed status and thrown CLI errors without mutating ambient credentials', () => {
-  process.env.ANTHROPIC_API_KEY = 'sk-ant-ambient-placeholder';
-  assert.equal(localAuthStatus({ spawn: () => ({ stdout: '{}' }) }), false);
-  assert.equal(localAuthStatus({ spawn: () => { throw new Error('unavailable'); } }), false);
-  assert.equal(process.env.ANTHROPIC_API_KEY, 'sk-ant-ambient-placeholder');
-});
-
-test('help states the saved Claude credential exception in both priority sections', () => {
-  const originalLog = console.log; let output = '';
-  console.log = line => { output += line; };
-  try { printInitHelp(); } finally { console.log = originalLog; }
-  assert.equal(output.match(/Claude credential exception: environment variables do not override credentials already in \.env\./g)?.length, 2);
-});

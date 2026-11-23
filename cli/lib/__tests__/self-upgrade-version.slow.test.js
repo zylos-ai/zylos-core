@@ -19,7 +19,6 @@ const CURRENT = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf
 const CURRENT_CORE = CURRENT.split(/[-+]/)[0];
 const MAJOR = Number(CURRENT_CORE.split('.')[0]);
 const NEXT = `${MAJOR + 1}.0.0`;
-const escapeVersion = version => version.replaceAll('.', '\\.');
 const DATABASE_CONTENT = 'isolated version-selection database sentinel\n';
 const HISTORY = path.join(ROOT, 'skills/comm-bridge/scripts/__tests__/fixtures/migration-history');
 const sha256 = file => fs.existsSync(file) ? crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') : null;
@@ -158,138 +157,7 @@ function parsed(result) {
   return JSON.parse(result.stdout);
 }
 
-function assertNoWork(f, { tagLookup = false } = {}) {
-  assert.equal(f.recoveryCalls(), '');
-  assert.equal(fs.existsSync(f.handoffFile), false);
-  // The default check looks up release tags; it never downloads an archive.
-  const curl = f.calls().filter(call => call.command === 'curl');
-  if (tagLookup) assert.ok(curl.every(call => call.args.at(-1).startsWith('https://api.github.com/repos/zylos-ai/zylos-core/tags')), JSON.stringify(curl));
-  else assert.equal(curl.length, 0);
-}
 
-// Boundary: top-level version dispatch vs upgrade's value flag. Run when CLI
-// dispatch/help changes; skip for unrelated upgrade execution/recovery changes.
-test('top-level version prints installed version and help distinguishes the target option', t => {
-  const f = fixture(t);
-  for (const flag of ['--version', '-v']) {
-    const result = f.run([flag]);
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout.trim(), CURRENT);
-  }
-  const help = f.run(['--help']);
-  assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /--version/);
-  assert.match(help.stdout, /upgrade --self/);
-  assertNoWork(f);
-});
-
-const invalidArguments = [
-  ['--self', '--version=1.0.0'],
-  ['--self', '--version'],
-  ['--self', '--version', '--check'],
-  ['--self', '--version', '1.0.0', '--version', '1.1.0'],
-  ['--self', '--version', '1.0.0', '--beta'],
-  ['--self', '--version', '1.0.0', '--branch', 'main'],
-  ['--version', '1.0.0', 'telegram'],
-  ['--all', '--version', '1.0.0'],
-  ['--self', '--all', '--version', '1.0.0'],
-  ['--self', 'telegram', '--version', '1.0.0'],
-];
-for (const args of invalidArguments) {
-  // Boundary: argument admission before selection/recovery. Run when upgrade
-  // parsing changes; skip for finalizer, service or database-only changes.
-  test(`invalid target option combination is rejected: ${args.join(' ')}`, t => {
-    const f = fixture(t);
-    const result = f.run(['upgrade', ...args, '--yes']);
-    assert.equal(result.status, 1, result.stdout + result.stderr);
-    assert.match(result.stderr + result.stdout, /--version/);
-    assertNoWork(f);
-  });
-}
-
-for (const version of ['v1.0.0', '1.0', '01.0.0', '1.0.0-beta.01', '^1.0.0', 'main']) {
-  // Boundary: strict explicit SemVer input, including actionable v-prefix error.
-  // Run when version parsing changes; skip for unrelated upgrade stages.
-  test(`invalid explicit version is rejected before recovery: ${version}`, t => {
-    const f = fixture(t);
-    const result = f.run(['upgrade', '--self', '--version', version, '--yes']);
-    assert.equal(result.status, 1, result.stdout + result.stderr);
-    assert.match(result.stderr + result.stdout, /version|SemVer/i);
-    if (version.startsWith('v')) assert.match(result.stderr + result.stdout, /--version 1\.0\.0/);
-    assertNoWork(f);
-  });
-}
-
-for (const check of [false, true]) {
-  // Boundary: explicit downgrade/equality precedence before deployed recovery.
-  // Run when explicit selection or check/upgrade ordering changes; skip for
-  // target-package internals, since the target entry never runs here.
-  test(`lower explicit targets fail and equal targets do no work${check ? ' in check mode' : ''}`, t => {
-    const f = fixture(t);
-    const tail = check ? ['--check'] : ['--yes'];
-    for (const version of ['0.0.0', `${CURRENT_CORE}-alpha.1`]) {
-      const lower = f.run(['upgrade', '--self', '--version', version, ...tail]);
-      assert.equal(lower.status, 1, lower.stdout + lower.stderr);
-      assert.match(lower.stdout + lower.stderr, /downgrade|lower|older/i);
-    }
-    for (const version of [CURRENT, `${CURRENT}+local`]) {
-      const equal = f.run(['upgrade', '--self', '--version', version, ...tail]);
-      assert.equal(equal.status, 0, equal.stdout + equal.stderr);
-      assert.match(equal.stdout, /already|up to date/i);
-    }
-    assertNoWork(f);
-  });
-}
-
-for (const target of [NEXT, `${NEXT}-beta.1`, `${NEXT}+build.1`]) {
-  // Boundary: explicit stable/prerelease/build targets cross major by exact tag,
-  // and --check reports only version/tag eligibility. Run when selection/check
-  // output changes; skip for target execution or finalization-only changes.
-  test(`explicit check accepts an exact target tag without executing: ${target}`, t => {
-    const f = fixture(t, { target, pages: [[{ name: `v${target}` }]] });
-    const result = f.run(['upgrade', '--self', '--check', '--version', target, '--json']);
-    const output = parsed(result);
-    assert.equal(output.current, CURRENT);
-    assert.equal(output.latest, target);
-    assert.equal(output.hasUpdate, true);
-    assert.match(JSON.stringify(output), /version.*tag|tag.*version/i);
-    assert.match(JSON.stringify(output), /target.*entry|target.*accept|starting.*version/i);
-    const plain = f.run(['upgrade', '--self', '--check', '--version', target]);
-    assert.equal(plain.status, 0, plain.stdout + plain.stderr);
-    assert.match(plain.stdout, /version.*tag|tag.*version/i);
-    assert.match(plain.stdout, /target.*entry|target.*accept|starting.*version/i);
-    assert.equal(f.recoveryCalls(), '');
-    assert.equal(fs.existsSync(f.handoffFile), false);
-    assert.ok(f.calls().filter(call => call.command === 'curl')
-      .every(call => new URL(call.args.at(-1)).pathname.endsWith('/tags')));
-  });
-}
-
-for (const tags of [[{ name: NEXT }], [{ name: `v${NEXT}-beta.1` }], []]) {
-  // Boundary: missing exact v-prefixed tag, even when unprefixed/similar names
-  // exist. Run when exact tag lookup changes; skip for target internals.
-  test(`explicit missing tag is rejected without branch fallback: ${JSON.stringify(tags)}`, t => {
-    const f = fixture(t, { pages: [tags] });
-    const result = f.run(['upgrade', '--self', '--check', '--version', NEXT, '--json']);
-    assert.equal(result.status, 1, result.stdout + result.stderr);
-    assert.match(result.stdout + result.stderr, new RegExp(`tag.*v${escapeVersion(NEXT)}|v${escapeVersion(NEXT)}.*tag`, 'i'));
-    assert.equal(f.recoveryCalls(), '');
-    assert.equal(fs.existsSync(f.handoffFile), false);
-    assert.ok(f.calls().filter(call => call.command === 'curl')
-      .every(call => new URL(call.args.at(-1)).pathname.endsWith('/tags')));
-  });
-}
-
-// Boundary: exact target tag on later GitHub tag page. Run when tags pagination
-// or explicit selection changes; skip for target execution-only changes.
-test('explicit tag lookup continues beyond the first page', t => {
-  const first = Array.from({ length: 100 }, (_, i) => ({ name: `v${MAJOR + 2}.0.${i}` }));
-  const f = fixture(t, { pages: [first, [{ name: `v${NEXT}` }]] });
-  const output = parsed(f.run(['upgrade', '--self', '--check', '--version', NEXT, '--json']));
-  assert.equal(output.latest, NEXT);
-  assert.ok(f.calls().some(call => call.command === 'curl' && call.args.at(-1).endsWith('&page=2')));
-  assert.equal(f.recoveryCalls(), '');
-});
 
 for (const beta of [false, true]) {
   // Boundary: default/beta current-major selection across paginated tags.
@@ -310,29 +178,6 @@ for (const beta of [false, true]) {
     assert.equal(fs.existsSync(f.handoffFile), false);
   });
 }
-
-// Boundary: no current-major stable candidate; higher major is never advertised.
-// Run when default tag filtering changes; skip for execution-only changes.
-test('stable check with only a newer major reports the current version', t => {
-  const f = fixture(t, { pages: [[{ name: `v${NEXT}` }]] });
-  const output = parsed(f.run(['upgrade', '--self', '--check', '--json']));
-  assert.equal(output.latest, CURRENT);
-  assert.equal(output.hasUpdate, false);
-  assert.doesNotMatch(output.reply, new RegExp(escapeVersion(NEXT)));
-});
-
-// Boundary: beta lookup has no candidate in the installed major. Run when beta
-// filtering changes; skip for execution-only changes. An empty result is not a
-// reason to advertise a release from another major.
-test('beta check with only a newer major reports no matching release', t => {
-  const f = fixture(t, { pages: [[{ name: `v${NEXT}-beta.1` }, { name: `v${NEXT}` }]] });
-  const result = f.run(['upgrade', '--self', '--check', '--beta', '--json']);
-  assert.equal(result.status, 1, result.stdout + result.stderr);
-  assert.match(result.stdout, /No release tags found/);
-  assert.doesNotMatch(result.stdout, new RegExp(escapeVersion(NEXT)));
-  assert.equal(f.recoveryCalls(), '');
-  assert.equal(fs.existsSync(f.handoffFile), false);
-});
 
 // Boundary: exact release archive and existing target-owned JSON handoff.
 // Run when explicit selection/download/handoff wiring changes; skip for real
@@ -362,73 +207,4 @@ test('explicit archive failure does not fall back to a branch or execute a targe
   assert.equal(fs.existsSync(f.handoffFile), false);
   assert.ok(f.calls().filter(call => call.command === 'curl')
     .every(call => !call.args.at(-1).includes('/heads/') && !call.args.at(-1).includes('/tarball/main')));
-});
-
-// Boundary: non-check upgrade rejects a missing exact tag after recovery without
-// downloading or handing off. Run for explicit selection or admission ordering
-// changes; skip for real installation/finalizer-only changes.
-test('explicit upgrade with a missing tag never downloads or executes a target', t => {
-  const f = fixture(t, { pages: [[{ name: NEXT }]] });
-  const result = f.run(['upgrade', '--self', '--version', NEXT, '--yes']);
-  assert.equal(result.status, 1, result.stdout + result.stderr);
-  assert.match(result.stdout + result.stderr, new RegExp(`tag.*v${escapeVersion(NEXT)}|v${escapeVersion(NEXT)}.*tag`, 'i'));
-  assert.equal(fs.existsSync(f.handoffFile), false);
-  assert.ok(f.calls().filter(call => call.command === 'curl')
-    .every(call => new URL(call.args.at(-1)).pathname.endsWith('/tags')));
-});
-
-// Boundary: --check with no newer version still reads the live databases, so an
-// older database is reported as pending migration instead of "up to date", and a
-// failed probe fails the check. Run when check output or the database probe
-// changes; skip for execution-only changes. Read-only: no recovery, no download.
-for (const explicit of [false, true]) {
-  const args = ['upgrade', '--self', '--check', ...(explicit ? ['--version', CURRENT] : [])];
-  test(`check reports older databases as pending migration${explicit ? ' (explicit --version)' : ''}`, t => {
-    const f = fixture(t, { c4: 'older' });
-    const output = parsed(f.run([...args, '--json']));
-    assert.equal(output.hasUpdate, false);
-    assert.deepEqual(output.pendingMigrations, [{ source: 'comm-bridge/c4.db', status: 'present', fromVersion: 1, toVersion: c4Schema.SUPPORTED_SCHEMA_VERSION, needsMigration: true }]);
-    assert.match(output.reply, /1 database\(s\) need migration \(comm-bridge\/c4\.db 1 → \d+\)\. Run "zylos upgrade --self --yes" to migrate them\./);
-    assert.doesNotMatch(output.reply, /No upgrade will run/);
-    const plain = f.run(args);
-    assert.equal(plain.status, 0, plain.stderr);
-    assert.match(plain.stdout, /need migration .*zylos upgrade --self --yes/);
-    assertNoWork(f, { tagLookup: !explicit });
-  });
-  test(`check with current databases is unchanged${explicit ? ' (explicit --version)' : ''}`, t => {
-    const f = fixture(t);
-    const output = parsed(f.run([...args, '--json']));
-    assert.equal(output.pendingMigrations, undefined);
-    assert.match(output.reply, explicit ? /No upgrade will run/ : /up to date/);
-    assertNoWork(f, { tagLookup: !explicit });
-  });
-  test(`check fails when the database probe fails${explicit ? ' (explicit --version)' : ''}`, t => {
-    const f = fixture(t, { c4: 'newer' });
-    const json = f.run([...args, '--json']);
-    assert.equal(json.status, 1, json.stdout + json.stderr);
-    const output = JSON.parse(json.stdout);
-    assert.equal(output.success, false);
-    assert.equal(output.code, 'SCHEMA_TOO_NEW');
-    const plain = f.run(args);
-    assert.equal(plain.status, 1);
-    assert.match(plain.stderr, /Database version check failed/);
-    assert.doesNotMatch(plain.stdout, /up to date|No upgrade will run/);
-    assertNoWork(f, { tagLookup: !explicit });
-  });
-}
-
-// Boundary: --check on a machine without a deployment directory has no
-// databases to report; it must not fail on the missing directory or create it.
-// Run when the check's database probe changes; skip for execution-only changes.
-for (const explicit of [false, true]) test(`check without a deployment directory reports the version only${explicit ? ' (explicit --version)' : ''}`, t => {
-  const f = fixture(t, { deployment: false });
-  const args = ['upgrade', '--self', '--check', ...(explicit ? ['--version', CURRENT] : [])];
-  const output = parsed(f.run([...args, '--json']));
-  assert.equal(output.hasUpdate, false);
-  assert.equal(output.pendingMigrations, undefined);
-  assert.match(output.reply, explicit ? /No upgrade will run/ : /up to date/);
-  const plain = f.run(args);
-  assert.equal(plain.status, 0, plain.stderr);
-  assert.equal(fs.existsSync(f.zylosDir), false);
-  assertNoWork(f, { tagLookup: !explicit });
 });

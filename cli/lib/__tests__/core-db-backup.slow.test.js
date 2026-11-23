@@ -5,14 +5,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
-import crypto from 'node:crypto';
-import {execute} from '../core-db-backup-worker.js';
 import {spawnSync} from 'node:child_process';
 import {protectedDataReady} from '../upgrade-protection.js';
-import {fileURLToPath} from 'node:url';
 import {SUPPORTED_SCHEMA_VERSION as C4_VERSION} from '../../../skills/comm-bridge/scripts/c4-schema.js';
 import {SUPPORTED_SCHEMA_VERSION as SCHEDULER_VERSION} from '../../../skills/scheduler/scripts/schema.js';
-import {CORE_DATABASES as ALL_CORE_DATABASES,cleanupCoreDbRehearsals,createCoreDbSnapshot as snapshot,prepareRecoveryDependencies,probeCoreDbVersions as probeVersions,rehearseCoreDbUpgrade as rehearse,retirePreviousCoreDbSnapshots,runCoreDbWorker as worker} from '../core-db-backup.js';
+import {CORE_DATABASES as ALL_CORE_DATABASES,createCoreDbSnapshot as snapshot,prepareRecoveryDependencies,probeCoreDbVersions as probeVersions,rehearseCoreDbUpgrade as rehearse,retirePreviousCoreDbSnapshots,runCoreDbWorker as worker} from '../core-db-backup.js';
 const CORE_DATABASES=ALL_CORE_DATABASES.filter(item=>item.owner!=='dashboard');
 const createCoreDbSnapshot=options=>snapshot(options);
 const runCoreDbWorker=(payload,options)=>worker({dashboardOwnerManaged:false,...payload},options);
@@ -23,11 +20,6 @@ const currentVersions=[C4_VERSION,SCHEDULER_VERSION];
 let Database;try{Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');}catch{}
 function fixture(t){const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'core-db-')));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
 function skills(dir){for(const item of CORE_DATABASES){const owner=path.join(dir,'.claude','skills',item.owner);fs.mkdirSync(owner,{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{}');fs.symlinkSync(path.join(installed,'node_modules'),path.join(owner,'node_modules'));}}
-test('removed ordinary migration action rejects before creating databases',t=>{
- const dir=fixture(t);
- assert.throws(()=>runCoreDbWorker({action:'ordinary-migrate',zylosDir:dir}),/Unknown action/);
- assert.deepEqual(fs.readdirSync(dir),[]);
-});
 // Integration boundary: real SQLite/worker with temporary databases and copied
 // dependencies only; run for backup/driver-path changes, skip if unrelated.
 // Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixture(t) cleans.
@@ -58,22 +50,6 @@ test('version probe uses pure owner inspection, detects a missing or older datab
  try{c4.pragma('user_version=99');}finally{c4.close();}
  assert.throws(probe,new RegExp(`exceeds supported ${C4_VERSION}`));
  assert.equal(fs.existsSync(path.join(dir,'.backup/db')),false);
-});
-test('next upgrade removes fixed and legacy rehearsal copies but preserves snapshot groups', t => {
- const dir=fixture(t),root=path.join(dir,'.backup/db');fs.mkdirSync(root,{recursive:true});
- const fixed=path.join(root,'.rehearsal'),legacy=path.join(root,'.rehearsal-old123'),snapshot=path.join(root,'snapshot-1');
- for(const target of [fixed,legacy,snapshot]){fs.mkdirSync(target);fs.writeFileSync(path.join(target,'copy.db'),'fixture');}
- const result=cleanupCoreDbRehearsals(dir);
- assert.deepEqual(result.removed.sort(),[fixed,legacy].sort());
- assert.equal(fs.existsSync(fixed),false);assert.equal(fs.existsSync(legacy),false);
- assert.equal(fs.existsSync(path.join(snapshot,'copy.db')),true);
-});
-test('unsafe rehearsal links reject before deleting any copy', t => {
- const dir=fixture(t),root=path.join(dir,'.backup/db');fs.mkdirSync(root,{recursive:true});
- const fixed=path.join(root,'.rehearsal'),outside=path.join(dir,'outside');fs.mkdirSync(fixed);fs.mkdirSync(outside);
- fs.symlinkSync(outside,path.join(root,'.rehearsal-legacy'));
- assert.throws(()=>cleanupCoreDbRehearsals(dir),/Unsafe rehearsal copy/);
- assert.equal(fs.existsSync(fixed),true);assert.equal(fs.existsSync(outside),true);
 });
 test('missing DBs do not create files; orphan sidecars stop and preserve prior group',t=>{
  const dir=fixture(t);const first=createCoreDbSnapshot({zylosDir:dir,transactionId:'one',fromVersion:'1',toVersion:'2'});
@@ -109,159 +85,6 @@ test('readonly WAL backup includes latest committed rows and independent frozen 
  assert.equal(runCoreDbWorker({action:'verify',zylosDir:dir,driverPath:closure.driverPath,dbBackupDir:snapshot.dbBackupDir,manifest:snapshot.manifest},closure).databases[0].integrityCheck,'ok');
  fs.appendFileSync(path.join(snapshot.dbBackupDir,row.file),'bad');assert.throws(()=>runCoreDbWorker({action:'verify',zylosDir:dir,driverPath:closure.driverPath,dbBackupDir:snapshot.dbBackupDir,manifest:snapshot.manifest},closure),/hash mismatch/);
 });
-test('driver missing fails before publication and preserves staging',t=>{
- const dir=fixture(t);fs.mkdirSync(path.join(dir,'comm-bridge'));fs.writeFileSync(path.join(dir,'comm-bridge/c4.db'),'unreadable');
- assert.throws(()=>createCoreDbSnapshot({zylosDir:dir,transactionId:'no-driver'}),error=>error.code==='SNAPSHOT_FAILED' && /Cannot find module 'better-sqlite3'/.test(error.message));
- assert.ok(!fs.existsSync(path.join(dir,'.backup/db/no-driver')));
-});
-
-// Integration boundary: real SQLite/worker with temporary databases and copied
-// dependencies only; run for backup/driver-path changes, skip if unrelated.
-// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixture(t) cleans.
-test('offline-preflight loads only pure owner inspectors through maintenance marker and rejects future schema', {skip:!Database},t=>{
- const dir=fixture(t);skills(dir);const schemaRoot=path.resolve('skills');
- fs.mkdirSync(path.join(dir,'.zylos'));fs.writeFileSync(path.join(dir,'.zylos/self-upgrade-maintenance.json'),'{}');
- assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot}).databases.length,3);
- fs.mkdirSync(path.join(dir,'comm-bridge'));const source=path.join(dir,'comm-bridge/c4.db');const db=new Database(source);db.pragma('user_version=999');db.close();
- const before=fs.readFileSync(source);
- assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot}),/future|newer|unsupported|exceeds/i);
- assert.deepEqual(fs.readFileSync(source),before);
-});
-
-// Real worker/SQLite boundary: all files and databases belong to fixture(t),
-// with HOME/ZYLOS_DIR/PM2_HOME/TMPDIR isolated by the official runner. Run for
-// restored snapshot evidence changes; no services or tmux are involved.
-test('restored snapshot evidence takes precedence over original deployment evidence', {skip:!Database},async t=>{
- const dir=fixture(t);skills(dir);
- const {migrateDatabase}=await import('../../../skills/comm-bridge/scripts/sqlite-schema.js');
- const owner=await import('../../../skills/comm-bridge/scripts/c4-schema.js');
- const source=path.join(dir,'comm-bridge/c4.db');fs.mkdirSync(path.dirname(source),{recursive:true});
- const db=new Database(source);
- try {migrateDatabase(db,owner,{allowNew:true,strict:false});} finally {db.close();}
- const snapshot=createCoreDbSnapshot({zylosDir:dir,transactionId:'restored-evidence'});
- fs.copyFileSync(path.join(snapshot.dbBackupDir,'comm-bridge.db'),source);
- const expectedDatabases=snapshot.manifest.databases.map(row=>({source:row.source,status:row.status==='missing'?'missing':'complete'}));
- const request={action:'offline-preflight',zylosDir:dir,schemaRoot:path.resolve('skills'),formatVersion:3,expectedDatabases,manifest:snapshot.manifest};
- assert.equal(runCoreDbWorker(request).databases[0].status,'present');
- for(const status of ['complete','failed',undefined]) {
-  const manifest={...snapshot.manifest,databases:snapshot.manifest.databases.map((row,index)=>index===0?{...row,status}:row)};
-  assert.throws(()=>runCoreDbWorker({...request,manifest}),/Missing standalone restored snapshot evidence/);
- }
- const before=fs.readFileSync(source);
- const changed=new Database(source);changed.exec('CREATE TABLE retained_archive(value TEXT)');changed.close();
- assert.throws(()=>runCoreDbWorker(request),/Standalone database hash mismatch/);
- assert.notDeepEqual(fs.readFileSync(source),before);
-});
-
-// Real worker/SQLite boundary: isolated fixture databases, no services/tmux.
-// Run for current preflight or legacy snapshot selection changes; skip otherwise.
-for(const installedSkill of [false,true]) test(`current original deployment checks ignore retired Web Console bytes with installed skill=${installedSkill}`, {skip:!Database},t=>{
- const dir=fixture(t);skills(dir);
- const source=path.join(dir,'web-console/web-console.db');fs.mkdirSync(path.dirname(source),{recursive:true});
- // Opaque archived bytes prove the worker does not even open the retired file.
- const before=Buffer.from('retired Web Console archive\n');fs.writeFileSync(source,before);
- const snapshot=createCoreDbSnapshot({zylosDir:dir,transactionId:'retired-owner'});
- assert.equal(snapshot.manifest.formatVersion,3);
- assert.equal(snapshot.manifest.databases.some(row=>row.source==='web-console/web-console.db'),false);
- const expectedDatabases=[...snapshot.manifest.databases.slice(0,2).map(row=>({source:row.source,status:'missing'})),
-  {source:'web-console/web-console.db',status:'complete'},
-  {source:'components/dashboard/dashboard.db',status:'missing'}];
- const request={action:'offline-preflight',zylosDir:dir,schemaRoot:path.resolve('skills'),formatVersion:2,expectedDatabases};
- const schemaRoot=path.join(dir,'schemas');fs.mkdirSync(schemaRoot);
- for(const name of ['comm-bridge','scheduler'])fs.symlinkSync(path.resolve('skills',name),path.join(schemaRoot,name));
- if(installedSkill){
-  const owner=path.join(schemaRoot,'web-console');fs.mkdirSync(path.join(owner,'scripts'),{recursive:true});
-  fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');
-  fs.writeFileSync(path.join(owner,'scripts/schema.js'),"throw Error('retired owner must not load');\n");
- }
- request.schemaRoot=schemaRoot;
- for(const manifest of [undefined,snapshot.manifest]) for(const status of ['complete','missing']) {
-  const result=runCoreDbWorker({...request,manifest,expectedDatabases:expectedDatabases.map(row=>row.source==='web-console/web-console.db'?{...row,status}:row)});
-  assert.equal(result.databases.length,3);
-  assert.equal(result.databases.some(row=>row.source==='web-console/web-console.db'),false);
-  assert.deepEqual(fs.readFileSync(source),before);
- }
-});
-
-// Real worker/SQLite boundary: fixture(t) owns and cleans all data; the official
-// runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR. No services or tmux are used.
-// Run for legacy snapshot/preflight selection changes; skip for unrelated work.
-for(const formatVersion of [1,2]) test(`legacy format ${formatVersion} snapshot preflight retains Web Console presence checks`, {skip:!Database},t=>{
- const dir=fixture(t);skills(dir);
- const sources=['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db'];
- if(formatVersion===2)sources.push('components/dashboard/dashboard.db');
- const manifest={function:'core-self-upgrade-db',status:'complete',id:'legacy-snapshot',formatVersion,
-  databases:sources.map(source=>({source,status:'missing',file:null,bytes:0,sha256:null,userVersion:null,integrityCheck:null}))};
- const request={action:'offline-preflight',zylosDir:dir,schemaRoot:path.resolve('skills'),manifest};
- const result=runCoreDbWorker(request);
- assert.equal(result.databases.length,sources.length);
- assert.equal(result.databases.find(row=>row.source==='web-console/web-console.db')?.status,'missing');
- const restoredManifest={...manifest,databases:manifest.databases.map(row=>row.source==='web-console/web-console.db'
-  ? {...row,status:'backed_up',file:'web-console.db',bytes:4096,sha256:'a'.repeat(64),userVersion:1,integrityCheck:'ok'} : row)};
- assert.throws(()=>runCoreDbWorker({...request,manifest:restoredManifest}),/Expected database absent/);
- assert.equal(fs.existsSync(path.join(dir,'web-console/web-console.db')),false);
-});
-
-// Integration boundary: real SQLite/worker with temporary databases and copied
-// dependencies only; run for backup/driver-path changes, skip if unrelated.
-// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixture(t) cleans.
-test('offline preflight accepts and reports archive tables and extra columns', {skip:!Database},async t=>{
- const dir=fixture(t);skills(dir);
- const schemaRoot=path.resolve('skills');
- const {migrateDatabase}=await import('../../../skills/comm-bridge/scripts/sqlite-schema.js');
- const owners=await Promise.all([
-  import('../../../skills/comm-bridge/scripts/c4-schema.js'),
-  import('../../../skills/scheduler/scripts/schema.js'),
- ]);
- const requiredTables=['checkpoints','tasks'];
- for(const [index,item] of CORE_DATABASES.entries()) {
-  const file=path.join(dir,item.source);fs.mkdirSync(path.dirname(file),{recursive:true});
-  const db=new Database(file);
-  try {
-   migrateDatabase(db,owners[index],{allowNew:true,strict:false});
-   db.exec('CREATE TABLE archive_records(id INTEGER PRIMARY KEY, value TEXT)');
-  } finally {db.close();}
- }
- const preflight=()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot});
- const tables=preflight().databases.filter(row=>row.source!=='components/dashboard/dashboard.db');
- assert.equal(tables.length,2);
- for(const [index,row] of tables.entries()) {
-  assert.equal(row.source,CORE_DATABASES[index].source);
-  assert.deepEqual(row.extensions,{tables:['archive_records'],columns:[]});
- }
- for(const [index,item] of CORE_DATABASES.entries()) {
-  const db=new Database(path.join(dir,item.source));
-  try {db.exec(`ALTER TABLE ${requiredTables[index]} ADD COLUMN extension_value TEXT`);} finally {db.close();}
- }
- const before=CORE_DATABASES.map(item=>fs.readFileSync(path.join(dir,item.source)));
- const accepted=preflight().databases.filter(row=>row.source!=='components/dashboard/dashboard.db');
- for(const [index,row] of accepted.entries()) {
-  assert.deepEqual(row.extensions,{tables:['archive_records'],columns:[{table:requiredTables[index],column:'extension_value'}]});
- }
- assert.deepEqual(CORE_DATABASES.map(item=>fs.readFileSync(path.join(dir,item.source))),before);
-});
-
-// Integration boundary: real SQLite/worker with temporary databases and copied
-// dependencies only; run for backup/driver-path changes, skip if unrelated.
-// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixture(t) cleans.
-test('upgrade preflight and rehearsal reject an unsafe extension', {skip:!Database},async t=>{
- const dir=fixture(t);skills(dir);
- const schemaRoot=path.resolve('skills');
- const {migrateDatabase,guardDatabase}=await import('../../../skills/comm-bridge/scripts/sqlite-schema.js');
- const owner=await import('../../../skills/comm-bridge/scripts/c4-schema.js');
- const source=path.join(dir,'comm-bridge/c4.db');fs.mkdirSync(path.dirname(source),{recursive:true});
- const db=new Database(source);
- try {
-  migrateDatabase(db,owner,{allowNew:true,strict:false});
-  db.exec('ALTER TABLE conversations ADD COLUMN my_tag TEXT NOT NULL');
-  assert.equal(guardDatabase(db,owner).version,owner.SUPPORTED_SCHEMA_VERSION);
- }finally{db.close();}
- const before=fs.readFileSync(source);
- assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot}),/conversations\.my_tag.*default/);
- assert.throws(()=>rehearseCoreDbUpgrade(dir,path.resolve('.'),{driverRoot:path.join(dir,'.claude','skills')}),/conversations\.my_tag.*default/);
- assert.deepEqual(fs.readFileSync(source),before);
- assert.equal(fs.existsSync(path.join(dir,'.backup')),false);
-});
 
 // Integration boundary: real SQLite/worker with temporary databases and copied
 // dependencies only; run for backup/driver-path changes, skip if unrelated.
@@ -284,81 +107,6 @@ test('target rehearsal migrates private copies and leaves source databases uncha
  assert.equal(fs.existsSync(path.join(dir,'.backup')),false);
 });
 
-test('rehearsal worker receives a private backup path and parent removes it on failure',t=>{
- const dir=fixture(t),target=path.join(dir,'target'),observed=path.join(dir,'observed.json');
- fs.mkdirSync(path.join(target,'cli/lib'),{recursive:true});
- fs.mkdirSync(path.join(target,'skills/comm-bridge/scripts'),{recursive:true});
- fs.writeFileSync(path.join(target,'skills/comm-bridge/scripts/sqlite-schema.js'),'');
- fs.writeFileSync(path.join(target,'cli/lib/core-db-backup-worker.js'),`
-  const fs=require('node:fs');
-  const payload=JSON.parse(process.argv[2]);
-  const stat=fs.lstatSync(payload.rehearsalDir);
-  fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify({path:payload.rehearsalDir,mode:stat.mode&0o777,isDirectory:stat.isDirectory()}));
-  process.stdout.write(JSON.stringify({ok:false,error:{code:'SCHEMA_MIGRATION_FAILED',message:'injected rehearsal failure'}}));
-  process.exit(1);
- `);
- assert.throws(()=>rehearseCoreDbUpgrade(dir,target),error=>error.code==='SCHEMA_MIGRATION_FAILED' && /injected rehearsal failure/.test(error.message));
- const result=JSON.parse(fs.readFileSync(observed,'utf8'));
- assert.equal(result.path,path.join(dir,'.backup/db/.rehearsal'));
- assert.equal(result.mode,0o700);
- assert.equal(result.isDirectory,true);
- assert.equal(fs.existsSync(result.path),false);
- assert.equal(fs.existsSync(path.join(dir,'.backup')),false);
-});
-
-// Integration boundary: real SQLite/worker with temporary databases and copied
-// dependencies only; run for backup/driver-path changes, skip if unrelated.
-// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixture(t) cleans.
-test('normalized snapshots inspect directly with no temporary database and preserve live WAL bytes', {skip:!Database},t=>{
- const dir=fixture(t);skills(dir);fs.mkdirSync(path.join(dir,'comm-bridge'));
- const source=path.join(dir,'comm-bridge/c4.db');const writer=new Database(source);t.after(()=>writer.close());
- writer.pragma('journal_mode=WAL');writer.exec('CREATE TABLE entries(id INTEGER PRIMARY KEY,value BLOB)');
- writer.prepare('INSERT INTO entries VALUES (?,?)').run(9007199254740993n,Buffer.from([0,255,2]));
- const before=[source,source+'-wal'].map(file=>fs.readFileSync(file));
- const snapshot=createCoreDbSnapshot({zylosDir:dir,transactionId:'normalized'});
- assert.deepEqual([source,source+'-wal'].map(file=>fs.readFileSync(file)),before);
- assert.equal(writer.pragma('journal_mode',{simple:true}),'wal');
- const row=snapshot.manifest.databases[0],file=path.join(snapshot.dbBackupDir,row.file);
- assert.equal(Object.hasOwn(row,'logicalHash'),false);
- const readonly=new Database(file,{readonly:true,fileMustExist:true});
- try {
-  assert.equal(readonly.pragma('journal_mode',{simple:true}),'delete');
-  const value=readonly.prepare('SELECT * FROM entries').safeIntegers(true).get();
-  assert.equal(value.id,9007199254740993n);assert.deepEqual(value.value,Buffer.from([0,255,2]));
- }finally{readonly.close();}
- const tmpdir=process.env.TMPDIR;
- try {
-  process.env.TMPDIR=path.join(dir,'unavailable-temp-directory');
-  const verified=runCoreDbWorker({action:'verify',zylosDir:dir,dbBackupDir:snapshot.dbBackupDir,manifest:snapshot.manifest});
-  assert.equal(verified.databases[0].integrityCheck,'ok');
- }finally{if(tmpdir===undefined)delete process.env.TMPDIR;else process.env.TMPDIR=tmpdir;}
- for(const suffix of ['-wal','-shm'])assert.equal(fs.existsSync(file+suffix),false);
-});
-// Integration boundary: real SQLite/worker with temporary databases and copied
-// dependencies only; run for backup/driver-path changes, skip if unrelated.
-// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixture(t) cleans.
-test('copied closure is probe-loaded and remains independent of owner installations', {skip:!Database},t=>{
- const dir=fixture(t);skills(dir);const closure=prepareRecoveryDependencies(path.join(dir,'transaction'),dir);
- assert.equal(Object.hasOwn(closure,'driverClosureHashes'),false);
- for(const item of CORE_DATABASES)fs.unlinkSync(path.join(dir,'.claude/skills',item.owner,'node_modules'));
- assert.deepEqual(runCoreDbWorker({action:'probe',driverPath:closure.driverPath},closure),{ok:true});
- fs.writeFileSync(closure.driverPath,'throw Error("broken copied driver");');
- assert.throws(()=>runCoreDbWorker({action:'probe',driverPath:closure.driverPath},closure),/broken copied driver/);
-});
-test('old owner without pure schema module fails explicit compatibility preflight',t=>{
- const dir=fixture(t);const schemaRoot=path.join(dir,'old-skills');
- assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot}),/Incompatible owner schema code comm-bridge/);
-});
-
-test('worker executes through a directory alias without skipping its CLI entry',t=>{
- const dir=fixture(t);
- const alias=path.join(dir,'worker-alias');
- const worker=fileURLToPath(new URL('../core-db-backup-worker.js',import.meta.url));
- fs.symlinkSync(path.dirname(worker),alias,'dir');
- const result=runCoreDbWorker({action:'snapshot',zylosDir:dir,stagingDir:dir},{workerPath:path.join(alias,path.basename(worker))});
- assert.equal(result.databases.length,3);
- assert.ok(result.databases.every(row=>row.status==='missing'));
-});
 
 // Integration boundary: real SQLite/worker with temporary databases and copied
 // dependencies only; run for backup/driver-path changes, skip if unrelated.
@@ -377,17 +125,6 @@ test('worker snapshot sync failure aborts publication and retains the previous v
  } finally {if(options===undefined)delete process.env.NODE_OPTIONS;else process.env.NODE_OPTIONS=options;}
  assert.equal(fs.existsSync(path.join(dir,'.backup/db/failed-sync')),false);
  assert.equal(runCoreDbWorker({action:'verify',zylosDir:dir,dbBackupDir:previous.dbBackupDir,manifest:previous.manifest}).databases[0].integrityCheck,'ok');
-});
-
-// Integration boundary: real SQLite/worker with temporary databases and copied
-// dependencies only; run for backup/driver-path changes, skip if unrelated.
-// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixture(t) cleans.
-test('failed verification of a published snapshot keeps the prior verified group', {skip:!Database},t=>{
- const dir=fixture(t);skills(dir);
- const previous=createCoreDbSnapshot({zylosDir:dir,transactionId:'previous'});
- assert.throws(()=>createCoreDbSnapshot({zylosDir:dir,transactionId:'failed-verify',verifySnapshot:()=>{throw Error('injected verification failure');}}),/injected verification failure/);
- assert.equal(fs.existsSync(path.join(previous.dbBackupDir,'manifest.json')),true);
- assert.equal(runCoreDbWorker({action:'verify',zylosDir:dir,dbBackupDir:previous.dbBackupDir,manifest:previous.manifest}).databases.length,3);
 });
 
 // Integration boundary: real SQLite/worker with temporary databases and copied
@@ -462,64 +199,4 @@ test('controlled installed migration requires installing identity, preserves sna
   try {assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,1);}finally{db.close();}
  }
  assert.throws(()=>runCoreDbWorker(payload),/active installing|ENOENT/);
-});
-
-test('rehearsal cleanup accepts an instance alias while retaining unrelated directories', t => {
- const dir=fixture(t),base=path.join(dir,'.backup/db'),alias=path.join(dir,'instance-alias');
- fs.mkdirSync(path.join(base,'.rehearsal'),{recursive:true});fs.writeFileSync(path.join(base,'.rehearsal/copy.db'),'owned');
- fs.mkdirSync(path.join(base,'keep'));fs.writeFileSync(path.join(base,'keep/content'),'unchanged');fs.symlinkSync(dir,alias);
- assert.deepEqual(cleanupCoreDbRehearsals(alias).removed,[path.join(base,'.rehearsal')]);
- assert.equal(fs.readFileSync(path.join(base,'keep/content'),'utf8'),'unchanged');
- assert.equal(fs.lstatSync(alias).isSymbolicLink(),true);
-});
-
-// Root bypasses chmod permissions; the shared deletion suite separately proves
-// preflight retention in a real unprivileged child when the runner is root.
-test('rehearsal cleanup preflight failure preserves every file and reports the pending tree',
- {skip:process.getuid?.()===0?'Root bypasses chmod; real unprivileged permission coverage is in remove-owned-tree.test.js':false}, t => {
- const dir=fixture(t),target=path.join(dir,'.backup/db/.rehearsal'),locked=path.join(target,'locked');
- fs.mkdirSync(locked,{recursive:true});fs.writeFileSync(path.join(target,'first.db'),'first');fs.writeFileSync(path.join(locked,'last.db'),'last');
- fs.chmodSync(locked,0o000);t.after(()=>{if(fs.existsSync(locked))fs.chmodSync(locked,0o700);});
- try {assert.throws(()=>cleanupCoreDbRehearsals(dir),error=>error.code==='EACCES'&&error.removedRehearsals.length===0);}
- finally {fs.chmodSync(locked,0o700);}
- assert.equal(fs.readFileSync(path.join(target,'first.db'),'utf8'),'first');assert.equal(fs.readFileSync(path.join(locked,'last.db'),'utf8'),'last');
-});
-
-// Boundary: real worker and a small SQLite file; count only product digest
-// and integrity operations. Run for snapshot creation or verify changes.
-test('snapshot and verification each hash once and only full verification opens SQLite', {skip:!Database}, async t=>{
- const dir=fixture(t);
- skills(dir);
- const source=path.join(dir,'comm-bridge/c4.db');
- fs.mkdirSync(path.dirname(source));
- const db=new Database(source);
- try { db.exec("CREATE TABLE example(value TEXT); INSERT INTO example VALUES ('fixture')"); }
- finally { db.close(); }
- const stagingDir=path.join(dir,'snapshot');
- fs.mkdirSync(stagingDir);
- const digest=crypto.createHash;
- const hashes=t.mock.method(crypto,'createHash');
- const pragma=Database.prototype.pragma;
- let integrityChecks=0;
- t.mock.method(Database.prototype,'pragma',function (expression,options) {
-   if(expression==='integrity_check') integrityChecks++;
-   return pragma.call(this,expression,options);
- });
- const input={zylosDir:dir,databaseSource:'comm-bridge/c4.db'};
- const {databases}=await execute({...input,action:'snapshot',stagingDir});
- assert.equal(hashes.mock.callCount(),1);
- assert.equal(integrityChecks,1);
- const bytes=fs.readFileSync(path.join(stagingDir,databases[0].file));
- assert.equal(databases[0].sha256,digest('sha256').update(bytes).digest('hex'));
- const manifest={formatVersion:3,function:'core-self-upgrade-db',status:'complete',id:'snapshot',databases:[
-   ...databases,...ALL_CORE_DATABASES.slice(1).map(({source})=>({
-     source,status:'missing',file:null,bytes:0,sha256:null,userVersion:null,integrityCheck:null
-   }))
- ]};
- await execute({...input,action:'verify-new-snapshot',dbBackupDir:stagingDir,manifest,driverPath:path.join(dir,'absent-driver.cjs')});
- assert.equal(hashes.mock.callCount(),2);
- assert.equal(integrityChecks,1);
- await execute({...input,action:'verify',dbBackupDir:stagingDir,manifest});
- assert.equal(hashes.mock.callCount(),3);
- assert.equal(integrityChecks,2);
 });

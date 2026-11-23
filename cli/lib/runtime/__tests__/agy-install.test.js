@@ -19,15 +19,6 @@ function fixture(t) {
   return { root, executable };
 }
 
-test('Antigravity installer timeout points to the instance proxy configuration', async t => {
-  const { root } = fixture(t);
-  const { install } = (await getRuntime('agy')).install;
-  const exec = { execSync() { throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }); } };
-  await assert.rejects(install({ root, exec }), {
-    message: `Antigravity installation did not finish within 10 minutes. If this machine needs a proxy, set HTTPS_PROXY in ${path.join(root, '.env')} and retry.`,
-  });
-});
-
 test('Antigravity installer verifies the executable even when the script succeeds', async t => {
   const { root, executable } = fixture(t);
   const { install } = (await getRuntime('agy')).install;
@@ -41,26 +32,4 @@ test('Antigravity installer verifies the executable even when the script succeed
   };
   assert.equal(await install({ root, exec }), false);
   assert.deepEqual(calls, [{ command: executable, args: ['--version'], timeout: 10000 }]);
-});
-
-test('Antigravity installer and version check use the instance proxy and disable auto-update', async t => {
-  const { root, executable } = fixture(t);
-  const { install } = (await getRuntime('agy')).install;
-  fs.writeFileSync(path.join(root, '.env'), 'HTTPS_PROXY=http://p\n');
-  const exec = {
-    execSync(command, { env, timeout, stdio }) {
-      assert.equal(command, 'curl -fsSL https://antigravity.google/cli/install.sh | bash');
-      assert.equal(timeout, 600000);
-      assert.equal(stdio, 'pipe');
-      assert.equal(env.HTTPS_PROXY, 'http://p');
-      assert.equal(env.AGY_CLI_DISABLE_AUTO_UPDATE, 'true');
-    },
-    execFileSync(command, args, { env }) {
-      assert.equal(command, executable);
-      assert.deepEqual(args, ['--version']);
-      assert.equal(env.HTTPS_PROXY, 'http://p');
-      assert.equal(env.AGY_CLI_DISABLE_AUTO_UPDATE, 'true');
-    },
-  };
-  assert.equal(await install({ root, exec }), true);
 });

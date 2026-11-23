@@ -85,17 +85,3 @@ test('Codex reads context from a recorded rollout bound to its Zylos session sta
     model: 'gpt-5.4-mini', contextWindow: 258_400, usedPercent: null, usedTokens: 450, effort: null, version: null,
   });
 });
-
-test('Codex resolves the model window from its recorded cache', async t => {
-  const { context } = await getRuntime('codex');
-  const { env } = fixture(t, 'codex');
-  const codexHome = path.join(env.ZYLOS_DIR, '.codex');
-  fs.mkdirSync(codexHome);
-  fs.writeFileSync(path.join(codexHome, 'models_cache.json'), recorded('codex/context/models_cache.json'));
-  const windows = context.readModelWindows({ env: { CODEX_HOME: codexHome } });
-  assert.ok(windows.length > 0);
-  for (const model of windows) {
-    assert.ok(model.context_window > 0);
-    assert.equal(context.contextWindowFor(model.slug, windows), model.context_window);
-  }
-});

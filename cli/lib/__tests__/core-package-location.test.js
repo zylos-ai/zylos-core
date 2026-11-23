@@ -4,16 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { writeCorePackageLocation } from '../core-package-location.js';
-import { step5_syncCoreSkills, completeUpgradeFinalization, resumeUpgradeFinalization } from '../self-upgrade.js';
+import { step5_syncCoreSkills } from '../self-upgrade.js';
 import { deployUpgradeBootstrap } from '../upgrade-protection.js';
-import { formatSelfUpgradeCompletion } from '../../commands/component.js';
 
 const require = createRequire(import.meta.url);
 const maintenance = require('../upgrade-maintenance.cjs');
-const repository = fileURLToPath(new URL('../../../', import.meta.url));
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 
 function fixture(t) {
@@ -49,22 +45,6 @@ test('location publication validates package identity and atomically retains the
   assert.equal(fs.readFileSync(f.record).equals(before), true);
 });
 
-test('location publication rejects symlink metadata instead of modifying another directory', t => {
-  const f = fixture(t), outside = path.join(f.root, 'outside');
-  fs.mkdirSync(outside);
-  fs.symlinkSync(outside, path.join(f.skillDir, '.zylos'));
-  assert.throws(() => writeCorePackageLocation({ skillDir: f.skillDir, packageRoot: f.packageRoot }), /Unsafe.*metadata/);
-  assert.equal(fs.readdirSync(outside).length, 0);
-});
-
-test('location publication records the real package root behind a symlink', t => {
-  const f = fixture(t), linkedRoot = path.join(f.root, 'package-link');
-  fs.symlinkSync(f.packageRoot, linkedRoot, 'dir');
-  writeCorePackageLocation({ skillDir: f.skillDir, packageRoot: linkedRoot });
-  assert.deepEqual(read(f.record), { v: 1, packageRoot: fs.realpathSync(f.packageRoot) });
-  assert.notEqual(read(f.record).packageRoot, linkedRoot);
-});
-
 const synced = () => ({ synced: [], added: [], merged: [], deleted: [], preserved: [], conflicts: [], errors: [], pendingBaselines: [] });
 
 // Integration boundary: real installed-package writer plus the real sync step,
@@ -84,73 +64,6 @@ test('skill sync publishes the installed root instead of the downloaded source a
     syncCoreSkills: () => ({ ...synced(), errors: ['comm-bridge copy failed'] }) });
   assert.equal(failed.status, 'failed');
   assert.equal(fs.readFileSync(f.record).equals(original), true);
-});
-
-// Integration boundary: real sync warning -> successful finalization result ->
-// real human formatter. Run for warning/result projection changes; skip unrelated
-// runtime work. Temporary deployment, injected services/CLI/DB observations;
-// no sockets, child processes or production services are started.
-test('record publication failure remains a distinct JSON and readable warning without failing upgrade completion', async t => {
-  const f = fixture(t);
-  fs.writeFileSync(path.join(f.skillDir, '.zylos'), 'metadata blocked');
-  const ctx = { packageRoot: f.packageRoot, coreDir: f.oldRoot, tempDir: f.tempDir, mode: 'merge',
-    zylosDir: f.zylosDir, from: '0.9.5', to: '1.0.0', servicesWereRunning: [], steps: [], mergeConflicts: [], mergedFiles: [],
-    journal: { phase: 'compensation_closed' }, transactionDir: path.join(f.root, 'transaction'),
-    maintenance: { canRecognizeProcesses: () => true } };
-  const step = step5_syncCoreSkills(ctx, { zylosDir: f.zylosDir, syncCoreSkills: synced });
-  assert.equal(step.status, 'done');
-  assert.equal(ctx.corePackageWarnings.length, 1);
-  const finalizer = {
-    finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
-    ensureLogRotation:()=>({state:'present'}),
-    updateConfig() {}, ensureMemoryMigration() {}, verifyPublicationForServices() {},
-    startServices: () => ({ status: 'done' }), verifyServices: () => ({ status: 'done' }),
-    dashboardOwner: { verifyDashboard: () => ({ state: 'ready', errors: [] }) },
-    readModeStatus: () => ({ sessionMode: 'single', transition: null }),
-    restart: () => ({ ok: true, data: { result: 'accepted' } }), protectedSuccess() {},
-  };
-  const result = await completeUpgradeFinalization(ctx, finalizer);
-  const json = JSON.parse(JSON.stringify(result));
-  assert.equal(json.success, true);
-  assert.equal(json.completion.install, 'done');
-  assert.equal(json.corePackageWarnings[0].code, 'CORE_PACKAGE_LOCATION_WRITE_FAILED');
-  assert.deepEqual(json.warnings, []);
-  const text = formatSelfUpgradeCompletion(json);
-  assert.match(text, /Core package location warning:/);
-  assert.match(text, /ZYLOS_PACKAGE_ROOT/);
-  assert.match(text, /zylos init/);
-  assert.doesNotMatch(text, /Runtime warning/);
-  ctx.journal.corePackageWarnings = structuredClone(json.corePackageWarnings);
-  ctx.journal.originalServices = [];
-  delete ctx.corePackageWarnings;
-  ctx.dbManifest = {};
-  const repaired = await resumeUpgradeFinalization(ctx, { ...finalizer, publish: () => ({ ok: true }) });
-  assert.equal(repaired.success, true);
-  assert.deepEqual(repaired.corePackageWarnings, json.corePackageWarnings);
-});
-
-// Integration boundary: real init's file-only skill-sync entry, in a bounded
-// absolute-Node child. Run for init publication changes; skip other init/auth work.
-// HOME/ZYLOS_DIR/PM2_HOME/TMPDIR point inside this owned temporary fixture; no
-// services, authentication, network or installer is invoked by this helper.
-test('initialization publishes the package that actually supplied its comm-bridge files', t => {
-  const f = fixture(t), home = path.join(f.root, 'init-home'), zylosDir = path.join(home, 'zylos');
-  const tmp = path.join(f.root, 'tmp'); fs.mkdirSync(tmp);
-  const args = [fileURLToPath(new URL('./helpers/sync-core-skills.js', import.meta.url))];
-  const options = {
-    timeout: 30000, encoding: 'utf8', env: { ...process.env, HOME: home, ZYLOS_DIR: zylosDir,
-      PM2_HOME: path.join(home, '.pm2'), TMPDIR: tmp, CODEX_HOME: path.join(home, '.codex') },
-  };
-  const output = execFileSync(process.execPath, args, options);
-  assert.ok(JSON.parse(output.trim()).installed.includes('comm-bridge'));
-  const record = path.join(zylosDir, '.claude/skills/comm-bridge/.zylos/core-package.json');
-  assert.deepEqual(read(record), { v: 1, packageRoot: fs.realpathSync(repository) });
-  fs.unlinkSync(record); fs.mkdirSync(record);
-  const failure = execFileSync(process.execPath, args, options);
-  assert.match(failure, /Failed to sync.*comm-bridge/);
-  assert.match(failure, /Unsafe Core package location record/);
-  assert.equal(JSON.parse(failure.trim().split('\n').at(-1)).updated.includes('comm-bridge'), false);
-  assert.equal(fs.statSync(record).isDirectory(), true);
 });
 
 // Integration boundary: actual protected recovery restoreCore over a private

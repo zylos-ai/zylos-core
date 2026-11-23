@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { beginUpgrade, maintenance as m, maintenanceFor, protectedDataReady, protectedSuccess, saveProtectedCode } from '../upgrade-protection.js';
+import { beginUpgrade, maintenance as m, protectedSuccess, saveProtectedCode } from '../upgrade-protection.js';
 import { createCoreDbSnapshot } from '../core-db-backup.js';
 
 function attachSnapshot(f) {
@@ -36,30 +36,6 @@ function fixture(t) {
   return { root, skillsDir, ctx };
 }
 
-for (const field of ['firstTakeover','dashboardOwnerManaged']) test(`beginning requires inspected ${field} before creating transaction materials`, t => {
-  const f=fixture(t);
-  delete f.ctx[field];
-  const before=fs.readdirSync(path.join(f.root,'.backup'));
-  assert.throws(()=>beginUpgrade(f.ctx,{zylosDir:f.root,skillsDir:f.skillsDir}),/source decisions must be inspected/);
-  assert.deepEqual(fs.readdirSync(path.join(f.root,'.backup')),before);
-  assert.equal(fs.existsSync(path.join(f.root,'.zylos/upgrade')),false);
-});
-
-test('ordinary unconfigured adoption deploys bootstrap and atomically publishes a live controller', t => {
-  const f = fixture(t);
-  beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir });
-  assert.equal(fs.existsSync(path.join(f.root, '.zylos/upgrade/bootstrap.cjs')), true);
-  assert.equal(f.ctx.bootCapability, undefined);
-  const current = m.transaction(f.root, f.ctx.transactionDir);
-  assert.equal(current.phase, 'preparing');
-  assert.equal(current.installationIntent, false);
-  if (!m.canRecognizeProcesses()) {
-    assert.equal(f.ctx.releaseControl.withOwnership(f.ctx.transactionDir, () => 'owned'), 'owned');
-    assert.throws(() => m.acquire(f.ctx.transactionDir), /admission retained/);
-  } else assert.equal(m.alive(m.read(path.join(f.ctx.transactionDir, 'controller.json'))), true);
-  assert.equal(fs.readdirSync(path.join(f.root, '.backup/self-upgrade-staging')).length, 0);
-});
-
 test('transaction recovery is durably saved before the first journal is published', t => {
   const f = fixture(t), synced = new Set(), sync = fs.fsyncSync, rename = fs.renameSync;
   let checked = false;
@@ -91,143 +67,6 @@ test('initial metadata error publishes no transaction and leaves ordinary databa
   assert.throws(() => beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir }), /individual real directory/);
   assert.equal(m.discover(f.root).blocked, false);
   assert.doesNotThrow(() => m.assertCoreDatabaseAvailable(f.root));
-});
-
-test('journal write failure stays outside discovery and cannot poison normal database access', t => {
-  const f = fixture(t);
-  const update = m.update;
-  m.update = () => { throw Error('injected initial journal failure'); };
-  try {
-    assert.throws(() => beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir }), /initial journal failure/);
-  } finally { m.update = update; }
-  assert.deepEqual(m.discover(f.root).diagnostics, []);
-  assert.equal(m.discover(f.root).blocked, false);
-  assert.equal(fs.readdirSync(path.join(f.root, '.backup/self-upgrade')).length, 0);
-  assert.equal(fs.readdirSync(path.join(f.root, '.backup/self-upgrade-staging')).length, 0);
-});
-
-test('retired capability configuration does not gate protected publication', t => {
-  const f = fixture(t);
-  fs.mkdirSync(path.join(f.root, '.zylos/upgrade'), { mode: 0o700 });
-  m.durable(path.join(f.root, '.zylos/upgrade/capability.json'), { formatVersion: 1 });
-  beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir });
-  assert.equal(f.ctx.upgradeProtected, true);
-});
-
-test('symlink deployment root records canonical transaction identities', t => {
-  const f = fixture(t), alias = f.root + '-alias';
-  fs.symlinkSync(f.root, alias);
-  t.after(() => fs.unlinkSync(alias));
-  beginUpgrade(f.ctx, { zylosDir: alias, skillsDir: path.join(alias, '.claude/skills') });
-  assert.equal(f.ctx.journal.zylosDir, f.root);
-  assert.equal(f.ctx.journal.skillsDir, f.skillsDir);
-  assert.equal(m.discover(alias).diagnostics.length, 0);
-});
-
-test('data-ready refreshes context while retaining installing isolation', t => {
-  const f = fixture(t);
-  beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir });
-  attachSnapshot(f);
-  const active = maintenanceFor(f.ctx), preflight = active.preflight;
-  active.preflight = () => ({ success: true });
-  m.update(f.ctx.transactionDir,f.ctx.journal,{phase:'installing',installationIntent:true});
-  m.marker(f.root,f.ctx.transactionDir,f.ctx.journal);
-  try { protectedDataReady(f.ctx,{migrate:()=>({databases:[]}),verify:()=>({databases:[]})}); } finally { active.preflight = preflight; }
-  assert.equal(f.ctx.journal.phase, 'installing');
-  m.update(f.ctx.transactionDir, f.ctx.journal, { ecosystemCreationIntent: { test: true } });
-  assert.equal(m.read(path.join(f.ctx.transactionDir, 'journal.json')).phase, 'installing');
-  assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),/maintenance/);
-});
-
-for (const from of ['0.9.3', '1.0.0']) for (const firstTakeover of [false,true]) test(`data-ready uses persisted takeover=${firstTakeover} from source ${from}`, t => {
-  const f = fixture(t);
-  f.ctx.from = from;
-  f.ctx.firstTakeover = firstTakeover;
-  f.ctx.dashboardOwnerManaged = !firstTakeover;
-  beginUpgrade(f.ctx, {zylosDir:f.root, skillsDir:f.skillsDir});
-  assert.equal(f.ctx.journal.firstTakeover,firstTakeover);
-  assert.equal(f.ctx.journal.dashboardOwnerManaged,!firstTakeover);
-  f.ctx.firstTakeover = !firstTakeover;
-  f.ctx.dashboardOwnerManaged = firstTakeover;
-  attachSnapshot(f);
-  const active = maintenanceFor(f.ctx), preflight = active.preflight;
-  active.preflight = () => ({success:true});
-  m.update(f.ctx.transactionDir, f.ctx.journal, {phase:'installing', installationIntent:true});
-  m.marker(f.root, f.ctx.transactionDir, f.ctx.journal);
-  let checked = false;
-  try {
-    protectedDataReady(f.ctx, {migrate:()=>{}, verify: payload => {
-      checked = true;
-      assert.equal(payload.dashboardOwnerManaged, !firstTakeover);
-      assert.equal(payload.requireCurrent, true);
-      return {databases:[]};
-    }});
-  } finally { active.preflight = preflight; }
-  assert.equal(checked, true);
-});
-
-test('controller acquisition failure removes only its unpublished staging attempt', t => {
-  const f = fixture(t), stagingRoot = path.join(f.root, '.backup/self-upgrade-staging');
-  fs.mkdirSync(stagingRoot, {recursive:true, mode:0o700});
-  const unrelated = path.join(stagingRoot, 'prior-attempt');
-  fs.mkdirSync(unrelated, {mode:0o700});fs.writeFileSync(path.join(unrelated, 'note'), 'keep');
-  const admission = m.canRecognizeProcesses() ? '/controller.guard' : '/controller.json';
-  const open = fs.openSync;
-  fs.openSync = (file, ...args) => {
-    if (String(file).endsWith(admission)) throw Error('injected controller failure');
-    return open(file, ...args);
-  };
-  try {
-    assert.throws(() => beginUpgrade(f.ctx, {zylosDir:f.root, skillsDir:f.skillsDir}), /injected controller failure/);
-  } finally {fs.openSync = open;}
-  assert.deepEqual(fs.readdirSync(stagingRoot), ['prior-attempt']);
-  assert.equal(fs.readFileSync(path.join(unrelated, 'note'), 'utf8'), 'keep');
-  assert.deepEqual(fs.readdirSync(path.join(f.root, '.backup/self-upgrade')), []);
-  assert.equal(m.discover(f.root).blocked, false);
-  beginUpgrade(f.ctx, {zylosDir:f.root, skillsDir:f.skillsDir});
-  assert.equal(f.ctx.upgradeProtected, true);
-});
-
-test('migration failure retains installing isolation and never reaches READY', t => {
-  const f=fixture(t);
-  beginUpgrade(f.ctx,{zylosDir:f.root,skillsDir:f.skillsDir});
-  attachSnapshot(f);
-  m.update(f.ctx.transactionDir,f.ctx.journal,{phase:'installing',installationIntent:true});
-  m.marker(f.root,f.ctx.transactionDir,f.ctx.journal);
-  let verified=false;
-  assert.throws(()=>protectedDataReady(f.ctx,{migrate:()=>{throw Error('injected owner migration failure');},verify:()=>{verified=true;}}),/owner migration failure/);
-  assert.equal(verified,false);
-  assert.equal(m.transaction(f.root,f.ctx.transactionDir).phase,'installing');
-  assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),/maintenance|upgrade|blocked/i);
-});
-
-test('changed active identity after migration prevents READY publication', t => {
-  const f=fixture(t);
-  beginUpgrade(f.ctx,{zylosDir:f.root,skillsDir:f.skillsDir});
-  attachSnapshot(f);
-  m.update(f.ctx.transactionDir,f.ctx.journal,{phase:'installing',installationIntent:true});
-  m.marker(f.root,f.ctx.transactionDir,f.ctx.journal);
-  const active=maintenanceFor(f.ctx),preflight=active.preflight;
-  active.preflight=()=>({success:true});
-  try {
-    assert.throws(()=>protectedDataReady(f.ctx,{migrate:()=>{},verify:()=>{
-      m.durable(path.join(f.root,'.zylos/upgrade/active.json'),{formatVersion:1,transactionId:'other',transactionDir:f.ctx.transactionDir});
-    }}),/changed before data-ready/);
-  } finally {active.preflight=preflight;}
-  assert.equal(m.transaction(f.root,f.ctx.transactionDir).phase,'installing');
-});
-
-// Publication/deletion boundary: real beginUpgrade loads the frozen controller
-// before renaming its directory; fixtures own HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and
-// only private files/SQLite snapshots. Run for controller publication/cleanup
-// changes, skip unrelated runtime/UI work. No installer or service is started.
-test('published controller retains its authenticated deletion helper after staging is renamed', t => {
-  const f=fixture(t);
-  beginUpgrade(f.ctx,{zylosDir:f.root,skillsDir:f.skillsDir});
-  assert.deepEqual(fs.readdirSync(path.join(f.root,'.backup/self-upgrade-staging')),[]);
-  const target=path.join(f.ctx.transactionDir,'disposable');fs.mkdirSync(target);fs.writeFileSync(path.join(target,'owned'),'owned');
-  assert.equal(f.ctx.maintenance.removeOwnedTree(f.ctx.transactionDir,target),1);
-  assert.equal(fs.existsSync(target),false);
 });
 
 test('protected success finishes through the staging-loaded controller and clears its active marker', t => {

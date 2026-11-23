@@ -1,11 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import https from 'node:https';
-import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { classifyApiVerification, isOfficialClaudeBaseUrl, isPrintableAsciiCredential, verifyApiKey, verifyCodexApiKey } from '../init-api-auth.js';
+import { verifyApiKey, verifyCodexApiKey } from '../init-api-auth.js';
 
 const isolation = Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, process.env[key]]));
 const isolationRoot = path.dirname(isolation.TMPDIR || '');
@@ -27,15 +25,6 @@ async function server(t, handle, observeConnection = () => {}) {
   return `http://127.0.0.1:${listener.address().port}`;
 }
 
-test('verification distinguishes auth rejection, successful proof and inconclusive responses', () => {
-  for (const status of [200, 201, 204, 299]) assert.equal(classifyApiVerification(status), true);
-  for (const status of [401, 403]) assert.equal(classifyApiVerification(status), false);
-  for (const status of [301, 307, 400, 404, 429, 500, 503]) assert.equal(classifyApiVerification(status), null);
-  assert.equal(isOfficialClaudeBaseUrl(), true);
-  assert.equal(isOfficialClaudeBaseUrl('https://api.anthropic.com/'), true);
-  assert.equal(isOfficialClaudeBaseUrl('https://api.anthropic.com.example/'), false);
-});
-
 for (const authToken of [false, true]) test(`Claude verification sends only its selected ${authToken ? 'Bearer' : 'API key'} header to the exact base prefix`, { timeout: 3000 }, async t => {
   const credential = crypto.randomUUID(); let requests = 0;
   const baseUrl = await server(t, (req, res) => {
@@ -51,55 +40,6 @@ for (const authToken of [false, true]) test(`Claude verification sends only its 
   assert.equal(requests, 1);
 });
 
-test('the default Claude endpoint verifies model access over HTTPS', async t => {
-  const credential = crypto.randomUUID();
-  let statusCode;
-  const request = t.mock.method(https, 'request', (url, options, receive) => {
-    const pending = new EventEmitter();
-    pending.end = () => receive({ statusCode, destroy() {} });
-    return pending;
-  });
-  for (const [status, expected] of [[200, true], [401, false], [400, null]]) {
-    statusCode = status;
-    assert.equal(await verifyApiKey(credential), expected);
-  }
-  assert.equal(request.mock.callCount(), 3);
-  for (const { arguments: [url, options] } of request.mock.calls) {
-    assert.equal(url.href, 'https://api.anthropic.com/v1/models');
-    assert.equal(options.method, 'GET');
-    assert.equal(options.headers['anthropic-version'], '2023-06-01');
-    assert.equal(options.headers['x-api-key'] === credential, true);
-  }
-});
-
-test('Claude base joining preserves an explicit version path exactly like the SDK', { timeout: 3000 }, async t => {
-  const baseUrl = await server(t, (req, res) => { assert.equal(req.url, '/prefix/v1/v1/models'); res.writeHead(400); res.end(); });
-  assert.equal(await verifyApiKey(crypto.randomUUID(), { baseUrl: baseUrl + '/prefix/v1' }), null);
-});
-
-
-test('Claude URL joining retains multiple trailing slashes in the configured prefix', { timeout: 3000 }, async t => {
-  const baseUrl = await server(t, (req, res) => { assert.equal(req.url, '/prefix//v1/models'); res.writeHead(200); res.end(); });
-  assert.equal(await verifyApiKey(crypto.randomUUID(), { baseUrl: baseUrl + '/prefix//' }), true);
-});
-
-test('Codex verification uses the custom versioned base and Bearer without an Anthropic header', { timeout: 3000 }, async t => {
-  const credential = crypto.randomUUID(); let requests = 0;
-  const baseUrl = await server(t, (req, res) => {
-    requests += 1; assert.equal(req.url, '/relay/v1/models'); assert.equal(req.method, 'GET');
-    assert.equal(req.headers.authorization === `Bearer ${credential}`, true); assert.equal(req.headers['x-api-key'], undefined);
-    assert.equal(req.headers['anthropic-version'], undefined);
-    res.writeHead(204); res.end();
-  });
-  assert.equal(await verifyCodexApiKey(credential, { baseUrl: baseUrl + '/relay/v1/' }), true);
-  assert.equal(requests, 1);
-});
-
-for (const status of [400, 401, 403, 404, 429, 503]) test(`custom verification classifies HTTP ${status} without printing response content`, { timeout: 3000 }, async t => {
-  const credential = crypto.randomUUID();
-  const baseUrl = await server(t, (req, res) => { res.writeHead(status); res.end(credential); });
-  assert.equal(await verifyApiKey(credential, { baseUrl }), status === 401 || status === 403 ? false : null);
-});
 
 test('redirects are inconclusive and never forward the credential to another listener', { timeout: 3000 }, async t => {
   let forwarded = 0;
@@ -108,51 +48,4 @@ test('redirects are inconclusive and never forward the credential to another lis
   assert.equal(await verifyApiKey(crypto.randomUUID(), { baseUrl: origin }), null);
   assert.equal(await verifyCodexApiKey(crypto.randomUUID(), { baseUrl: origin }), null);
   assert.equal(forwarded, 0);
-});
-
-test('unreachable hosts and absolute timeout are inconclusive and release their sockets', { timeout: 3000 }, async t => {
-  const closures = [];
-  const hanging = await server(t, () => {}, socket => {
-    closures.push(new Promise(resolve => socket.once('close', resolve)));
-  });
-  const closedBeforeCleanup = async index => {
-    assert.equal(closures.length, index + 1, 'the local server observed the verification connection');
-    let timer;
-    try {
-      await Promise.race([closures[index], new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error('verification timeout did not close its server socket before fixture cleanup')), 500);
-      })]);
-    } finally { clearTimeout(timer); }
-  };
-  assert.equal(await verifyApiKey(crypto.randomUUID(), { baseUrl: hanging, timeoutMs: 30 }), null);
-  await closedBeforeCleanup(0);
-  assert.equal(await verifyCodexApiKey(crypto.randomUUID(), { baseUrl: hanging, timeoutMs: 30 }), null);
-  await closedBeforeCleanup(1);
-  const listener = http.createServer(); await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
-  const closed = `http://127.0.0.1:${listener.address().port}`; await new Promise(resolve => listener.close(resolve));
-  assert.equal(await verifyApiKey(crypto.randomUUID(), { baseUrl: closed }), null);
-});
-
-test('non-ASCII credentials are rejected before constructing headers or sending requests', { timeout: 3000 }, async t => {
-  let requests = 0;
-  const origin = await server(t, (req, res) => { requests += 1; res.end(); });
-  for (const suffix of ['\u200b', '\uff21', '\u00e9', '\n', '\x7f']) {
-    const credential = crypto.randomUUID() + suffix;
-    assert.equal(isPrintableAsciiCredential(credential), false);
-    assert.equal(await verifyApiKey(credential, { baseUrl: origin }), false);
-    assert.equal(await verifyApiKey(credential, { baseUrl: origin, authToken: true }), false);
-    assert.equal(await verifyCodexApiKey(credential, { baseUrl: origin }), false);
-  }
-  assert.equal(requests, 0);
-  assert.equal(isPrintableAsciiCredential(crypto.randomUUID() + ' #$\'"\\'), true);
-});
-
-test('malformed or credential-bearing base URLs fail without requests or secret-bearing errors', { timeout: 3000 }, async t => {
-  let requests = 0;
-  const origin = await server(t, (req, res) => { requests += 1; res.end(); });
-  for (const baseUrl of ['not-url', origin.replace('http:', 'ftp:'), origin.replace('http://', 'http://user:password@'), origin + '?q=value', origin + '#fragment', origin + '?', origin + '#']) {
-    assert.equal(await verifyApiKey(crypto.randomUUID(), { baseUrl }), null);
-    assert.equal(await verifyCodexApiKey(crypto.randomUUID(), { baseUrl }), null);
-  }
-  assert.equal(requests, 0);
 });

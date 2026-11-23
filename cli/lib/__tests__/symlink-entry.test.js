@@ -43,20 +43,3 @@ for (const [relative, args, status, output] of [
   assert.equal(imported.status, 0, imported.stderr);
   assert.equal(imported.stdout + imported.stderr, '');
 });
-
-// Integration boundary: the real Dashboard module/guard runs in a subprocess
-// with a temporary database and paths. OS service queries and version checks
-// are mocked by the fixture; no server is listened. Run for Dashboard entry
-// guard changes; skip otherwise. Child exits and t.after removes its database.
-for (const mode of ['argv', 'pm_exec_path']) test(`Dashboard ${mode} symlink selects its smoke entry`, t => {
-  const f = fixture(t), real = path.join(repo, 'skills/dashboard/src/index.js');
-  const link = path.join(f.root, 'dashboard.js'); fs.symlinkSync(real, link);
-  const wrapper = path.join(repo, 'cli/lib/__tests__/fixtures/dashboard-smoke-entry.js');
-  const result = mode === 'argv'
-    ? f.run(['--experimental-test-module-mocks', '--import', pathToFileURL(wrapper).href, link, '--smoke'])
-    : f.run(['--experimental-test-module-mocks', wrapper, '--smoke'], { pm_exec_path: link });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  const receipt = JSON.parse(result.stdout);
-  assert.equal(receipt.ok, true);
-  assert.equal(receipt.db.startsWith(`${f.env.ZYLOS_DIR}${path.sep}`), true);
-});

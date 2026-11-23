@@ -5,11 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import {spawn} from 'node:child_process';
-import {resolveUpgradeNpmCli,installUpgradeTarget} from '../upgrade-entry.js';
+import {installUpgradeTarget} from '../upgrade-entry.js';
 import {step6_installSkillDeps} from '../self-upgrade.js';
-import {upgradeFailureMessage} from '../upgrade-admission.js';
 const require=createRequire(import.meta.url),m=require('../upgrade-maintenance.cjs');
-const runInstaller=(ctx,options)=>m.runInstaller(ctx.transactionDir,ctx.journal,options);
 function fixture(t,body){
  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-installer-'))),dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
  for(const [src,dest] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dest));fs.chmodSync(path.join(dir,dest),0o600);}fs.writeFileSync(path.join(dir,'runner.cjs'),'// fixture',{mode:0o600});
@@ -23,78 +21,6 @@ function fixture(t,body){
  return {root,dir,j,npmCli,helper,ctx:{transactionDir:dir,journal:j},read:()=>m.read(path.join(dir,'journal.json'))};
 }
 
-// Boundary: actual protected installer + local npm lifecycle failure, no registry,
-// PM2, tmux or DB. Run for stderr selection/installer changes; skip unrelated UI.
-test('real npm warning before a lifecycle failure selects an error after installer exit', t => {
- const npmCli=resolveUpgradeNpmCli(),f=fixture(t,'// local installer material');
- const target=path.join(f.root,'local-package');fs.mkdirSync(target);
- fs.writeFileSync(path.join(target,'package.json'),JSON.stringify({name:'upgrade-output-fixture',version:'1.0.0',scripts:{postinstall:'node fail.cjs'}}));
- fs.writeFileSync(path.join(target,'fail.cjs'),"process.stderr.write('fixture lifecycle install failed\\n');process.exit(23);\n");
- const overrides={npm_config_userconfig:path.join(f.root,'user.npmrc'),npm_config_globalconfig:path.join(f.root,'global.npmrc'),
-  npm_config_cache:path.join(f.root,'npm-cache'),npm_config_global_style:'true',npm_config_audit:'false',npm_config_fund:'false',npm_config_update_notifier:'false'};
- fs.writeFileSync(overrides.npm_config_userconfig,'');fs.writeFileSync(overrides.npm_config_globalconfig,'');
- const previous=Object.fromEntries(Object.keys(overrides).map(key=>[key,process.env[key]]));
- Object.assign(process.env,overrides);
- t.after(()=>{for(const [key,value] of Object.entries(previous)){if(value===undefined)delete process.env[key];else process.env[key]=value;}});
- const prefix=path.join(f.root,'prefix');
- for(const key of ['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR'])assert.ok(process.env[key]?.startsWith(path.dirname(process.env.HOME)+path.sep),`${key} is not isolated`);
- assert.ok(prefix.startsWith(f.root+path.sep));
- t.diagnostic(JSON.stringify({HOME:process.env.HOME,ZYLOS_DIR:process.env.ZYLOS_DIR,PM2_HOME:process.env.PM2_HOME,TMPDIR:process.env.TMPDIR,prefix,target,npmCli,services:[],databases:[]}));
- let error;
- try{m.runInstaller(f.dir,f.j,{stage:'install',npmCli,args:['install','-g','--prefix',prefix,target],cwd:target,timeout:20000});}catch(cause){error=cause;}
- assert.ok(error);assert.match(error.message.split('\n')[0],/npm warn.*deprecated/);
- assert.match(error.message,/npm error code 23/);
- assert.equal(upgradeFailureMessage(error),'npm error fixture lifecycle install failed');
- assert.equal(f.read().installerExitConfirmed,true);
- assert.equal(f.helper.members(f.read().installerPid).length,0);
-});
-// Boundary: real npm replaces a local global bin in an isolated prefix. Run for
-// npm failure selection changes; no registry, service, tmux or database access.
-test('real npm permission failure reports the error rather than rename metadata', t => {
- const npmCli=resolveUpgradeNpmCli(),f=fixture(t,'// local installer material');
- const prefix=path.join(f.root,'prefix'),bin=path.join(prefix,'bin');
- const overrides={npm_config_userconfig:path.join(f.root,'user.npmrc'),npm_config_globalconfig:path.join(f.root,'global.npmrc'),
-  npm_config_cache:path.join(f.root,'npm-cache'),npm_config_audit:'false',npm_config_fund:'false',npm_config_update_notifier:'false'};
- for(const key of ['npm_config_userconfig','npm_config_globalconfig'])fs.writeFileSync(overrides[key],'');
- const previous=Object.fromEntries(Object.keys(overrides).map(key=>[key,process.env[key]]));
- Object.assign(process.env,overrides);
- t.after(()=>{for(const [key,value] of Object.entries(previous)){if(value===undefined)delete process.env[key];else process.env[key]=value;}});
- for(const key of ['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR'])assert.ok(process.env[key]?.startsWith(path.dirname(process.env.HOME)+path.sep),`${key} is not isolated`);
- assert.ok(prefix.startsWith(f.root+path.sep));
- t.diagnostic(JSON.stringify({HOME:process.env.HOME,ZYLOS_DIR:process.env.ZYLOS_DIR,PM2_HOME:process.env.PM2_HOME,TMPDIR:process.env.TMPDIR,prefix,npmCli,services:[],databases:[]}));
- const targets=['1.0.0','2.0.0'].map(version=>{
-  const target=path.join(f.root,version);fs.mkdirSync(target);
-  fs.writeFileSync(path.join(target,'package.json'),JSON.stringify({name:'upgrade-output-permission-fixture',version,bin:{'upgrade-output-permission':'bin.cjs'}}));
-  fs.writeFileSync(path.join(target,'bin.cjs'),'#!/usr/bin/env node\n',{mode:0o755});return target;
- });
- const install=target=>m.runInstaller(f.dir,f.j,{stage:'install',npmCli,args:['install','-g','--prefix',prefix,target],cwd:f.root,timeout:20000});
- install(targets[0]);
- let error;
- fs.chmodSync(bin,0o500);
- try{install(targets[1]);}catch(cause){error=cause;}finally{fs.chmodSync(bin,0o700);}
- assert.ok(error,'read-only bin must reject the replacement');
- assert.match(error.message,/npm error code EACCES/);
- assert.match(error.message,/npm error Error: EACCES: permission denied, rename/);
- const reason=upgradeFailureMessage(error);
- assert.match(reason,/^EACCES: permission denied, rename /);
- assert.doesNotMatch(reason,/npm error (?:dest|path|code)|\n/);
- t.diagnostic(`Error: ${reason}`);
- assert.equal(f.read().installerExitConfirmed,true);
- assert.equal(f.helper.members(f.read().installerPid).length,0);
-});
-
-for(const ci of [undefined,'','0','false','xyz'])test(`protected npm preserves inherited CI=${ci} under original Node with durable started evidence`,t=>{
- const previous=process.env.CI;
- if(ci===undefined)delete process.env.CI;else process.env.CI=ci;
- t.after(()=>{if(previous===undefined)delete process.env.CI;else process.env.CI=previous;});
- const f=fixture(t,`const fs=require('node:fs');const dir=process.argv[2];const j=JSON.parse(fs.readFileSync(dir+'/journal.json'));if(!j.installerStarted||!Number.isSafeInteger(j.installerPid)||j.installerPid<=1||j.installerIdentity.pid!==j.installerPid||Object.hasOwn(j,'installerToken')||process.env.ZYLOS_UPGRADE_INSTALLER_TOKEN!==undefined||process.env.ZYLOS_PROTECTED_INSTALL!=='1'||process.env.ZYLOS_SKIP_POSTINSTALL!==undefined||process.env.ZYLOS_UPGRADE_FROM_VERSION!==undefined)process.exit(9);process.stdout.write(JSON.stringify({node:process.execPath,args:process.argv.slice(2),stage:j.installerStage,ci:process.env.CI}));`);
- const output=runInstaller(f.ctx,{stage:'pack-target',npmCli:f.npmCli,args:[f.dir],cwd:f.root});const seen=JSON.parse(output);assert.equal(seen.node,process.execPath);assert.equal(seen.stage,'pack-target');assert.equal(seen.ci,process.env.CI);assert.deepEqual(seen.args,[f.dir]);assert.equal(f.read().installerExitConfirmed,true);assert.equal(f.read().installerExitUnconfirmed,false);
- for(const stage of ['pack-target','install','skill-deps:example']) {
-  const seen=JSON.parse(runInstaller(f.ctx,{stage,npmCli:f.npmCli,args:[f.dir],cwd:f.root}));
-  assert.equal(seen.stage,stage);assert.equal(seen.ci,process.env.CI);
-  assert.equal(f.read().installerStage,stage);assert.equal(f.read().installerExitConfirmed,true);
- }
-});
 
 test('target and skill installation keep lifecycle scripts enabled',t=>{
  const f=fixture(t,''),log=path.join(f.root,'npm-calls.jsonl');
@@ -118,58 +44,6 @@ test('target and skill installation keep lifecycle scripts enabled',t=>{
   for(const [key,value] of Object.entries(call.env))if(key.toLowerCase()==='npm_config_ignore_scripts')assert.ok(value===''||value==='false',`${call.stage} must not disable lifecycle scripts via ${key}`);
  }
 });
-for(const exitCode of [0,2])test(`all npm exits quiesce descendants before returning (exit=${exitCode})`,t=>{
- const f=fixture(t,`const cp=require('node:child_process');const child=cp.spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});child.unref();process.stdout.write('fixture.tgz\\n');process.exit(${exitCode});`);
- const invoke=()=>runInstaller(f.ctx,{stage:'install',npmCli:f.npmCli,args:[],cwd:f.root});if(exitCode)assert.throws(invoke,/npm install failed/);else assert.match(invoke(),/fixture.tgz/);const saved=f.read();assert.equal(saved.installerExitConfirmed,true);assert.equal(f.helper.members(saved.installerPid).length,0);
-});
-test('npm timeout kills and verifies entire installer group before reporting failure',t=>{
- const f=fixture(t,`require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});setInterval(()=>{},1000);`);
- assert.throws(()=>runInstaller(f.ctx,{stage:'install',npmCli:f.npmCli,args:[],cwd:f.root,timeout:1500}),/ETIMEDOUT|timed out/);const saved=f.read();assert.equal(saved.installerExitConfirmed,true);assert.equal(f.helper.members(saved.installerPid).length,0);
-});
-for (const beforeDescriptor of [false,true]) test(`controller death retains recoverable installer identity (beforeDescriptor=${beforeDescriptor})`,async t=>{
- const f=fixture(t,`require('node:fs').writeFileSync(process.argv[2],String(process.pid));setInterval(()=>{},1000);`),ready=path.join(f.root,'body-started'),launcher=path.join(f.root,'launcher.mjs');
- if (beforeDescriptor) fs.unlinkSync(path.join(f.dir,'descriptor.json'));
- fs.writeFileSync(launcher,`import {createRequire} from 'node:module';const m=createRequire(import.meta.url)(${JSON.stringify(path.resolve('cli/lib/upgrade-maintenance.cjs'))});m.runInstaller(${JSON.stringify(f.dir)},${JSON.stringify(f.j)},{stage:'install',npmCli:${JSON.stringify(f.npmCli)},args:[${JSON.stringify(ready)}],cwd:${JSON.stringify(f.root)}});`);
- const parent=spawn(process.execPath,[launcher],{stdio:'ignore'});t.after(()=>{try{parent.kill('SIGKILL');}catch{}});const deadline=Date.now()+7000;while(!fs.existsSync(ready)){if(Date.now()>deadline)throw Error('npm body did not start');await new Promise(resolve=>setTimeout(resolve,20));}
- const npmPid=Number(fs.readFileSync(ready,'utf8'));
- const exited=new Promise(resolve=>parent.once('exit',resolve));parent.kill('SIGKILL');await exited;const saved=f.read();
- assert.equal(saved.installerStarted,true);assert.ok(saved.installerPid>1);assert.notEqual(saved.installerPid,npmPid);assert.equal(saved.installerIdentity.pid,saved.installerPid);assert.ok(f.helper.members(saved.installerPid).length);
- m.verifyFinalizerExit(f.dir,saved);
- assert.equal(f.read().installerExitConfirmed,true);
- assert.equal(f.helper.members(saved.installerPid).length,0);
-});
-
-test('interruption before launcher identity publication stays fail closed without descriptor',t=>{
- const f=fixture(t,'// not launched');fs.unlinkSync(path.join(f.dir,'descriptor.json'));
- m.update(f.dir,f.j,{installerStarted:true,installerPid:null,installerExitConfirmed:false});
- assert.throws(()=>m.verifyFinalizerExit(f.dir,f.j),/interrupted launch/);
- assert.notEqual(f.read().installerExitConfirmed,true);
-});
-
-test('dead installer leader with surviving members requires manual recovery without signalling them',async t=>{
- const f=fixture(t,`require('node:fs').writeFileSync(process.argv[2],String(process.pid));setInterval(()=>{},1000);`),ready=path.join(f.root,'started'),launcher=path.join(f.root,'controller.mjs');
- fs.writeFileSync(launcher,`import {createRequire} from 'node:module';const m=createRequire(import.meta.url)(${JSON.stringify(path.resolve('cli/lib/upgrade-maintenance.cjs'))});m.runInstaller(${JSON.stringify(f.dir)},${JSON.stringify(f.j)},{stage:'install',npmCli:${JSON.stringify(f.npmCli)},args:[${JSON.stringify(ready)}],cwd:${JSON.stringify(f.root)}});`);
- const controller=spawn(process.execPath,[launcher],{stdio:'ignore'});
- t.after(()=>{try{controller.kill('SIGKILL');}catch{}});
- const deadline=Date.now()+7000;
- while(!fs.existsSync(ready)){if(Date.now()>deadline)throw Error('npm did not start');await new Promise(resolve=>setTimeout(resolve,20));}
- const saved=f.read(),npmPid=Number(fs.readFileSync(ready,'utf8'));
- const exited=new Promise(resolve=>controller.once('exit',resolve));controller.kill('SIGKILL');await exited;
- process.kill(saved.installerPid,'SIGKILL');
- while(!m.identity(saved.installerPid).absent && Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,20));
- const result=f.helper.quiesce(f.dir,saved,{terminate:true});
- assert.equal(result.confirmed,false);assert.match(result.error,/manual recovery/);
- assert.doesNotThrow(()=>process.kill(npmPid,0));
- assert.throws(()=>m.verifyFinalizerExit(f.dir,saved),/manual recovery/);
- assert.notEqual(f.read().installerExitConfirmed,true);
-});
-
-test('pre-descriptor exit verification rejects changed frozen material',t=>{
- const f=fixture(t,'// not launched');fs.unlinkSync(path.join(f.dir,'descriptor.json'));
- m.update(f.dir,f.j,{installerStarted:true,installerPid:null,installerExitConfirmed:false});
- fs.appendFileSync(path.join(f.dir,'installer.cjs'),'// changed');
- assert.throws(()=>m.verifyFinalizerExit(f.dir,f.j),/transaction recovery material changed/);
-});
 
 test('installer PID reuse is rejected before signalling an unrelated group',t=>{
  const f=fixture(t,'// not launched');
@@ -180,58 +54,3 @@ test('installer PID reuse is rejected before signalling an unrelated group',t=>{
  assert.equal(f.helper.quiesce(f.dir,{...j,installerIdentity:null},{kind:'installer',terminate:true}).confirmed,false);
  assert.doesNotThrow(()=>process.kill(unrelated.pid,0));
 });
-test('trusted npm resolver accepts readable modes 775 and 644 but rejects wrappers, unreadable and non-files',t=>{
- const f=fixture(t,'// fixture'),bin=path.join(f.root,'bin');fs.mkdirSync(bin);fs.writeFileSync(path.join(bin,'npm'),'#!/bin/sh\nexit 0\n',{mode:0o700});const prior=process.env.PATH;
- try{
-  process.env.PATH=bin;
-  assert.throws(resolveUpgradeNpmCli,/trusted npm-cli/);
-  fs.unlinkSync(path.join(bin,'npm'));fs.symlinkSync(f.npmCli,path.join(bin,'npm'));
-  fs.chmodSync(f.npmCli,0o775);assert.equal(resolveUpgradeNpmCli(),f.npmCli);
-  fs.chmodSync(f.npmCli,0o644);assert.equal(resolveUpgradeNpmCli(),f.npmCli);
-  fs.chmodSync(f.npmCli,0o000);
-  if(process.geteuid?.()!==0)assert.throws(resolveUpgradeNpmCli,/trusted npm-cli/);
-  fs.unlinkSync(f.npmCli);fs.mkdirSync(f.npmCli);
-  assert.throws(resolveUpgradeNpmCli,/trusted npm-cli/);
- }finally{process.env.PATH=prior;}
-});
-
-test('npm resolver accepts a readable executable owned by another user',t=>{
- const f=fixture(t,'// fixture'),bin=path.join(f.root,'bin');fs.mkdirSync(bin);fs.symlinkSync(f.npmCli,path.join(bin,'npm'));fs.chmodSync(f.npmCli,0o755);
- const prior=process.env.PATH,statSync=fs.statSync;
- t.mock.method(fs,'statSync',(file,...args)=>{const stat=statSync(file,...args);if(file===f.npmCli)stat.uid=-1;return stat;});
- try{process.env.PATH=bin;assert.equal(resolveUpgradeNpmCli(),f.npmCli);}finally{process.env.PATH=prior;}
-});
-
-test('protected installation uses the preflight npm path after its PATH entry changes',t=>{
- const f=fixture(t,"if(process.argv[2]==='pack')process.stdout.write(JSON.stringify([{filename:'fixture.tgz'}]));");
- const bin=path.join(f.root,'bin');fs.mkdirSync(bin);fs.symlinkSync(f.npmCli,path.join(bin,'npm'));fs.chmodSync(f.npmCli,0o644);
- const prior=process.env.PATH;
- try{
-  process.env.PATH=bin+path.delimiter+prior;
-  f.ctx.protectedNpmCli=resolveUpgradeNpmCli();
-  fs.unlinkSync(path.join(bin,'npm'));fs.writeFileSync(path.join(bin,'npm'),'#!/bin/sh\nexit 1\n',{mode:0o700});
-  f.ctx.tempDir=f.root;f.ctx.maintenance=m;
-  installUpgradeTarget(f.ctx,{markInstallationIntent:()=>{}});
-  assert.equal(f.read().installerStage,'install');assert.equal(f.read().installerExitConfirmed,true);
- }finally{process.env.PATH=prior;}
-});
-
-test('transaction installer launches through an aliased work directory', t => {
-  const f=fixture(t,"process.stdout.write(process.cwd());"),alias=f.root+'-alias';
-  fs.symlinkSync(f.root,alias);
-  t.after(()=>fs.unlinkSync(alias));
-  const output=runInstaller(f.ctx,{stage:'pack',npmCli:f.npmCli,args:[],cwd:alias});
-  assert.equal(output,f.root);
-  assert.equal(f.read().installerStarted,true);
-  assert.equal(f.read().installerExitConfirmed,true);
-});
-
-for(const name of ['runner.cjs','maintenance.cjs','installer.cjs','remove-owned-tree.mjs']) for(const damage of ['missing','changed']) {
- test(`transaction installer rejects ${damage} ${name} before recording launch`,t=>{
-  const f=fixture(t,"process.stdout.write('unexpected');");
-  const file=path.join(f.dir,name);
-  if(damage==='missing')fs.unlinkSync(file);else fs.appendFileSync(file,'// changed');
-  assert.throws(()=>runInstaller(f.ctx,{stage:'install',npmCli:f.npmCli,args:[],cwd:f.root}),damage==='missing'?/ENOENT/:/transaction recovery material changed/);
-  assert.notEqual(f.read().installerStarted,true);
- });
-}

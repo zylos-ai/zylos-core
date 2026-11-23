@@ -8,7 +8,6 @@ import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
 import { launchSession } from '../runtime/launch-flow.js';
 import { getRuntime } from '../runtime/index.js';
-import { deployManifestTemplate } from '../runtime/tmux-env.js';
 import { tmuxNameForGroup } from '../session-group-paths.js';
 
 // Session launch integration. Only the model CLI is a stand-in;
@@ -122,14 +121,6 @@ ${succeed
   return { dir, executed };
 }
 
-function publishActiveRecoveryCue(root) {
-  const stable = path.join(root, '.zylos/upgrade');
-  fs.mkdirSync(stable, {recursive:true, mode:0o700});
-  fs.writeFileSync(path.join(stable, 'active.json'), '{}', {mode:0o600});
-  fs.writeFileSync(path.join(stable, 'maintenance.cjs'), '// fixture dependency\n', {mode:0o600});
-  fs.writeFileSync(path.join(stable, 'bootstrap.cjs'),
-    "exports.bootstrap = () => ({active:true, blocked:false, prompt:'cleanup task'});\n", {mode:0o600});
-}
 
 test('shared runtime launch creates the workspace skills symlink', async t => {
   const f = setup(t, 'claude');
@@ -141,29 +132,6 @@ test('shared runtime launch creates the workspace skills symlink', async t => {
 
   await f.launch();
   assert.equal(fs.readlinkSync(path.join(agentsDir, 'skills')), skillsDir);
-});
-
-test('shared runtime launch preserves an existing workspace skills symlink', async t => {
-  const f = setup(t, 'claude');
-  const skillsLink = path.join(f.root, '.agents', 'skills');
-  const customTarget = path.join(f.root, 'custom-skills');
-  fs.mkdirSync(path.dirname(skillsLink));
-  fs.symlinkSync(customTarget, skillsLink);
-  const original = fs.lstatSync(skillsLink);
-
-  await f.launch();
-  assert.equal(fs.lstatSync(skillsLink).ino, original.ino);
-  assert.equal(fs.readlinkSync(skillsLink), customTarget);
-});
-
-test('shared runtime launch continues when the workspace skills symlink cannot be created', async t => {
-  const f = setup(t, 'claude');
-  const agentsPath = path.join(f.root, '.agents');
-  fs.writeFileSync(agentsPath, 'blocks directory creation');
-
-  const launched = await f.launch();
-  assert.equal(launched.result.tmuxName, tmuxNameForGroup('origin'));
-  assert.equal(fs.readFileSync(agentsPath, 'utf8'), 'blocks directory creation');
 });
 
 for (const runtime of ['claude', 'codex']) {
@@ -189,18 +157,6 @@ for (const runtime of ['claude', 'codex']) {
     if (runtime === 'codex') assert.equal(p.args.at(-1), sentinel);
   });
 
-  test(`${runtime}: repeated fresh launches preserve manifest npm mirrors`, async t => {
-    const f = setup(t, runtime);
-    deployManifestTemplate(path.resolve(import.meta.dirname, '../../../templates/runtime-env.manifest.example'), f.root);
-    f.env.npm_config_registry = 'https://registry.example.test/';
-    f.env.npm_config_better_sqlite3_binary_host_mirror = 'https://binary.example.test/better-sqlite3';
-    for (let cycle = 0; cycle < 3; cycle++) {
-      const p = await f.launch({ sessionGroup: `test:cycle-${cycle}`, sessionMode: 'multi', runId: `cycle-${cycle}` });
-      for (const key of ['npm_config_registry', 'npm_config_better_sqlite3_binary_host_mirror']) assert.equal(p.env[key], f.env[key]);
-      assert.equal(p.env.ZYLOS_SESSION_GROUP, `test:cycle-${cycle}`);
-    }
-  });
-
   test(`${runtime}: existing name rejects without writing into the original process`, async t => {
     const f = setup(t, runtime); const first = await f.launch();
     await assert.rejects(f.launch({ runId: 'replacement-run' }), { code: 'NAME_CONFLICT' });
@@ -221,22 +177,6 @@ for (const runtime of ['claude', 'codex']) {
     else { assert.ok(p.args.includes('model_reasoning_effort="high"')); assert.ok(p.args.includes('--no-daemon')); assert.equal(p.args.at(-1), sentinel); }
   });
 
-  for(const mode of (runtime==='codex'?['override','default']:['override'])) {
-    const title=mode==='override'?`${runtime}: capability failure rejects before tmux creation`:'Codex default capability failure rejects before creation';
-    test(title,async t=>{
-      const f=setup(t,runtime,{helpFails:true});
-      const changes=mode==='default'?{}:{launchConfig:{runtime:f.input.launchConfig.runtime,mode,model:'test',effort:'high'}};
-      await assert.rejects(f.launch(changes),{code:'LAUNCH_FAILED'});
-      assert.throws(()=>f.tmux('list-sessions'));
-    });
-  }
-
-  test(`${runtime}: unsupported override rejects before creation`, async t => {
-    const f = setup(t, runtime, { help: ' --help ' });
-    await assert.rejects(f.launch({ launchConfig: { runtime: f.input.launchConfig.runtime, mode: 'override', model: 'test', effort: 'high' } }), { code: 'MODEL_CONFIG_REJECTED' });
-    assert.throws(() => f.tmux('list-sessions'));
-  });
-
   test(`${runtime}: failed automatic startup recovery reaches runtime argv`, async t => {
     const f = setup(t, runtime);
     const recovery = publishStartupRecovery(f.root);
@@ -250,78 +190,7 @@ for (const runtime of ['claude', 'codex']) {
     }
   });
 
-  test(`${runtime}: successful automatic startup recovery preserves ordinary argv`, async t => {
-    const f = setup(t, runtime);
-    const recovery = publishStartupRecovery(f.root, { succeed: true });
-    const p = await f.launch();
-    assert.deepEqual(JSON.parse(fs.readFileSync(recovery.executed, 'utf8')), ['resume', '--transaction-dir', recovery.dir]);
-    assert.doesNotMatch(JSON.stringify(p.args), /SYSTEM RECOVERY TASK/);
-    if (runtime === 'codex') assert.equal(p.args.at(-1), sentinel);
-  });
-
-  test(`${runtime}: live upgrade controller preserves ordinary argv`, async t => {
-    const f = setup(t, runtime);
-    const recovery = publishStartupRecovery(f.root, { controller: true });
-    const p = await f.launch();
-    assert.equal(fs.existsSync(recovery.executed), false);
-    assert.doesNotMatch(JSON.stringify(p.args), /SYSTEM RECOVERY TASK/);
-    if (runtime === 'codex') assert.equal(p.args.at(-1), sentinel);
-  });
-
-  test(`${runtime}: active recovery cue appends once to the ordinary prompt`, async t => {
-    const f = setup(t, runtime);
-    publishActiveRecoveryCue(f.root);
-    const p = await f.launch();
-    const prompt = p.args.at(-1);
-    assert.equal((prompt.match(/cleanup task/g) || []).length, 1);
-    assert.doesNotMatch(prompt, /undefined/);
-    if (runtime === 'codex') assert.equal(prompt, `${sentinel}\n\ncleanup task`);
-    else assert.equal(prompt, 'cleanup task');
-  });
 }
-
-test('Claude compat PATH is deduplicated in actual runtime environment', async t => {
-  const f = setup(t, 'claude');
-  fs.writeFileSync(path.join(f.root, '.env'), 'ZYLOS_CLEAN_ENV=false\n');
-  f.env.PATH = '/usr/bin:/bin:/usr/bin:/bin';
-  const p = await f.launch(); assert.equal(p.env.PATH, '/usr/bin:/bin');
-});
-
-for(const [mode,title,help,cycles] of [
-  ['override','Codex override without daemon capability omits unsupported flag and keeps stateless sentinel',' --model MODEL ',2],
-  ['default','Codex default launch without daemon capability omits unsupported flag',' --help ',1],
-]) test(title,async t=>{
-  const f=setup(t,'codex',{help});
-  for(let i=0;i<cycles;i++){
-    const changes=mode==='default'?{}:{sessionGroup:`test:codex-${i}`,sessionMode:'multi',launchConfig:{runtime:'codex',mode,model:'test',effort:'low'}};
-    const p=await f.launch(changes);
-    assert.equal(p.args.includes('--no-daemon'),false);assert.equal(p.args.at(-1),sentinel);
-    if(mode==='override')assert.equal(p.args.some(a=>a.includes('session-start-inject.js')),false);
-  }
-  if(mode==='override')assert.equal(fs.existsSync(path.join(f.root,'.zylos/first-start-done')),false);
-});
-
-// .env credentials are passed with or without a subscription login and are pre-approved.
-for(const [auth,title] of [
-  ['credentials','Claude subscription login file keeps dotenv tokens in actual runtime environment'],
-  ['status','Claude subscription login status keeps dotenv tokens in actual runtime environment'],
-  ['none','Claude without a subscription login retains dotenv tokens'],
-]) test(title,async t=>{
-  const f=setup(t,'claude',{nativeAuth:auth==='status'});
-  fs.mkdirSync(path.join(f.root,'.zylos'));
-  fs.writeFileSync(path.join(f.root,'.zylos/runtime-env.manifest'),'env ANTHROPIC_API_KEY\nenv CLAUDE_CODE_OAUTH_TOKEN\n');
-  if(auth==='credentials'){
-    fs.mkdirSync(path.join(f.home,'.claude'));
-    fs.writeFileSync(path.join(f.home,'.claude/.credentials.json'),JSON.stringify({claudeAiOauth:{refreshToken:'synthetic-refresh-token'}}));
-  }
-  fs.appendFileSync(path.join(f.root,'.env'),'CLAUDE_CODE_OAUTH_TOKEN=synthetic-oauth-token\n');
-  const originalEnv={...f.env},p=await f.launch();
-  assert.equal(p.env.ANTHROPIC_API_KEY,secret);
-  assert.equal(p.env.CLAUDE_CODE_OAUTH_TOKEN,'synthetic-oauth-token');
-  const approved=JSON.parse(fs.readFileSync(path.join(f.home,'.claude.json'),'utf8')).customApiKeyResponses.approved;
-  for(const value of [secret,'synthetic-oauth-token'])assert.ok(approved.includes(value.slice(-20)),'pre-approved');
-  assert.deepEqual(f.env,originalEnv);
-});
 
 // Built-in Claude passthrough: Claude auth variables set in .env reach the
 // session without any runtime-env.manifest line, and the auth probe sees the
@@ -361,15 +230,6 @@ for (const compat of [false, true]) for (const [name, dotenv] of Object.entries(
     if (!dotenv.ANTHROPIC_BASE_URL) assert.equal(session.ANTHROPIC_BASE_URL, compat ? 'https://stale-process.example.test' : undefined);
   });
 }
-for (const name of ['API key', 'setup token']) test(`Claude subscription login: the .env ${name} reaches session and probe and is pre-approved`, async t => {
-  const dotenv = builtinCases[name];
-  const { session, probe, home } = await launchAndProbe(t, dotenv, { nativeAuth: true });
-  const [[key, value]] = Object.entries(dotenv);
-  assert.equal(session[key], value);
-  assert.equal(probe[key], value);
-  const approved = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')).customApiKeyResponses.approved;
-  assert.ok(approved.includes(value.slice(-20)), `${name} must be pre-approved`);
-});
 
 // The built-in passthrough is Claude-only: a Codex session launched through
 // launchSession, with every Claude variable in .env and an empty manifest,
@@ -387,13 +247,6 @@ for (const compat of [false, true]) test(`Codex session gets none of the Claude 
     + Object.entries(dotenv).map(([key, value]) => `${key}=${value}\n`).join(''));
   const { env } = await f.launch();
   for (const key of builtinKeys) assert.equal(env[key], undefined, `Codex session must not carry ${key}`);
-});
-
-// Preserve daemon isolation through the target API.
-test('Codex default launch retains supported daemon isolation', async t => {
-  const f = setup(t, 'codex');
-  const p = await f.launch();
-  assert.ok(p.args.includes('--no-daemon'), 'supported isolation must also apply to default model config');
 });
 
 

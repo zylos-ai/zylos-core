@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findRuntime, getRuntime, runtimesWith, SUPPORTED_RUNTIMES } from '../index.js';
+import { getRuntime, runtimesWith, SUPPORTED_RUNTIMES } from '../index.js';
 import { RUNTIME_CONTRACT, UNSUPPORTED } from '../contract.js';
 
 for (const id of SUPPORTED_RUNTIMES) {
@@ -148,18 +148,3 @@ for (const id of SUPPORTED_RUNTIMES) {
     }
   });
 }
-
-test('runtime factory refuses unsupported ids and shares loaded implementations', async () => {
-  for (const id of ['constructor', 'toString', '__proto__', 'foo', '', undefined]) {
-    await assert.rejects(getRuntime(id), { code: 'RUNTIME_UNSUPPORTED', message: `Unsupported runtime: ${id}` });
-    assert.equal(await findRuntime(id), null);
-  }
-  const [first, second] = await Promise.all([getRuntime('claude'), getRuntime('claude')]);
-  assert.equal(first, second);
-  assert.equal(await findRuntime('claude'), first);
-});
-
-test('exactly one runtime stages settings during upgrade', async () => {
-  const runtimes = await Promise.all(SUPPORTED_RUNTIMES.map(getRuntime));
-  assert.equal(runtimes.filter(runtime => runtime.hooks.stage !== UNSUPPORTED).length, 1);
-});

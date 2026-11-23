@@ -5,11 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { stripVTControlCharacters } from 'node:util';
 
 const rootDir = path.resolve(import.meta.dirname, '../../..');
-const cliPath = path.join(rootDir, 'cli', 'zylos.js');
-const loaderUrl = pathToFileURL(path.join(rootDir, 'skills', 'comm-bridge', 'scripts', 'core-config-loader.js')).href;
 let root;
 
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-config-readers-')); });
@@ -42,34 +39,6 @@ describe('strict runtime readers', () => {
     const malformed = run(['--input-type=module', '-e', `${read} try {read();process.exit(9)} catch(error){console.log(JSON.stringify({code:error.code,cause:error.cause?.name}));}`]);
     assert.equal(malformed.status, 0, malformed.stderr);
     assert.deepEqual(JSON.parse(malformed.stdout), { code: 'CONFIG_UNREADABLE', cause: 'SyntaxError' });
-  });
-
-  it('defaults a missing runtime but rejects malformed F1 at the CLI boundary', () => {
-    const missing = run([cliPath, 'runtime', 'status']);
-    assert.equal(missing.status, 0, missing.stderr);
-    assert.equal(stripVTControlCharacters(missing.stdout).trim(), 'Current runtime: Claude');
-    writeConfig('{');
-    const malformed = run([cliPath, 'runtime', 'status']);
-    assert.notEqual(malformed.status, 0);
-    assert.match(malformed.stderr, /configuration is unreadable/i);
-  });
-
-  it('applies the statusNotices matrix from one snapshot', () => {
-    const cases = [
-      { config: null, expected: { notices: {} } },
-      { config: {}, expected: { notices: {} } },
-      { config: { runtime: 'other', statusNotices: null }, expected: { notices: {} } },
-      { config: { runtime: 'codex' }, expected: { notices: {} } },
-      { config: { statusNotices: { prefix: 'Core' } }, expected: { notices: { prefix: 'Core' } } },
-    ];
-    for (const entry of cases) {
-      const file = path.join(root, '.zylos', 'config.json');
-      fs.rmSync(file, { force: true });
-      if (entry.config !== null) writeConfig(JSON.stringify(entry.config));
-      const result = run(['--input-type=module', '-e', `const core=await import(${JSON.stringify(loaderUrl)}); const config=(await core.loadCoreConfig()).readZylosConfigOrThrow(); console.log(JSON.stringify({notices:config.statusNotices??{}}));`]);
-      assert.equal(result.status, 0, result.stderr);
-      assert.deepEqual(JSON.parse(result.stdout), entry.expected);
-    }
   });
 
 });

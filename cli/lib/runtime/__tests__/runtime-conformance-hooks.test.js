@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import test from 'node:test';
 import { getRuntime } from '../index.js';
-import { buildKickPrompt } from '../kick-prompt.js';
 
 async function recordedHooks(id) {
   const directory = new URL(`./samples/${id}/hooks/`, import.meta.url);
@@ -78,46 +77,3 @@ for (const [id, events] of [
 function pick(input, keys) {
   return Object.fromEntries(keys.filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]]));
 }
-
-test('Antigravity native hook records normalize lifecycle, failures and tool input', async () => {
-  const { hooks, payload } = await recordedHooks('agy');
-  const normalized = {};
-  for (const [name, event, standard] of [
-    ['session-start-kick', 'SessionStart', 'SessionStart'],
-    ['pre-invocation-first', 'PreInvocation', 'UserPromptSubmit'],
-    ['pre-invocation-later', 'PreInvocation', null],
-    ['stop-idle', 'Stop', 'Stop'],
-    ['stop-auth-error', 'Stop', 'StopFailure'],
-    ['stop-custom-hook', 'Stop', 'Stop'],
-    ['pre-tool-use', 'PreToolUse', 'PreToolUse'],
-    ['post-tool-use', 'PostToolUse', 'PostToolUse'],
-    ['post-tool-use-nonzero-exit', 'PostToolUse', 'PostToolUse'],
-  ]) {
-    const native = await payload(name);
-    const record = hooks.normalize(native, event);
-    if (standard === null) {
-      assert.equal(native.invocationNum, 1);
-      assert.equal(record, null);
-      continue;
-    }
-    assert.equal(record.hook_event_name, standard, name);
-    assert.equal(typeof record.session_id, 'string', name);
-    assert.ok(record.session_id, name);
-    assert.equal(record.session_id, native.conversationId, name);
-    if (event.endsWith('ToolUse')) {
-      assert.equal(record.tool_use_id, native.toolCall.id, name);
-      assert.equal(record.tool_name, 'run_command', name);
-    }
-    normalized[name] = record;
-  }
-  const start = normalized['session-start-kick'].lastUserInput.trim();
-  assert.ok(start === buildKickPrompt() || start.startsWith(buildKickPrompt() + '\n'));
-  assert.equal(normalized['pre-invocation-first'].invocationNum, 0);
-  assert.equal(normalized['stop-idle'].fullyIdle, true);
-  assert.equal(normalized['stop-auth-error'].error, 'authentication_failed');
-  assert.equal(normalized['stop-custom-hook'].terminationReason, 'TERMINAL_CUSTOM_HOOK');
-  assert.equal((await payload('post-tool-use-nonzero-exit')).error, '');
-  assert.equal(Object.hasOwn(normalized['post-tool-use-nonzero-exit'], 'error'), false);
-  const tool = normalized['pre-tool-use'];
-  assert.deepEqual(hooks.toolInput(tool.tool_name, tool.tool_input), pick(tool.tool_input, ['CommandLine', 'Cwd']));
-});

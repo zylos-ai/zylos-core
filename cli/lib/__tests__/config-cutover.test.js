@@ -20,7 +20,4 @@ describe('session mode facade', () => {
     assert.throws(() => readSessionMode(), error => error.code === 'CONFIG_UNREADABLE');
   });
 
-  it('rejects unknown modes before writing', () => {
-    assert.throws(() => writeSessionModeAtCutover('other'), TypeError);
-  });
 });

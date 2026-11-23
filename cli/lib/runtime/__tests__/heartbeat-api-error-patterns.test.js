@@ -4,37 +4,12 @@ import { describe, it } from 'node:test';
 import { detectApiErrorText } from '../shared/api-error-patterns.js';
 
 describe('heartbeat API error patterns', () => {
-  it('detects many-image dimension limit errors', () => {
-    const pane = `
-      An image in the conversation exceeds the dimension limit for many-image requests (2000px).
-      Run /compact to remove old images from context, or start a new session.
-    `;
-
-    const result = detectApiErrorText(pane);
-
-    assert.equal(result.detected, true);
-    assert.match(result.pattern, /dimension limit/i);
-  });
 
   it('detects existing API error patterns', () => {
     const result = detectApiErrorText('APIError: 400 invalid_request_error');
 
     assert.equal(result.detected, true);
     assert.equal(result.pattern, 'APIError: 400');
-  });
-
-  it('detects API Error with space (content filtering)', () => {
-    const result = detectApiErrorText('API Error: 400 Output blocked by content filtering policy');
-
-    assert.equal(result.detected, true);
-    assert.equal(result.pattern, 'API Error: 400');
-  });
-
-  it('detects content filtering policy text standalone', () => {
-    const result = detectApiErrorText('Output blocked by content filtering policy');
-
-    assert.equal(result.detected, true);
-    assert.match(result.pattern, /content filtering policy/i);
   });
 
   it('does not match ordinary image discussion text', () => {

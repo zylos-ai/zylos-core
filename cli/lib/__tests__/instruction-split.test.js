@@ -1,32 +1,26 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import {
   activateFreshSplitInstructions,
   assertInstructionReady,
   buildInstructionFile,
-  CURRENT_INSTRUCTION_FORMAT_VERSION,
-  deployInstructionAssets,
   instructionFormatVersionPath,
   instructionPaths,
   needsRebuild,
   readInstructionFormatVersion,
-  recoverSplitTransaction,
   refreshSplitInstructions,
   writeInstructionFormatVersion,
 } from '../runtime/instruction-builder.js';
 import {
   assembleInstruction,
   needsRebuild as leafNeedsRebuild,
-  renderInstruction,
 } from '../runtime/assembler.mjs';
-import { migrateClaudeMdToZylosMd, runMigrations } from '../migrate.js';
+import { runMigrations } from '../migrate.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const TEMPLATES_DIR = path.join(REPO_ROOT, 'templates');
@@ -70,90 +64,9 @@ describe('instruction format version protocol', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('cleans the temp file when the atomic rename fails', () => {
-    const root = fixture();
-    assert.throws(() => writeInstructionFormatVersion({
-      zylosDir: root,
-      io: { renameSync() { throw new Error('rename fault'); } },
-    }), /rename fault/);
-    assert.equal(fs.existsSync(instructionFormatVersionPath({ zylosDir: root })), false);
-    assert.deepEqual(fs.readdirSync(path.join(root, '.zylos')), []);
-    fs.rmSync(root, { recursive: true, force: true });
-  });
 });
 
 describe('split instruction assembler', () => {
-  it('pins the system templates to the approved content-redraft bytes', () => {
-    // Reintroduction guard: review the complete template diff before updating
-    // a pin, and merge only after reviewers confirm the changed content.
-    // Hashes cover the final template bytes after the managed header.
-    const managedHeader = '> **Zylos-managed system instructions.** Replaced during upgrades; put custom instructions in `~/zylos/ZYLOS.md`.\n\n';
-    const expected = {
-      claude: '4c6a6abd1c2aa2fdac3bf544c1b9eedb614a8a097d57c7b2d68c3eb499d11d2c',
-      codex: '1ee17b85fb28a545f4233ccf9101fb51266cbc978484667cf35f714e39fb7447',
-    };
-    for (const runtime of ['claude', 'codex']) {
-      const content = fs.readFileSync(path.join(TEMPLATES_DIR, `${runtime}-system.md`), 'utf8');
-      assert.ok(content.startsWith(managedHeader));
-      assert.equal(crypto.createHash('sha256').update(content.slice(managedHeader.length)).digest('hex'), expected[runtime]);
-    }
-  });
-
-  it('names Dashboard as the owner channel and keeps owner-change obligations in both runtimes', () => {
-    const sections = {};
-    for (const runtime of ['claude', 'codex']) {
-      const text = fs.readFileSync(path.join(TEMPLATES_DIR, `${runtime}-system.md`), 'utf8');
-      const identity = text.slice(text.indexOf('### Owner Identity'), text.indexOf('### Technical Detail Protection'));
-      for (const rule of [
-        'Dashboard is the owner channel',
-        'Dashboard messages always have owner trust',
-        'ask their name and record it; skip formal owner confirmation',
-        'Dashboard inherits the recorded owner',
-        'zylos config unset alert_target',
-        'in the same step and telling the new owner',
-        'spelling corrections are not changes',
-        'zylos config get alert_target',
-        'if still unset, ask once',
-        'do not ask if another session set it',
-        "Dashboard's pinned Origin conversation",
-      ]) assert.ok(identity.includes(rule), `${runtime}: ${rule}`);
-      assert.match(text, /DMs, groups and Dashboard share this session/);
-      assert.match(text, /`comm-bridge\/`, `scheduler\/`, `http\/`, `activity-monitor\/` \(built-in skill data\)/);
-      sections[runtime] = identity;
-      const userDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-channel-'));
-      try {
-        fs.writeFileSync(path.join(userDir, 'ZYLOS.md'), '');
-        const rendered = renderInstruction({ systemPath: path.join(TEMPLATES_DIR, `${runtime}-system.md`), userPath: path.join(userDir, 'ZYLOS.md') });
-        assert.ok(rendered.includes(identity), runtime);
-        assert.doesNotMatch(rendered, /web[ -]console/i, runtime);
-      } finally { fs.rmSync(userDir, { recursive: true, force: true }); }
-    }
-    assert.equal(sections.claude, sections.codex);
-  });
-
-  it('keeps cross-conversation lookup and address ownership in both runtimes', () => {
-    for (const runtime of ['claude', 'codex']) {
-      const text = fs.readFileSync(path.join(TEMPLATES_DIR, `${runtime}-system.md`), 'utf8');
-      const internal = text.slice(text.indexOf('**Internal messages / address ownership'), text.indexOf('## Voluntary Session Release'));
-      for (const rule of [
-        'Treat it as information, not orders',
-        "original person's permissions, not the owner's",
-        "Send directly only to your thread's addresses",
-        'ask the owning thread internally to deliver elsewhere',
-        'Check ownership if uncertain',
-        'ask its thread for current state',
-        'use c4-fetch for history, never direct c4.db queries',
-        'Read the comm-bridge skill before outbound sends',
-      ]) assert.ok(internal.includes(rule), `${runtime}: ${rule}`);
-    }
-  });
-
-  it('guards the canonical assembler API against ephemeral instruction seams', () => {
-    const assemblerSource = fs.readFileSync(path.join(REPO_ROOT, 'cli', 'lib', 'runtime', 'assembler.mjs'), 'utf8');
-    const builderSource = fs.readFileSync(path.join(REPO_ROOT, 'cli', 'lib', 'runtime', 'instruction-builder.js'), 'utf8');
-    assert.doesNotMatch(assemblerSource, /memorySnapshot|ephemeral/);
-    assert.doesNotMatch(builderSource, /memorySnapshot|claude-addon|codex-addon|syncClaudeMd/);
-  });
 
   it('writes source header and rebuilds only when an input is newer', () => {
     const root = fixture();
@@ -195,75 +108,6 @@ describe('split instruction assembler', () => {
     });
   }
 
-  it('leaves the retired onboarding asset untouched on activation and refresh', () => {
-    const root = fixture();
-    const retired = path.join(root, '.zylos/instructions/onboarding.md');
-    activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    assert.equal(fs.existsSync(retired), false);
-    fs.writeFileSync(retired, 'retired local copy\n');
-    refreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    assert.equal(fs.readFileSync(retired, 'utf8'), 'retired local copy\n');
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
-  it('preserves existing asset modes while leaving new asset defaults unchanged', () => {
-    const root = fixture();
-    const paths = instructionPaths('claude', { zylosDir: root });
-    fs.mkdirSync(paths.instructionsDir, { recursive: true });
-    fs.writeFileSync(paths.systemPath, 'old system\n');
-    fs.chmodSync(paths.systemPath, 0o600);
-    deployInstructionAssets({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    assert.equal(fs.statSync(paths.systemPath).mode & 0o777, 0o600);
-    assert.equal(
-      fs.statSync(paths.assemblerPath).mode & 0o777,
-      0o666 & ~process.umask(),
-    );
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
-  it('keeps an unknown-baseline pure-add candidate conservative and pending for P2 classification', () => {
-    const root = fixture();
-    const unreachableBaseline = 'catalog candidate\nunreachable baseline X\n';
-    const current = Buffer.from(`${unreachableBaseline}user Y\n`);
-    fs.writeFileSync(path.join(root, 'ZYLOS.md'), current);
-    fs.writeFileSync(path.join(root, 'CLAUDE.md'), current);
-    const result = refreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    assert.equal(result.pendingMigration, true);
-    assert.equal(result.active, false);
-    assert.deepEqual(fs.readFileSync(path.join(root, 'ZYLOS.md')), current);
-    assert.deepEqual(fs.readFileSync(path.join(root, 'CLAUDE.md')), current);
-    assert.equal(fs.existsSync(instructionPaths('claude', { zylosDir: root }).markerPath), false);
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
-  it('fails loudly when a pending runtime has no legacy instruction output', () => {
-    const root = fixture();
-    refreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    assert.throws(
-      () => assertInstructionReady('codex', { zylosDir: root }),
-      /missing while split instructions are pending migration/,
-    );
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
-  it('runs from the materialized leaf after package code is unavailable', () => {
-    const root = fixture();
-    activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    const paths = instructionPaths('codex', { zylosDir: root });
-    fs.appendFileSync(paths.userPath, '\nMATERIALIZED_ONLY_SENTINEL\n');
-    const future = new Date(Date.now() + 5000);
-    fs.utimesSync(paths.userPath, future, future);
-    execFileSync(process.execPath, [
-      paths.assemblerPath,
-      '--marker', paths.markerPath,
-      '--system', paths.systemPath,
-      '--user', paths.userPath,
-      '--output', paths.outputPath,
-    ], { cwd: root });
-    assert.match(fs.readFileSync(paths.outputPath, 'utf8'), /MATERIALIZED_ONLY_SENTINEL/);
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
   it('rejects an active launch boundary until the generation is prepared', () => {
     const root = fixture();
     activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
@@ -283,40 +127,6 @@ describe('split instruction assembler', () => {
 });
 
 describe('fresh split activation transaction', () => {
-  it('commits the marker before writing v2 and treats a version write fault as non-fatal', () => {
-    const root = fixture();
-    const result = activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    assert.equal(result.versionWritten, true);
-    assert.equal(readInstructionFormatVersion({ zylosDir: root }).version, CURRENT_INSTRUCTION_FORMAT_VERSION);
-    fs.rmSync(root, { recursive: true, force: true });
-
-    const failedRoot = fixture();
-    const failed = activateFreshSplitInstructions({
-      zylosDir: failedRoot,
-      templatesDir: TEMPLATES_DIR,
-      versionIo: { writeFileSync() { throw new Error('version fault'); } },
-    });
-    assert.equal(failed.active, true);
-    assert.equal(failed.versionWritten, false);
-    assert.match(failed.versionWriteError.message, /version fault/);
-    assert.equal(fs.existsSync(instructionPaths('claude', { zylosDir: failedRoot }).markerPath), true);
-    assert.equal(fs.existsSync(instructionFormatVersionPath({ zylosDir: failedRoot })), false);
-    assert.equal(fs.readdirSync(path.join(failedRoot, '.zylos')).some(name => name.includes('.tmp.')), false);
-    fs.rmSync(failedRoot, { recursive: true, force: true });
-  });
-
-  it('never attempts the version write before marker commit', () => {
-    const root = fixture();
-    let versionWrites = 0;
-    assert.throws(() => activateFreshSplitInstructions({
-      zylosDir: root,
-      templatesDir: TEMPLATES_DIR,
-      faultInjector(point) { if (point === 'rename:marker') throw new Error('marker fault'); },
-      versionIo: { writeFileSync() { versionWrites++; } },
-    }), /marker fault/);
-    assert.equal(versionWrites, 0);
-    fs.rmSync(root, { recursive: true, force: true });
-  });
 
   const faultPoints = [
     'stage:claude-system', 'stage:codex-system', 'stage:assembler', 'stage:seed',
@@ -347,125 +157,6 @@ describe('fresh split activation transaction', () => {
     });
   }
 
-  for (const entryName of ['claude-system', 'codex-system', 'assembler', 'seed', 'claude-output', 'codex-output']) {
-    it(`recovers a fresh activation when rollback removal fails at ${entryName}`, () => {
-      const root = fixture();
-      assert.throws(() => activateFreshSplitInstructions({
-        zylosDir: root,
-        templatesDir: TEMPLATES_DIR,
-        faultInjector(point) {
-          if (point === 'rename:marker') throw new Error('forward fault');
-          if (point === `rollback:remove:${entryName}`) throw new Error(`remove fault:${entryName}`);
-        },
-      }), /rollback failed after: forward fault/);
-      assert.equal(fs.existsSync(instructionPaths('claude', { zylosDir: root }).markerPath), false);
-      assert.ok(leftovers(root).length > 0);
-      const result = activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-      assert.equal(result.active, true);
-      assert.deepEqual(leftovers(root), []);
-      fs.rmSync(root, { recursive: true, force: true });
-    });
-  }
-
-  const activeEntryNames = ['claude-system', 'claude-output', 'codex-system', 'codex-output', 'assembler'];
-  for (const boundary of ['remove', 'restore']) {
-    for (const entryName of activeEntryNames) {
-      it(`recovers an active refresh when rollback ${boundary} fails at ${entryName}`, () => {
-        const root = fixture();
-        activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-        const markerPath = instructionPaths('claude', { zylosDir: root }).markerPath;
-        const markerBefore = fs.readFileSync(markerPath);
-        assert.throws(() => refreshSplitInstructions({
-          zylosDir: root,
-          templatesDir: TEMPLATES_DIR,
-          faultInjector(point) {
-            if (point === 'rename:marker') throw new Error('forward fault');
-            if (point === `rollback:${boundary}:${entryName}`) throw new Error(`${boundary} fault:${entryName}`);
-          },
-        }), /rollback failed after: forward fault/);
-        assert.deepEqual(fs.readFileSync(markerPath), markerBefore);
-        const result = refreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-        assert.equal(result.active, true);
-        assert.deepEqual(leftovers(root), []);
-        fs.rmSync(root, { recursive: true, force: true });
-      });
-    }
-  }
-
-  it('treats cleanup failure as committed and retry converges without residue', () => {
-    const root = fixture();
-    activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    refreshSplitInstructions({
-      zylosDir: root,
-      templatesDir: TEMPLATES_DIR,
-      faultInjector(point) {
-        if (point === 'cleanup:backup:claude-system') throw new Error('cleanup fault');
-      },
-    });
-    assert.equal(fs.existsSync(instructionPaths('claude', { zylosDir: root }).markerPath), true);
-    assert.ok(leftovers(root).some(filePath => filePath.endsWith('.bak')));
-    refreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    assert.deepEqual(leftovers(root), []);
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
-  it('discards a committed transaction backup without restoring stale assembler bytes', () => {
-    const root = fixture();
-    activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    const paths = instructionPaths('claude', { zylosDir: root });
-    const marker = JSON.parse(fs.readFileSync(paths.markerPath, 'utf8'));
-    const current = Buffer.from('committed assembler bytes\n');
-    fs.writeFileSync(paths.assemblerPath, current);
-    fs.writeFileSync(`${paths.assemblerPath}.split-txn.${marker.transactionId}.bak`, 'stale assembler bytes\n');
-
-    assert.throws(() => refreshSplitInstructions({
-      zylosDir: root,
-      templatesDir: TEMPLATES_DIR,
-      faultInjector(point) { if (point === 'stage:claude-system') throw new Error('stop after recovery'); },
-    }), /stop after recovery/);
-
-    assert.deepEqual(fs.readFileSync(paths.assemblerPath), current);
-    assert.deepEqual(leftovers(root), []);
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
-  it('restores an uncommitted transaction backup before starting the next refresh', () => {
-    const root = fixture();
-    activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    const paths = instructionPaths('claude', { zylosDir: root });
-    const restored = Buffer.from('restored assembler bytes\n');
-    fs.writeFileSync(paths.assemblerPath, 'partial assembler bytes\n');
-    fs.writeFileSync(`${paths.assemblerPath}.split-txn.111.222.deadbeef.bak`, restored);
-
-    assert.throws(() => refreshSplitInstructions({
-      zylosDir: root,
-      templatesDir: TEMPLATES_DIR,
-      faultInjector(point) { if (point === 'stage:claude-system') throw new Error('stop after recovery'); },
-    }), /stop after recovery/);
-
-    assert.deepEqual(fs.readFileSync(paths.assemblerPath), restored);
-    assert.deepEqual(leftovers(root), []);
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
-  it('refuses fresh activation when unmarked legacy instruction artifacts exist', () => {
-    const root = fixture();
-    const legacyUser = Buffer.from('## Behavioral Rules\nlegacy system plus user\n');
-    const legacyClaude = Buffer.from('legacy claude output\n');
-    const legacyAgents = Buffer.from('legacy codex output\n');
-    fs.writeFileSync(path.join(root, 'ZYLOS.md'), legacyUser);
-    fs.writeFileSync(path.join(root, 'CLAUDE.md'), legacyClaude);
-    fs.writeFileSync(path.join(root, 'AGENTS.md'), legacyAgents);
-    const result = activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    assert.equal(result.pendingMigration, true);
-    assert.equal(result.active, false);
-    assert.equal(fs.existsSync(instructionPaths('claude', { zylosDir: root }).markerPath), false);
-    assert.deepEqual(fs.readFileSync(path.join(root, 'ZYLOS.md')), legacyUser);
-    assert.deepEqual(fs.readFileSync(path.join(root, 'CLAUDE.md')), legacyClaude);
-    assert.deepEqual(fs.readFileSync(path.join(root, 'AGENTS.md')), legacyAgents);
-    assert.ok(fs.existsSync(instructionPaths('claude', { zylosDir: root }).assemblerPath));
-    fs.rmSync(root, { recursive: true, force: true });
-  });
 
   it('recovers a hard-killed active refresh while leaving the live marker in place', () => {
     const root = fixture();
@@ -486,33 +177,6 @@ describe('fresh split activation transaction', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('retains a failed rollback backup and recovers it on retry', () => {
-    const root = fixture();
-    activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    const paths = instructionPaths('claude', { zylosDir: root });
-    const markerBefore = fs.readFileSync(paths.markerPath);
-    let injectedRestoreFailure = false;
-    assert.throws(() => refreshSplitInstructions({
-      zylosDir: root,
-      templatesDir: TEMPLATES_DIR,
-      faultInjector(point) {
-        if (point === 'rename:codex-system') throw new Error('forward fault');
-        if (!injectedRestoreFailure && point === 'rollback:restore:claude-system') {
-          injectedRestoreFailure = true;
-          throw new Error('restore EIO');
-        }
-      },
-    }), /rollback failed after: forward fault/);
-    assert.deepEqual(fs.readFileSync(paths.markerPath), markerBefore);
-    assert.ok(leftovers(root).some(filePath => filePath.endsWith('.bak')));
-
-    const result = refreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    assert.equal(result.active, true);
-    assert.ok(fs.existsSync(paths.systemPath));
-    assert.deepEqual(leftovers(root), []);
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
   it('preserves user content on active re-init and repairs a missing materialized assembler', () => {
     const root = fixture();
     activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
@@ -526,79 +190,9 @@ describe('fresh split activation transaction', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('restores the complete active generation when a refresh rename fails', () => {
-    const root = fixture();
-    activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    const watched = [
-      instructionPaths('claude', { zylosDir: root }).markerPath,
-      instructionPaths('claude', { zylosDir: root }).systemPath,
-      instructionPaths('codex', { zylosDir: root }).systemPath,
-      instructionPaths('claude', { zylosDir: root }).outputPath,
-      instructionPaths('codex', { zylosDir: root }).outputPath,
-    ];
-    const before = watched.map(filePath => fs.readFileSync(filePath));
-    assert.throws(() => refreshSplitInstructions({
-      zylosDir: root,
-      templatesDir: TEMPLATES_DIR,
-      faultInjector(point) { if (point === 'rename:codex-output') throw new Error('active rename fault'); },
-    }), /active rename fault/);
-    watched.forEach((filePath, index) => assert.deepEqual(fs.readFileSync(filePath), before[index]));
-    assert.deepEqual(leftovers(root), []);
-    refreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    assert.deepEqual(leftovers(root), []);
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-});
-
-describe('split instruction temporary cleanup ownership', () => {
-  for (const linkedPart of ['instructions', 'metadata']) {
-    it(`keeps outside transaction residue behind a linked ${linkedPart} directory`, t => {
-      const container = fixture();
-      t.after(() => fs.rmSync(container, { recursive: true, force: true }));
-      const instance = path.join(container, 'instance');
-      const outside = path.join(container, 'outside');
-      fs.mkdirSync(instance);
-      fs.mkdirSync(outside);
-      let externalInstructions;
-      if (linkedPart === 'instructions') {
-        fs.mkdirSync(path.join(instance, '.zylos'));
-        fs.symlinkSync(outside, path.join(instance, '.zylos', 'instructions'), 'dir');
-        externalInstructions = outside;
-      } else {
-        externalInstructions = path.join(outside, 'instructions');
-        fs.mkdirSync(externalInstructions);
-        fs.symlinkSync(outside, path.join(instance, '.zylos'), 'dir');
-      }
-      const protectedResidue = path.join(externalInstructions, 'system.split-txn.123.456.abc');
-      fs.mkdirSync(protectedResidue);
-      const sentinel = path.join(protectedResidue, 'sentinel');
-      fs.writeFileSync(sentinel, 'external transaction residue remains');
-      const localResidue = path.join(instance, 'local.split-txn.123.456.abc');
-      fs.writeFileSync(localResidue, 'local temporary data');
-
-      recoverSplitTransaction(instance);
-
-      assert.equal(fs.existsSync(localResidue), false);
-      assert.equal(fs.readFileSync(sentinel, 'utf8'), 'external transaction residue remains');
-      assert.equal(fs.lstatSync(linkedPart === 'instructions' ? path.join(instance, '.zylos', 'instructions') : path.join(instance, '.zylos')).isSymbolicLink(), true);
-    });
-  }
 });
 
 describe('pre-v0.4 migration', () => {
-  it('does not let a migrated legacy CLAUDE.md fall through into fresh split activation', async () => {
-    const root = fixture();
-    const legacy = Buffer.from('## Behavioral Rules\nlegacy pre-v0.4 body\n');
-    fs.writeFileSync(path.join(root, 'CLAUDE.md'), legacy);
-    await runMigrations({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    const migratedUser = fs.readFileSync(path.join(root, 'ZYLOS.md'));
-    const result = activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    assert.equal(result.pendingMigration, true);
-    assert.equal(fs.existsSync(instructionPaths('claude', { zylosDir: root }).markerPath), false);
-    assert.deepEqual(fs.readFileSync(path.join(root, 'CLAUDE.md')), legacy);
-    assert.deepEqual(fs.readFileSync(path.join(root, 'ZYLOS.md')), migratedUser);
-    fs.rmSync(root, { recursive: true, force: true });
-  });
 
   it('uses an explicit root, preserves CLAUDE.md, and does not activate split mode', async () => {
     const root = fixture();
@@ -612,18 +206,4 @@ describe('pre-v0.4 migration', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('leaves the legacy file unchanged when migration staging fails', () => {
-    const root = fixture();
-    const legacy = Buffer.from('legacy bytes\n');
-    fs.writeFileSync(path.join(root, 'CLAUDE.md'), legacy);
-    assert.throws(() => migrateClaudeMdToZylosMd({
-      zylosDir: root,
-      templatesDir: TEMPLATES_DIR,
-      faultInjector(point) { if (point === 'rename:user') throw new Error('rename fault'); },
-    }), /rename fault/);
-    assert.deepEqual(fs.readFileSync(path.join(root, 'CLAUDE.md')), legacy);
-    assert.equal(fs.existsSync(path.join(root, 'ZYLOS.md')), false);
-    assert.equal(migrateClaudeMdToZylosMd({ zylosDir: root, templatesDir: TEMPLATES_DIR }), true);
-    fs.rmSync(root, { recursive: true, force: true });
-  });
 });

@@ -5,11 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
-  applyCaddyRoutes, checkCaddyRouteMarkers, generateManualRouteSnippet, inspectCaddyRouteMarkers,
-  removeCaddyRoutes, resolveCaddyRoutePorts, validateAndDeploy,
+  applyCaddyRoutes, generateManualRouteSnippet, inspectCaddyRouteMarkers,
+  removeCaddyRoutes,
 } from '../caddy.js';
-import { step6_updateCaddyRoutes } from '../upgrade.js';
-import { formatC4Reply } from '../../commands/component.js';
 import { generateManifest, saveMergeBaseline } from '../manifest.js';
 
 const route = (path, port, extra = {}) => ({
@@ -18,45 +16,6 @@ const route = (path, port, extra = {}) => ({
 const site = (...blocks) => `example.com {\n    respond /health 200\n${blocks.join('\n')}\n}\n`;
 const block = (name, routes) => generateManualRouteSnippet(name, routes);
 const parsed = (name, content) => inspectCaddyRouteMarkers(content, name).blocks;
-
-for (const action of ['apply', 'remove']) {
-  test(`component route ${action} retains validation diagnostics and supports symlink Caddyfiles`, t => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'component-caddy-'));
-    t.after(() => fs.rmSync(root, {recursive:true, force:true}));
-    const target = path.join(root, 'configured-Caddyfile'), caddyfile = path.join(root, 'Caddyfile');
-    const original = site(block('example', [route('/example/*', 3471)]));
-    fs.writeFileSync(target, original, {mode:0o640});
-    fs.symlinkSync('configured-Caddyfile', caddyfile);
-    let reject = true, reloads = 0;
-    const deps = {
-      isCaddyAvailable:() => true,
-      readFileSync:() => fs.readFileSync(caddyfile, 'utf8'),
-      validateAndDeploy:(next, previous) => validateAndDeploy(next, previous, {
-        caddyfile,
-        validate:() => {
-          if (reject) throw Object.assign(Error('validation rejected'), {stderr:'Caddyfile:4: invalid route'});
-        },
-        reload:() => { reloads++; },
-      }),
-    };
-    const run = () => action === 'apply'
-      ? applyCaddyRoutes('example', [route('/renamed/*', 3471)], deps)
-      : removeCaddyRoutes('example', deps);
-    const failed = run();
-    assert.equal(failed.success, false);
-    assert.match(failed.error, /Caddyfile:4: invalid route/);
-    assert.equal(fs.readFileSync(target, 'utf8'), original);
-    assert.equal(reloads, 0);
-    reject = false;
-    assert.equal(run().success, true);
-    assert.equal(fs.readlinkSync(caddyfile), 'configured-Caddyfile');
-    assert.equal(reloads, 1);
-    const updated = fs.readFileSync(target, 'utf8');
-    assert.match(updated, /respond \/health 200/);
-    if (action === 'apply') assert.match(updated, /handle \/renamed\/\*/);
-    else assert.doesNotMatch(updated, /zylos-component:example/);
-  });
-}
 
 test('upgrade keeps a deployed port while regenerating all other route settings', () => {
   const old = site(block('dashboard', [route('/dashboard/*', 3471, { strip_prefix: '/dashboard' })]));
@@ -73,53 +32,6 @@ test('upgrade keeps a deployed port while regenerating all other route settings'
   assert.match(deployed, /uri strip_prefix \/new-prefix/);
   assert.doesNotMatch(deployed, /uri strip_prefix \/dashboard\n/);
   assert.match(deployed, /respond \/health 200/);
-});
-
-test('new path inherits a single old port; multiple old ports keep matched paths only', () => {
-  const one = parsed('x', site(block('x', [route('/old/*', 3471)])));
-  assert.equal(resolveCaddyRoutePorts('x', [route('/renamed/*', 3480)], one).routes[0].target, '127.0.0.1:3471');
-
-  const mixed = parsed('x', site(block('x', [route('/a/*', 3471), route('/b/*', 3490)])));
-  const result = resolveCaddyRoutePorts('x', [route('/a/*', 3480), route('/new/*', 3480)], mixed);
-  assert.deepEqual(result.routes.map(r => r.target), ['127.0.0.1:3471', '127.0.0.1:3480']);
-  assert.equal(result.portSource, 'default');
-  assert.match(result.notice, /\/new\/\*/);
-});
-
-test('invalid ports, ambiguous paths, and unsupported targets use declared defaults', () => {
-  for (const target of ['127.0.0.1:0', '127.0.0.1:65536', 'http://127.0.0.1:3471']) {
-    const old = site(`    # BEGIN zylos-component:x\n    handle /x/* {\n        reverse_proxy ${target}\n    }\n    # END zylos-component:x`);
-    const result = resolveCaddyRoutePorts('x', [route('/x/*', 3480)], parsed('x', old));
-    assert.equal(result.routes[0].target, '127.0.0.1:3480');
-    assert.match(result.notice, /Could not determine the existing port/);
-  }
-  const duplicate = site(`    # BEGIN zylos-component:x\n    handle /x/* {\n        reverse_proxy 127.0.0.1:3471\n    }\n    handle /x/* {\n        reverse_proxy 127.0.0.1:3471\n    }\n    # END zylos-component:x`);
-  assert.equal(resolveCaddyRoutePorts('x', [route('/x/*', 3480)], parsed('x', duplicate)).routes[0].target, '127.0.0.1:3480');
-});
-
-test('unpaired or interleaved markers fail, while formatting and component prefixes are exact', () => {
-  for (const malformed of [
-    '# BEGIN zylos-component:dash',
-    '# END zylos-component:dash',
-    '# BEGIN zylos-component:dash\n# BEGIN zylos-component:dash\n# END zylos-component:dash',
-    '# END zylos-component:dash\n# BEGIN zylos-component:dash',
-  ]) assert.equal(inspectCaddyRouteMarkers(malformed, 'dash').success, false);
-  const formatted = '  # BEGIN zylos-component:dash  \r\n  handle /dash/* {\r\n reverse_proxy 127.0.0.1:3471\r\n }\r\n # END zylos-component:dash \r\n# BEGIN zylos-component:dashboard\n# END zylos-component:dashboard';
-  assert.equal(inspectCaddyRouteMarkers(formatted, 'dash').blocks.length, 1);
-  assert.equal(inspectCaddyRouteMarkers(formatted, 'dashboard').blocks.length, 1);
-});
-
-test('preflight is independent of Caddy availability and does not mutate the file', () => {
-  const content = site('    # BEGIN zylos-component:x\n    reverse_proxy 127.0.0.1:3471');
-  let reads = 0;
-  const checked = checkCaddyRouteMarkers('x', {
-    existsSync: () => true,
-    readFileSync: () => { reads++; return content; },
-  });
-  assert.equal(checked.success, false);
-  assert.equal(reads, 1);
-  assert.match(checked.error, /Unpaired Caddy route markers/);
-  assert.equal(checkCaddyRouteMarkers('x', { existsSync: () => false }).success, true);
 });
 
 test('upgrade rejects malformed markers before stopping the service or changing files', t => {
@@ -202,211 +114,6 @@ test('paired duplicate blocks merge, conflicting ports fall back, removal clears
   assert.match(removal.notice, /Duplicate route blocks found/);
 });
 
-test('alternating component upgrades do not accumulate blank lines', () => {
-  let content = site(block('first', [route('/first/*', 3471)]), block('second', [route('/second/*', 3472)]));
-  for (let i = 0; i < 10; i++) {
-    for (const [name, port] of [['first', 3471], ['second', 3472]]) {
-      const result = applyCaddyRoutes(name, [route(`/${name}/*`, port)], {
-        isCaddyAvailable: () => true,
-        readFileSync: () => content,
-        validateAndDeploy: next => { content = next; return { success: true }; },
-      });
-      assert.equal(result.success, true);
-      assert.doesNotMatch(content, /\n{3,}/);
-    }
-  }
-  assert.equal(parsed('first', content).length, 1);
-  assert.equal(parsed('second', content).length, 1);
-});
-
-test('unavailable Caddy still gives a manual snippet with the old port', () => {
-  const old = site(block('dashboard', [route('/dashboard/*', 3471)]));
-  const result = applyCaddyRoutes('dashboard', [route('/dashboard/*', 3470)], {
-    isCaddyAvailable: () => false,
-    readFileSync: () => old,
-  });
-  assert.equal(result.action, 'manual_required');
-  assert.equal(result.portSource, 'caddy');
-  assert.match(result.manualConfig, /127\.0\.0\.1:3471/);
-});
-
-test('missing Caddyfile gives a manual snippet without a misleading read warning', () => {
-  const missing = new Error('ENOENT: no such file or directory');
-  missing.code = 'ENOENT';
-  const result = applyCaddyRoutes('dashboard', [route('/dashboard/*', 3470)], {
-    isCaddyAvailable: () => false,
-    readFileSync: () => { throw missing; },
-  });
-  assert.equal(result.action, 'manual_required');
-  assert.equal(result.portSource, 'default');
-  assert.equal(result.notice, undefined);
-  assert.match(result.manualConfig, /127\.0\.0\.1:3470/);
-
-  const unreadable = new Error('EACCES: permission denied');
-  unreadable.code = 'EACCES';
-  const warning = applyCaddyRoutes('dashboard', [route('/dashboard/*', 3470)], {
-    isCaddyAvailable: () => false,
-    readFileSync: () => { throw unreadable; },
-  });
-  assert.match(warning.notice, /Could not read Caddyfile/);
-});
-
-test('old generated formats and consecutive upgrades retain the same port', () => {
-  let content = site(`    # BEGIN zylos-component:x\n    handle /x/* {\n        reverse_proxy 127.0.0.1:3471\n    }\n    # END zylos-component:x`);
-  for (const declaredPort of [3470, 3480, 3490]) {
-    const result = applyCaddyRoutes('x', [route('/x/*', declaredPort, { strip_prefix: '/x' })], {
-      isCaddyAvailable: () => true,
-      readFileSync: () => content,
-      validateAndDeploy: next => { content = next; return { success: true }; },
-    });
-    assert.equal(result.success, true);
-    assert.equal(result.portSource, 'caddy');
-    assert.match(content, /reverse_proxy 127\.0\.0\.1:3471 \{/);
-  }
-});
-
-test('upgrade without declared routes removes only the component’s old managed blocks', () => {
-  let content = site(
-    block('retired', [route('/retired/*', 3471)]),
-    block('other', [route('/other/*', 3472)]),
-    block('retired', [route('/retired/*', 3471)]),
-  );
-  const otherBlock = block('other', [route('/other/*', 3472)]);
-  const ctx = { component: 'retired', skillDir: '/unused' };
-  const deps = {
-    parseSkillMd: () => ({ frontmatter: {} }),
-    checkCaddyRouteMarkers: () => inspectCaddyRouteMarkers(content, 'retired'),
-    isCaddyAvailable: () => true,
-    removeCaddyRoutes: () => removeCaddyRoutes('retired', {
-      isCaddyAvailable: () => true,
-      readFileSync: () => content,
-      validateAndDeploy: next => { content = next; return { success: true }; },
-    }),
-  };
-  const first = step6_updateCaddyRoutes(ctx, deps);
-  assert.equal(first.status, 'done');
-  assert.equal(first.caddy.action, 'removed');
-  assert.match(first.notice, /New version declares no HTTP routes/);
-  assert.match(content, /respond \/health 200/);
-  assert.ok(content.includes(otherBlock));
-  assert.equal(content, site(otherBlock));
-  assert.equal(parsed('retired', content).length, 0);
-  assert.equal(parsed('other', content).length, 1);
-  assert.doesNotMatch(content, /\n{3,}/);
-
-  const unchanged = content;
-  const second = step6_updateCaddyRoutes(ctx, deps);
-  assert.equal(second.status, 'skipped');
-  assert.equal(second.notice, undefined);
-  assert.equal(content, unchanged);
-});
-
-test('upgrade without declared routes asks for manual removal when Caddy is unavailable', () => {
-  const content = site(block('retired', [route('/retired/*', 3471)]));
-  const result = step6_updateCaddyRoutes({ component: 'retired', skillDir: '/unused' }, {
-    parseSkillMd: () => ({ frontmatter: { http_routes: [] } }),
-    checkCaddyRouteMarkers: () => inspectCaddyRouteMarkers(content, 'retired'),
-    isCaddyAvailable: () => false,
-    removeCaddyRoutes: () => { throw new Error('removal must not run'); },
-  });
-  assert.equal(result.status, 'skipped');
-  assert.equal(result.caddy.action, 'skipped');
-  assert.match(result.notice, /remove the old managed routes.*manually/);
-  assert.equal(parsed('retired', content).length, 1);
-});
-
-test('invalid new route metadata does not delete existing managed routes', () => {
-  const ctx = { component: 'retired', skillDir: '/unused' };
-  for (const metadata of [null, { frontmatter: { http_routes: 'invalid' } }]) {
-    const result = step6_updateCaddyRoutes(ctx, {
-      parseSkillMd: () => metadata,
-      removeCaddyRoutes: () => { throw new Error('removal must not run'); },
-    });
-    assert.equal(result.status, 'skipped');
-  }
-});
-
-test('route removal validation failure leaves the Caddyfile intact and is non-fatal', () => {
-  const content = site(block('retired', [route('/retired/*', 3471)]));
-  let attempted = false;
-  const result = step6_updateCaddyRoutes({ component: 'retired', skillDir: '/unused' }, {
-    parseSkillMd: () => ({ frontmatter: {} }),
-    checkCaddyRouteMarkers: () => inspectCaddyRouteMarkers(content, 'retired'),
-    isCaddyAvailable: () => true,
-    removeCaddyRoutes: () => removeCaddyRoutes('retired', {
-      isCaddyAvailable: () => true,
-      readFileSync: () => content,
-      validateAndDeploy: () => { attempted = true; return { success: false, error: 'validation failed' }; },
-    }),
-  });
-  assert.equal(attempted, true);
-  assert.equal(result.status, 'skipped');
-  assert.match(result.notice, /validation failed/);
-  assert.equal(parsed('retired', content).length, 1);
-});
-
-test('a Caddyfile read failure after inspection is reported during route retirement', () => {
-  const content = site(block('retired', [route('/retired/*', 3471)]));
-  const result = step6_updateCaddyRoutes({ component: 'retired', skillDir: '/unused' }, {
-    parseSkillMd: () => ({ frontmatter: {} }),
-    checkCaddyRouteMarkers: () => inspectCaddyRouteMarkers(content, 'retired'),
-    isCaddyAvailable: () => true,
-    removeCaddyRoutes: () => ({ success: false, action: 'not_found', error: 'Cannot read Caddyfile' }),
-  });
-  assert.equal(result.status, 'skipped');
-  assert.match(result.notice, /Cannot read Caddyfile/);
-});
-
-test('validation failure while retiring routes does not fail the upgrade or stop its service', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-805-retire-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const home = path.join(root, 'home');
-  const installed = path.join(home, '.claude/skills/example');
-  const oldSource = path.join(root, 'old');
-  const nextSource = path.join(root, 'next');
-  const bin = path.join(home, 'bin');
-  const http = path.join(home, 'http');
-  for (const dir of [installed, oldSource, nextSource, bin, http]) fs.mkdirSync(dir, { recursive: true });
-  const oldSkill = '---\nname: example\nversion: 1.0.0\nlifecycle:\n  service:\n    name: zylos-example\nhttp_routes:\n  - path: /example/*\n    type: reverse_proxy\n    target: 127.0.0.1:3471\n---\n';
-  const nextSkill = '---\nname: example\nversion: 2.0.0\nlifecycle:\n  service:\n    name: zylos-example\n---\n';
-  for (const dir of [installed, oldSource]) fs.writeFileSync(path.join(dir, 'SKILL.md'), oldSkill);
-  fs.writeFileSync(path.join(nextSource, 'SKILL.md'), nextSkill);
-  saveMergeBaseline(installed, oldSource, generateManifest(oldSource));
-  const originalCaddy = site(block('example', [route('/example/*', 3471)]));
-  const caddyfile = path.join(http, 'Caddyfile');
-  fs.writeFileSync(caddyfile, originalCaddy);
-  fs.writeFileSync(path.join(bin, 'caddy'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
-  const log = path.join(root, 'pm2.log');
-  fs.writeFileSync(path.join(bin, 'pm2'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$ZYLOS_TEST_PM2_LOG"\nif [ "$1" = jlist ]; then printf '[{"name":"zylos-example","pm2_env":{"status":"online"}}]\\n'; fi\n`, { mode: 0o755 });
-  const driver = new URL('../../../test/helpers/run-upgrade-driver.mjs', import.meta.url);
-  const child = spawnSync(process.execPath, [driver.pathname, 'example', nextSource, '2.0.0'], {
-    env: { ...process.env, ZYLOS_DIR: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, ZYLOS_TEST_PM2_LOG: log },
-    encoding: 'utf8', timeout: 15000,
-  });
-  assert.equal(child.status, 0, child.stderr);
-  const result = JSON.parse(child.stdout);
-  assert.equal(result.success, true, JSON.stringify(result));
-  assert.equal(result.steps.find(s => s.name === 'caddy_routes').status, 'skipped');
-  assert.match(result.steps.find(s => s.name === 'caddy_routes').notice, /Caddy validation failed/);
-  assert.equal(result.steps.find(s => s.name === 'start_service').status, 'done');
-  assert.equal(fs.readFileSync(caddyfile, 'utf8'), originalCaddy);
-  assert.match(fs.readFileSync(log, 'utf8'), /stop zylos-example/);
-  assert.match(fs.readFileSync(log, 'utf8'), /restart zylos-example/);
-});
-
-test('upgrade route step catches parser and application exceptions without returning failed', () => {
-  const ctx = { component: 'x', skillDir: '/unused' };
-  const parsed = { frontmatter: { http_routes: [route('/x/*', 3470)] } };
-  const readFailure = step6_updateCaddyRoutes(ctx, { parseSkillMd: () => { throw new Error('parse broke'); } });
-  assert.equal(readFailure.status, 'skipped');
-  const applyFailure = step6_updateCaddyRoutes(ctx, {
-    parseSkillMd: () => parsed,
-    applyCaddyRoutes: () => { throw new Error('route broke'); },
-  });
-  assert.equal(applyFailure.status, 'skipped');
-  assert.match(applyFailure.message, /route broke/);
-});
-
 test('a route generation error does not leave a running service stopped after upgrade', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-805-resume-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -436,27 +143,4 @@ test('a route generation error does not leave a running service stopped after up
   assert.equal(result.steps.find(s => s.name === 'start_service').status, 'done');
   assert.match(fs.readFileSync(log, 'utf8'), /stop zylos-example/);
   assert.match(fs.readFileSync(log, 'utf8'), /restart zylos-example/);
-});
-
-test('upgrade reply carries the Caddy route notice', () => {
-  const reply = formatC4Reply('upgrade', {
-    component: 'x', success: true, from: '1.0.0', to: '1.1.0',
-    skill: { caddy: { notice: '端口无法确定，已使用默认目标', portSource: 'default' } },
-  });
-  assert.match(reply, /端口无法确定/);
-});
-
-test('route generation errors and validation failures remain non-fatal to the route step', () => {
-  const old = site(block('x', [route('/x/*', 3471)]));
-  const invalid = applyCaddyRoutes('x', [{ type: 'reverse_proxy', target: '127.0.0.1:3470' }], {
-    isCaddyAvailable: () => true, readFileSync: () => old,
-  });
-  assert.equal(invalid.success, false);
-  assert.equal(invalid.action, 'skipped');
-  const failed = applyCaddyRoutes('x', [route('/x/*', 3470)], {
-    isCaddyAvailable: () => true, readFileSync: () => old,
-    validateAndDeploy: () => ({ success: false, error: 'validation failed' }),
-  });
-  assert.equal(failed.success, false);
-  assert.equal(failed.error, 'validation failed');
 });

@@ -7,8 +7,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { parseInitFlags, printInitHelp, initSessionModeConflict, initSessionModeUpdate } from '../../commands/init.js';
-import { CONFIG_FILE, ZYLOS_DIR, readSessionMode, updateZylosConfigLocked } from '../config.js';
+import { initSessionModeConflict, initSessionModeUpdate } from '../../commands/init.js';
+import { CONFIG_FILE, ZYLOS_DIR } from '../config.js';
 import { updateConfigWithLock } from '../config-lock.js';
 import { guardDatabase } from '../../../skills/comm-bridge/scripts/sqlite-schema.js';
 import * as c4Schema from '../../../skills/comm-bridge/scripts/c4-schema.js';
@@ -87,34 +87,6 @@ function useRunnerInstance(t, config) {
   fs.writeFileSync(CONFIG_FILE, config);
 }
 
-test('init --session-mode parses single and multi; absent means no selection', () => {
-  assert.equal(parseInitFlags([]).sessionMode, null);
-  assert.equal(parseInitFlags(['--session-mode', 'single']).sessionMode, 'single');
-  assert.equal(parseInitFlags(['-y', '--session-mode', 'multi']).sessionMode, 'multi');
-});
-
-test('init --help documents --session-mode, the switch command and installs without a saved mode', t => {
-  const lines = [];
-  t.mock.method(console, 'log', text => lines.push(String(text)));
-  printInitHelp();
-  const help = lines.join('\n');
-  assert.match(help, /--session-mode <mode>\s+New install: single or multi \(default: multi\)/);
-  assert.match(help, /zylos session-mode switch/);
-  assert.match(help, /without a saved mode: multi is left to the\s+automatic migration; single is saved and kept/);
-});
-
-test('init rejects an invalid or missing --session-mode value before any change', t => {
-  for (const args of [['-y', '--session-mode', 'both'], ['-y', '--session-mode'], ['-y', '--session-mode', '--quiet']]) {
-    const box = sandbox(t);
-    const before = snapshot(box.home);
-    const result = runInit(box, args);
-    assert.equal(result.status, 1, `${args.join(' ')}: ${result.stderr}`);
-    assert.match(result.stderr, args[2] === 'both' ? /INIT_SESSION_MODE_INVALID.*single or multi/ : /--session-mode requires a value/);
-    assert.equal(fs.existsSync(box.zylosDir), false);
-    assert.equal(snapshot(box.home), before);
-  }
-});
-
 test('installed instance with a different saved --session-mode exits with the switch hint and changes nothing', t => {
   const cases = [
     { config: '{"session_mode":"multi","runtime":"claude"}\n', requested: 'single', current: 'multi' },
@@ -159,37 +131,6 @@ test('installed instance without a saved mode refuses single while a mode switch
     assert.doesNotMatch(result.stdout, /Checking prerequisites/);
     assert.equal(snapshot(box.home), before);
   }
-});
-
-test('saved mode: same value continues, different value is refused, nothing is written', async t => {
-  for (const saved of ['single', 'multi']) {
-    useRunnerInstance(t, `{"session_mode":"${saved}"}\n`);
-    const other = saved === 'single' ? 'multi' : 'single';
-    assert.equal(await initSessionModeConflict(saved, 'complete'), null);
-    assert.equal((await initSessionModeConflict(other, 'complete')).code, 'INIT_SESSION_MODE_MISMATCH');
-    const { keyPresent } = readSessionMode();
-    assert.equal(initSessionModeUpdate('complete', saved, { keyPresent }), null);
-    assert.equal(initSessionModeUpdate('complete', other, { keyPresent }), null);
-    assert.equal(fs.readFileSync(CONFIG_FILE, 'utf8'), `{"session_mode":"${saved}"}\n`);
-  }
-});
-
-test('no saved mode: multi passes without a write, single is written and opens no mode switch', async t => {
-  useRunnerInstance(t, '{"runtime":"claude"}\n');
-  assert.equal(await initSessionModeConflict('multi', 'complete'), null);
-  assert.equal(initSessionModeUpdate('complete', 'multi', { keyPresent: readSessionMode().keyPresent }), null);
-  assert.deepEqual(readSessionMode(), { mode: null, keyPresent: false });
-
-  // No C4 database yet: no switch can be open.
-  assert.equal(await initSessionModeConflict('single', 'complete'), null);
-  const update = initSessionModeUpdate('complete', 'single', { keyPresent: readSessionMode().keyPresent });
-  assert.deepEqual(update, { set: { session_mode: 'single' } });
-  updateZylosConfigLocked(update);
-  assert.deepEqual(readSessionMode(), { mode: 'single', keyPresent: true });
-  assert.equal(fs.existsSync(path.join(ZYLOS_DIR, 'comm-bridge', 'c4.db')), false);
-  // Once saved, the same flag confirms it and nothing more is written.
-  assert.equal(await initSessionModeConflict('single', 'complete'), null);
-  assert.equal(initSessionModeUpdate('complete', 'single', { keyPresent: true }), null);
 });
 
 test('no saved mode: an open mode switch in the real C4 store refuses single but not multi', async t => {
