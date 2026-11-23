@@ -53,6 +53,7 @@ test('flags and help expose explicit API-key and Bearer-token choices without pr
   let help = ''; const before = console.log; console.log = line => { help += String(line); };
   try { printInitHelp(); } finally { console.log = before; }
   assert.match(help, /--auth-token <token>/); assert.match(help, /ANTHROPIC_AUTH_TOKEN/); assert.match(help, /x-api-key/); assert.match(help, /Authorization: Bearer/);
+  assert.match(help, /appends \/v1\/models for verification/);
   assert.equal(help.includes(credential), false);
 });
 
@@ -140,7 +141,7 @@ test('custom-address interactive prompt explicitly selects Bearer without probin
 for (const kind of ['apiKey', 'authToken']) test(`selected ${kind} stage verifies at its custom base, selects only that credential and writes no settings.json`, { timeout: 4000 }, async t => {
   const home = isolatedCredentials(t), credential = crypto.randomUUID(), output = [];
   const baseUrl = await endpoint(t, 200, req => {
-    assert.equal(req.url, '/relay/v1/messages');
+    assert.equal(req.url, '/relay/v1/models');
     assert.equal(kind === 'authToken' ? req.headers.authorization === `Bearer ${credential}` : req.headers['x-api-key'] === credential, true);
   });
   const result = await authenticateClaudeApiCredential({ [kind]: credential, baseUrl: baseUrl + '/relay' }, { log: value => output.push(value), reportError: value => output.push(value) });
@@ -149,10 +150,12 @@ for (const kind of ['apiKey', 'authToken']) test(`selected ${kind} stage verifie
   assert.equal(process.env[kind === 'authToken' ? 'ANTHROPIC_API_KEY' : 'ANTHROPIC_AUTH_TOKEN'], undefined);
   assert.equal(fs.existsSync(path.join(home, '.claude', 'settings.json')), false, 'settings.json is not created');
   assert.equal(fs.existsSync(path.join(home, 'zylos', '.env')), false, 'auth stage must defer .env to template deployment');
+  assert.match(output.join(''), /Claude API credential verified/);
+  assert.doesNotMatch(output.join(''), /inconclusive/);
   assert.equal(output.join('').includes(credential), false);
 });
 
-for (const status of [401, 403, 400, 503]) test(`Claude stage handles HTTP ${status} without a secret-bearing log or false verified message`, { timeout: 4000 }, async t => {
+for (const status of [401, 403, 400, 404]) test(`Claude stage handles HTTP ${status} without a secret-bearing log or false verified message`, { timeout: 4000 }, async t => {
   const home = isolatedCredentials(t), credential = crypto.randomUUID(), output = [];
   const baseUrl = await endpoint(t, status);
   const result = await authenticateClaudeApiCredential({ authToken: credential, baseUrl }, { log: value => output.push(value), reportError: value => output.push(value) });
@@ -160,7 +163,7 @@ for (const status of [401, 403, 400, 503]) test(`Claude stage handles HTTP ${sta
   assert.equal(result, !rejected); assert.equal(fs.existsSync(path.join(home, '.claude', 'settings.json')), false);
   assert.equal(process.env.ANTHROPIC_AUTH_TOKEN === credential, !rejected);
   assert.match(output.join(''), rejected ? /rejected/ : /inconclusive/);
-  assert.equal(output.join('').includes('verified and saved'), false); assert.equal(output.join('').includes(credential), false);
+  assert.doesNotMatch(output.join(''), /Claude API credential verified/); assert.equal(output.join('').includes(credential), false);
 });
 
 test('Codex auth stage uses the selected base and native OPENAI_API_KEY store with arbitrary relay credential', { timeout: 4000 }, async t => {
@@ -226,7 +229,7 @@ for (const runtime of ['claude', 'codex']) for (const source of ['deployment env
   });
   assert.equal(result.failed, undefined); assert.equal(result.authenticated, true);
   assert.equal(result.pending[runtime]?.baseUrl, base);
-  assert.deepEqual(guardedCalls, [runtime]); assert.deepEqual(requests, [runtime === 'claude' ? '/saved/v1/messages' : '/saved/v1/models']);
+  assert.deepEqual(guardedCalls, [runtime]); assert.deepEqual(requests, ['/saved/v1/models']);
   if (runtime === 'claude') {
     // The credential is selected for this run and saved to .env later; settings.json is only read.
     assert.equal(process.env.ANTHROPIC_AUTH_TOKEN === credential, true);
@@ -409,7 +412,7 @@ for (const runtime of ['claude', 'codex']) for (const accepted of [true, false])
   const envKey = runtime === 'claude' ? 'ANTHROPIC_BASE_URL' : 'OPENAI_BASE_URL';
   process.env[envKey] = 'https://previous.example';
   const origin = await endpoint(t, accepted ? 200 : 401, req => {
-    requests += 1; assert.equal(req.url, runtime === 'claude' ? '/chosen/v1/messages' : '/chosen/v1/models');
+    requests += 1; assert.equal(req.url, '/chosen/v1/models');
     assert.equal(req.headers.authorization === `Bearer ${credential}`, true); assert.equal(process.env[envKey], 'https://previous.example');
   });
   const base = origin + (runtime === 'claude' ? '/chosen' : '/chosen/v1');
