@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import https from 'node:https';
+import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { classifyApiVerification, isOfficialClaudeBaseUrl, isOfficialClaudeVerificationBaseUrl, isPrintableAsciiCredential, verifyApiKey, verifyCodexApiKey } from '../init-api-auth.js';
+import { classifyApiVerification, isOfficialClaudeBaseUrl, isPrintableAsciiCredential, verifyApiKey, verifyCodexApiKey } from '../init-api-auth.js';
 
 const isolation = Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, process.env[key]]));
 const isolationRoot = path.dirname(isolation.TMPDIR || '');
@@ -29,38 +31,55 @@ test('verification distinguishes auth rejection, successful proof and inconclusi
   for (const status of [200, 201, 204, 299]) assert.equal(classifyApiVerification(status), true);
   for (const status of [401, 403]) assert.equal(classifyApiVerification(status), false);
   for (const status of [301, 307, 400, 404, 429, 500, 503]) assert.equal(classifyApiVerification(status), null);
-  assert.equal(classifyApiVerification(400, { officialAnthropic: true }), true);
   assert.equal(isOfficialClaudeBaseUrl(), true);
   assert.equal(isOfficialClaudeBaseUrl('https://api.anthropic.com/'), true);
   assert.equal(isOfficialClaudeBaseUrl('https://api.anthropic.com.example/'), false);
-  assert.equal(isOfficialClaudeVerificationBaseUrl('https://api.anthropic.com/prefix'), true);
-  assert.equal(isOfficialClaudeVerificationBaseUrl('http://api.anthropic.com'), false);
-  assert.equal(isOfficialClaudeVerificationBaseUrl('https://api.anthropic.com:444'), false);
 });
 
 for (const authToken of [false, true]) test(`Claude verification sends only its selected ${authToken ? 'Bearer' : 'API key'} header to the exact base prefix`, { timeout: 3000 }, async t => {
   const credential = crypto.randomUUID(); let requests = 0;
   const baseUrl = await server(t, (req, res) => {
     requests += 1;
-    assert.equal(req.method, 'POST'); assert.equal(req.url, '/relay/v1/messages');
+    assert.equal(req.method, 'GET'); assert.equal(req.url, '/relay/v1/models');
     assert.equal(req.headers['anthropic-version'], '2023-06-01');
     assert.equal(authToken ? req.headers.authorization === `Bearer ${credential}` : req.headers['x-api-key'] === credential, true);
     assert.equal(authToken ? req.headers['x-api-key'] === undefined : req.headers.authorization === undefined, true);
-    let body = ''; req.on('data', chunk => { body += chunk; assert.ok(body.length <= 2); });
-    req.on('end', () => { assert.equal(body, '{}'); res.writeHead(200); res.end(); });
+    req.on('data', () => assert.fail('Claude models verification sent a request body'));
+    req.on('end', () => { res.writeHead(200); res.end(); });
   });
   assert.equal(await verifyApiKey(credential, { baseUrl: baseUrl + '/relay/', authToken }), true);
   assert.equal(requests, 1);
 });
 
+test('the default Claude endpoint verifies model access over HTTPS', async t => {
+  const credential = crypto.randomUUID();
+  let statusCode;
+  const request = t.mock.method(https, 'request', (url, options, receive) => {
+    const pending = new EventEmitter();
+    pending.end = () => receive({ statusCode, destroy() {} });
+    return pending;
+  });
+  for (const [status, expected] of [[200, true], [401, false], [400, null]]) {
+    statusCode = status;
+    assert.equal(await verifyApiKey(credential), expected);
+  }
+  assert.equal(request.mock.callCount(), 3);
+  for (const { arguments: [url, options] } of request.mock.calls) {
+    assert.equal(url.href, 'https://api.anthropic.com/v1/models');
+    assert.equal(options.method, 'GET');
+    assert.equal(options.headers['anthropic-version'], '2023-06-01');
+    assert.equal(options.headers['x-api-key'] === credential, true);
+  }
+});
+
 test('Claude base joining preserves an explicit version path exactly like the SDK', { timeout: 3000 }, async t => {
-  const baseUrl = await server(t, (req, res) => { assert.equal(req.url, '/prefix/v1/v1/messages'); res.writeHead(400); res.end(); });
+  const baseUrl = await server(t, (req, res) => { assert.equal(req.url, '/prefix/v1/v1/models'); res.writeHead(400); res.end(); });
   assert.equal(await verifyApiKey(crypto.randomUUID(), { baseUrl: baseUrl + '/prefix/v1' }), null);
 });
 
 
 test('Claude URL joining retains multiple trailing slashes in the configured prefix', { timeout: 3000 }, async t => {
-  const baseUrl = await server(t, (req, res) => { assert.equal(req.url, '/prefix//v1/messages'); res.writeHead(200); res.end(); });
+  const baseUrl = await server(t, (req, res) => { assert.equal(req.url, '/prefix//v1/models'); res.writeHead(200); res.end(); });
   assert.equal(await verifyApiKey(crypto.randomUUID(), { baseUrl: baseUrl + '/prefix//' }), true);
 });
 
@@ -69,6 +88,7 @@ test('Codex verification uses the custom versioned base and Bearer without an An
   const baseUrl = await server(t, (req, res) => {
     requests += 1; assert.equal(req.url, '/relay/v1/models'); assert.equal(req.method, 'GET');
     assert.equal(req.headers.authorization === `Bearer ${credential}`, true); assert.equal(req.headers['x-api-key'], undefined);
+    assert.equal(req.headers['anthropic-version'], undefined);
     res.writeHead(204); res.end();
   });
   assert.equal(await verifyCodexApiKey(credential, { baseUrl: baseUrl + '/relay/v1/' }), true);

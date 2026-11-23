@@ -147,11 +147,11 @@ The shared writers also make `zylos runtime claude --save-apikey` and
 `zylos runtime ... --save-base-url` now rejects addresses containing userinfo,
 query strings, or fragments, as init does.
 
-Verification sends one request to the selected address with the selected
-header, without following redirects or probing another address. Claude appends
-`/v1/messages` to its base URL, matching the runtime SDK: supply a root or path
-prefix such as `https://relay.example.com/anthropic`, without a trailing `/v1`
-unless your provider requires it. Codex appends `/models` to its base URL; its
+Verification sends one GET request with the selected authentication header
+and follows no redirects. Claude appends `/v1/models` to its base URL and sends
+the `anthropic-version` header. Supply a root or path prefix such as
+`https://relay.example.com/anthropic`, without a trailing `/v1` unless your
+provider requires it. Codex appends `/models` to its base URL; its
 default is `https://api.openai.com/v1`, and a compatible custom base commonly
 ends in `/v1`. Codex keeps its API key in `~/.codex/auth.json` under
 `OPENAI_API_KEY` and uses Bearer authentication.
@@ -159,12 +159,10 @@ When initializing Claude, an explicit `--codex-base-url` still updates only the
 Codex endpoint; an ambient `OPENAI_API_KEY` does not suppress this update or
 cause Codex authentication.
 
-A 2xx response verifies the credential; 401 or 403 rejects it. The official
-Anthropic origin (`https://api.anthropic.com`) also treats a 400 response to the
-empty validation request as verified. Other HTTP responses, network failures, and timeouts are
-inconclusive: init warns and saves the supplied credential so the runtime can
-report the actual endpoint behavior. In particular, a custom endpoint's 400
-response is not treated as proof of valid authentication.
+A 2xx response verifies the credential, and 401 or 403 rejects it. Other HTTP
+responses (including 404 when a relay lacks the models endpoint), network
+failures, and timeouts leave verification inconclusive. Init warns and saves
+the supplied credential so the runtime can report the actual endpoint behavior.
 
 CI, Kubernetes, and shared E2E environments should also provide `GITHUB_TOKEN`
 so `zylos add` and `zylos upgrade` use GitHub's authenticated API quota instead
