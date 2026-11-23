@@ -9,6 +9,9 @@ import { timelinePage, timelineQuery } from './workbench/timeline-page.js';
 // Keep this predicate aligned for list ordering and incremental invalidation.
 export const receivedMessage = "c.direction='in' AND c.channel<>'' AND c.channel NOT IN ('void','control')";
 
+// A channel that stops sending would otherwise keep an old failure alerting forever.
+const SEND_FAILURE_ALERT_MS = 24 * 60 * 60 * 1000;
+
 export function prepareLatestReceived(db) {
   return db.prepare(`SELECT c.id, c.timestamp FROM conversations c INDEXED BY idx_conv_group_id
     WHERE c.session_group=? AND ${receivedMessage} ORDER BY c.id DESC LIMIT 1`);
@@ -79,8 +82,12 @@ export class C4Reader {
     const db = this._open();
     if (!db) return null;
     try {
-      const latest = db.prepare("SELECT status FROM conversations WHERE direction='out' AND channel=? ORDER BY id DESC LIMIT 1").get(channel);
+      const latest = db.prepare("SELECT status, timestamp FROM conversations WHERE direction='out' AND channel=? ORDER BY id DESC LIMIT 1").get(channel);
       if (latest?.status !== 'failed') return { lastSendFailed: false, consecutiveFailures: 0 };
+      // C4 timestamps are UTC 'YYYY-MM-DD HH:MM:SS'; an unreadable one keeps the alert.
+      const failedAt = typeof latest.timestamp === 'string'
+        ? Date.parse(latest.timestamp.includes('T') ? latest.timestamp : latest.timestamp.replace(' ', 'T') + 'Z') : NaN;
+      if (Date.now() - failedAt > SEND_FAILURE_ALERT_MS) return { lastSendFailed: false, consecutiveFailures: 0 };
       const row = db.prepare(`SELECT COUNT(*) AS count FROM conversations
         WHERE direction='out' AND channel=? AND status='failed' AND id > COALESCE(
           (SELECT MAX(id) FROM conversations WHERE direction='out' AND channel=? AND status='delivered'), 0)`).get(channel, channel);
