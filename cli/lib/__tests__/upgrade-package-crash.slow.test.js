@@ -1,4 +1,4 @@
-// covers: cli/lib/upgrade-entry.js cli/lib/upgrade-discovery.js cli/lib/upgrade-maintenance.cjs cli/lib/upgrade-recovery.cjs cli/lib/__tests__/helpers/protected-package-crash.js
+// covers: cli/lib/upgrade-entry.js cli/lib/upgrade-discovery.js cli/lib/upgrade-maintenance.cjs cli/lib/upgrade-recovery.cjs cli/lib/dashboard-install.js cli/lib/request-runtime-restart.js cli/lib/am-sock-client.js cli/lib/__tests__/helpers/protected-package-crash.js cli/lib/__tests__/helpers/stop-after-prepared-journal.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,13 +6,23 @@ import os from 'node:os';
 import path from 'node:path';
 import { createProtectedPackageCrashFixture } from './helpers/protected-package-crash.js';
 
+function createFixtureRoot() {
+  if (process.platform === 'linux') {
+    try { return fs.mkdtempSync('/dev/shm/pkg-crash-'); }
+    catch (error) {
+      if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM', 'EROFS', 'ENOSPC'].includes(error.code)) throw error;
+    }
+  }
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'pkg-crash-'));
+}
+
 // Integration: real npm install and recovery before and after installer exit.
 // Run for package recovery changes, not unrelated CLI changes. Use the isolated
 // runner; the fixture uses a private HOME, ZYLOS_DIR, PM2_HOME and npm prefix.
 for (const managedDashboard of [false, true]) for (const stage of ['before', 'after']) test(`real npm SIGKILL ${stage} install recovers v0.9.2-as-0.9.3 and permits retry${managedDashboard ? ' with retained Dashboard v20' : ''}`, {
   timeout: 1200000,
 }, async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), `package-crash-${stage}-`));
+  const root = createFixtureRoot();
   t.diagnostic(`Isolated fixture (retained on failure) at ${root}`);
   const f = createProtectedPackageCrashFixture(root, { managedDashboard }), { target } = await f.build();
   const original = f.logicalDatabases();
@@ -42,7 +52,7 @@ for (const managedDashboard of [false, true]) for (const stage of ['before', 'af
     assert.equal(fs.existsSync(path.join(f.core, 'skills/dashboard')), false);
     assert.equal(fs.existsSync(path.join(f.skills, 'dashboard')), false);
   }
-  const retry = f.entry(f.handoff(target, 'retry-download'));
+  const retry = await f.entry(f.handoff(target, 'retry-download'), t.signal);
   assert.equal(retry.status, 0, JSON.stringify(retry));
   assert.equal(retry.result.success, true, JSON.stringify(retry));
   assert.equal(retry.result.completion.install, 'done');
