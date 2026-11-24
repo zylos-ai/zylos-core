@@ -482,7 +482,7 @@
   z-index:2;
   border-radius:18px;
   box-shadow:var(--wb-shadow);
-  font-size:var(--fs-small)
+  font-size:var(--fs-caption)
 }
 .conversation-page .conversation-composer {
   display:flex;
