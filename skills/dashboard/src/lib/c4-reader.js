@@ -147,6 +147,17 @@ export class C4Reader {
   }
 
   /**
+   * When Origin last moved any group's cross-group sync cursor (Unix seconds), i.e. when it last finished taking in a
+   * group; null when no cursor has been written yet.
+   */
+  getLastOriginSyncAt() {
+    const db = this._open();
+    if (!db) throw Object.assign(new Error('Origin sync cursors unavailable'), { code: 'READ_FAILED', statusCode: 502 });
+    const at = db.prepare('SELECT MAX(updated_at) AS at FROM origin_sync_cursors').get()?.at ?? null;
+    return Number.isSafeInteger(at) && at > 0 ? at : null;
+  }
+
+  /**
    * Core's own unsummarized range (`progressFunctions().api`, the calculation behind `c4-db.js unsummarized`) for
    * each scope, all in one snapshot of this read-only connection; null is the whole machine (Origin in single
    * mode). `readConfig` is Core's strict config read, which Origin's range needs. One entry per scope:

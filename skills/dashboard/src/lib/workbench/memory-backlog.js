@@ -25,10 +25,10 @@ async function readAll(groupBacklog, keys) {
 const listed = row => (known(row.count) && row.count > 0) || row.syncing === true || Boolean(row.reason);
 
 /**
- * The supplied group reader owns the only per-group backlog cache, shared with details and the memory entries' group badges. Every
- * group is read; only the groups with something to show are listed. Each row, Origin's own included, compares its own
- * unsummarized count with the group threshold. The cross-group Origin Sync backlog is a separate field, read only in
- * multi mode.
+ * The supplied group reader owns the only per-group backlog cache, shared with details and the memory entries' group badges.
+ * In multi mode the backlog is only the cross-group Origin Sync field: each group's own pending messages are not listed
+ * (they stay in group details and the memory entries' badges), so no group is read here. In single mode Origin is the
+ * whole machine and is listed like a group, comparing its unsummarized count with the Sync threshold.
  */
 export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, originBacklog = null,
   readConfig = async () => JSON.parse(await fs.readFile(path.join(zylosDir, '.zylos', 'config.json'), 'utf8')),
@@ -59,8 +59,9 @@ export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, origi
     const rows = new Map(snapshot.rows.filter(row => row.sessionGroup !== null).map(row => [row.sessionGroup, row]));
     const keys = [...rows.keys()];
     const threshold = positive(config?.syncThreshold);
-    const backlogs = readAll(groupBacklog, keys);
+    const backlogs = snapshot.view === 'multi' ? null : readAll(groupBacklog, keys);
     async function readGroups() {
+      if (snapshot.view === 'multi') return [];
       return (await backlogs).map((read, index) => {
         const sessionGroup = keys[index], row = rows.get(sessionGroup);
         const backlog = read ?? { count: null, firstAt: null, syncing: null, reason: 'backlog_failed' };
@@ -86,6 +87,7 @@ export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, origi
         count: backlog.count ?? null, pendingSummaries: backlog.pendingSummaries ?? null, firstAt,
         aged: Number.isFinite(firstMillis) && at - firstMillis > SIX_HOURS_MS,
         syncing: backlog.syncing ?? null, threshold: positive(config?.originSyncThreshold),
+        lastSyncAt: positive(backlog.lastSyncAt),
         ...(backlog.reason ? { reason: backlog.reason } : {}),
       };
     }
