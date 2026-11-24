@@ -152,7 +152,7 @@ function loginCookies(response, { base = '', markerBase = base, maxAge = 86400, 
   assert.ok(session, 'login must set its session cookie');
   const [credential, ...attributes] = session.split('; ');
   assert.match(credential, /^__Secure-zylos_dashboard_session=[^;]+$/);
-  assert.deepEqual(attributes, ['HttpOnly', 'Secure', 'SameSite=Strict', `Path=${base || '/'}`, `Max-Age=${maxAge}`]);
+  assert.deepEqual(attributes, ['HttpOnly', 'Secure', 'SameSite=Lax', `Path=${base || '/'}`, `Max-Age=${maxAge}`]);
   const marker = cookies.find(cookie => cookie.startsWith('zylos_dashboard_draft_reset_'));
   assert.equal(marker, `zylos_dashboard_draft_reset_${encodeURIComponent(markerBase)}=1; Secure; SameSite=Strict; Path=${base || '/'}`);
   assert.doesNotMatch(marker, /HttpOnly/);
@@ -239,7 +239,7 @@ test('login sets secure cookie and authenticated requests can reach API and SSE'
 // and tmux directory and disabled network version checks; loopback servers close.
 test('logout always clears browser sessions and respects forwarded prefix', { timeout: TEST_TIMEOUT_MS }, async () => {
   const { origin, server } = await makeServer();
-  const clearCookie = '__Secure-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Strict; Path=/dashboard; Max-Age=0';
+  const clearCookie = '__Secure-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Lax; Path=/dashboard; Max-Age=0';
   const loginCookie = async () => (await fetch(`${origin}/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

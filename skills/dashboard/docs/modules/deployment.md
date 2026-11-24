@@ -71,7 +71,7 @@ Dashboard backup, migration, and upgrade behavior is governed by Core's current 
 ## Access Control
 
 - The service listens only on loopback; external access goes through Caddy.
-- Browser login uses a separate scrypt password hash and an HttpOnly, Secure, SameSite=Strict cookie.
+- Browser login uses a separate scrypt password hash and an HttpOnly, Secure, SameSite=Lax cookie, so opening the Dashboard from outside the site (an installed PWA launched from its icon, a link in another app) keeps the session; cookie-authenticated writes under `/api/` and `/fleet/` are rejected unless Fetch Metadata or Origin shows the same origin, so SameSite is not the CSRF defence.
 - REST APIs and SSE use same-origin sessions; CLI/internal calls may use a Bearer token.
 - URL token login is not supported.
 - Login failures have per-IP lockout and global rate limiting.
