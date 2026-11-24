@@ -1428,6 +1428,7 @@ html:not([data-detail=technical]) #action-instance-status { display: none; }
 .wb-ktable { width: 100%; min-width: 560px; border-collapse: collapse; font-size: var(--fs-body-sm); }
 .wb-ktable th { padding: 6px 8px; border-bottom: 1px solid var(--wb-line); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-control); text-align: left; }
 .wb-ktable td { padding: 9px 8px; border-bottom: 1px solid var(--wb-line); vertical-align: middle; }
+.wb-ktable td:nth-child(4), .wb-ktable td:nth-child(5) { font-size: var(--fs-small); }
 .wb-ktable tr:last-child td { border-bottom: 0; }
 .wb-ktable tr.revoked td { color: var(--text-muted); }
 .wb-ktable b { font-weight: var(--fw-control); }
