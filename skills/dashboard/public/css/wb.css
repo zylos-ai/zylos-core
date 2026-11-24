@@ -663,6 +663,8 @@ main:has(> #tab-schedule.active) { padding: 0 0 var(--space-xl); }
 .wb-empty-state { display: grid; justify-items: center; gap: 8px; margin: 48px 16px; padding: 32px; border: 1px dashed var(--wb-line-strong); border-radius: 12px; color: var(--text-dim); text-align: center; }
 .wb-empty-state p { margin: 0; }
 .wb-schedule { display: block; }
+.wb-sched-mobile-bar, .wb-sched-marker-label { display: none; }
+.wb-sched-tasks { display: contents; }
 .wb-sched-main > p { margin: 10px 16px 0; font-size: 12.5px; }
 .wb-sched-top { padding: 14px 16px 4px; border-bottom: 1px solid var(--wb-line); }
 .wb-sched-kpi { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 30px; }
@@ -844,9 +846,12 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
   .wb-sched-side { inset: 0; z-index: 55; width: auto; border-left: 0; box-shadow: none; }
 }
 @media (max-width: 760px) {
-  /* Phones: the task list comes first; the numbers, charts and timeline follow it. Desktop keeps its order. */
-  .wb-sched-main { display: flex; flex-direction: column; }
-  .wb-sched-main > .wb-sched-top { order: 1; border-top: 1px solid var(--wb-line); border-bottom: 0; }
+  .wb-sched-mobile-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--wb-line); }
+  .wb-sched-mobile-bar .wb-detail-tabs { margin: 0; }
+  .wb-sched-mobile-bar .wb-detail-tabs button, .wb-sched-new-mobile { height: var(--wb-control-touch); margin-bottom: 0; }
+  .wb-sched-tasks { display: block; }
+  .wb-sched-main[data-schedule-tab="overview"] > .wb-sched-tasks,
+  .wb-sched-main[data-schedule-tab="tasks"] > .wb-sched-top { display: none; }
   .wb-sched-top { padding: 12px 12px 4px; }
   /* Six numbers as three columns by two rows. */
   .wb-sched-kpi { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 10px 12px; }
@@ -857,8 +862,9 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
   .wb-sched-filters .wb-seg { display: flex; flex: 1 1 100%; max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
   .wb-sched-filters .wb-seg button { flex: 1 0 auto; justify-content: center; padding: 0 6px; font-size: 12px; }
   .wb-sched-picker, .wb-sched-filters .wb-search { flex: 1 1 140px; width: auto; }
+  .wb-sched-filters .wb-search { flex-basis: 184px; }
   .wb-sched-filters .wb-search input { width: 100%; }
-  .wb-sched-new { margin-left: 0; flex: 1 1 100%; justify-content: center; }
+  .wb-sched-filters > .wb-sched-new-desktop { display: none; }
   .wb-sched-th { display: none; }
   .wb-sched-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 0; }
   .wb-sched-select { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; padding: 12px 12px 4px; }
@@ -1734,6 +1740,20 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   .fleet-sound-toggle.wb-switch-btn:hover { border: 10px solid transparent; }
   /* Timeline dots: a 40px transparent target around the same 9px dot; the lane clips targets at its ends. */
   .wb-sched-timeline { overflow-x: clip; }
+  .wb-sched-timeline .wb-sched-marker-label {
+    position: absolute;
+    z-index: 1;
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    height: auto;
+    padding: 4px 8px;
+    transform: translateY(calc(-100% - 8px));
+    border-radius: var(--wb-r);
+    box-shadow: var(--shadow-card);
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
   /* Chart text stays readable: the timeline's hour labels are at least 11px. */
   .wb-sched-lane .wb-sched-axis, .wb-sched-lane .wb-sched-axis span { font-size: 11px; }
   .wb-sched-timeline .wb-sched-dot { --wb-dot: var(--text-dim); --wb-dot-ring: none; width: 40px; height: 40px; margin: -20px 0 0 -20px; border: 0; border-radius: 0; background: transparent; box-shadow: none; transform: none; }

@@ -621,13 +621,15 @@ export async function runWorkbenchBrowser(t, sandbox) {
 
     // Schedule: six numbers in two rows of three; the next-day timeline stays inside the screen.
     await section(page, 'schedule');
-    await page.locator('.wb-sched-row').first().waitFor();
     await page.locator('.wb-sched-kpi .wb-sched-kpi-item').first().waitFor();
     const sched = await check('schedule');
     assert.deepEqual(sched.kpiRows, [3, 3]);
-    // The task list comes first on a phone: its first task is on the first screen, above the numbers.
-    assert.ok(sched.firstTask.bottom <= sched.screenHeight && sched.firstTask.bottom <= sched.scheduleNumbers.top,
-      `the first task (${sched.firstTask.top}-${sched.firstTask.bottom}) is on screen above the numbers (${sched.scheduleNumbers.top})`);
+    assert.equal(sched.firstTask, null, 'Overview hides the task list');
+    await page.locator('#wb-sched-tab-tasks').click();
+    await page.locator('.wb-sched-row').first().waitFor();
+    const tasks = await check('schedule-tasks');
+    assert.equal(tasks.scheduleNumbers, null, 'Tasks hides the overview');
+    assert.ok(tasks.firstTask.bottom <= tasks.screenHeight, 'the first task is on screen');
 
     assert.deepEqual(errors, []);
     await context.close();

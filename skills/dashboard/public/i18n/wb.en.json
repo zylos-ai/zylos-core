@@ -253,6 +253,8 @@
   "wb.schedule.result.started": "Delivering",
   "wb.schedule.result.unknown": "Unknown",
   "wb.schedule.search": "Search task names",
+  "wb.schedule.tab.overview": "Overview",
+  "wb.schedule.tab.tasks": "Tasks",
   "wb.schedule.new": "New task",
   "wb.schedule.in": "in {span}",
   "wb.schedule.ago": "{span} ago",
