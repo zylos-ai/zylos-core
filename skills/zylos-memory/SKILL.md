@@ -80,7 +80,7 @@ absolute path, and relevant facts absent from C4/inbox (code
 findings, unmentioned actions and pitfalls). Capture these as they arise using
 `memory-append.js`. The worker cannot see the parent conversation.
 
-Select the job named in the control prompt, then check the inherited environment:
+Select the job from the control prompt and the inherited environment:
 
 - `group Sync` with a nonempty `ZYLOS_SESSION_GROUP` uses kind=group and
   `zylos-group-sync`, including in `origin`: it syncs origin's own working state.
