@@ -275,6 +275,8 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] The AI engine card shows and upgrades the selected engine’s CLI. If an engine installed on demand cannot be found, the card shows its version as unknown and hides the upgrade action. The server command and Check again button appear below the selector when that engine is selected as a candidate for default. The version row, upgrade action and confirmation use the registered runtime display names Claude, Codex and Antigravity. The Antigravity version row states that update checks are unsupported. A missing runtime name uses the localized unknown label in confirmation. Confirmed upgrade failures and deadlines retain their specific outcomes. Lost responses and unconfirmed upstream errors identify the runtime and show an unknown outcome.
 
+[Approved] The AI engine version row starts 12 px below the selector row when no notice intervenes. The upgrade action sits 8 px after the installed version and wraps to the next line when space is tight. Hide the action when the installed and latest versions are both known and no update is available. Show the target version in the action when an update is available. Use the plain upgrade label when either version is unavailable or checking is unsupported.
+
 ## 8. Review Checklist and Browser Gates
 
 [Approved] Read this document before every visual change, check delivery against all eight sections, and update affected rules. The approved requirements in the decision list govern the 22 decisions; historical values help locate migrations. Documentation-only changes do not introduce product mechanisms or site-wide tests.

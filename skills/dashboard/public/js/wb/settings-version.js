@@ -42,13 +42,18 @@ export function coreUpgradePrompt(current, latest, t = key => key) {
 // the default engine card: each engine shows and upgrades its own CLI.
 export function renderEngineVersion(root, info, { upgrade, document = root.ownerDocument, t = key => key, readOnly = false, runtime = DEFAULT_RUNTIME } = {}) {
   const name = runtimeName(runtime);
-  const version = info?.[runtime]?.installed;
-  const update = info?.[runtime]?.update;
-  const updateNote = info?.[runtime]?.update_check === 'unsupported' ? ` · ${t('wb.settings.updateCheckUnsupported')}` : '';
-  root.replaceChildren(element(document, 'p', `${name} · ${version ? 'v' + version : t('wb.unknown')}${update ? ' ↑' + update : ''}${updateNote}`, 'wb-version-line'));
-  if (upgrade) {
-    const label = upgrade.querySelector('#action-cli-label'); if (label) label.textContent = t('actions.upgrade_runtime', { runtime: name });
-    const badge = upgrade.querySelector('#action-cc-ver'); if (badge) { badge.textContent = version ? ' v' + version : ''; badge.classList.toggle('action-ver-dot', !!update); }
-    upgrade.disabled = readOnly; upgrade.title = readOnly ? t('remote.actions_read_only_tooltip') : ''; root.append(upgrade);
-  }
+  const version = info?.[runtime];
+  const unsupported = version?.update_check === 'unsupported';
+  const latest = unsupported ? null : version?.latest;
+  const update = latest ? version.update : null;
+  const installed = version?.installed ? 'v' + version.installed : t('wb.unknown');
+  const updateNote = unsupported ? ` · ${t('wb.settings.updateCheckUnsupported')}` : '';
+  root.replaceChildren(element(document, 'p', `${name} · ${installed}${updateNote}`, 'wb-version-line'));
+  if (!upgrade || (version?.installed && latest && !update)) return;
+
+  const label = upgrade.querySelector('#action-cli-label');
+  if (label) label.textContent = t('actions.upgrade_runtime', { runtime: name }) + (update ? ' v' + update : '');
+  upgrade.disabled = readOnly;
+  upgrade.title = readOnly ? t('remote.actions_read_only_tooltip') : '';
+  root.append(upgrade);
 }
