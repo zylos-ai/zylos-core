@@ -1850,13 +1850,12 @@ export function mountConversationPage({
           top = node('span', undefined, 'conversation-list-title');
         const name = node('strong'),
           channel = node('span', undefined, 'conversation-list-channel'),
-          pinned = node('span', t('chat.page.pinned'), 'conversation-pinned'),
           draft = node('span', t('chat.draft'), 'conversation-draft'),
           time = node('time', undefined, 'conversation-list-time');
         const preview = node('span', undefined, 'chat-preview');
         const unreadDot = node('span', undefined, 'conversation-unread-dot');
         unreadDot.setAttribute('aria-hidden', 'true');
-        top.append(name, pinned, channel, draft, time, unreadDot);
+        top.append(name, channel, draft, time, unreadDot);
         body.append(top, preview);
         button.append(symbol, body);
         bindPinOrder(button, wrapper, item.id);
@@ -1892,7 +1891,6 @@ export function mountConversationPage({
           button,
           name,
           channel,
-          pinned,
           draft,
           time,
           preview
@@ -1920,9 +1918,6 @@ export function mountConversationPage({
       text(row.name, nameOf(item));
       const origin = s.tab === 'mine' && isOriginConversation(item.id);
       const pinned = Number.isInteger(item.pinOrder);
-      row.button.dataset.origin = String(origin);
-      row.pinned.hidden = !origin;
-      text(row.pinned, t('chat.page.pinned'));
       row.canPin = !origin && !item.id.startsWith('d:');
       row.isPinned = pinned;
       row.menuToggle.hidden = !row.canPin && (row.remove.hidden || !!shownState);
