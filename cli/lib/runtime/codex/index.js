@@ -5,6 +5,7 @@ import { usage } from './usage.js';
 import { busy } from './busy.js';
 import { hooks } from './hooks.js';
 import { instructions } from './instructions.js';
+import { GROUP_SYNC_WORKER_PROMPT, GROUP_SYNC_RESULT_INSTRUCTION } from '../shared/group-sync-prompts.js';
 import { input } from './input.js';
 import { sessionSwitch } from './switch.js';
 import { modelConfig, prepare, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags } from './launch.js';
@@ -39,7 +40,13 @@ export default Object.freeze({
   auth,
   health,
   launch: Object.freeze({ modelConfig, prepare, preAccept: UNSUPPORTED, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags, checkAutonomous: UNSUPPORTED }),
-  instructions,
+  instructions: Object.freeze({
+    ...instructions,
+    groupSyncPrompt: 'Call spawn_agent once without reading skills. Set fork_turns: "none". ' +
+      'Use the exact listed Terra ID as model. If none, omit model and tell the worker why. Omit reasoning_effort. ' +
+      `Prompt: "${GROUP_SYNC_WORKER_PROMPT}" Await the final result before ending this turn. ` +
+      GROUP_SYNC_RESULT_INSTRUCTION,
+  }),
   input,
   busy,
   context,

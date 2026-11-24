@@ -5,7 +5,7 @@ import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
 import { captureSyncTarget, observeSyncCompletion, latestSyncFailure } from './sync-reclaim.js';
 import { CHECKPOINT_THRESHOLD } from '../../comm-bridge/scripts/c4-config.js';
 
-const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
+const { findRuntime, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/index.js');
 
 const SYNC_DIAGNOSTIC_TYPES = new Set(['origin_frequency', 'origin_idle', 'control_timeout', 'state_uncommitted']);
 const TERMINAL_CONTROLS = new Set(['done', 'timeout', 'superseded', 'failed', 'cancelled']);
@@ -1027,9 +1027,15 @@ export class SupervisorLifecycle {
     const marker = await this.d.readSyncMarker({ runDir: scene.runDir, kind, currentRunId: scene.runId });
     if (!marker || typeof marker.held !== 'boolean' || typeof marker.stale !== 'boolean') throw error('INVALID_OBSERVATION', 'Invalid Sync marker result');
     if (marker.held && !marker.stale) return;
+    // Single mode uses the regular group trigger for its global Sync.
+    const runtimePrompt = kind === 'group' && modeOf(context) === 'multi'
+      ? (await findRuntime(scene.runtime))?.instructions.groupSyncPrompt
+      : undefined;
     if (!await this.beforeWrite(scene.sessionGroup, context, kind === 'origin' ? undefined : scene)) return;
     const checkpointId = await this.syncCheckpoint(scene, kind);
-    const control = await this.d.db.insertControl(this.prompt(kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT'), {
+    const prompt = typeof runtimePrompt === 'string'
+      ? runtimePrompt : this.prompt(kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT');
+    const control = await this.d.db.insertControl(prompt, {
       sessionGroup: scene.sessionGroup, priority: 2, appendAckSuffix: false,
       ...(kind === 'origin' ? {} : { ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000), createdAt: Math.floor(now / 1000) }),
     });

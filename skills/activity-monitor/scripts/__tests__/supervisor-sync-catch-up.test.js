@@ -65,7 +65,7 @@ function fixture(mode = 'multi', configuration = {}) {
     const context = f.context();
     await f.lifecycle.checkSync(context.scenes, context);
   };
-  f.syncs = () => f.controls.filter(row => row.content === 'group sync');
+  f.syncs = () => f.controls.filter(row => row.priority === 2 && row.ackDeadlineAt !== undefined);
   f.key = JSON.stringify(['group', f.scene.sessionGroup]);
   f.restart();
   return f;

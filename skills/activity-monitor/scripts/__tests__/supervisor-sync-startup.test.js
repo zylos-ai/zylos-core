@@ -28,7 +28,7 @@ function fixture(mode = 'multi', configuration = {}) {
       REFERENCE_REORG_PROMPT: 'reference proposal' },
   }, { now: () => f.now });
   f.check = async () => { await f.lifecycle.checkSync(f.context.scenes, f.context); f.now += 600000; };
-  f.syncs = () => f.controls.filter(row => row.content === 'sync');
+  f.syncs = () => f.controls.filter(row => row.priority === 2 && row.ackDeadlineAt !== undefined);
   f.key = JSON.stringify([mode === 'single' ? 'global' : 'group', f.scene.sessionGroup]);
   f.start = start;
   return f;

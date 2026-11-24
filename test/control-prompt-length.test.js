@@ -1,5 +1,5 @@
 import test from 'node:test';
-import { getRuntime } from '../cli/lib/runtime/index.js';
+import { getRuntime, SUPPORTED_RUNTIMES } from '../cli/lib/runtime/index.js';
 import assert from 'node:assert/strict';
 import { PASTE_CHAR_THRESHOLD } from '../skills/comm-bridge/scripts/c4-config.js';
 import { fixture } from '../skills/comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
@@ -37,8 +37,12 @@ async function controls() {
   const { dailyUpgradePrompt } = (await getRuntime('claude')).install;
   const fixed = Object.entries({ ...syncPrompts, ...reclaimPrompts, ...originPrompts })
     .filter(([, value]) => typeof value === 'string');
+  const groupSyncPrompts = await Promise.all(SUPPORTED_RUNTIMES.map(async id => [
+    `${id} group Sync`, (await getRuntime(id)).instructions.groupSyncPrompt,
+  ]));
   return [
     ...fixed,
+    ...groupSyncPrompts.filter(([, value]) => typeof value === 'string'),
     ['SYNC_BACKLOG_ALERT', syncPrompts.SYNC_BACKLOG_ALERT(LONG_GROUP, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)],
     ...['backlog', 'no_checkpoint', 'repair_failed'].flatMap(type =>
       ['pre_reclaim_retry'].map(repairAttempt => [`SYNC_BACKLOG_ALERT ${type} ${repairAttempt}`,
@@ -56,7 +60,8 @@ async function controls() {
 test('every control prompt is typed as an ordinary input: within the paste length and line-break limits with the longest ack suffix', async t => {
   const suffix = longestAckSuffix(t);
   const list = await controls();
-  for (const name of ['GROUP_SYNC_PROMPT', 'ORIGIN_SYNC_PROMPT', 'PRE_RECLAIM_CHECK_PROMPT',
+  for (const name of ['GROUP_SYNC_PROMPT', 'claude group Sync', 'codex group Sync', 'agy group Sync',
+    'ORIGIN_SYNC_PROMPT', 'PRE_RECLAIM_CHECK_PROMPT',
     'UPGRADE_RESTART_CHECK_PROMPT', 'ROTATION_PROMPT', 'IDENTITY_ROTATION_PROMPT', 'conversation naming']) {
     assert.ok(list.some(([key]) => key === name), `${name} is measured`);
   }
