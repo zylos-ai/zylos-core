@@ -91,11 +91,52 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Body text uses the local Inter variable font, with Chinese falling back through system Chinese fonts. Monospaced content uses JetBrains Mono, falling back to system monospace when absent. [Font declarations](../public/css/style.css) and [font references](../public/index.html) are the maintenance entry points.
 
-| Item | Current values and complete variants | Status / decision |
+[Approved → decision 14] Size tiers live in the shared `:root` in [style.css](../public/css/style.css).
+
+| Tier | Variable | Use |
 |---|---|---|
-| Font size | 9/9.5/10/10.5/11/11.5/12/12.5/13/13.5/14/14.5/15/16/17/18/19/20 px; also 0.92 em, inherited sizes, and 0 for hiding | [Approved → decision 14] |
-| Font weight | Body 400, currently 450/500/550/600/650/700; font files support 100–900 | [Current] |
-| Line height | 1/1.2/1.3/1.35/1.4/1.45/1.5/1.55/1.6/1.65/1.7/1.8 times; fixed 15/16/18/20/22/24 px | [Approved → decision 15] |
+| 9 px | `--fs-micro` | Smallest chart marks and badges |
+| 10 px | `--fs-tiny` | Tick labels and compact badges such as draft and fleet link badges |
+| 10.5 px | `--fs-badge` | Chart annotations and dedicated context, mode, and price badges |
+| 11 px | `--fs-caption` | Compact descriptions and metadata |
+| 12 px | `--fs-small` | Regular descriptions and compact controls |
+| 12.5 px | `--fs-control` | Compact controls such as filters, toolbar actions, and menu options |
+| 13 px | `--fs-body-sm` | Compact body text and field labels |
+| 14 px | `--fs-body` | Body text |
+| 16 px | `--fs-title-sm` | Small headings |
+| 18 px | `--fs-title-md` | Intermediate headings |
+| 20 px | `--fs-title-lg` | Page headings |
+| 16 px | `--fs-input-mobile` | Text fields and selects at 760 px and below |
+| 14 / 16 px | `--c-input-fs` | Rich conversation question fields use the body tier on desktop and the mobile input tier at 760 px and below. |
+
+[Approved] Weight uses three tiers (Howard, TG topic 5950 msg 9680). The variable font still declares its supported weight range of 100–900.
+
+| Tier | Variable | Use |
+|---|---|---|
+| 400 | `--fw-body` | Regular text |
+| 500 | `--fw-control` | Controls, configuration labels and unselected segments |
+| 600 | `--fw-strong` | Titles, emphasized text and selected segments |
+
+[Approved → decision 15] Multiline text uses the applicable size and line-height pair. Other text inherits the root ratio. Vertically center single-line controls in their existing frames.
+
+| Tier | Variable | Use |
+|---|---|---|
+| 1.5 | `--lh-root` | Root and other multiline text |
+| 14 / 24 px | `--lh-body` | Multiline body and conversation text |
+| 12 / 18 px | `--lh-caption` | Descriptions and help text |
+| 13 / 20 px | `--lh-label` | Multiline labels and compact body text |
+| 1.2 | `--lh-control` | Single-line buttons, segmented controls, tabs and chips in their existing vertically centered frames |
+| 1.3 | `--lh-chart-label` | Chart labels |
+| 22 px | `--lh-diagram` | Diagram connector glyphs |
+| 1 | `--lh-close-glyph` | Modal close glyph |
+| 1 | `--lh-activity-pill` | Compact phone conversation activity pills |
+| 1.2 | `--lh-pill` | Small fleet and memory badges |
+| 16 px | `--lh-badge` | Question status and mode badges |
+| 18 px | `--lh-badge-bordered` | Bordered badges and fixed annotation counters |
+| 15 px | `--lh-badge-price` | Price badges |
+| 22 px | `--lh-composer-mobile` | Decision 4 exception for the mobile message input. The line box preserves the 44 px frame with the existing padding and borders. |
+
+[Approved] CSS declarations and inline styles in HTML and JS use these variables for font size, weight and line height. Retain inherited sizes, the existing relative `0.92em` size and zero for hidden labels. Numeric values belong in shared token definitions. The font face's supported weight range is a font descriptor.
 
 [Current] See the complete value snapshot for long-tail radii, shadows, borders, spacing, and icon overrides. Geometry, column widths, safe areas, and chart-specific values are outside bulk font-size or spacing-tier migrations.
 
@@ -168,7 +209,7 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] On desktop, the live conversation activity area reuses the AI message avatar, author and time styles, with the same avatar and body columns. It has no quote action or delivery status. Its time is the later of the recorded activity start and the anchor message timestamp, so it never precedes the message immediately above it. The activity start comes from `working.main.since`, otherwise `working.since`; queued input uses the presentation's unanswered-message start, child-only work can use its subtask start, and handled input uses `awaiting.since`. A newer incoming message or interim reply advances the header time to that anchor's recorded timestamp when the activity started earlier. It uses the instance time zone, never the browser's current time, and adds no timestamp storage. The header is removed with the activity area when nothing remains to show.
 
-[Current] Conversation activity marks for new messages, system instructions, scheduled tasks, other messages, and subtask starts align their 13 px icons and text with the step grid's icon and text columns. They have no separator lines and retain the pale label background, 10 px radius, 11.5 px font, and existing colors. Long labels stay on one line with an ellipsis within the activity width, including at 390 px.
+[Current] Conversation activity marks for new messages, system instructions, scheduled tasks, other messages, and subtask starts align their 13 px icons and text with the step grid's icon and text columns. They have no separator lines and retain the pale label background, 10 px radius, 12 px description text and existing colors. Long labels stay on one line with an ellipsis within the activity width, including at 390 px.
 
 [Current] The workbench consists of a top bar, instance status, notices, main content, and right-hand details. The top bar is usually 48 px; navigation moves to a new row when space is insufficient. The scheduled-task drawer is 480 px wide and positioned according to the actual top-bar height. Settings has separate navigation and content areas.
 
@@ -184,7 +225,7 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Canonical group detail shows the observed model and effort, the running CLI version, and a readable restart-needed explanation when an installed CLI or configured runtime, model, or effort change is awaiting restart. Technical detail additionally shows the installed CLI version and available update. Target actions stay disabled until canonical detail has loaded; a confirmed stopped Origin retains its existing restart action. Optional stored-message and configuration read failures show their own source error without replacing the group detail. These facts come from group detail; Overview rows retain the approved compact list contract. Settings loads only the bounded running rows' details to display override provenance and preserves an unknown result when a detail cannot be read.
 
-[Current] The group configuration editor places the AI engine above the model and effort. Model and effort share a row above 760 px and each fill their own row at 760 px and below. All three dropdowns use the shared Dashboard style and fill their field. Labels use 13 px type on desktop and 14 px at 760 px and below, with a 20 px line height and 550 weight. Both engine and model can follow the global default. The model choices belong to the selected engine, or to the global engine when the selection follows the default. When the catalog is unavailable, the model field accepts a typed model ID and shows Follow global default as its empty placeholder. Effort is disabled while the model follows the default. For Antigravity, the model only shows Follow global default and both model controls are disabled with an availability note. The form has one Save and one Cancel.
+[Current] The group configuration editor places the AI engine above the model and effort. Model and effort share a row above 760 px and each fill their own row at 760 px and below. All three dropdowns use the shared Dashboard style and fill their field. Labels use 13 px type with a 20 px line height on desktop and 14 px with the root line height at 760 px and below. They use the 500 control weight. Both engine and model can follow the global default. The model choices belong to the selected engine, or to the global engine when the selection follows the default. When the catalog is unavailable, the model field accepts a typed model ID and shows Follow global default as its empty placeholder. Effort is disabled while the model follows the default. For Antigravity, the model only shows Follow global default and both model controls are disabled with an availability note. The form has one Save and one Cancel.
 
 [Current] A running group uses one restart confirmation for the whole form. The editor stores any change that does not affect the current run first. It shows the save result and the separate restart result reported by Core. If the second write fails, it shows the setting already saved alongside the error.
 

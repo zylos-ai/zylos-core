@@ -27,7 +27,7 @@ export async function copyText(text, view = window) {
   field.value = text;
   field.readOnly = true;
   field.tabIndex = -1;
-  field.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px;pointer-events:none';
+  field.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:var(--fs-input-mobile);pointer-events:none';
   try {
     document.body.append(field);
     field.focus({ preventScroll: true });
