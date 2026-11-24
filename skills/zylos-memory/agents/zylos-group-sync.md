@@ -11,7 +11,7 @@ Acquire your own token through `sync-run.js start`. A returned token proves the 
 For memory edits, use the exact restricted tool name supplied by the parent
 when available. If none was supplied or that tool is absent, discover an
 exposed restricted tool ending in `edit_memory` before reporting
-`TOOL_UNAVAILABLE`. Use the restricted tool for all memory edits.
+`TOOL_UNAVAILABLE`; never use native editing or shell writes as a fallback.
 Use one byte range per top-level tool call; do not batch ranges in loops;
 truncated output is unread: retry in a fresh top-level call under the
 procedure's bounded read retries.
