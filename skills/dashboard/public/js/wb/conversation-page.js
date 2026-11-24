@@ -1859,7 +1859,6 @@ export function mountConversationPage({
         unreadDot.setAttribute('aria-hidden', 'true');
         top.append(name, pinned, channel, draft, time, unreadDot);
         body.append(top, preview);
-        pinned.setAttribute('aria-hidden', 'true');
         button.append(symbol, body);
         bindPinOrder(button, wrapper, item.id);
         button.addEventListener('click', event => {
