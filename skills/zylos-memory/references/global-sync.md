@@ -28,10 +28,10 @@ state, commit, and failure sequence, with these differences:
   but checkpoint/state/release still proceed; do not claim it will retry itself.
 - Use the same guarded `prepare` mode selection (oversized rewrite or within-budget
   fragment edits), complete state read, status reconciliation, soft budget and
-  per-item checkpoint result lines as the working-state steps below. For global Sync, record
-  completed/superseded results in project pages yourself through the required
-  shared edits before checkpoint; do not hand them off to Origin Sync, which
-  does not run in single mode. During a full rewrite, rules, lessons and pitfalls
+  per-item checkpoint result lines as the working-state steps below. Global Sync
+  has no Origin Sync after it, so record completed/superseded results in
+  project pages yourself through the required shared edits before checkpoint.
+  During a full rewrite, rules, lessons and pitfalls
   already saved elsewhere get only a one-line pointer to their source file in
   state, not their full text. Use `state.md.tmp`; the tool selects this scope's token-named temporary file. Preserve absorbed
   items by supplying only proven followedUpIds to commit, as in the working-state steps.
