@@ -8,11 +8,20 @@ const MINIMUM_LIST_API_VERSION = '1.0.0-beta.16';
 const DEFAULT_POLL_INTERVAL_MS = 3000;
 const DEFAULT_TIMEOUT_MS = 2500;
 // Liveness is connection-based (#180): an agent is OFFLINE only when its SSE
-// connection is down and polling fails — never because pushed events are
-// sparse (an idle agent legitimately emits nothing for long stretches).
+// connection is down and polling keeps failing (see FAILURE_GRACE_MS) — never
+// because pushed events are sparse (an idle agent legitimately emits nothing
+// for long stretches).
 // The idle timeout guards against half-open connections: the server emits
 // keepalives every 15s, so 45s of byte silence means the connection is dead.
 const DEFAULT_SSE_IDLE_TIMEOUT_MS = 45_000;
+// A slow peer is not a lost one: once a complete read has succeeded, a timeout,
+// connection, unreachable or bad-payload failure keeps the last row and data
+// until failures have continued for 30s, counted from the first failure since
+// the last success (an idle peer on SSE can have an old last_seen); the first
+// failure after that marks the agent OFFLINE. auth_failed, version_unsupported
+// and failures of an agent never read successfully apply immediately.
+const FAILURE_GRACE_MS = 30_000;
+const IMMEDIATE_FAILURE_REASONS = new Set(['auth_failed', 'version_unsupported']);
 const DEFAULT_JITTER_MS = 500;
 const TOKEN_REFRESH_SKEW_MS = 60_000;
 const DEFAULT_RECONNECT_BASE_MS = 1000;
@@ -374,6 +383,8 @@ export class FleetPoller {
     // One fixed-size summary per configured agent, shared by failures and
     // fallback transitions. Never retain a growing set of failure reasons.
     this.connectionLogs = new Map();
+    // Start of each agent's current run of failed reads; cleared by a success.
+    this.failingSince = new Map();
     this.records = new Map();
     this.tokens = new Map();
     this.streams = new Map();
@@ -495,6 +506,7 @@ export class FleetPoller {
     if (latency?.timer) this.clearTimeout(latency.timer);
     this.latency.delete(name);
     this.tokens.delete(name);
+    this.failingSince.delete(name);
     this.records.delete(name);
     this.onPoll?.(this.getFleet());
   }
@@ -805,10 +817,18 @@ export class FleetPoller {
     }, this.timeoutMs);
   }
 
+  // Only a 404 or an explicitly older version is unsupported. A missing, empty,
+  // unparsable version or an unreadable body is a bad payload that leaves the
+  // cached version verdict untouched, so a busy peer is not reported as old.
   async _readSupportedInstance(agent, response, cached) {
-    const instance = response.ok ? await response.json().catch(() => null) : null;
-    const comparison = compareVersions(instance?.versions?.zylos?.installed, MINIMUM_LIST_API_VERSION, { prerelease: true });
-    const supported = comparison !== null && comparison >= 0;
+    let supported = false;
+    let instance = null;
+    if (response.ok) {
+      instance = await response.json().catch(() => null);
+      const comparison = compareVersions(instance?.versions?.zylos?.installed, MINIMUM_LIST_API_VERSION, { prerelease: true });
+      if (comparison === null) throw reasonError('bad_payload');
+      supported = comparison >= 0;
+    }
     if (cached && this.tokens.get(agent.name) === cached) cached.listApiSupported = supported;
     if (!supported) throw reasonError('version_unsupported');
     return instance;
@@ -964,6 +984,7 @@ export class FleetPoller {
   }
 
   _setSuccess(agent, state) {
+    this.failingSince.delete(agent.name);
     this.records.set(agent.name, stateToFleetRecord(agent, state, {
       self: false,
       base_url: agent.base_url,
@@ -1149,6 +1170,18 @@ export class FleetPoller {
 
   _setFailure(agent, reason) {
     const existing = this.records.get(agent.name) || {};
+    const nowMs = this.now();
+    if (!this.failingSince.has(agent.name)) this.failingSince.set(agent.name, nowMs);
+    // Only a row that shows a successful read is held; a row already marked
+    // failed takes the newest reason.
+    if (!IMMEDIATE_FAILURE_REASONS.has(reason) && !FAILURE_REASONS.has(existing.health_reason) &&
+        Number.isFinite(Date.parse(existing.last_seen || '')) &&
+        nowMs - this.failingSince.get(agent.name) < FAILURE_GRACE_MS) {
+      // Keep the last good row; refreshing updated_at shows the self-heal
+      // watchdog that this agent is still being read, not frozen.
+      this.records.set(agent.name, { ...existing, updated_at: nowIso(nowMs) });
+      return;
+    }
     const color = agentColor(agent.name);
     this.records.set(agent.name, sanitizeRecord({
       name: agent.name,
@@ -1165,7 +1198,7 @@ export class FleetPoller {
       last_seen: existing.last_seen || null,
       pulse_rate: 0,
       health_reason: reason,
-      updated_at: nowIso(this.now())
+      updated_at: nowIso(nowMs)
     }));
   }
 
