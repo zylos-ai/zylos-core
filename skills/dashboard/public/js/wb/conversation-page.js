@@ -1904,11 +1904,13 @@ export function mountConversationPage({
           channel = node('span', undefined, 'conversation-list-channel'),
           draft = node('span', t('chat.draft'), 'conversation-draft'),
           time = node('time', undefined, 'conversation-list-time');
+        const previewLine = node('span', undefined, 'conversation-list-preview');
         const preview = node('span', undefined, 'chat-preview');
         const unreadDot = node('span', undefined, 'conversation-unread-dot');
         unreadDot.setAttribute('aria-hidden', 'true');
-        top.append(name, channel, draft, time, unreadDot);
-        body.append(top, preview);
+        top.append(name, channel, draft, time);
+        previewLine.append(preview, unreadDot);
+        body.append(top, previewLine);
         button.append(symbol, body);
         bindPinOrder(button, wrapper, item.id);
         button.addEventListener('click', event => {

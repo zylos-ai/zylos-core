@@ -165,6 +165,19 @@
   line-height:1.4;
   color:var(--text-dim)
 }
+.conversation-list-preview {
+  display:flex;
+  align-items:center;
+  gap:6px
+}
+.conversation-list-preview > .chat-preview { flex:1; min-width:0; }
+.conversation-unread-dot {
+  flex:none;
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:var(--accent);
+}
 .conversation-list-notice {
   padding:8px;
   text-align:center
@@ -1094,9 +1107,6 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
   opacity:0;
   pointer-events:none;
 }
-.conversation-list-row:has(.conversation-unread-dot:not([hidden])) .conversation-row-menu-toggle {
-  margin-inline-end:calc(var(--row-menu-edge) + 13px);
-}
 .conversation-list-row:has(> .conversation-row-menu-toggle:not([hidden])) .conversation-list-time {
   min-width:var(--row-menu-size);
   text-align:end;
@@ -1144,9 +1154,6 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
     --row-menu-y:-11px;
     position:relative;
     gap:0;
-  }
-  .conversation-list-row:has(.conversation-unread-dot:not([hidden])) .conversation-row-menu-toggle {
-    margin-inline-end:calc(var(--row-menu-edge) + 14px);
   }
   /* Only a row that can swipe open (the test in conversation-swipe.js) keeps horizontal touch to itself. */
   .conversation-page .conversation-list-row:not([data-deletion-state]):has(> .conversation-delete:not([hidden])) { touch-action:pan-y; }
@@ -2186,13 +2193,6 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 }
 .conversation-page .conversation-search { min-width:0; }
 .conversation-page .conversation-list-update { justify-content:center; }
-.conversation-unread-dot {
-  flex:none;
-  width:8px;
-  height:8px;
-  border-radius:50%;
-  background:var(--accent);
-}
 @media (any-pointer:fine) {
   .conversation-page .conversation-list-row[data-pin-id] .conversation-list-item { cursor:grab; }
   .conversation-page .conversation-list-row[data-pin-id] .conversation-list-item:active { cursor:grabbing; }
