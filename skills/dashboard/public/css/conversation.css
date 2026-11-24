@@ -1056,11 +1056,13 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .conversation-delete-status { flex-basis:100%; padding:0 9px 7px; font-size:11px; line-height:1.5; color:var(--text-dim); overflow-wrap:anywhere; }
 .conversation-delete-short { display:none; }
 /* Desktop rows reserve the menu slot so names do not shift on hover or focus. */
-@media (width > 760px) {
-  .conversation-list-row:not([data-deletion-state]) .conversation-delete { display:none; }
+@media (width > 760px) and (hover:hover) {
   .conversation-row-menu-toggle:not(:focus-visible) { opacity:0; pointer-events:none; }
   .conversation-list-row:is(:hover,:focus-within) .conversation-row-menu-toggle,
   .conversation-row-menu-toggle[aria-expanded=true] { opacity:1; pointer-events:auto; }
+}
+@media (width > 760px) {
+  .conversation-list-row:not([data-deletion-state]) .conversation-delete { display:none; }
   .conversation-page .conversation-row-menu {
     position:fixed;
     z-index:61;
