@@ -1,19 +1,32 @@
 import { loadRuntimeContexts } from '../../../../cli/lib/model-rotation-thresholds.js';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
+import * as runtimes from '../../../../cli/lib/runtime/index.js';
+import { UNSUPPORTED } from '../../../../cli/lib/runtime/contract.js';
 import { fixture as databaseFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
-import { CLAUDE_GROUP_SYNC_PROMPT, GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
+import { GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
   PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT } from '../../../zylos-memory/scripts/sync-prompts.js';
 import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
 import { groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
 import { renderStateSkeleton } from '../../../zylos-memory/scripts/state-format.js';
 
 const contexts = await loadRuntimeContexts();
+
+// Supply a synthetic adapter for the optional capability. All supported IDs
+// still resolve through the real registry and load their runtime adapters.
+const runtimeWithoutPrompt = 'without-group-sync';
+const findRuntime = mock.fn(async id => id === runtimeWithoutPrompt
+  ? { instructions: { groupSyncPrompt: UNSUPPORTED } }
+  : runtimes.findRuntime(id));
+const registry = mock.module('../../../../cli/lib/runtime/index.js', {
+  namedExports: { ...runtimes, findRuntime },
+});
+const { SupervisorLifecycle } = await import('../supervisor-lifecycle.js');
+registry.restore();
 
 function localFixture(t, Class = SupervisorLifecycle, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lifecycle-acceptance-'));
@@ -33,7 +46,7 @@ function localFixture(t, Class = SupervisorLifecycle, options = {}) {
     requests: { read: () => [] }, diagnostic: e => f.events.push(e),
     groupRunDir: () => f.root,
     readSyncMarker: args => { f.markerCalls.push(args); return f.marker; },
-    prompts: { CLAUDE_GROUP_SYNC_PROMPT, GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
+    prompts: { GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
       PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT, ROTATION_PROMPT: 'rotate' },
     ...options.deps };
   const configuration = f.context.configuration;
@@ -83,12 +96,18 @@ test('Sync reads group and Origin marker scopes and failed writes do not mark a 
   await syncScopeScenario(t, SupervisorLifecycle);
 });
 
-test('only ordinary Claude group Sync uses the direct launch prompt', async t => {
+test('ordinary group Sync uses the runtime prompt when available', async t => {
+  const adapterCases = await Promise.all(runtimes.SUPPORTED_RUNTIMES.map(async runtime => {
+    const { instructions: { groupSyncPrompt } } = await runtimes.findRuntime(runtime);
+    assert.equal(typeof groupSyncPrompt, 'string', runtime);
+    return ['multi', runtime, 'telegram:room', groupSyncPrompt];
+  }));
+  const { instructions: { groupSyncPrompt } } = await runtimes.findRuntime('claude');
   for (const [mode, runtime, sessionGroup, expected] of [
-    ['multi', 'claude', 'telegram:room', CLAUDE_GROUP_SYNC_PROMPT],
-    ['multi', 'claude', 'origin', CLAUDE_GROUP_SYNC_PROMPT],
-    ['multi', 'codex', 'telegram:room', GROUP_SYNC_PROMPT],
-    ['multi', 'agy', 'telegram:room', GROUP_SYNC_PROMPT],
+    ...adapterCases,
+    ['multi', 'claude', 'origin', groupSyncPrompt],
+    ['multi', runtimeWithoutPrompt, 'telegram:room', GROUP_SYNC_PROMPT],
+    ['multi', 'unknown', 'telegram:room', GROUP_SYNC_PROMPT],
     ['single', 'claude', 'origin', GROUP_SYNC_PROMPT],
   ]) {
     const f = localFixture(t);
@@ -100,6 +119,7 @@ test('only ordinary Claude group Sync uses the direct launch prompt', async t =>
     assert.deepEqual(f.controls.map(row => [row.sessionGroup, row.content]),
       [[sessionGroup, expected], ['origin', ORIGIN_SYNC_PROMPT]], `${mode}/${runtime}/${sessionGroup}`);
   }
+  assert.ok(findRuntime.mock.calls.some(call => call.arguments[0] === runtimeWithoutPrompt));
 
   const f = localFixture(t, SupervisorLifecycle, { db: {
     getLastActivity: () => null,

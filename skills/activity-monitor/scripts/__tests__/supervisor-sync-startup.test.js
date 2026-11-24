@@ -24,11 +24,11 @@ function fixture(mode = 'multi', configuration = {}) {
     readSyncMarker: () => ({ held: f.held, stale: false }), groupRunDir: () => '/isolated/origin',
     prepareReferenceReorg: () => false, diagnostic: event => f.events.push(event),
     reportError: (cause, context) => f.errors.push({ cause, context }),
-    prompts: { GROUP_SYNC_PROMPT: 'sync', CLAUDE_GROUP_SYNC_PROMPT: 'sync', ORIGIN_SYNC_PROMPT: 'origin', SYNC_BACKLOG_ALERT: () => 'alert',
+    prompts: { GROUP_SYNC_PROMPT: 'sync', ORIGIN_SYNC_PROMPT: 'origin', SYNC_BACKLOG_ALERT: () => 'alert',
       REFERENCE_REORG_PROMPT: 'reference proposal' },
   }, { now: () => f.now });
   f.check = async () => { await f.lifecycle.checkSync(f.context.scenes, f.context); f.now += 600000; };
-  f.syncs = () => f.controls.filter(row => row.content === 'sync');
+  f.syncs = () => f.controls.filter(row => row.priority === 2 && row.ackDeadlineAt !== undefined);
   f.key = JSON.stringify([mode === 'single' ? 'global' : 'group', f.scene.sessionGroup]);
   f.start = start;
   return f;

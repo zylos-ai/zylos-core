@@ -8,11 +8,10 @@ model: sonnet
 Resolve `.claude/skills/zylos-memory/references/group-sync.md` under your inherited `ZYLOS_DIR`
 (default `~/zylos`), then read that procedure and sync-common.md and state-format.md in the same references directory completely. Do not read the parent SKILL.md or other procedures. Execute only the group procedure.
 Acquire your own token through `sync-run.js start`. A returned token proves the session binding. Continue without rechecking environment variables.
-For all memory edits, use the exact restricted tool name if the parent supplied
-one. Otherwise begin with `mcp__zylos-memory__edit_memory`. If the selected
-tool is absent, discover an exposed tool ending in
-`edit_memory` before reporting `TOOL_UNAVAILABLE`; never use native editing or
-shell writes as a fallback.
+For memory edits, use the exact restricted tool name supplied by the parent
+when available. If none was supplied or that tool is absent, discover an
+exposed restricted tool ending in `edit_memory` before reporting
+`TOOL_UNAVAILABLE`. Use the restricted tool for all memory edits.
 Use one byte range per top-level tool call; do not batch ranges in loops;
 truncated output is unread: retry in a fresh top-level call under the
 procedure's bounded read retries.
