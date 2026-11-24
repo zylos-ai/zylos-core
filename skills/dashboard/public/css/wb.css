@@ -895,7 +895,7 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-memory-card { min-width: 0; padding: 12px 14px; border: 1px solid var(--wb-line-strong); border-radius: 12px; background: var(--wb-panel); }
 /* Each card folds to its title line; the whole line is the button that opens it. */
 .wb-memory-card h3 { margin: 0; font-size: 13px; font-weight: 650; }
-.wb-memory-card-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.wb-memory-card-h { display: flex; flex-wrap: wrap; align-items: baseline; align-content: center; gap: 4px 8px; width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .wb-memory-card-h .wb-ico { align-self: center; color: var(--text-dim); }
 .wb-memory-card-h > .wb-ico:first-child { color: var(--text-muted); transition: transform .15s; }
 .wb-memory-card-h[aria-expanded="true"] > .wb-ico:first-child { transform: rotate(90deg); }
@@ -934,7 +934,7 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-memory-bl .wb-memory-chart-value { text-align: right; }
 .wb-memory-bl-tag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 9px; background: var(--wb-off); color: var(--text-dim); font-size: 11px; line-height: 1.2; white-space: nowrap; }
 .wb-memory-bl-tag.warn { background: color-mix(in srgb, var(--wb-wait) 16%, transparent); color: var(--wb-wait); font-weight: 600; }
-/* The group list scrolls inside the card, about seven rows high, so the memory files below stay on screen. */
+/* The group list scrolls inside the card, at most 280px and a third of the window, so the memory files below stay on screen. */
 .wb-memory-rows { display: grid; max-height: min(280px, 34vh); overflow-y: auto; overscroll-behavior: contain; }
 .wb-memory-gfilter { display: flex; width: 100%; height: var(--wb-h); margin: 0 0 6px; }
 .wb-memory-gfilter input { flex: 1; width: auto; }

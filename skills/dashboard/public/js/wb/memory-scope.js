@@ -620,6 +620,8 @@ export function createMemoryScope({ document = globalThis.document, root, charts
   }
   function renderCharts() {
     if (!chartsRoot || stopped) return;
+    // Redrawing takes the list out of the page, which resets its scroll; it goes back where it was.
+    const backlogScroll = backlogRows.scrollTop;
     chartsRoot.replaceChildren();
     chartsRoot.hidden = detail() !== 'technical';
     if (chartsRoot.hidden) return;
@@ -637,6 +639,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       else backlogSearch.value = '';
       progress.append(backlogRows);
       renderBacklogRows();
+      backlogRows.scrollTop = backlogScroll;
     }
     progress.append(element(document, 'p', t('wb.memory.backlogSource'), 'wb-memory-source'));
     const budgets = chartCard('wb-memory-budgets', 'book', t('wb.memory.budgets'), t('wb.memory.budgetHint'), 'budgets');
