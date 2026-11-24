@@ -607,14 +607,14 @@ export function mountConversationPage({
     cancelRowPress();
     if (!event.isPrimary || event.button !== 0 || !isContact(event)) return;
     const row = listRows.get(event.target.closest?.('.conversation-list-item')?.dataset.conversationId);
-    if (!row || row.menuToggle.hidden) return;
+    if (!row) return;
     rowPress = {
       id: event.pointerId, x: event.clientX, y: event.clientY,
       timer: view.setTimeout(() => {
         rowPress = null;
-        if (!opened || !row.wrapper.isConnected || row.menuToggle.hidden) return;
+        if (!opened || !row.wrapper.isConnected) return;
         ignoreRowHoldClick = true;
-        openRowMenu(row, true);
+        if (!row.menuToggle.hidden) openRowMenu(row, true);
       }, 500)
     };
   });
@@ -631,6 +631,10 @@ export function mountConversationPage({
   list.addEventListener('contextmenu', event => {
     if ((isContact(event) || touchRowPress) && event.target.closest?.('.conversation-list-item')) event.preventDefault();
   });
+  // A touch release can send mouse events to the scrim now covering the row.
+  page.addEventListener('mousedown', event => {
+    if (ignoreRowHoldClick) event.preventDefault();
+  }, true);
   page.addEventListener('click', event => {
     if (!ignoreRowHoldClick || event.detail === 0) return;
     ignoreRowHoldClick = false;
