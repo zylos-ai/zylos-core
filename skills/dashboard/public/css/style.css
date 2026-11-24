@@ -353,11 +353,7 @@ main { padding: var(--space-md) var(--space-lg) var(--space-xl); }
   color: var(--text);
   font-family: "JetBrains Mono", monospace;
   font-size: var(--fs-small);
-  line-height: var(--lh-caption);
-}
-
-@media (max-width: 760px) {
-  .memory-editor { line-height: var(--lh-root); }
+  line-height: var(--lh-root);
 }
 
 .memory-notice {
