@@ -1845,7 +1845,6 @@ export function mountConversationPage({
         })));
         const pinBadge = node('span', undefined, 'conversation-pin-badge');
         pinBadge.setAttribute('role', 'img');
-        pinBadge.append(icon(document, 'pin'));
         symbol.append(pinBadge);
         const body = node('span', undefined, 'conversation-list-body'),
           top = node('span', undefined, 'conversation-list-title');
