@@ -29,15 +29,12 @@ state, commit, and failure sequence, with these differences:
 - Use the same guarded `prepare` mode selection (oversized rewrite or within-budget
   fragment edits), complete state read, status reconciliation, soft budget and
   per-item checkpoint result lines as the working-state steps below. Global Sync
-  applies to legacy single sessions without a session group. Those sessions have
-  no Origin Sync, so record completed/superseded results in project pages through
-  the required shared edits before checkpoint. The `origin` group runs Origin
-  Sync in both native single-session and multi-session mode. During a full
-  rewrite, rules, lessons and pitfalls already saved elsewhere get only a
-  one-line pointer to their source file in state, not their full text. Use
-  `state.md.tmp`; the tool selects this scope's token-named temporary file.
-  Preserve absorbed items by supplying only proven followedUpIds to commit, as
-  in the working-state steps.
+  has no Origin Sync after it, so record completed/superseded results in
+  project pages yourself through the required shared edits before checkpoint.
+  During a full rewrite, rules, lessons and pitfalls
+  already saved elsewhere get only a one-line pointer to their source file in
+  state, not their full text. Use `state.md.tmp`; the tool selects this scope's token-named temporary file. Preserve absorbed
+  items by supplying only proven followedUpIds to commit, as in the working-state steps.
 - Release once and report.
 
 
