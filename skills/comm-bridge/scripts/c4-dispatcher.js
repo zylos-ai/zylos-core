@@ -2,6 +2,7 @@
 import { loadStartupTimezone } from './startup-timezone.js';
 import { createDispatcher } from './router/factory.js';
 import { close } from './c4-db.js';
+import { listenForWake } from './router/wake-socket.js';
 
 /** Production entry: one router owns all group lanes and drains before DB close. */
 export async function main({ create = createDispatcher, closeDatabase = close,
@@ -11,10 +12,13 @@ export async function main({ create = createDispatcher, closeDatabase = close,
   const dispatcher = create();
   let stopping;
   let started;
+  let closeWakeSocket;
   const shutdown = () => stopping ??= (async () => {
     try {
       await started.catch(() => {});
+      const closingWakeSocket = closeWakeSocket?.();
       await dispatcher.stop();
+      await closingWakeSocket;
     } finally {
       signals.removeListener('SIGINT', onSignal);
       signals.removeListener('SIGTERM', onSignal);
@@ -25,7 +29,13 @@ export async function main({ create = createDispatcher, closeDatabase = close,
   signals.on('SIGINT', onSignal);
   signals.on('SIGTERM', onSignal);
   log('=== C4 Session Router Started ===');
-  started = Promise.resolve().then(() => dispatcher.start());
+  started = Promise.resolve().then(async () => {
+    await dispatcher.start();
+    const socketError = error => log(`Dispatcher wake socket: ${error.code ?? error.message}`);
+    // The poll remains available if the optional wake socket cannot listen.
+    try { closeWakeSocket = await listenForWake(dispatcher.wake, { onError: socketError }); }
+    catch (error) { socketError(error); }
+  });
   try { await started; }
   catch (error) {
     // Startup failure must still release owned work and the database.

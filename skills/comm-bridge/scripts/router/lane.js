@@ -28,18 +28,18 @@ export function createLane(context, group) {
     diagnostic(reason, { session_group: group, runId: activation.runId, conversation_id: activation.message?.id ?? null });
   }
   async function sendControl(row, live, startup = false) {
-    if (deps.canAttemptDelivery?.(row, 'control') === false) return { claimed: false, blocked: true };
+    // Wakes and follow-up deliveries can run between deadline sweeps.
+    if ((row.ack_deadline_at != null && row.ack_deadline_at < Math.floor(now() / 1000)) ||
+        deps.canAttemptDelivery?.(row, 'control') === false) return { claimed: false, blocked: true };
     if (!deps.db.claimControl(row.id)) {
       if (startup && deps.db.getControlById(row.id)?.status === 'pending') releaseActivation('fenced_during_launch');
       return { claimed: false, blocked: true };
     }
     const result = await deps.deliverControl(row, live);
     if (startup && result?.blocked) releaseActivation('activation_released');
-    return { claimed: true, blocked: result?.blocked ?? false };
+    return { claimed: true, blocked: result?.blocked ?? false, delivered: result?.delivered === true };
   }
   async function ready(live) {
-    await deps.maybePeriodicEnter?.(group);
-    if (stopped || state.stopped) return;
     const key = `${live.runId}\0${live.sessionId}`;
     if (startupIdentity !== key) { startupIdentity = key; startupLoaded = false; startupIds = []; }
     if (!startupLoaded) {
@@ -60,7 +60,7 @@ export function createLane(context, group) {
     // Recovery controls are already priority-zero and bypass-gated by their
     // producers. They must not wait behind a health-blocked startup prompt.
     if (control?.bypass_state && !startupIds.includes(control.id)) {
-      await sendControl(control, live); return;
+      return (await sendControl(control, live)).delivered;
     }
     const message = await nextMessage();
     while (startupIds.length) {
@@ -70,20 +70,23 @@ export function createLane(context, group) {
       if (row.session_group !== group || (row.available_at !== null && row.available_at > Math.floor(now() / 1000))) return;
       const result = await sendControl(row, live, true);
       if (result.claimed && !result.blocked) startupIds.shift();
-      return;
+      return result.delivered;
     }
-    if (control) { await sendControl(control, live); return; }
+    if (control) return (await sendControl(control, live)).delivered;
     const activation = state.activations.get(group);
     if (activation) {
       // A settled delivery failure must not replay an already-pasted trigger.
       // If its DB write threw, the row remains running for startup recovery.
       if (activation.message && deps.canAttemptDelivery?.(activation.message, 'conversation') === false) return;
-      try { if (activation.message) await deps.deliverConversation(activation.message, live); }
-      finally { state.activations.delete(group); }
+      try {
+        if (activation.message) return (await deps.deliverConversation(activation.message, live))?.delivered === true;
+      } finally { state.activations.delete(group); }
       return;
     }
     const row = message;
-    if (row && deps.canAttemptDelivery?.(row, 'conversation') !== false && deps.db.claimConversation(row.id, modeOptions)) await deps.deliverConversation(row, live);
+    if (row && deps.canAttemptDelivery?.(row, 'conversation') !== false && deps.db.claimConversation(row.id, modeOptions)) {
+      return (await deps.deliverConversation(row, live))?.delivered === true;
+    }
   }
   async function step() {
     const activation = state.activations.get(group);
@@ -101,7 +104,15 @@ export function createLane(context, group) {
         // Cached identities can pace guarded delivery while a batch is pending,
         // but cannot clear a newer restart marker. Activation pins its run.
         if (activation) context.clearContinuation(group, live);
-        return ready(live);
+        await deps.maybePeriodicEnter?.(group);
+        // A blocked or unsuccessful attempt always goes back to normal polling.
+        // Check the observed identity again before taking another item.
+        while (!stopped && !state.stopped) {
+          const current = state.live.get(group);
+          if (!current?.present || !current.ready || current.runId !== live.runId || current.sessionId !== live.sessionId) break;
+          if (!await ready(current)) break;
+        }
+        return;
       }
       if (activation) return;
       return context.handleUnowned(group, live);
