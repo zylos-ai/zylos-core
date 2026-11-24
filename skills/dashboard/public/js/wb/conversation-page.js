@@ -570,6 +570,114 @@ export function mountConversationPage({
     }
   };
   menuSheet.addEventListener('keydown', menuKeydown);
+  const rowMenuScrim = node('button', undefined, 'conversation-row-menu-scrim');
+  rowMenuScrim.type = 'button';
+  rowMenuScrim.tabIndex = -1;
+  rowMenuScrim.hidden = true;
+  rowMenuScrim.addEventListener('click', () => closeRowMenu());
+  const rowMenu = node('section', undefined, 'conversation-row-menu');
+  rowMenu.hidden = true;
+  rowMenu.tabIndex = -1;
+  const rowMenuGrab = node('div', undefined, 'conversation-menu-grab');
+  const rowPin = action('chat.page.pin', () => {
+    const id = menuRow.id;
+    closeRowMenu();
+    return state.togglePin(id);
+  }, 'pin', 'conversation-menu-item');
+  const rowDelete = action('chat.page.rowDelete', () => {
+    const item = deletableItem(currentSnapshot, menuRow.id);
+    closeRowMenu();
+    if (item) return removeConversation(item);
+  }, 'trash', 'conversation-menu-item conversation-menu-delete');
+  const rowMenuButtons = () => [rowPin, rowDelete].filter(button => !button.hidden && !button.disabled);
+  rowMenu.append(rowMenuGrab, rowPin, rowDelete);
+  page.append(rowMenuScrim, rowMenu);
+  let menuRow = null;
+  function closeOutsideRowMenu(event) {
+    if (!rowMenu.contains(event.target) && !menuRow?.menuToggle.contains(event.target)) closeRowMenu();
+  }
+  function closeRowMenu(focus = true) {
+    if (!menuRow) return;
+    const { menuToggle } = menuRow;
+    menuRow = null;
+    rowMenu.hidden = rowMenuScrim.hidden = true;
+    menuToggle.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('click', closeOutsideRowMenu, true);
+    if (focus) menuToggle.focus({ preventScroll: true });
+  }
+  function updateRowMenu(row) {
+    rowPin.hidden = !row.canPin;
+    rowPin.disabled = currentSnapshot.savingPins;
+    const pinLabel = t(row.isPinned ? 'chat.page.unpin' : 'chat.page.pin');
+    text(rowPin.label, pinLabel);
+    rowPin.setAttribute('aria-label', pinLabel);
+    rowDelete.hidden = row.remove.hidden || !row.notice.hidden;
+    rowDelete.disabled = row.remove.disabled;
+    rowMenu.setAttribute('aria-label', row.menuToggle.getAttribute('aria-label'));
+    rowMenuScrim.setAttribute('aria-label', t('chat.page.cancel'));
+  }
+  function openRowMenu(row) {
+    if (menuRow === row) {
+      closeRowMenu();
+      return;
+    }
+    closeRowMenu(false);
+    swipe.close();
+    const mobile = view?.innerWidth <= 760;
+    menuRow = row;
+    updateRowMenu(row);
+    row.menuToggle.setAttribute('aria-expanded', 'true');
+    rowMenu.setAttribute('role', mobile ? 'dialog' : 'menu');
+    if (mobile) rowMenu.setAttribute('aria-modal', 'true');
+    else rowMenu.removeAttribute('aria-modal');
+    for (const button of [rowPin, rowDelete]) {
+      if (mobile) button.removeAttribute('role');
+      else button.setAttribute('role', 'menuitem');
+    }
+    rowMenu.hidden = false;
+    rowMenuGrab.hidden = rowMenuScrim.hidden = !mobile;
+    if (mobile) {
+      rowMenu.style.removeProperty('left');
+      rowMenu.style.removeProperty('top');
+    } else {
+      const anchor = row.menuToggle.getBoundingClientRect();
+      const { width, height } = rowMenu.getBoundingClientRect();
+      rowMenu.style.left = Math.max(4, anchor.right - width) + 'px';
+      const below = anchor.bottom + 4;
+      rowMenu.style.top = (below + height <= view.innerHeight ? below : Math.max(4, anchor.top - height - 4)) + 'px';
+      document.addEventListener('click', closeOutsideRowMenu, true);
+    }
+    (rowMenuButtons()[0] ?? rowMenu).focus({ preventScroll: true });
+  }
+  rowMenu.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeRowMenu();
+      return;
+    }
+    const buttons = rowMenuButtons();
+    const index = buttons.indexOf(document.activeElement);
+    const mobile = !rowMenuScrim.hidden;
+    if (event.key === 'Tab' && !mobile) {
+      closeRowMenu();
+    } else if (event.key === 'Tab' || ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      const backward = event.key === 'ArrowUp' || event.key === 'Tab' && event.shiftKey;
+      const last = buttons.length - 1;
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? last
+        : backward ? (index <= 0 ? last : index - 1) : (index >= last ? 0 : index + 1);
+      (buttons[next] ?? rowMenu).focus();
+    }
+  });
+  const dismissRowMenu = () => closeRowMenu();
+  list.addEventListener('scroll', dismissRowMenu);
+  function resizeRowMenu() {
+    closeRowMenu();
+    for (const row of listRows.values()) {
+      row.menuToggle.setAttribute('aria-haspopup', view.innerWidth <= 760 ? 'dialog' : 'menu');
+    }
+  }
+  view?.addEventListener('resize', resizeRowMenu);
   // The group's detail opens beside the conversation (over it on narrow screens), never on the overview.
   let groupSideFor = null;
   const groupSide = groupLinks ? createGroupSide({ document, t, fetch: fetcher, endpoint, identity: () => typeof identity === 'function' ? identity() : identity,
@@ -729,17 +837,17 @@ export function mountConversationPage({
     const focusFree = !document.activeElement || document.activeElement === document.body || document.activeElement === input;
     if (refocus && focusFree && !destroyed && selectedKey === selected && !input.disabled) input.focus();
   }
-  // A listed conversation this local page may delete.
+  const canDeleteItem = (s, item) => s?.canDelete && s.tab === 'mine' && local() && !!deletionPath(item);
   function deletableItem(s, id) {
-    if (!s?.canDelete || !local() || !id) return null;
-    const item = s.items.find(row => row.id === id);
-    return item && deletionPath(item) ? item : null;
+    const item = s?.items.find(row => row.id === id);
+    return canDeleteItem(s, item) ? item : null;
   }
   function removeConversation(item) {
     swipe.close();
     return deletion.remove(item);
   }
   function mobileDetail(open) {
+    closeRowMenu(false);
     page.classList.toggle('conversation-detail-open', open);
     if (!open) quickConfig?.close();
     closeConversationMenu(false);
@@ -1401,14 +1509,10 @@ export function mountConversationPage({
     scheduleFit();
   }
   function bindPin(button, id) {
-    let pointer = null, suppressClick = false;
-    button.addEventListener('click', () => {
-      if (!suppressClick) void state.togglePin(id);
-      suppressClick = false;
-    });
+    let pointer = null;
     button.addEventListener('pointerdown', event => {
-      suppressClick = false;
       if (event.button !== 0 || !button.parentNode.dataset.pinId || button.disabled) return;
+      event.stopPropagation();
       pointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
       button.setPointerCapture?.(event.pointerId);
     });
@@ -1416,8 +1520,7 @@ export function mountConversationPage({
       if (pointer?.id !== event.pointerId) return;
       const distance = Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y);
       pointer = null;
-      if (distance < 6) return;
-      suppressClick = true;
+      if (distance < 6 || !button.parentNode.dataset.pinId) return;
       const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-pin-id]');
       if (target?.dataset.pinId && target.dataset.pinId !== id) void state.reorderPin(id, target.dataset.pinId);
     });
@@ -1649,6 +1752,7 @@ export function mountConversationPage({
     text(unreadDivider, t('chat.page.unreadDivider'));
     if (s.blocked) {
       closeCopyMenu();
+      closeRowMenu(false);
       leaveTextSelection();
       annotations.hide();
       uploadTray.clear();
@@ -1677,6 +1781,7 @@ export function mountConversationPage({
       closeCopyMenu();
       leaveTextSelection();
       closeConversationMenu(false);
+      closeRowMenu(false);
       selectedKey = key;
       cancelReadTimer();
       attemptedRead = 0;
@@ -1750,17 +1855,28 @@ export function mountConversationPage({
         pin.dataset.action = 'pin';
         pin.append(icon(document, 'pin'));
         bindPin(pin, item.id);
-        const remove = action('chat.delete.button', () => removeConversation(item), 'trash', 'wb-icon-btn conversation-delete');
+        const rowToggle = node('button', undefined, 'wb-icon-btn conversation-row-menu-toggle');
+        rowToggle.type = 'button';
+        rowToggle.append(icon(document, 'more'));
+        rowToggle.setAttribute('aria-expanded', 'false');
+        rowToggle.addEventListener('pointerdown', event => event.stopPropagation());
+        rowToggle.addEventListener('click', event => {
+          if (!swipe.consumeTap(wrapper, event)) openRowMenu(row);
+        });
+        const remove = action('chat.delete.button', () => {
+          const target = deletableItem(currentSnapshot, item.id);
+          if (target) return removeConversation(target);
+        }, 'trash', 'wb-icon-btn conversation-delete');
         // The phone's revealed button reads the short word; its accessible name stays the full action.
         const short = node('span', t('chat.delete.short'), 'conversation-delete-short');
         short.setAttribute('aria-hidden', 'true');
         remove.append(short);
         const notice = node('span', undefined, 'conversation-delete-status');
         notice.setAttribute('role', 'status');
-        wrapper.append(button, pin, remove, notice);
+        wrapper.append(button, pin, rowToggle, remove, notice);
         swipe.attach(wrapper);
         row = {
-          wrapper, remove, short, notice, pin, unreadDot,
+          id: item.id, wrapper, remove, short, notice, pin, unreadDot, menuToggle: rowToggle,
           button,
           name,
           channel,
@@ -1777,7 +1893,7 @@ export function mountConversationPage({
         ? deletionState.state : null;
       if (shownState) row.wrapper.dataset.deletionState = shownState;
       else delete row.wrapper.dataset.deletionState;
-      row.remove.hidden = !s.canDelete || !local() || !deletionPath(item);
+      row.remove.hidden = !canDeleteItem(s, item);
       row.remove.disabled = deletionState?.busy === true;
       const deletionLabel = deletionState?.state === 'pending' || deletionState?.state === 'error' ? 'chat.delete.retry' : 'chat.delete.button';
       text(row.remove.label, t(deletionLabel));
@@ -1795,12 +1911,17 @@ export function mountConversationPage({
       row.button.dataset.origin = String(origin);
       row.pinned.hidden = !origin;
       text(row.pinned, t('chat.page.pinned'));
-      row.pin.hidden = origin || item.id.startsWith('d:');
+      row.canPin = !origin && !item.id.startsWith('d:');
+      row.isPinned = pinned;
+      row.menuToggle.hidden = !row.canPin && (row.remove.hidden || !!shownState);
+      row.menuToggle.setAttribute('aria-haspopup', view?.innerWidth <= 760 ? 'dialog' : 'menu');
+      row.menuToggle.setAttribute('aria-label', t('chat.page.rowMenu', { name: nameOf(item) }));
+      row.pin.hidden = !row.canPin || !pinned;
+      row.pin.tabIndex = s.search ? -1 : 0;
       row.pin.disabled = s.savingPins;
-      row.pin.setAttribute('aria-pressed', String(pinned));
       row.pin.setAttribute('aria-label', t('chat.page.pinned') + ': ' + nameOf(item));
       row.pin.title = t('chat.page.pinned');
-      if (pinned && !s.search) row.wrapper.dataset.pinId = item.id;
+      if (!row.pin.hidden && !s.search) row.wrapper.dataset.pinId = item.id;
       else delete row.wrapper.dataset.pinId;
       row.unreadDot.hidden = s.tab !== 'mine' || item.unread !== true;
       const preview = item.preview || t(item.draft ? 'chat.page.blankPreview' : 'chat.page.noMessages');
@@ -1824,11 +1945,18 @@ export function mountConversationPage({
     }
     for (const [id, row] of listRows) {
       if (!live.has(id)) {
+        if (menuRow === row) closeRowMenu(false);
         row.wrapper.remove();
         listRows.delete(id);
       }
     }
+    const focusedRowToggle = document.activeElement?.closest?.('.conversation-row-menu-toggle');
     positionChildren(list, ordered);
+    if (focusedRowToggle?.isConnected && document.activeElement !== focusedRowToggle) {
+      focusedRowToggle.focus({ preventScroll: true });
+    }
+    if (menuRow?.menuToggle.hidden) closeRowMenu(false);
+    else if (menuRow) updateRowMenu(menuRow);
     newConversations.hidden = !s.listUpdates;
     text(newConversations.label, countLabel(t, 'chat.page.newConversations', s.listUpdates, {}).replace('{count}', String(s.listUpdates)));
     newConversations.setAttribute('aria-label', newConversations.label.textContent);
@@ -2061,6 +2189,7 @@ export function mountConversationPage({
     },
     close() {
       closeCopyMenu();
+      closeRowMenu(false);
       leaveTextSelection();
       autoSelectPending = false;
       opened = false;
@@ -2079,6 +2208,8 @@ export function mountConversationPage({
     clearDrafts(scope) { uploadTray.clearForAuthentication(scope?.instance ? { instance: scope.instance } : undefined); state.clearDrafts(scope); },
     destroy() {
       closeCopyMenu();
+      closeRowMenu(false);
+      view?.removeEventListener('resize', resizeRowMenu);
       leaveTextSelection();
       closeConversationMenu(false);
       document.documentElement.dataset.conversationFocus = 'false';

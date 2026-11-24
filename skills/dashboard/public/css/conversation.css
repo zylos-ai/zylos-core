@@ -1055,11 +1055,30 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .conversation-delete span { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 .conversation-delete-status { flex-basis:100%; padding:0 9px 7px; font-size:11px; line-height:1.5; color:var(--text-dim); overflow-wrap:anywhere; }
 .conversation-delete-short { display:none; }
-/* Desktop: the trash shows on the hovered or keyboard-focused row; a row showing a deletion status keeps its button shown. */
-@media (min-width:761px) and (hover:hover) {
-  .conversation-list-row:not([data-deletion-state]) .conversation-delete:not(:focus-visible) { opacity:0; }
-  .conversation-list-row:hover .conversation-delete:not(:focus-visible) { opacity:1; }
-  .conversation-list-row:has(:focus-visible) .conversation-delete:not(:focus-visible) { opacity:1; }
+/* Desktop rows reserve the menu slot so names do not shift on hover or focus. */
+@media (width > 760px) {
+  .conversation-list-row:not([data-deletion-state]) .conversation-delete { display:none; }
+  .conversation-row-menu-toggle:not(:focus-visible) { opacity:0; pointer-events:none; }
+  .conversation-list-row:is(:hover,:focus-within) .conversation-row-menu-toggle,
+  .conversation-row-menu-toggle[aria-expanded=true] { opacity:1; pointer-events:auto; }
+  .conversation-page .conversation-row-menu {
+    position:fixed;
+    z-index:61;
+    min-width:148px;
+    padding:4px;
+    border:1px solid var(--wb-line-strong);
+    border-radius:var(--wb-r);
+    background:var(--wb-panel);
+    box-shadow:var(--wb-shadow);
+  }
+  .conversation-page .conversation-row-menu .conversation-menu-item {
+    min-height:var(--wb-control-regular);
+    padding:0 8px;
+    gap:8px;
+    border-radius:var(--wb-r);
+    font-size:13px;
+  }
+  .conversation-page .conversation-row-menu .conversation-menu-item > .wb-ico { width:16px; height:16px; }
 }
 /* Phone: a leftward swipe slides the row over to reveal its delete button (see conversation-swipe.js). */
 @media (max-width:760px) {
@@ -1069,6 +1088,7 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
   .conversation-page .conversation-list-row .conversation-list-item { position:relative; z-index:1; transition:transform .18s ease; }
   .conversation-page .conversation-list-row:is(.conversation-swiping,.conversation-swipe-open) { overflow:hidden; border-radius:10px; }
   .conversation-page :is(.conversation-swiping,.conversation-swipe-open) .conversation-list-item:not(.selected) { background:var(--wb-side); }
+  .conversation-page :is(.conversation-swiping,.conversation-swipe-open) :is(.conversation-pin-action,.conversation-row-menu-toggle) { visibility:hidden; }
   .conversation-page .conversation-swiping .conversation-list-item { transform:translateX(var(--conversation-swipe-offset,0)); transition:none; }
   .conversation-page .conversation-swipe-open .conversation-list-item { transform:translateX(-88px); }
   .conversation-page .conversation-list-row:not([data-deletion-state]) .conversation-delete {
@@ -1917,6 +1937,14 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .conversation-header .wi-ind.conversation-restricted { color:var(--wb-wait) }
 .conversation-header .wi-ind.conversation-waiting { color:var(--text-muted) }
 
+.conversation-menu-item { display:flex; align-items:center; gap:14px; width:100%; min-height:52px; padding:0 20px; border:0; background:transparent; color:var(--text); font:inherit; font-size:15px; text-align:left; cursor:pointer; }
+.conversation-menu-item:hover { background:var(--wb-hover); }
+.conversation-menu-item:focus-visible { outline:2px solid var(--wb-accent-line); outline-offset:-2px; }
+.conversation-menu-item>.wb-ico { width:20px; height:20px; flex:none; color:var(--text-dim); }
+.conversation-row-menu .conversation-menu-item:disabled { opacity:.38; cursor:default; }
+.conversation-row-menu .conversation-menu-delete,
+.conversation-row-menu .conversation-menu-delete>.wb-ico { color:var(--wb-err); }
+
 /* Mobile conversation chrome retains its own header, list and composer layout. */
 .conversation-page .conversation-menu-toggle,
 .conversation-mobile-label,
@@ -2041,17 +2069,13 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
     border-radius:16px 16px 0 0
   }
 
-  .conversation-page .conversation-menu-scrim { display:block; position:fixed; inset:0; z-index:60; width:100%; height:100%; margin:0; padding:0; border:0; border-radius:0; background:var(--wb-scrim); }
-  .conversation-page .conversation-menu-sheet { display:block; position:fixed; inset:auto 0 0; z-index:61; max-height:min(85dvh, calc(100dvh - env(safe-area-inset-top))); overflow:auto; padding:6px 0 calc(12px + env(safe-area-inset-bottom)); border-radius:16px 16px 0 0; background:var(--wb-panel); box-shadow:var(--wb-shadow); outline:0; }
+  .conversation-page :is(.conversation-menu-scrim,.conversation-row-menu-scrim) { display:block; position:fixed; inset:0; z-index:60; width:100%; height:100%; margin:0; padding:0; border:0; border-radius:0; background:var(--wb-scrim); }
+  .conversation-page :is(.conversation-menu-sheet,.conversation-row-menu) { display:block; position:fixed; inset:auto 0 0; z-index:61; max-height:min(85dvh, calc(100dvh - env(safe-area-inset-top))); overflow:auto; padding:6px 0 calc(12px + env(safe-area-inset-bottom)); border-radius:16px 16px 0 0; background:var(--wb-panel); box-shadow:var(--wb-shadow); outline:0; }
   .conversation-menu-grab { width:36px; height:4px; margin:4px auto 8px; border-radius:2px; background:var(--wb-line-strong); }
   .conversation-menu-info { display:flex; align-items:center; gap:14px; padding:10px 20px; color:var(--text-dim); font-size:13px; line-height:1.5; }
   .conversation-menu-info>.wb-ico { flex:none; width:20px; height:20px; }
   .conversation-menu-info>span { min-width:0; overflow-wrap:anywhere; }
   .conversation-menu-divider { height:1px; margin:6px 0; background:var(--wb-line); }
-  .conversation-menu-item { display:flex; align-items:center; gap:14px; width:100%; min-height:52px; padding:0 20px; border:0; background:transparent; color:var(--text); font:inherit; font-size:15px; text-align:left; cursor:pointer; }
-  .conversation-menu-item:hover { background:var(--wb-hover); }
-  .conversation-menu-item:focus-visible { outline:2px solid var(--wb-accent-line); outline-offset:-2px; }
-  .conversation-menu-item>.wb-ico { width:20px; height:20px; flex:none; color:var(--text-dim); }
   .conversation-menu-copy { display:flex; flex-direction:column; gap:2px; min-width:0; }
   .conversation-menu-summary { font-size:12px; line-height:1.5; color:var(--text-muted); }
   .conversation-menu-item>.conversation-menu-chevron { width:16px; height:16px; margin-left:auto; }
@@ -2109,12 +2133,14 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   border-radius:50%;
   background:var(--accent);
 }
-.conversation-page .conversation-pin-action {
+.conversation-page :is(.conversation-pin-action,.conversation-row-menu-toggle) {
   flex:none;
   width:var(--wb-control-regular);
   height:var(--wb-control-regular);
 }
-.conversation-page .conversation-pin-action[aria-pressed=true] { color:var(--accent); }
+.conversation-page .conversation-pin-action { color:var(--accent); cursor:default; }
+.conversation-page .conversation-pin-action:hover:not(:disabled) { color:var(--accent); }
+.conversation-page .conversation-pin-action > .wb-ico { width:14px; height:14px; }
 .conversation-list-row[data-pin-id] .conversation-pin-action {
   touch-action:none;
   cursor:grab;
@@ -2139,5 +2165,5 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .conversation-new-messages > .wb-ico { transform:rotate(90deg); }
 @media (max-width:760px) {
   .conversation-page .conversation-search { font-size:16px; }
-  .conversation-page .conversation-pin-action { width:36px; height:36px; }
+  .conversation-page :is(.conversation-pin-action,.conversation-row-menu-toggle) { width:var(--wb-control-touch); height:var(--wb-control-touch); }
 }
