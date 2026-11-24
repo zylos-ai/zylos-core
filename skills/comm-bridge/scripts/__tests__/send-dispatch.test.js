@@ -24,6 +24,7 @@ function setup(t) {
     fs.copyFileSync(path.join(scripts, file), path.join(installed, 'scripts', file));
   }
   fs.copyFileSync(path.join(scripts, 'router/core-modules.js'), path.join(installed, 'scripts/router/core-modules.js'));
+  fs.copyFileSync(path.join(scripts, 'router/wake-socket.js'), path.join(installed, 'scripts/router/wake-socket.js'));
   return { dir, installed, cli: path.join(installed, 'scripts/c4-send.js'),
     env: { HOME: path.join(dir, 'home'), ZYLOS_DIR: dir, PM2_HOME: path.join(dir, 'pm2'),
       TMPDIR: path.join(dir, 'tmp'), TMUX_TMPDIR: path.join(dir, 'tmp'), PATH: path.join(dir, 'bin'),

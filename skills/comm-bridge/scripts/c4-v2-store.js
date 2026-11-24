@@ -10,6 +10,7 @@ import { transitionFunctions } from './c4-store-transition.js';
 import { createTargetBindingBuilder } from './c4-target-binding.js';
 import { hostFunctions } from './c4-store-host.js';
 import { fixedAddressSessionGroup } from './c4-fixed-address.js';
+import { notifyQueued } from './router/wake-socket.js';
 
 // Dependencies are private implementation inputs, never business API options.
 export function createStore(database, dependencies = {}) {
@@ -26,6 +27,9 @@ export function createStore(database, dependencies = {}) {
       throw error;
     }
   }
+  const notify = dependencies.notifyQueued ?? notifyQueued;
+  let queuedGroups;
+  const queued = group => (queuedGroups ??= new Set()).add(group);
   function transaction(operation, write = true) {
     const c = connection();
     try { c.exec(write ? 'BEGIN IMMEDIATE' : 'BEGIN'); }
@@ -34,10 +38,11 @@ export function createStore(database, dependencies = {}) {
       if (write) throw dataError('DB_WRITE_FAILED', error.message, { cause: error });
       throw error;
     }
+    let result, committedGroups;
     try {
-      const result = operation(c);
+      result = operation(c);
       c.exec('COMMIT');
-      return result;
+      committedGroups = queuedGroups;
     } catch (error) {
       try { c.exec('ROLLBACK'); }
       catch (rollbackError) {
@@ -49,7 +54,14 @@ export function createStore(database, dependencies = {}) {
       if (error.code?.startsWith('SQLITE_BUSY')) throw dataError('DB_BUSY', error.message, { cause: error });
       if (!write) throw error;
       throw dataError('DB_WRITE_FAILED', error.message, { cause: error });
+    } finally {
+      queuedGroups = undefined;
     }
+    for (const group of committedGroups ?? []) {
+      // The notification is outside the transaction and cannot change its result.
+      try { Promise.resolve(notify(group)).catch(() => {}); } catch {}
+    }
+    return result;
   }
   const write = operation => transaction(operation);
   const snapshot = operation => transaction(operation, false);
@@ -116,10 +128,12 @@ export function createStore(database, dependencies = {}) {
     run(c, 'INSERT INTO group_heads(session_group,head_id) VALUES(?,?) ON CONFLICT(session_group) DO UPDATE SET head_id=max(head_id,excluded.head_id)', group, id);
   }
   function insert(c, direction, channel, endpointId, content, group, options = {}) {
+    const status = options.status ?? (direction === 'in' ? 'pending' : 'delivered');
     const result = run(c, `INSERT INTO conversations(direction,channel,endpoint_id,content,status,delivery_action,priority,require_idle,session_group,session_id)
-      VALUES(?,?,?,?,?,?,?,?,?,?)`, direction, channel, endpointId ?? null, content, options.status ?? (direction === 'in' ? 'pending' : 'delivered'), options.deliveryAction ?? null, options.priority ?? 3, options.requireIdle ? 1 : 0, group, direction === 'out' ? options.sessionId ?? null : null);
+      VALUES(?,?,?,?,?,?,?,?,?,?)`, direction, channel, endpointId ?? null, content, status, options.deliveryAction ?? null, options.priority ?? 3, options.requireIdle ? 1 : 0, group, direction === 'out' ? options.sessionId ?? null : null);
     const id = Number(result.lastInsertRowid);
     advanceHead(c, group, id);
+    if (direction === 'in' && status === 'pending') queued(group);
     return get(c, 'SELECT * FROM conversations WHERE id=?', id);
   }
   const hosting = hostFunctions({
@@ -174,7 +188,7 @@ export function createStore(database, dependencies = {}) {
   const config = configFunctions(context);
   const progress = progressFunctions(context);
   const transitions = transitionFunctions(context);
-  Object.assign(api, deletionFunctions(context), deliveryFunctions(context), config.api, progress.api, controlFunctions({ ...context, baseline: config.baseline }), transitions.api);
+  Object.assign(api, deletionFunctions(context), deliveryFunctions(context), config.api, progress.api, controlFunctions({ ...context, baseline: config.baseline, queued }), transitions.api);
   api.buildTargetBinding = createTargetBindingBuilder({ ...context, baseline: config.baseline, resolveTarget: dependencies.resolveTarget });
   function listGroups({ match, limit, activeSince, keyMatch, raw } = {}) {
     if (match !== undefined && typeof match !== 'string') throw dataError('INVALID_ARGS', 'match must be a string');

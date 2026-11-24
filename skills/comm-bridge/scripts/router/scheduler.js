@@ -34,6 +34,8 @@ export function createRouter(dependencies, configuration = {}) {
   const tasks = new Set();
   const opportunities = new Set();
   const attemptedRound = new Map();
+  const wakeGroups = new Set();
+  let wakeBatch;
   let sceneTask = null, legacyTask = null, maintenanceTask = null, timer = null, initialization = null;
   let lastCleanup = -Infinity, lastDiagnostics = -Infinity, lastMismatch = -Infinity;
   let directoryFailed = false;
@@ -182,6 +184,24 @@ export function createRouter(dependencies, configuration = {}) {
     if (!state.lanes.has(group)) state.lanes.set(group, createLane(context, group));
     return state.lanes.get(group);
   }
+  function wake(group) {
+    if (!state.ready || state.inert || state.stopped || (state.mode === 'single' && !state.keyPresent)) return;
+    wakeGroups.add(state.mode === 'single' ? 'origin' : group);
+    wakeBatch ??= setImmediate(() => {
+      wakeBatch = undefined;
+      try {
+        if (!directoryAvailable()) return;
+        for (const group of wakeGroups) {
+          const live = state.live.get(group);
+          if (!live?.present || !live.ready || !live.runId || state.activations.has(group)) continue;
+          const current = lane(group);
+          if (!current.working) track(current.kick());
+        }
+      } catch (error) {
+        diagnostic('scheduler_error', { reason: error.code ?? error.message });
+      } finally { wakeGroups.clear(); }
+    });
+  }
   function adoptReadySlots() {
     if (!state.sceneObservable) return;
     for (const group of state.listed) {
@@ -261,11 +281,12 @@ export function createRouter(dependencies, configuration = {}) {
   }
   async function stop() {
     state.stopped = true; clearInterval(timer); timer = null;
+    clearImmediate(wakeBatch); wakeGroups.clear();
     context.capacityWaits.stop();
     for (const current of state.lanes.values()) current.stop();
     await Promise.allSettled([...tasks]);
   }
-  return { initialize, start, tick, stop, state, availableCapacity: context.availableCapacity,
+  return { initialize, start, tick, wake, stop, state, availableCapacity: context.availableCapacity,
     // Wait for the current round only; follow-up lanes may wait on external I/O.
     async idle() { await Promise.allSettled([...tasks]); } };
 }

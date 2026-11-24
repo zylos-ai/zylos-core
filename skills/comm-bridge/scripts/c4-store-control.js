@@ -1,7 +1,7 @@
 import { dataError, requireGroup, parseSessionGroup } from './c4-session-group.js';
 import { normalizeTargetBinding } from './c4-target-binding.js';
 import { fileURLToPath } from 'node:url';
-export function controlFunctions({ read, write, get, all, run, seconds, baseline }) {
+export function controlFunctions({ read, write, get, all, run, seconds, baseline, queued }) {
   const fenceColumns = 'session_group AS sessionGroup,reason,run_id AS runId,created_at AS createdAt';
   const unfenced = "NOT EXISTS(SELECT 1 FROM drain_fences WHERE session_group=control_queue.session_group OR session_group='*')";
   function target(value, { allowKeepOrigin = false } = {}) {
@@ -47,6 +47,10 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     const superseded = run(c, "UPDATE control_queue SET status='superseded',updated_at=?,last_error=NULL WHERE status='pending' AND raw_content=? AND session_group IS ? AND target_binding IS ?", current, content, sessionGroup, binding).changes;
     const id = Number(run(c, `INSERT INTO control_queue(raw_content,content,priority,require_idle,bypass_state,ack_deadline_at,status,retry_count,available_at,last_error,created_at,updated_at,session_group,target_binding) VALUES(?,?,?,?,?,?,'pending',0,?,NULL,?,?,?,?)`, content, content, priority, requireIdle ? 1 : 0, bypassState ? 1 : 0, ackDeadlineAt, availableAt, current, current, sessionGroup, binding).lastInsertRowid);
     if (appendAckSuffix) run(c, 'UPDATE control_queue SET content=? WHERE id=?', `${content} ---- ack via: node ${fileURLToPath(new URL('./c4-control.js', import.meta.url))} ack --id ${id}`, id);
+    if (sessionGroup !== null) {
+      const queuedAt = seconds();
+      if ((availableAt === null || availableAt <= queuedAt) && (ackDeadlineAt === null || ackDeadlineAt >= queuedAt)) queued(sessionGroup);
+    }
     return { ...get(c, 'SELECT * FROM control_queue WHERE id=?', id), superseded_count: superseded };
   }
   function clear(c, group, { expectedReason, expectedRunId } = {}, conditional = false) {

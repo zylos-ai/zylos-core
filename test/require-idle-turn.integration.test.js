@@ -234,8 +234,6 @@ for (const runtime of ['claude', 'codex']) test(`${runtime} queued inactivity Es
   await running;
   const persisted = f.database.prepare('SELECT status FROM conversations WHERE id=?').get(message.id);
   assert.equal(persisted.status, 'delivered');
-  assert.equal(f.escapeRows()[0].status, 'pending');
-  await lane.kick();
   assert.equal(f.escapeRows()[0].status, 'done');
   assert.deepEqual(f.calls.filter(value => value[0] !== 'log'), [['paste-start', 'keep this message'], ['paste-end', 'keep this message'], ['key', 'Enter'], ['key', 'Escape']]);
   await lane.kick(); await f.interrupt();
