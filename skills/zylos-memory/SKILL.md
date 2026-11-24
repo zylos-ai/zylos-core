@@ -81,8 +81,9 @@ findings, unmentioned actions and pitfalls). Capture these as they arise using
 
 For Codex and Antigravity, include the inherited bindings only as values in the
 worker instructions and never ask the worker to check or verify them, including
-with shell commands. For Group Sync, `sync-run.js start` validates the bindings
-and reports `SCOPE_UNBOUND` if a required binding is missing.
+with shell commands. The token acquisition step validates the bindings and reports
+`SCOPE_UNBOUND` if a required binding is missing (`sync-run.js start` for Group
+Sync and `sync-lock.js acquire` for Origin and global Sync).
 
 Select the job named in the control prompt, then check the inherited environment:
 
