@@ -199,6 +199,8 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     query = '', backlogQuery = '', backlogTimer = null, loadingMore = false, searchTimer = null,
     pickerQuery = '', pickerOpen = false, pickerTimer = null;
   let expanded = new Set();
+  // Which memory cards are open: held only in this page, so a reload folds both again.
+  const openCards = { backlog: false, budgets: false };
   const entries = createMemoryEntries({ request, onChange: () => { if (!stopped) onChange(); } });
   const search = element(document, 'input');
   search.type = 'search';
@@ -531,12 +533,22 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     if (waiting) summaryRoot.append(element(document, 'span', countLabel(t, 'wb.memory.summaryWaiting', waiting)));
     summaryRoot.append(element(document, 'span', t('wb.memory.summaryTech'), 'wb-sub'));
   }
-  function chartCard(className, iconName, title, hint) {
+  // A card starts folded to its title line on every page load and keeps its state while the page stays open; the
+  // whole title line opens and closes it, and the card's content goes in the returned body.
+  function chartCard(className, iconName, title, hint, key) {
     const card = element(document, 'section', undefined, className + ' wb-memory-card');
     const head = element(document, 'h3');
-    head.append(icon(document, iconName, 'xs'), element(document, 'span', title), element(document, 'small', hint));
-    card.append(head);
-    return card;
+    const body = element(document, 'div', undefined, 'wb-memory-card-body');
+    const toggle = button(head, undefined, () => {
+      openCards[key] = !openCards[key];
+      toggle.setAttribute('aria-expanded', String(openCards[key])); body.hidden = !openCards[key];
+    }, 'wb-memory-card-h');
+    toggle.setAttribute('aria-expanded', String(openCards[key]));
+    toggle.append(icon(document, 'chev', 'xs'), icon(document, iconName, 'xs'), element(document, 'span', title), element(document, 'small', hint));
+    body.hidden = !openCards[key];
+    card.append(head, body);
+    chartsRoot.append(card);
+    return body;
   }
   // `cross` is the machine-wide Origin Sync backlog: not a group of its own, so its name selects nothing.
   function backlogItem(row, cross = false) {
@@ -617,7 +629,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     const hint = origin == null
       ? (view.threshold == null ? t('wb.memory.backlogHint') : t('wb.memory.thresholdHint', { count: view.threshold }))
       : (view.threshold == null ? t('wb.memory.backlogHintOrigin', { origin }) : t('wb.memory.thresholdHintOrigin', { count: view.threshold, origin }));
-    const progress = chartCard('wb-memory-progress', 'layers', t('wb.memory.backlog'), hint);
+    const progress = chartCard('wb-memory-progress', 'layers', t('wb.memory.backlog'), hint, 'backlog');
     if (!backlog) progress.append(element(document, 'p', t('wb.unknown')));
     else {
       const many = (backlog.summary?.groups ?? 0) >= BACKLOG_FILTER_AT || Boolean(backlogQuery);
@@ -627,8 +639,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       renderBacklogRows();
     }
     progress.append(element(document, 'p', t('wb.memory.backlogSource'), 'wb-memory-source'));
-    chartsRoot.append(progress);
-    const budgets = chartCard('wb-memory-budgets', 'book', t('wb.memory.budgets'), t('wb.memory.budgetHint'));
+    const budgets = chartCard('wb-memory-budgets', 'book', t('wb.memory.budgets'), t('wb.memory.budgetHint'), 'budgets');
     for (const row of memoryBudgetRows(entries.known().rootFiles, backlog?.budgets)) {
       const item = element(document, 'div', undefined, 'wb-memory-chart-row');
       button(item, row.path, () => onFile(row.path), 'wb-memory-chart-label');
@@ -651,7 +662,6 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       budgets.append(item);
     }
     budgets.append(element(document, 'p', t('wb.memory.budgetSource'), 'wb-memory-source'));
-    chartsRoot.append(budgets);
   }
   const backlogPath = cursor => {
     const params = new URLSearchParams({ limit: String(BACKLOG_PAGE) });

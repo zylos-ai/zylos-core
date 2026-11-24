@@ -891,11 +891,16 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-memory-summary.wb-warn > .wb-ico { color: var(--wb-wait); }
 .wb-memory-summary b { color: var(--text); font-weight: 600; }
 .wb-memory-summary > span::before { content: "·"; margin: 0 7px; color: var(--text-muted); }
-.wb-memory-charts:not([hidden]) { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 14px; padding: 12px 16px; border-bottom: 1px solid var(--wb-line); }
+.wb-memory-charts:not([hidden]) { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); align-items: start; gap: 14px; padding: 12px 16px; border-bottom: 1px solid var(--wb-line); }
 .wb-memory-card { min-width: 0; padding: 12px 14px; border: 1px solid var(--wb-line-strong); border-radius: 12px; background: var(--wb-panel); }
-.wb-memory-card h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0 0 10px; font-size: 13px; font-weight: 650; }
-.wb-memory-card h3 .wb-ico { align-self: center; color: var(--text-dim); }
-.wb-memory-card h3 small { color: var(--text-muted); font-size: 11.5px; font-weight: 450; }
+/* Each card folds to its title line; the whole line is the button that opens it. */
+.wb-memory-card h3 { margin: 0; font-size: 13px; font-weight: 650; }
+.wb-memory-card-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.wb-memory-card-h .wb-ico { align-self: center; color: var(--text-dim); }
+.wb-memory-card-h > .wb-ico:first-child { color: var(--text-muted); transition: transform .15s; }
+.wb-memory-card-h[aria-expanded="true"] > .wb-ico:first-child { transform: rotate(90deg); }
+.wb-memory-card-body { margin-top: 10px; }
+.wb-memory-card-h small { color: var(--text-muted); font-size: 11.5px; font-weight: 450; }
 .wb-memory-chart-row { display: grid; grid-template-columns: minmax(84px, 140px) minmax(60px, 1fr) auto minmax(0, max-content); align-items: center; gap: 10px; margin: 7px 0; font-size: 12.5px; }
 .wb-memory-chart-label { min-width: 0; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 .wb-memory-chart-label:hover { text-decoration: underline; text-underline-offset: 2px; }
@@ -929,7 +934,8 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-memory-bl .wb-memory-chart-value { text-align: right; }
 .wb-memory-bl-tag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 9px; background: var(--wb-off); color: var(--text-dim); font-size: 11px; line-height: 1.2; white-space: nowrap; }
 .wb-memory-bl-tag.warn { background: color-mix(in srgb, var(--wb-wait) 16%, transparent); color: var(--wb-wait); font-weight: 600; }
-.wb-memory-rows { display: grid; }
+/* The group list scrolls inside the card, about seven rows high, so the memory files below stay on screen. */
+.wb-memory-rows { display: grid; max-height: min(280px, 34vh); overflow-y: auto; overscroll-behavior: contain; }
 .wb-memory-gfilter { display: flex; width: 100%; height: var(--wb-h); margin: 0 0 6px; }
 .wb-memory-gfilter input { flex: 1; width: auto; }
 .memory-layout { grid-template-columns: 300px minmax(0, 1fr); gap: 0; flex: 1; min-height: 640px; border-top: 0; }
