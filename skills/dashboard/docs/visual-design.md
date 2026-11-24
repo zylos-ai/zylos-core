@@ -97,7 +97,7 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 |---|---|---|
 | 9 px | `--fs-micro` | Smallest chart marks and badges |
 | 10 px | `--fs-tiny` | Tick labels and compact badges such as draft and fleet link badges |
-| 10.5 px | `--fs-badge` | Chart annotations and dedicated channel, mode, and price badges |
+| 10.5 px | `--fs-badge` | Chart annotations and dedicated context, mode, and price badges |
 | 11 px | `--fs-caption` | Compact descriptions and metadata |
 | 12 px | `--fs-small` | Regular descriptions and compact controls |
 | 12.5 px | `--fs-control` | Compact controls such as filters, toolbar actions, and menu options |
