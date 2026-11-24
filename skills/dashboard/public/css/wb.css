@@ -848,7 +848,6 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 @media (max-width: 760px) {
   .wb-sched-mobile-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--wb-line); }
   .wb-sched-mobile-bar .wb-detail-tabs { margin: 0; }
-  .wb-sched-mobile-bar [role="tab"]:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
   .wb-sched-mobile-bar .wb-detail-tabs button, .wb-sched-new-mobile { height: var(--wb-control-touch); margin-bottom: 0; }
   .wb-sched-tasks { display: block; }
   .wb-sched-main[data-schedule-tab="overview"] > .wb-sched-tasks,

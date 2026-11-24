@@ -292,7 +292,6 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   const aside = element(document, 'aside', undefined, 'wb-sched-side');
   const layer = element(document, 'div', undefined, 'wb-sched-layer');
   let mounted = false, sideKey = null, sideBody = null;
-  let mobileTab;
   let timelineLabel = null;
   const mobileWidth = window?.matchMedia?.('(max-width: 760px)');
   aside.hidden = true;
@@ -786,19 +785,10 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     tabButtons.set(name, tab);
     tabs.append(tab);
   }
-  tabs.addEventListener('keydown', event => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const next = { Home: 'overview', End: 'tasks' }[event.key] ?? (mobileTab === 'overview' ? 'tasks' : 'overview');
-    setMobileTab(next);
-    tabButtons.get(next).focus();
-  });
   function setMobileTab(name) {
-    mobileTab = name;
     main.dataset.scheduleTab = name;
     for (const [key, tab] of tabButtons) {
       tab.setAttribute('aria-selected', String(key === name));
-      tab.tabIndex = key === name ? 0 : -1;
     }
     dismissTimelineLabel();
     fitAxis();
@@ -1187,7 +1177,6 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     else if (form?.handle.dirty()) return;
     else if (form) form = null;
     else if (selected) { close(); event.preventDefault?.(); return; }
-    else if (timelineLabel) { dismissTimelineLabel(); event.preventDefault?.(); return; }
     else return;
     event.preventDefault?.();
     redraw();
