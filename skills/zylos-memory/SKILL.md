@@ -79,6 +79,11 @@ installed absolute path, and relevant facts absent from C4/inbox (code
 findings, unmentioned actions and pitfalls). Capture these as they arise using
 `memory-append.js`. The worker cannot see the parent conversation.
 
+For Codex and Antigravity, include the inherited bindings only as values in the
+worker instructions and never ask the worker to check or verify them, including
+with shell commands. For Group Sync, `sync-run.js start` validates the bindings
+and reports `SCOPE_UNBOUND` if a required binding is missing.
+
 Select the job named in the control prompt, then check the inherited environment:
 
 - `group Sync` with a nonempty `ZYLOS_SESSION_GROUP` uses kind=group and
