@@ -150,11 +150,11 @@ function appendSetCookie(res, cookie) {
 
 function setSessionCookie(res, token, base, remember = false) {
   const maxAge = remember ? 30 * 86400 : 86400;
-  appendSetCookie(res, `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Strict; Path=${sessionCookiePath(base)}; Max-Age=${maxAge}`);
+  appendSetCookie(res, `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Lax; Path=${sessionCookiePath(base)}; Max-Age=${maxAge}`);
 }
 
 function clearSessionCookie(res, base) {
-  appendSetCookie(res, `${COOKIE_NAME}=; HttpOnly; Secure; SameSite=Strict; Path=${sessionCookiePath(base)}; Max-Age=0`);
+  appendSetCookie(res, `${COOKIE_NAME}=; HttpOnly; Secure; SameSite=Lax; Path=${sessionCookiePath(base)}; Max-Age=0`);
 }
 
 function retireLegacySessionCookie(req, res) {

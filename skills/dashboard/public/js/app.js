@@ -34,7 +34,7 @@ import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPa
 import { createFleetSounds } from './fleet-sounds.js';
 import { refreshDashboardState } from './state-refresh.js';
 import { formatActionResult, actionFailureMessage } from './action-result.js';
-import { runtimeName } from './wb/plain-text.js';
+import { copyText, runtimeName } from './wb/plain-text.js';
 import { countLabel } from './count-label.js';
 
 const BASE_PATH = document.documentElement.dataset.basePath || '';
@@ -2266,11 +2266,9 @@ function dashboardBaseUrl() {
 }
 
 async function copyDashboardBaseUrl() {
-  try {
-    if (!navigator.clipboard?.writeText) throw new Error('clipboard_unavailable');
-    await navigator.clipboard.writeText(dashboardBaseUrl());
+  if (await copyText(dashboardBaseUrl())) {
     fleetManageStatus(t('fleet_manage.base_url_copied'), 'success', '.api-key-copy-row');
-  } catch {
+  } else {
     fleetManageStatus(t('fleet_manage.copy_failed'), 'error', '.api-key-copy-row');
   }
 }
@@ -2394,11 +2392,9 @@ function confirmSetting(body, options) {
 async function copyCreatedApiKey() {
   const key = fleetManageModal?._createdKey?.plaintext_key || '';
   if (!key) return;
-  try {
-    if (!navigator.clipboard?.writeText) throw new Error('clipboard_unavailable');
-    await navigator.clipboard.writeText(key);
+  if (await copyText(key)) {
     fleetManageStatus(t('fleet_manage.key_copied'), 'success', '#api-key-created');
-  } catch {
+  } else {
     fleetManageStatus(t('fleet_manage.copy_failed'), 'error', '#api-key-created');
   }
 }
@@ -2939,8 +2935,7 @@ async function refreshCoreUpdate() {
 async function offerCoreUpgrade(prompt) {
   const status = settingsVersionRoot;
   if (!(await confirmSetting(prompt, { title: t('wb.settings.version.copyTitle'), ok: t('wb.settings.version.copy'), danger: false }))) return;
-  let copied = false;
-  try { await navigator.clipboard.writeText(prompt); copied = true; } catch {}
+  const copied = await copyText(prompt);
   const note = status.parentElement.querySelector('#settings-zylos-copied') ?? Object.assign(document.createElement('p'), { id: 'settings-zylos-copied', className: 'wb-note' });
   note.setAttribute('role', 'status'); note.textContent = t(copied ? 'wb.settings.version.copied' : 'wb.settings.version.copyFailed'); status.after(note);
 }
