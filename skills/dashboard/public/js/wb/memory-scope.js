@@ -166,6 +166,14 @@ export function memoryBacklogAge(firstAt, now = Date.now()) {
   return hours >= 48 ? { unit: 'days', count: Math.floor(hours / 24) } : { unit: 'hours', count: hours };
 }
 const isNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+/** How long ago Origin last finished taking in a group (`lastSyncAt`, Unix seconds): whole minutes (at least one), hours or days. */
+export function memoryLastSync(lastSyncAt, now = Date.now()) {
+  const waited = now - lastSyncAt * 1000;
+  if (!isNumber(lastSyncAt) || !Number.isFinite(waited)) return null;
+  const minutes = Math.max(1, Math.floor(waited / 60e3));
+  return minutes < 60 ? { unit: 'minutes', count: minutes } : minutes < 48 * 60
+    ? { unit: 'hours', count: Math.floor(minutes / 60) } : { unit: 'days', count: Math.floor(minutes / 1440) };
+}
 /**
  * A shared minimum width for the backlog count column when a count is shown as words ("Unknown"), so every
  * row's bar starts at the same place. Measured in `ch`, two per wide (CJK) character; the column still grows
@@ -519,9 +527,10 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     summaryRoot.replaceChildren();
     summaryRoot.hidden = detail() === 'technical' || !entries.get({ dir: '' });
     if (summaryRoot.hidden) return;
-    // Counted over every group by the server, however many rows are loaded.
-    const summary = backlog?.summary ?? null, cross = backlog?.originSync ?? null;
-    const unknown = !summary || summary.unknown > 0 || (cross != null && (cross.count == null || cross.syncing === null));
+    // With cross-group sync (multi mode) only it is judged; groups' own pending messages are not listed there.
+    // Otherwise the summary is counted over every listed group by the server, however many rows are loaded.
+    const cross = backlog?.originSync ?? null, summary = cross ? null : backlog?.summary ?? null;
+    const unknown = cross ? cross.count == null || cross.syncing === null : !summary || summary.unknown > 0;
     const late = summary?.aged > 0, crossLate = cross?.aged === true;
     const waiting = summary?.waiting ?? 0, syncing = summary?.syncing ?? 0;
     summaryRoot.className = 'wb-memory-summary' + (late || crossLate ? ' wb-warn' : '');
@@ -557,7 +566,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     const head = element(document, 'span', undefined, 'wb-memory-bl-head');
     if (cross) {
       // Static name: the label class lays it out like a group name, the modifier drops the link look.
-      const name = element(document, 'span', t('wb.memory.originSync'), 'wb-memory-chart-label wb-memory-chart-label-static');
+      const name = element(document, 'span', t('wb.memory.originPending'), 'wb-memory-chart-label wb-memory-chart-label-static');
       // A plain-words explanation with the row's actual threshold; without one, the count clause is left out.
       name.title = isNumber(row.threshold) ? t('wb.memory.originSyncHint', { count: row.threshold }) : t('wb.memory.originSyncHintNoThreshold');
       head.append(name);
@@ -592,6 +601,8 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     if (row.syncing === true) flags.append(element(document, 'span', t(cross ? 'wb.memory.originSyncing' : 'wb.memory.syncing'), 'wb-memory-bl-tag'));
     else if (row.syncing === null) flags.append(element(document, 'span', t(cross ? 'wb.memory.originSyncUnknown' : 'wb.memory.syncUnknown'), 'wb-memory-bl-tag'));
     if (cross && isNumber(row.threshold)) flags.append(element(document, 'span', t('wb.memory.originThreshold', { count: row.threshold }), 'wb-memory-bl-tag'));
+    const last = cross ? memoryLastSync(row.lastSyncAt) : null;
+    if (last) flags.append(element(document, 'span', t({ minutes: 'wb.memory.lastSyncMinutes', hours: 'wb.memory.lastSyncHours', days: 'wb.memory.lastSyncDays' }[last.unit], { count: last.count }), 'wb-memory-bl-tag'));
     if (!cross && row.ownThreshold != null) flags.append(element(document, 'span', t('wb.memory.threshold', { count: row.ownThreshold }), 'wb-memory-bl-tag'));
     if (row.reason) flags.append(element(document, 'small', row.reason, 'wb-memory-bl-tag'));
     head.append(flags);
@@ -615,8 +626,9 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     for (const row of rows) backlogRows.append(backlogItem(row));
     if (backlog?.nextCursor) moreButton(backlogRows);
     if (needle && !cross && !rows.length) backlogRows.append(element(document, 'p', t('wb.memory.noMatch'), 'wb-memory-source'));
-    // Without a search, an empty list says so rather than leaving the card blank (the cross-group row is not a group).
-    else if (!needle && !rows.length && !backlog?.nextCursor) backlogRows.append(element(document, 'p', t('wb.memory.noBacklogGroups'), 'wb-memory-source'));
+    // Without a search, an empty group list says so rather than leaving the card blank; with cross-group sync the
+    // card lists no groups at all.
+    else if (!needle && !cross && !rows.length && !backlog?.nextCursor) backlogRows.append(element(document, 'p', t('wb.memory.noBacklogGroups'), 'wb-memory-source'));
   }
   function renderCharts() {
     if (!chartsRoot || stopped) return;
@@ -626,12 +638,13 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     chartsRoot.hidden = detail() !== 'technical';
     if (chartsRoot.hidden) return;
     const view = memoryBacklogView(backlog?.groups, backlog?.summary?.threshold ?? null);
-    // Each row draws its own scale, so with the cross-group row the subtitle names both thresholds.
-    const origin = isNumber(backlog?.originSync?.threshold) ? backlog.originSync.threshold : null;
-    const hint = origin == null
-      ? (view.threshold == null ? t('wb.memory.backlogHint') : t('wb.memory.thresholdHint', { count: view.threshold }))
-      : (view.threshold == null ? t('wb.memory.backlogHintOrigin', { origin }) : t('wb.memory.thresholdHintOrigin', { count: view.threshold, origin }));
-    const progress = chartCard('wb-memory-progress', 'layers', t('wb.memory.backlog'), hint, 'backlog');
+    // Multi mode shows only cross-group sync; single mode lists Origin (the whole machine) like a group.
+    const cross = backlog?.originSync ?? null;
+    const origin = isNumber(cross?.threshold) ? cross.threshold : null;
+    const hint = cross
+      ? (origin == null ? t('wb.memory.originHintNoThreshold') : t('wb.memory.originHint', { origin }))
+      : (view.threshold == null ? t('wb.memory.backlogHint') : t('wb.memory.thresholdHint', { count: view.threshold }));
+    const progress = chartCard('wb-memory-progress', 'layers', t(cross ? 'wb.memory.originSync' : 'wb.memory.backlog'), hint, 'backlog');
     if (!backlog) progress.append(element(document, 'p', t('wb.unknown')));
     else {
       const many = (backlog.summary?.groups ?? 0) >= BACKLOG_FILTER_AT || Boolean(backlogQuery);
@@ -641,7 +654,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       renderBacklogRows();
       backlogRows.scrollTop = backlogScroll;
     }
-    progress.append(element(document, 'p', t('wb.memory.backlogSource'), 'wb-memory-source'));
+    progress.append(element(document, 'p', t(cross ? 'wb.memory.originSource' : 'wb.memory.backlogSource'), 'wb-memory-source'));
     const budgets = chartCard('wb-memory-budgets', 'book', t('wb.memory.budgets'), t('wb.memory.budgetHint'), 'budgets');
     for (const row of memoryBudgetRows(entries.known().rootFiles, backlog?.budgets)) {
       const item = element(document, 'div', undefined, 'wb-memory-chart-row');

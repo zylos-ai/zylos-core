@@ -368,7 +368,7 @@ const groupConfig = createGroupConfig({ zylosDir: config.zylosDir });
 const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, c4Reader, getSnapshot: getDetailSnapshot,
   readConfig: () => readConfigStrict(path.join(config.zylosDir, '.zylos', 'config.json')) });
 const memoryBacklog = createMemoryBacklog({ zylosDir: config.zylosDir, getSnapshot: at => workbench.getSnapshot(at), groupBacklog,
-  originBacklog: createOriginBacklog({ zylosDir: config.zylosDir }) });
+  originBacklog: createOriginBacklog({ zylosDir: config.zylosDir, readLastSync: () => c4Reader.getLastOriginSyncAt() }) });
 function recordDashboardInterrupt(record) {
   recordGroupInterrupt(store, record);
 }

@@ -11,9 +11,10 @@ const millis = value => typeof value !== 'string' || !value ? NaN
 /**
  * The machine-wide backlog waiting for Origin's cross-group sync: the same source the Supervisor reads
  * (`c4-db.js origin-sync backlog`), and the Origin Sync lock (`origin.held` of Origin's sync-lock status).
- * The oldest time is the earliest raw message or unread summary, as the Supervisor computes it.
+ * The oldest time is the earliest raw message or unread summary, as the Supervisor computes it. `lastSyncAt` is when
+ * Origin last moved a group's cursor (`readLastSync`, Unix seconds); null when never or unreadable.
  */
-export function createOriginBacklog({ zylosDir, runC4Db, execute = promisify(execFile), env = process.env, now = Date.now } = {}) {
+export function createOriginBacklog({ zylosDir, runC4Db, readLastSync = () => null, execute = promisify(execFile), env = process.env, now = Date.now } = {}) {
   const childEnv = { ...env, ZYLOS_DIR: zylosDir };
   delete childEnv.ZYLOS_SESSION_GROUP;
   delete childEnv.ZYLOS_RUN_ID;
@@ -39,6 +40,7 @@ export function createOriginBacklog({ zylosDir, runC4Db, execute = promisify(exe
       value = { count: data.total, pendingSummaries: groups.reduce((sum, group) => sum + group.pendingCheckpoints, 0), firstAt };
     } else value = { count: null, pendingSummaries: null, firstAt: null, reason: 'origin_backlog_failed' };
     value.syncing = null;
+    try { value.lastSyncAt = readLastSync(); } catch { value.lastSyncAt = null; }
     try {
       const script = path.join(zylosDir, '.claude', 'skills', 'zylos-memory', 'scripts', 'sync-lock.js');
       const { stdout } = await execute(process.execPath, [script, 'status', '--group', 'origin', '--json'],
