@@ -110,6 +110,21 @@
   flex:none;
   color:var(--text-dim)
 }
+.conversation-list-icon { position:relative; }
+.conversation-pin-badge:not([hidden]) {
+  position:absolute;
+  top:-3px;
+  left:-3px;
+  display:grid;
+  place-items:center;
+  width:14px;
+  height:14px;
+  border-radius:50%;
+  background:var(--wb-panel);
+  color:var(--accent);
+  pointer-events:none;
+}
+.conversation-pin-badge > .wb-ico { width:10px; height:10px; }
 .conversation-list-body {
   display:flex;
   flex-direction:column;
@@ -1090,7 +1105,7 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
   .conversation-page .conversation-list-row .conversation-list-item { position:relative; z-index:1; transition:transform .18s ease; }
   .conversation-page .conversation-list-row:is(.conversation-swiping,.conversation-swipe-open) { overflow:hidden; border-radius:10px; }
   .conversation-page :is(.conversation-swiping,.conversation-swipe-open) .conversation-list-item:not(.selected) { background:var(--wb-side); }
-  .conversation-page :is(.conversation-swiping,.conversation-swipe-open) :is(.conversation-pin-action,.conversation-row-menu-toggle) { visibility:hidden; }
+  .conversation-page :is(.conversation-swiping,.conversation-swipe-open) .conversation-row-menu-toggle { visibility:hidden; }
   .conversation-page .conversation-swiping .conversation-list-item { transform:translateX(var(--conversation-swipe-offset,0)); transition:none; }
   .conversation-page .conversation-swipe-open .conversation-list-item { transform:translateX(-88px); }
   .conversation-page .conversation-list-row:not([data-deletion-state]) .conversation-delete {
@@ -2135,19 +2150,15 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   border-radius:50%;
   background:var(--accent);
 }
-.conversation-page :is(.conversation-pin-action,.conversation-row-menu-toggle) {
+.conversation-page .conversation-row-menu-toggle {
   flex:none;
   width:var(--wb-control-regular);
   height:var(--wb-control-regular);
 }
-.conversation-page .conversation-pin-action { color:var(--accent); cursor:default; }
-.conversation-page .conversation-pin-action:hover:not(:disabled) { color:var(--accent); }
-.conversation-page .conversation-pin-action > .wb-ico { width:14px; height:14px; }
-.conversation-list-row[data-pin-id] .conversation-pin-action {
-  touch-action:none;
-  cursor:grab;
+@media (any-pointer:fine) {
+  .conversation-page .conversation-list-row[data-pin-id] .conversation-list-item { cursor:grab; }
+  .conversation-page .conversation-list-row[data-pin-id] .conversation-list-item:active { cursor:grabbing; }
 }
-.conversation-list-row[data-pin-id] .conversation-pin-action:active { cursor:grabbing; }
 .conversation-unread-divider {
   margin:8px 0;
   padding:4px 12px;
@@ -2167,5 +2178,5 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .conversation-new-messages > .wb-ico { transform:rotate(90deg); }
 @media (max-width:760px) {
   .conversation-page .conversation-search { font-size:16px; }
-  .conversation-page :is(.conversation-pin-action,.conversation-row-menu-toggle) { width:var(--wb-control-touch); height:var(--wb-control-touch); }
+  .conversation-page .conversation-row-menu-toggle { width:var(--wb-control-touch); height:var(--wb-control-touch); }
 }

@@ -1508,25 +1508,38 @@ export function mountConversationPage({
     else if (before.anchor?.node.isConnected) stream.scrollTop = before.oldTop + before.anchor.node.getBoundingClientRect().top - before.anchorTop;
     scheduleFit();
   }
-  function bindPin(button, id) {
+  function bindPinOrder(button, wrapper, id) {
     let pointer = null;
+    let suppressClick = false;
+    const canReorder = () => wrapper.dataset.pinId && !currentSnapshot.savingPins;
+    function trackPointer(event) {
+      if (pointer?.id !== event.pointerId) return;
+      pointer.dragged ||= Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) >= 6;
+    }
     button.addEventListener('pointerdown', event => {
-      if (event.button !== 0 || !button.parentNode.dataset.pinId || button.disabled) return;
-      event.stopPropagation();
-      pointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
-      button.setPointerCapture?.(event.pointerId);
+      suppressClick = false;
+      if (event.pointerType !== 'mouse' || event.button !== 0 || !canReorder()) return;
+      pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, dragged: false };
+      button.setPointerCapture(event.pointerId);
     });
+    button.addEventListener('pointermove', trackPointer);
     button.addEventListener('pointerup', event => {
       if (pointer?.id !== event.pointerId) return;
-      const distance = Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y);
+      trackPointer(event);
+      suppressClick = pointer.dragged;
       pointer = null;
-      if (distance < 6 || !button.parentNode.dataset.pinId) return;
+      if (!suppressClick || !canReorder()) return;
       const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-pin-id]');
-      if (target?.dataset.pinId && target.dataset.pinId !== id) void state.reorderPin(id, target.dataset.pinId);
+      if (target && target.dataset.pinId !== id) void state.reorderPin(id, target.dataset.pinId);
     });
-    button.addEventListener('pointercancel', () => { pointer = null; });
+    button.addEventListener('lostpointercapture', () => { pointer = null; });
+    button.addEventListener('click', event => {
+      if (!suppressClick || event.detail === 0) return;
+      suppressClick = false;
+      event.stopImmediatePropagation();
+    });
     button.addEventListener('keydown', event => {
-      if (!button.parentNode.dataset.pinId || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+      if (!canReorder() || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
       const pinned = currentSnapshot.items.filter(row => Number.isInteger(row.pinOrder));
       const index = pinned.findIndex(row => row.id === id) + (event.key === 'ArrowUp' ? -1 : 1);
       if (!pinned[index]) return;
@@ -1830,6 +1843,10 @@ export function mountConversationPage({
             componentName: channelOf(item)
           }
         })));
+        const pinBadge = node('span', undefined, 'conversation-pin-badge');
+        pinBadge.setAttribute('role', 'img');
+        pinBadge.append(icon(document, 'pin'));
+        symbol.append(pinBadge);
         const body = node('span', undefined, 'conversation-list-body'),
           top = node('span', undefined, 'conversation-list-title');
         const name = node('strong'),
@@ -1842,7 +1859,9 @@ export function mountConversationPage({
         unreadDot.setAttribute('aria-hidden', 'true');
         top.append(name, pinned, channel, draft, time, unreadDot);
         body.append(top, preview);
+        pinned.setAttribute('aria-hidden', 'true');
         button.append(symbol, body);
+        bindPinOrder(button, wrapper, item.id);
         button.addEventListener('click', event => {
           // A tap that ends a swipe or puts a revealed delete button back does not open the conversation.
           if (swipe.consumeTap(wrapper, event)) { event.preventDefault?.(); return; }
@@ -1850,11 +1869,6 @@ export function mountConversationPage({
           autoSelectPending = false;
           void state.select(item.id);
         });
-        const pin = node('button', undefined, 'wb-icon-btn conversation-pin-action');
-        pin.type = 'button';
-        pin.dataset.action = 'pin';
-        pin.append(icon(document, 'pin'));
-        bindPin(pin, item.id);
         const rowToggle = node('button', undefined, 'wb-icon-btn conversation-row-menu-toggle');
         rowToggle.type = 'button';
         rowToggle.append(icon(document, 'more'));
@@ -1873,10 +1887,10 @@ export function mountConversationPage({
         remove.append(short);
         const notice = node('span', undefined, 'conversation-delete-status');
         notice.setAttribute('role', 'status');
-        wrapper.append(button, pin, rowToggle, remove, notice);
+        wrapper.append(button, rowToggle, remove, notice);
         swipe.attach(wrapper);
         row = {
-          id: item.id, wrapper, remove, short, notice, pin, unreadDot, menuToggle: rowToggle,
+          id: item.id, wrapper, remove, short, notice, pinBadge, unreadDot, menuToggle: rowToggle,
           button,
           name,
           channel,
@@ -1916,12 +1930,9 @@ export function mountConversationPage({
       row.menuToggle.hidden = !row.canPin && (row.remove.hidden || !!shownState);
       row.menuToggle.setAttribute('aria-haspopup', view?.innerWidth <= 760 ? 'dialog' : 'menu');
       row.menuToggle.setAttribute('aria-label', t('chat.page.rowMenu', { name: nameOf(item) }));
-      row.pin.hidden = !row.canPin || !pinned;
-      row.pin.tabIndex = s.search ? -1 : 0;
-      row.pin.disabled = s.savingPins;
-      row.pin.setAttribute('aria-label', t('chat.page.pinned') + ': ' + nameOf(item));
-      row.pin.title = t('chat.page.pinned');
-      if (!row.pin.hidden && !s.search) row.wrapper.dataset.pinId = item.id;
+      row.pinBadge.hidden = !origin && !pinned;
+      row.pinBadge.setAttribute('aria-label', t('chat.page.pinned'));
+      if (row.canPin && pinned && !s.search) row.wrapper.dataset.pinId = item.id;
       else delete row.wrapper.dataset.pinId;
       row.unreadDot.hidden = s.tab !== 'mine' || item.unread !== true;
       const preview = item.preview || t(item.draft ? 'chat.page.blankPreview' : 'chat.page.noMessages');
@@ -1950,10 +1961,10 @@ export function mountConversationPage({
         listRows.delete(id);
       }
     }
-    const focusedRowToggle = document.activeElement?.closest?.('.conversation-row-menu-toggle');
+    const focusedRowControl = document.activeElement?.closest?.('.conversation-list-item, .conversation-row-menu-toggle');
     positionChildren(list, ordered);
-    if (focusedRowToggle?.isConnected && document.activeElement !== focusedRowToggle) {
-      focusedRowToggle.focus({ preventScroll: true });
+    if (focusedRowControl?.isConnected && document.activeElement !== focusedRowControl) {
+      focusedRowControl.focus({ preventScroll: true });
     }
     if (menuRow?.menuToggle.hidden) closeRowMenu(false);
     else if (menuRow) updateRowMenu(menuRow);
