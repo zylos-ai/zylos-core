@@ -77,6 +77,13 @@ h1, h2, p { margin-top: 0; }
 h1 { margin-bottom: 0; font-size: var(--fs-title-lg); font-weight: var(--fw-strong); letter-spacing: -0.01em; }
 h2 { margin-bottom: 0; font-size: var(--fs-title-sm); font-weight: var(--fw-strong); }
 
+/* Browser-drawn surfaces (selection, native checks, radios and progress) use the theme accent. */
+:root { accent-color: var(--accent); }
+::selection { background: color-mix(in srgb, var(--accent) 26%, transparent); }
+/* Line breaks: balanced headings, no lone last word in paragraphs. The style longhand leaves nowrap rules alone. */
+h1, h2, h3 { text-wrap-style: balance; }
+p { text-wrap-style: pretty; }
+
 /* ─── Header ─── */
 .app-header {
   display: flex;

@@ -785,6 +785,7 @@ function renderMemory() {
 
   if (readOnly) {
     tree.innerHTML = '';
+    title.classList.remove('wb-mono');
     title.textContent = t('memory.title');
     meta.textContent = '';
     status.textContent = t('memory.remote_read_only');
@@ -816,6 +817,8 @@ function renderMemory() {
 
   const file = state.memory.file;
   const scopeTag = $('#memory-scope-tag');
+  // Monospace marks a file path; the empty-state prompt is ordinary text.
+  title.classList.toggle('wb-mono', Boolean(file));
   if (!file) {
     title.textContent = t('memory.select_file');
     meta.textContent = '';

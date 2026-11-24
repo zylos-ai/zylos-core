@@ -54,12 +54,12 @@
   --c-line: color-mix(in srgb, var(--text) 8%, transparent);
   --c-line-input: color-mix(in srgb, var(--text) 15%, transparent);
   --c-line-input-hover: color-mix(in srgb, var(--text) 26%, transparent);
-  --c-control-edge: var(--text-muted);                      /* radio/checkbox outline, 3.7:1 */
+  --c-control-edge: var(--text-muted);                      /* radio/checkbox outline, 5.0:1 */
 
   /* ink */
   --c-ink: var(--text);
   --c-ink-2: var(--text-dim);
-  --c-ink-meta: color-mix(in srgb, var(--text-dim) 60%, var(--text-muted)); /* 5.1:1 on card; --text-muted alone is 3.7:1 */
+  --c-ink-meta: color-mix(in srgb, var(--text-dim) 60%, var(--text-muted)); /* 5.8:1 on card; --text-muted alone is 5.0:1 on card, 4.8:1 on the page */
 
   /* Semantic fills and inks. */
   --c-primary: #0f766e;
@@ -78,6 +78,10 @@
   --c-danger-line: color-mix(in srgb, var(--wb-err) 22%, transparent);
   --c-success-ink: color-mix(in srgb, var(--wb-work) 70%, var(--text));
   --c-success-soft: color-mix(in srgb, var(--wb-work) 9%, transparent);
+  /* status-card outlines: a state card shows its state as a full tinted outline (both themes) */
+  --c-danger-outline: color-mix(in srgb, var(--wb-err) 40%, transparent);
+  --c-warn-outline: color-mix(in srgb, var(--wb-wait) 45%, transparent);
+  --c-success-outline: color-mix(in srgb, var(--wb-work) 40%, transparent);
 
   /* elevation: a 1px ring + soft falloff replaces the grey border */
   --c-shadow-card: 0 0 0 1px color-mix(in srgb, var(--text) 7%, transparent),
@@ -272,10 +276,10 @@ main:has(> #tab-overview.active) { padding: 0 0 var(--space-xl); }
 /* Attention: one line per item; group items open that group. */
 #wb-attention, #wb-board:has(> [role="alert"]) { display: flex; flex-direction: column; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--wb-line); }
 #wb-attention:empty { display: none; }
-.wb-attention-item { display: flex; align-items: center; gap: 10px; width: 100%; margin: 0; padding: 7px 10px; border: 1px solid var(--wb-line-strong); border-left: 3px solid var(--wb-err); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font-size: var(--fs-body-sm); text-align: left; }
+.wb-attention-item { display: flex; align-items: center; gap: 10px; width: 100%; margin: 0; padding: 7px 10px; border: 1px solid var(--c-danger-outline); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font-size: var(--fs-body-sm); text-align: left; }
 .wb-attention-item b { font-weight: var(--fw-control); }
 .wb-attention-item > .wb-ico { color: var(--wb-err); }
-.wb-attention-reminder { border-left-color: var(--wb-wait); }
+.wb-attention-reminder { border-color: var(--c-warn-outline); }
 .wb-attention-reminder > .wb-ico { color: var(--wb-wait); }
 button.wb-attention-item { cursor: pointer; transition: background .14s; }
 button.wb-attention-item:hover { background: var(--wb-hover); }
@@ -330,7 +334,7 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 /* Block, not flex, so a long name ends in an ellipsis. */
 .wb-nm { display: block; font-weight: var(--fw-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-nm .wb-tag { margin-left: 6px; vertical-align: 1px; }
-.wb-key { color: var(--text-muted); font-size: var(--fs-small); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-key { color: var(--c-ink-meta); font-size: var(--fs-small); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-key.wb-mono { font-size: var(--fs-caption); }
 .wb-pill { justify-self: start; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 9px 2px 8px; border: 1px solid transparent; border-radius: 20px; background: var(--wb-hover); color: var(--text); font-size: var(--fs-small); font-weight: var(--fw-control); white-space: nowrap; }
 .wb-status-age { color: var(--text-dim); font-size: var(--fs-caption); font-weight: var(--fw-body); white-space: nowrap; }
@@ -434,9 +438,11 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-detail-section { position: relative; padding: 12px 18px; border-bottom: 1px solid var(--wb-line); }
 .wb-detail-section h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-strong); letter-spacing: .04em; }
 .wb-now-card { padding: 12px 14px; border: 1px solid var(--wb-line-strong); border-radius: 12px; background: var(--wb-panel); }
-.wb-now-work { border-left: 3px solid var(--wb-work); }
-.wb-now-wait { border-left: 3px solid var(--wb-wait); background: color-mix(in srgb, var(--wb-wait) 5%, var(--wb-panel)); }
-.wb-now-err { border-left: 3px solid var(--wb-err); background: color-mix(in srgb, var(--wb-err) 5%, var(--wb-panel)); }
+/* Status cards carry their state in a full tinted outline and the leading icon, not a bar down one side. */
+.wb-now-work { border-color: var(--c-success-outline); background: color-mix(in srgb, var(--wb-work) 4%, var(--wb-panel)); }
+.wb-now-wait { border-color: var(--c-warn-outline); background: color-mix(in srgb, var(--wb-wait) 5%, var(--wb-panel)); }
+.wb-now-err { border-color: var(--c-danger-outline); background: color-mix(in srgb, var(--wb-err) 5%, var(--wb-panel)); }
+.wb-now-work .wb-now-title > .wb-ico { color: var(--wb-work); }
 .wb-now-title { display: flex; align-items: center; gap: 8px; font-weight: var(--fw-strong); }
 .wb-now-title + .wb-now-title { margin-top: 6px; }
 .wb-now-title .wb-dur { color: var(--text-dim); font-weight: var(--fw-body); }
@@ -459,7 +465,8 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-detail-evidence .wb-hit td:nth-child(2) { color: var(--text); font-weight: var(--fw-strong); }
 .wb-detail-evidence .wb-hit td:first-child { color: var(--text); }
 .wb-subs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.wb-ev { position: relative; display: grid; grid-template-columns: 40px 20px minmax(0, 1fr); align-items: start; gap: 8px; padding: 5px 0; font-size: var(--fs-body-sm); }
+/* 58px holds a 12-hour time ("01:25 PM") on one line; the connector below is centred on the 20px marker column. */
+.wb-ev { --wb-ev-time: 58px; position: relative; display: grid; grid-template-columns: var(--wb-ev-time) 20px minmax(0, 1fr); align-items: start; gap: 8px; padding: 5px 0; font-size: var(--fs-body-sm); }
 .wb-ev time { padding-top: 1px; color: var(--text-muted); font-size: var(--fs-small); font-variant-numeric: tabular-nums; }
 .wb-ev-k { position: relative; z-index: 1; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--wb-line-strong); border-radius: 50%; background: var(--wb-side); color: var(--text-muted); }
 .wb-ev-k .wb-ico { width: 11px; height: 11px; }
@@ -470,8 +477,10 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-ev-t .wb-tool { color: var(--text); font-weight: var(--fw-control); }
 .wb-ev-args { margin-left: 6px; color: var(--text-dim); font-size: var(--fs-caption); }
 .wb-ev-rep { margin-left: 6px; color: var(--text-dim); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.wb-ev + .wb-ev::before { content: ""; position: absolute; left: 57px; top: -10px; height: 16px; width: 1px; background: var(--wb-line-strong); }
+.wb-ev + .wb-ev::before { content: ""; position: absolute; left: calc(var(--wb-ev-time) + 17px); top: -10px; height: 16px; width: 1px; background: var(--wb-line-strong); }
 .wb-detail-recent .wb-link-btn { margin-top: 6px; }
+.wb-detail-usage .wb-note { margin: 4px 0 0; font-size: var(--fs-body-sm); }
+.wb-detail-usage .wb-note b { color: var(--text); font-weight: var(--fw-control); }
 .wb-mem-line, .wb-cfg-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-dim); font-size: var(--fs-body-sm); }
 .wb-cfg-line b { color: var(--text); font-weight: var(--fw-strong); }
 .wb-cfg-line .wb-btn { margin-left: auto; }
@@ -619,6 +628,8 @@ html[data-detail=plain] .wb-tech-col { display: none; }
   .wb-search input { width: 100%; }
   .wb-row, html[data-detail=technical] .wb-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 8px; padding: 12px; }
   .wb-row > .wb-name { grid-column: 1; }
+  /* Long group names wrap to at most two lines instead of being cut after a few words. */
+  .wb-row .wb-nm { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
   .wb-row > .wb-pill { grid-column: 2; justify-self: end; }
   .wb-row > .wb-current, .wb-row > .wb-activity { grid-column: 1 / -1; }
   .wb-row > .wb-queue, .wb-row > .wb-context, .wb-row > .wb-model { display: none; }
@@ -730,31 +741,35 @@ main:has(> #tab-schedule.active) { padding: 0 0 var(--space-xl); }
 .wb-sched-picker-item > span:not(.wb-mono) { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-sched-picker-item .wb-mono { flex: 1 1 0; min-width: 0; overflow: hidden; color: var(--text-muted); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
 .wb-sched-new { margin-left: auto; height: var(--wb-h); }
-.wb-sched-table { --wb-sched-cols: minmax(220px, 2.3fr) minmax(120px, 1.3fr) 118px 160px minmax(110px, 1fr) minmax(72px, max-content); }
+/* Every row is its own grid, so no track may size to its content: a content-sized status column moved each row's columns by its label width. */
+.wb-sched-table { --wb-sched-cols: minmax(220px, 2.3fr) minmax(120px, 1.3fr) 118px 160px minmax(110px, 1fr) 88px; }
 .wb-sched-th, .wb-sched-row, .wb-sched-select { display: grid; grid-template-columns: var(--wb-sched-cols); align-items: center; column-gap: 16px; }
 .wb-sched-th { padding: 9px 16px; border-bottom: 1px solid var(--wb-line); color: var(--text-muted); font-size: var(--fs-caption); }
 .wb-sched-section > h3 { margin: 0; padding: 14px 16px 8px; border-bottom: 1px solid var(--wb-line); color: var(--text-dim); font-size: var(--fs-small); font-weight: var(--fw-strong); }
 .wb-sched-section > h3 small { color: var(--text-muted); font-size: var(--fs-small); font-weight: var(--fw-body); }
-.wb-sched-row { position: relative; border-bottom: 1px solid var(--wb-line); }
+.wb-sched-row { position: relative; padding: 0 16px; border-bottom: 1px solid var(--wb-line); }
 .wb-sched-row:hover { background: var(--wb-hover); }
 .wb-sched-row.active { background: var(--wb-accent-soft); }
 .wb-sched-row.active::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }
-.wb-sched-select { grid-column: 1 / 5; grid-template-columns: subgrid; min-width: 0; padding: 10px 0 10px 16px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: var(--fs-body-sm); text-align: left; cursor: pointer; }
+.wb-sched-select { grid-column: 1 / 5; grid-template-columns: subgrid; min-width: 0; padding: 10px 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: var(--fs-body-sm); text-align: left; cursor: pointer; }
 .wb-sched-select:focus-visible { outline: 2px solid var(--wb-accent-line); outline-offset: -2px; }
 .wb-sched-name, .wb-sched-rule, .wb-sched-next, .wb-sched-recent { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .wb-sched-name b { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: var(--fw-strong); white-space: nowrap; }
 .wb-sched-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .wb-sched-name small, .wb-sched-rule small, .wb-sched-next small, .wb-sched-recent small { color: var(--text-muted); font-size: var(--fs-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The task's own description reads as body description (decision 17); the other cells keep the caption gray. */
+.wb-sched-name small { color: var(--c-ink-meta); }
 .wb-sched-rule small { font-size: var(--fs-caption); }
 .wb-sched-next { font-variant-numeric: tabular-nums; }
 .wb-sched-cells { display: flex; gap: 2px; }
 .wb-sched-cell { width: 8px; height: 14px; border-radius: 2px; background: var(--wb-off); }
 .wb-sched-bars { display: flex; align-items: flex-end; gap: 2px; height: 56px; padding-bottom: 1px; border-bottom: 1px solid var(--wb-line); }
 .wb-sched-bar { flex: 1; min-width: 3px; border-radius: 2px 2px 0 0; background: color-mix(in srgb, var(--text) 18%, transparent); }
-.wb-sched-cell.wb-ok { background: var(--wb-work); }
+/* Delivery colours mean the same in the list cells, the seven-day bars and the drawer's history bars. */
+.wb-sched-cell.wb-ok, .wb-sched-bar.wb-ok { background: var(--wb-work); }
 .wb-sched-cell.wb-timeout, .wb-sched-bar.wb-timeout { background: var(--wb-wait); }
 .wb-sched-cell.wb-bad, .wb-sched-bar.wb-bad { background: var(--wb-err); }
-.wb-sched-cell.wb-running { background: var(--wb-idle); }
+.wb-sched-cell.wb-running, .wb-sched-bar.wb-running { background: var(--wb-idle); }
 .wb-sched-target { justify-self: start; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: var(--fs-body-sm); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 button.wb-sched-target { color: var(--accent); cursor: pointer; }
 button.wb-sched-target:hover { text-decoration: underline; text-underline-offset: 2px; }
@@ -766,7 +781,6 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 .wb-sched-state.wb-bad { color: var(--wb-err); }
 .wb-sched-state.wb-bad .wb-dot { background: var(--wb-err); }
 .wb-sched-state.wb-done .wb-dot { background: var(--text-muted); }
-.wb-sched-row > .wb-sched-state { padding-right: 16px; }
 .wb-sched-empty { margin: 0; padding: 28px 16px; color: var(--text-dim); text-align: center; }
 .wb-sched-error, .wb-sched-invalid { color: var(--wb-err); }
 .wb-sched-notice { color: var(--text-dim); }
@@ -779,13 +793,13 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 .wb-sched-detail .wb-d-top > .wb-d-title { flex: 1; }
 .wb-sched-detail .wb-detail-meta { display: flex; flex-wrap: wrap; gap: 0; }
 .wb-icon-danger { color: var(--wb-err); }
-.wb-sched-error-card { padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--wb-err) 30%, transparent); border-left: 3px solid var(--wb-err); border-radius: 12px; background: color-mix(in srgb, var(--wb-err) 5%, var(--wb-panel)); }
+.wb-sched-error-card { padding: 12px 14px; border: 1px solid var(--c-danger-outline); border-radius: 12px; background: color-mix(in srgb, var(--wb-err) 5%, var(--wb-panel)); }
 .wb-sched-error-card .wb-ico { color: var(--wb-err); }
 .wb-sched-error-card .wb-btn { margin-top: 10px; }
 .wb-sched-prompt { margin: 0; padding: 12px 14px; border: 1px solid var(--wb-line-strong); border-radius: 10px; background: var(--wb-panel); font: inherit; font-size: var(--fs-body-sm); line-height: var(--lh-label); white-space: pre-wrap; }
 .wb-sched-prompt.wb-clamped { max-height: 9.6em; overflow: hidden; -webkit-mask: linear-gradient(currentColor 70%, transparent); mask: linear-gradient(currentColor 70%, transparent); }
 .wb-sched-prompt + .wb-link-btn { margin-top: 6px; }
-.wb-kv { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; padding: 4px 0; font-size: var(--fs-body-sm); }
+.wb-kv { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 8px; padding: 4px 0; font-size: var(--fs-body-sm); }
 .wb-kv-k { color: var(--text-dim); }
 .wb-kv-v small.wb-mono { color: var(--text-muted); font-size: var(--fs-caption); }
 .wb-sched-chip { display: inline-flex; padding: 1px 8px; border: 1px solid var(--wb-line-strong); border-radius: 6px; background: var(--wb-panel); color: var(--text-dim); font-size: var(--fs-small); white-space: nowrap; }
@@ -793,7 +807,7 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 .wb-sched-delivery, .wb-sched-idle { margin: 6px 0 0; color: var(--text-dim); font-size: var(--fs-body-sm); }
 .wb-sched-bars-axis { display: flex; justify-content: space-between; margin-top: 4px; color: var(--text-muted); font-size: var(--fs-caption); }
 .wb-sched-runs { margin-top: 8px; }
-.wb-sched-run { display: grid; grid-template-columns: 92px 16px minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 7px 0; border-top: 1px solid var(--wb-line); font-size: var(--fs-body-sm); }
+.wb-sched-run { display: grid; grid-template-columns: 112px 16px minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 7px 0; border-top: 1px solid var(--wb-line); font-size: var(--fs-body-sm); }
 .wb-sched-run time { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .wb-sched-run .wb-ico { margin-top: 2px; color: var(--wb-work); }
 .wb-sched-run.wb-timeout .wb-ico { color: var(--wb-wait); }
@@ -830,7 +844,7 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 @media (max-width: 1100px) {
   .wb-sched-week { grid-template-columns: 96px minmax(0, 1fr); }
   .wb-sched-days { grid-column: 1 / -1; }
-  .wb-sched-table { --wb-sched-cols: minmax(150px, 2fr) minmax(96px, 1fr) 100px 112px minmax(84px, 1fr) minmax(64px, max-content); }
+  .wb-sched-table { --wb-sched-cols: minmax(150px, 2fr) minmax(96px, 1fr) 100px 112px minmax(84px, 1fr) 80px; }
   .wb-sched-th, .wb-sched-row, .wb-sched-select { column-gap: 12px; }
   .wb-sched-cell { width: 6px; }
 }
@@ -864,9 +878,12 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
   .wb-sched-filters .wb-search input { width: 100%; }
   .wb-sched-filters > .wb-sched-new-desktop { display: none; }
   .wb-sched-th { display: none; }
-  .wb-sched-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 0; }
+  .wb-sched-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 0; padding: 0; }
   .wb-sched-select { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; padding: 12px 12px 4px; }
-  .wb-sched-select > .wb-sched-name { grid-column: 1 / -1; }
+  /* Next run sits on the name's row at the right; the rule gets the row below to itself. */
+  .wb-sched-select > .wb-sched-name { grid-column: 1; grid-row: 1; }
+  .wb-sched-select > .wb-sched-next { grid-column: 2; grid-row: 1; }
+  .wb-sched-select > .wb-sched-rule { grid-column: 1 / -1; }
   .wb-sched-select > .wb-sched-recent { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 8px; }
   .wb-sched-next { align-items: flex-end; text-align: right; }
   .wb-sched-row > .wb-sched-target { grid-column: 1; padding: 0 0 12px 12px; }
@@ -1075,7 +1092,8 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 #wb-usage-body > .wb-note { margin: 10px 0 0; }
 .wb-usage-page .wb-card { border-color: var(--wb-line-strong); border-radius: 12px; background: var(--wb-panel); }
 .wb-usage-summary { margin-top: 14px; padding: 12px 16px; }
-.wb-usage-scope { margin: 0 0 8px; color: var(--text-muted); font-size: var(--fs-caption); }
+/* The caption is the card's title, set like the Cost and Messages chart titles rather than as a small label above the numbers. */
+.wb-usage-scope { margin: 0 0 10px; color: var(--text); font-size: var(--fs-body-sm); font-weight: var(--fw-strong); }
 .wb-usage-totals { display: flex; flex-wrap: wrap; gap: 10px 36px; }
 .wb-usage-total { display: grid; gap: 1px; min-width: 0; }
 .wb-usage-total > small:first-child { color: var(--text-muted); font-size: var(--fs-caption); }
@@ -1337,7 +1355,8 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-pref-c { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .wb-pref-note { color: var(--text-muted); font-size: var(--fs-small); }
 .wb-pref-c > .wb-set-inline { width: 100%; }
-.wb-model-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, .55fr) 110px; align-items: end; gap: 10px; width: 100%; }
+/* The threshold column takes its label's width, so "Rotation threshold" stays on one line level with Model and Effort. */
+.wb-model-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, .55fr) max-content; align-items: end; gap: 10px; width: 100%; }
 .wb-model-field { display: flex; flex-direction: column; min-width: 0; gap: 6px; }
 .wb-model-field[hidden] { display: none; }
 .wb-model-field:nth-child(3) { grid-column: 3; }
@@ -1376,7 +1395,7 @@ a.wb-btn { text-decoration: none; }
 .wb-price-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 0 0 12px; color: var(--text-dim); font-size: var(--fs-body-sm); }
 .wb-price-sum-rt { display: inline-flex; align-items: center; gap: 6px; }
 .wb-price-sum-rt b { color: var(--text); font-weight: var(--fw-strong); font-variant-numeric: tabular-nums; }
-.wb-warn-row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; padding: 10px 14px; border: 1px solid var(--wb-line-strong); border-left: 3px solid var(--wb-wait); border-radius: var(--wb-r); background: color-mix(in srgb, var(--wb-wait) 5%, var(--wb-panel)); font-size: var(--fs-body-sm); }
+.wb-warn-row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; padding: 10px 14px; border: 1px solid var(--c-warn-outline); border-radius: var(--wb-r); background: color-mix(in srgb, var(--wb-wait) 5%, var(--wb-panel)); font-size: var(--fs-body-sm); }
 .wb-warn-row > .wb-ico { color: var(--wb-wait); }
 .wb-warn-row > div { min-width: 0; display: flex; flex-wrap: wrap; gap: 0 8px; }
 .wb-warn-row small { flex-basis: 100%; color: var(--text-dim); font-size: var(--fs-small); }
@@ -1432,7 +1451,7 @@ html:not([data-detail=technical]) #action-instance-status { display: none; }
 .wb-ktable tr:last-child td { border-bottom: 0; }
 .wb-ktable tr.revoked td { color: var(--text-muted); }
 .wb-ktable b { font-weight: var(--fw-control); }
-.wb-k-acts { display: flex; justify-content: flex-end; gap: 2px; }
+.wb-k-acts { display: flex; justify-content: flex-end; gap: 8px; }
 /* Chinese sentences follow a full stop directly; other languages keep a space. */
 html[lang^="zh"] .wb-sent-gap { display: none; }
 .wb-ktable td:nth-child(1), .wb-ktable td:nth-child(3), .wb-ktable td:last-child { white-space: nowrap; }
@@ -1664,7 +1683,7 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   .wb-savebar { margin: 18px -12px 0; padding: 12px; }
   .wb-set-split { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .wb-pref, .wb-fld { grid-template-columns: 1fr; gap: 6px; }
-  .wb-model-fields { grid-template-columns: minmax(0, 1fr) 104px; }
+  .wb-model-fields { grid-template-columns: minmax(0, 1fr) max-content; }
   .wb-model-field:first-child { grid-column: 1 / -1; }
   .wb-model-field:nth-child(3) { grid-column: 2; }
   .wb-fld > .wb-note { grid-column: 1; }

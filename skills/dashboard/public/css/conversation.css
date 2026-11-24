@@ -1007,13 +1007,13 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .conversation-activity-step[data-status=running]>.conversation-activity-label { color:var(--text); }
 .conversation-activity-step[data-status=failed]>.wb-ico,.conversation-activity-step[data-status=failed]>.conversation-activity-time,
 .conversation-activity-step[data-status=incomplete]>.wb-ico,.conversation-activity-step[data-status=incomplete]>.conversation-activity-time { color:var(--wb-wait); }
-.conversation-activity-more { grid-column:1/-1; margin:0; padding:2px 0 4px; font-size:var(--fs-caption); color:var(--text-muted); }
+.conversation-activity-more { grid-column:1/-1; margin:0; padding:2px 0 4px; font-size:var(--fs-caption); color:var(--c-ink-meta); }
 /* A new input or a subtask start: a left-aligned pill sharing the step icon and text columns. */
 .conversation-activity-mark { grid-column:1/-1; display:flex; align-items:center; min-width:0; margin:5px 0; font-size:var(--fs-small); color:var(--text-dim); }
 .conversation-activity-mark>span { display:inline-flex; align-items:center; gap:8px; min-width:0; max-width:calc(100% + 8px); margin-left:-8px; padding:1px 8px; border-radius:10px; background:var(--wb-hover); white-space:nowrap; }
 .conversation-activity-mark>span>span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 .conversation-activity-mark .wb-ico { width:13px; height:13px; flex:none; }
-.conversation-activity-thinking { grid-column:1/-1; display:flex; align-items:center; gap:6px; min-height:24px; font-size:var(--fs-caption); color:var(--text-muted); }
+.conversation-activity-thinking { grid-column:1/-1; display:flex; align-items:center; gap:6px; min-height:24px; font-size:var(--fs-caption); color:var(--c-ink-meta); }
 .conversation-activity-dots { display:inline-flex; gap:3px; }
 .conversation-activity-dots>i { width:4px; height:4px; border-radius:50%; background:currentColor; opacity:.5; animation:conversation-activity-dot 1.2s infinite; }
 .conversation-activity-dots>i:nth-child(2) { animation-delay:.2s; }
@@ -1034,7 +1034,7 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .conversation-activity-subtask-title>b { font-weight:var(--fw-control); color:var(--text); }
 .conversation-activity-subtask .conversation-activity-steps { margin:0 10px 8px 16px; }
 /* Work that ended without a reply: one quiet line under the user message. */
-.conversation-activity-handled { display:flex; align-items:center; flex-wrap:wrap; gap:6px; font-size:var(--fs-small); color:var(--text-muted); }
+.conversation-activity-handled { display:flex; align-items:center; flex-wrap:wrap; gap:6px; font-size:var(--fs-small); color:var(--c-ink-meta); }
 .conversation-activity-handled>.wb-ico { width:13px; height:13px; flex:none; }
 .conversation-activity-details { display:inline-flex; align-items:center; gap:4px; font-size:var(--fs-small); }
 .conversation-activity-details .wb-ico { width:12px; height:12px; }
@@ -2159,6 +2159,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .conversation-rename :is(input, button) { height: var(--wb-h); }
 @media (min-width: 761px) {
   .conversation-page .conversation-header { align-items: flex-start; }
+  .conversation-page .conversation-search { height: var(--wb-control-regular); }
   .conversation-page .conversation-title-line .wb-icon-btn { width: var(--wb-control-regular); }
   .conversation-page :is(.conversation-title-row, .conversation-title-line) { height: var(--wb-control-regular); }
   .conversation-page .conversation-header :is(.conversation-title-line .wb-icon-btn, .conversation-list-toggle, .conversation-running, .conversation-header-actions > .wb-btn) { height: var(--wb-control-regular); min-height: var(--wb-control-regular); }

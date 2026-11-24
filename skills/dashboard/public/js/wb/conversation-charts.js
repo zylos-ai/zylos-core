@@ -185,7 +185,7 @@ const valueMarks = {
 };
 
 /** Chart kinds are a host presentation choice; protocol data remains unchanged. */
-export function conversationChartConfig(block, { text = '#526170', muted = '#7a8794', strong = '#101827', grid = '#7a879424',
+export function conversationChartConfig(block, { text = '#526170', muted = '#64717d', strong = '#101827', grid = '#64717d24',
   surface = '#ffffff', tooltipBg = '#101827', tooltipText = '#f7faf9', font = 'Inter, system-ui, sans-serif',
   noValue = '—', locale, timeZone } = {}) {
   const data = block.data;

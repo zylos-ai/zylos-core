@@ -11,6 +11,7 @@ import { recentWindow } from './timeline-rows.js';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js';
 import { renderNameEditor } from './name-edit.js';
 import { formatZoned, zonedDay } from './instance-zone.js';
+import { money } from './instance-strip.js';
 import { runtimeNotFound } from './settings-defaults.js';
 
 export function resolveDetailRow(selection, snapshot = {}) {
@@ -257,14 +258,17 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
         const form = [...sections.config.children].find(node => node.classList.contains('wb-cfg-edit'));
         if (form) form.dataset.updateKey = `config:${configRevision}:${getWritable()}:${row.rotationThreshold}:${defaultRuntime}:${notFound}`;
       }
-      const usage = element(document, 'section', undefined, 'wb-ip-card');
-      usage.append(element(document, 'h3', t('wb.groupUsage.title')));
+      // Same section head as Now, Recent activity, Memory and Configuration above it.
+      const usage = element(document, 'section', undefined, 'wb-detail-section wb-detail-usage');
+      const usageHead = element(document, 'h3');
+      usageHead.append(icon(document, 'dollar', 'xs'), element(document, 'span', t('wb.groupUsage.title')));
+      usage.append(usageHead);
       for (const [period, label] of [['today', 'wb.inst.today'], ['sevenDay', 'wb.usage.range.7d']]) {
         const values = state.usage?.[period];
         const line = element(document, 'p', undefined, 'wb-note');
         line.append(element(document, 'b', t(label) + ' · '), element(document, 'span', values == null ? t('wb.unknown') :
           t('wb.groupUsage.summary', { tokens: values.tokens == null ? '—' : Number(values.tokens).toLocaleString(),
-            cost: values.cost == null ? '—' : '$' + Number(values.cost).toFixed(4),
+            cost: money(values.cost),
             cache: values.cacheHitRate == null ? '—' : Math.round(values.cacheHitRate * 100) + '%' })));
         usage.append(line);
       }
