@@ -78,6 +78,10 @@
   --c-danger-line: color-mix(in srgb, var(--wb-err) 22%, transparent);
   --c-success-ink: color-mix(in srgb, var(--wb-work) 70%, var(--text));
   --c-success-soft: color-mix(in srgb, var(--wb-work) 9%, transparent);
+  /* status-card outlines: a state card shows its state as a full tinted outline (both themes) */
+  --c-danger-outline: color-mix(in srgb, var(--wb-err) 40%, transparent);
+  --c-warn-outline: color-mix(in srgb, var(--wb-wait) 45%, transparent);
+  --c-success-outline: color-mix(in srgb, var(--wb-work) 40%, transparent);
 
   /* elevation: a 1px ring + soft falloff replaces the grey border */
   --c-shadow-card: 0 0 0 1px color-mix(in srgb, var(--text) 7%, transparent),
@@ -272,10 +276,10 @@ main:has(> #tab-overview.active) { padding: 0 0 var(--space-xl); }
 /* Attention: one line per item; group items open that group. */
 #wb-attention, #wb-board:has(> [role="alert"]) { display: flex; flex-direction: column; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--wb-line); }
 #wb-attention:empty { display: none; }
-.wb-attention-item { display: flex; align-items: center; gap: 10px; width: 100%; margin: 0; padding: 7px 10px; border: 1px solid color-mix(in srgb, var(--wb-err) 40%, transparent); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font-size: var(--fs-body-sm); text-align: left; }
+.wb-attention-item { display: flex; align-items: center; gap: 10px; width: 100%; margin: 0; padding: 7px 10px; border: 1px solid var(--c-danger-outline); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font-size: var(--fs-body-sm); text-align: left; }
 .wb-attention-item b { font-weight: var(--fw-control); }
 .wb-attention-item > .wb-ico { color: var(--wb-err); }
-.wb-attention-reminder { border-color: color-mix(in srgb, var(--wb-wait) 45%, transparent); }
+.wb-attention-reminder { border-color: var(--c-warn-outline); }
 .wb-attention-reminder > .wb-ico { color: var(--wb-wait); }
 button.wb-attention-item { cursor: pointer; transition: background .14s; }
 button.wb-attention-item:hover { background: var(--wb-hover); }
@@ -435,9 +439,9 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-detail-section h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-strong); letter-spacing: .04em; }
 .wb-now-card { padding: 12px 14px; border: 1px solid var(--wb-line-strong); border-radius: 12px; background: var(--wb-panel); }
 /* Status cards carry their state in a full tinted outline and the leading icon, not a bar down one side. */
-.wb-now-work { border-color: color-mix(in srgb, var(--wb-work) 40%, transparent); background: color-mix(in srgb, var(--wb-work) 4%, var(--wb-panel)); }
-.wb-now-wait { border-color: color-mix(in srgb, var(--wb-wait) 45%, transparent); background: color-mix(in srgb, var(--wb-wait) 5%, var(--wb-panel)); }
-.wb-now-err { border-color: color-mix(in srgb, var(--wb-err) 40%, transparent); background: color-mix(in srgb, var(--wb-err) 5%, var(--wb-panel)); }
+.wb-now-work { border-color: var(--c-success-outline); background: color-mix(in srgb, var(--wb-work) 4%, var(--wb-panel)); }
+.wb-now-wait { border-color: var(--c-warn-outline); background: color-mix(in srgb, var(--wb-wait) 5%, var(--wb-panel)); }
+.wb-now-err { border-color: var(--c-danger-outline); background: color-mix(in srgb, var(--wb-err) 5%, var(--wb-panel)); }
 .wb-now-work .wb-now-title > .wb-ico { color: var(--wb-work); }
 .wb-now-title { display: flex; align-items: center; gap: 8px; font-weight: var(--fw-strong); }
 .wb-now-title + .wb-now-title { margin-top: 6px; }
@@ -789,7 +793,7 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 .wb-sched-detail .wb-d-top > .wb-d-title { flex: 1; }
 .wb-sched-detail .wb-detail-meta { display: flex; flex-wrap: wrap; gap: 0; }
 .wb-icon-danger { color: var(--wb-err); }
-.wb-sched-error-card { padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--wb-err) 40%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--wb-err) 5%, var(--wb-panel)); }
+.wb-sched-error-card { padding: 12px 14px; border: 1px solid var(--c-danger-outline); border-radius: 12px; background: color-mix(in srgb, var(--wb-err) 5%, var(--wb-panel)); }
 .wb-sched-error-card .wb-ico { color: var(--wb-err); }
 .wb-sched-error-card .wb-btn { margin-top: 10px; }
 .wb-sched-prompt { margin: 0; padding: 12px 14px; border: 1px solid var(--wb-line-strong); border-radius: 10px; background: var(--wb-panel); font: inherit; font-size: var(--fs-body-sm); line-height: var(--lh-label); white-space: pre-wrap; }
@@ -1391,7 +1395,7 @@ a.wb-btn { text-decoration: none; }
 .wb-price-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 0 0 12px; color: var(--text-dim); font-size: var(--fs-body-sm); }
 .wb-price-sum-rt { display: inline-flex; align-items: center; gap: 6px; }
 .wb-price-sum-rt b { color: var(--text); font-weight: var(--fw-strong); font-variant-numeric: tabular-nums; }
-.wb-warn-row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--wb-wait) 45%, transparent); border-radius: var(--wb-r); background: color-mix(in srgb, var(--wb-wait) 5%, var(--wb-panel)); font-size: var(--fs-body-sm); }
+.wb-warn-row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; padding: 10px 14px; border: 1px solid var(--c-warn-outline); border-radius: var(--wb-r); background: color-mix(in srgb, var(--wb-wait) 5%, var(--wb-panel)); font-size: var(--fs-body-sm); }
 .wb-warn-row > .wb-ico { color: var(--wb-wait); }
 .wb-warn-row > div { min-width: 0; display: flex; flex-wrap: wrap; gap: 0 8px; }
 .wb-warn-row small { flex-basis: 100%; color: var(--text-dim); font-size: var(--fs-small); }

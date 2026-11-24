@@ -79,9 +79,10 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 | Purpose | Current token / core value | Exact source |
 |---|---|---|
 | Panels, subtle borders, hover backgrounds | `--wb-panel/line/line-strong/hover` | [wb.css lines 4–11](../public/css/wb.css) |
-| Sunken, selected, and input surfaces | `--c-surface/sunken/raised/input-bg` | [wb.css lines 44–57,102–113](../public/css/wb.css) |
-| Primary/destructive actions, soft status backgrounds, description text | `--c-primary/danger/on-fill/ink-meta` and related tokens | [wb.css lines 59–80,96–124](../public/css/wb.css) |
-| Card, button, filled-button, selected-block shadows | `--c-shadow-card/btn/fill/thumb/xs` | [wb.css lines 80–88,124–130](../public/css/wb.css) |
+| Sunken, selected, and input surfaces | `--c-surface/sunken/raised/input-bg` | [wb.css lines 44–57,111–119](../public/css/wb.css) |
+| Primary/destructive actions, soft status backgrounds, description text | `--c-primary/danger/on-fill/ink-meta` and related tokens | [wb.css lines 59–80,104–129](../public/css/wb.css) |
+| Status-card outlines (error, waiting, working) | `--c-danger-outline/warn-outline/success-outline` (state color at 40/45/40%, both themes) | [wb.css lines 81–84](../public/css/wb.css) |
+| Card, button, filled-button, selected-block shadows | `--c-shadow-card/btn/fill/thumb/xs` | [wb.css lines 86–94,130–138](../public/css/wb.css) |
 | Base and overlay shadows | `--shadow-card`, `--shadow-card-hover`; light blur 42/52 px, dark 26/32 px | [Light theme](../public/themes/light.css), [dark theme](../public/themes/dark.css) |
 | Main radii and spacing | Radii 12/8/4 px; spacing 4/8/16/24/32 px | [style.css lines 10–18](../public/css/style.css) |
 | Rich-content radii and padding | Radii 6/8/12 px; padding 20 px desktop, 16 px mobile | [wb.css lines 35–42](../public/css/wb.css), [conversation.css line 1448](../public/css/conversation.css) |
@@ -239,7 +240,7 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Idle reclaim settings are editable in both configured session modes unless an environment override makes them read-only. In single mode the value applies to Origin; instances awaiting mode migration remain read-only.
 
-[Current] Status cards (the drawer's Now card, attention items, the schedule error card and warning rows) carry a full 1 px outline tinted with their state color instead of a colored bar down one side; a working Now card adds a faint green fill and green tool icons. Selection side lines on selected rows are unchanged. In a task's delivery history, successful bars use the delivered green and running bars the idle color, matching the list cells. (Howard, TG topic 5950 msg 9721)
+[Current] Status cards (the drawer's Now card, attention items, the schedule error card and warning rows) carry a full 1 px outline in the shared status-card outline tokens (§1.2) instead of a colored bar down one side; a working Now card adds a faint green fill and green tool icons. Selection side lines on selected rows are unchanged. In a task's delivery history, successful bars use the delivered green and running bars the idle color, matching the list cells. (Howard, TG topic 5950 msg 9721)
 
 ## 6. Responsive Layout: Tasks Remain Usable on 390 px Mobile Screens
 
