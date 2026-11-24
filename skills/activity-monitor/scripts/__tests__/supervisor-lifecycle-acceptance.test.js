@@ -7,7 +7,8 @@ import path from 'node:path';
 import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
 import { fixture as databaseFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
-import { PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT } from '../../../zylos-memory/scripts/sync-prompts.js';
+import { CLAUDE_GROUP_SYNC_PROMPT, GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
+  PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT } from '../../../zylos-memory/scripts/sync-prompts.js';
 import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
 import { groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
 import { renderStateSkeleton } from '../../../zylos-memory/scripts/state-format.js';
@@ -32,8 +33,8 @@ function localFixture(t, Class = SupervisorLifecycle, options = {}) {
     requests: { read: () => [] }, diagnostic: e => f.events.push(e),
     groupRunDir: () => f.root,
     readSyncMarker: args => { f.markerCalls.push(args); return f.marker; },
-    prompts: { GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
-      ROTATION_PROMPT: 'rotate' },
+    prompts: { CLAUDE_GROUP_SYNC_PROMPT, GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
+      PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT, ROTATION_PROMPT: 'rotate' },
     ...options.deps };
   const configuration = f.context.configuration;
   Object.defineProperty(f, 'context', { get: () => ({ configuration, transition: f.db.getModeTransition(),
@@ -74,12 +75,45 @@ async function syncScopeScenario(t, Class) {
     f.scene = { ...f.scene, present: false }; f.now += 600000;
     await f.lifecycle.checkSync([f.scene], f.context);
     assert.equal(f.controls.length, count + 1);
-    assert.equal(f.controls.at(-1).content, 'origin sync');
+    assert.equal(f.controls.at(-1).content, ORIGIN_SYNC_PROMPT);
     assert.deepEqual(f.markerCalls.at(-1), { runDir: f.root, kind: 'origin', currentRunId: null });
   }
 }
 test('Sync reads group and Origin marker scopes and failed writes do not mark a scope sent', async t => {
   await syncScopeScenario(t, SupervisorLifecycle);
+});
+
+test('only ordinary Claude group Sync uses the direct launch prompt', async t => {
+  for (const [mode, runtime, sessionGroup, expected] of [
+    ['multi', 'claude', 'telegram:room', CLAUDE_GROUP_SYNC_PROMPT],
+    ['multi', 'claude', 'origin', CLAUDE_GROUP_SYNC_PROMPT],
+    ['multi', 'codex', 'telegram:room', GROUP_SYNC_PROMPT],
+    ['multi', 'agy', 'telegram:room', GROUP_SYNC_PROMPT],
+    ['single', 'claude', 'origin', GROUP_SYNC_PROMPT],
+  ]) {
+    const f = localFixture(t);
+    f.context.configuration.mode = mode;
+    f.scene.sessionGroup = sessionGroup;
+    f.scene.runtime = runtime;
+    f.scene.launchConfig.runtime = runtime;
+    await f.lifecycle.checkSync([f.scene], f.context);
+    assert.deepEqual(f.controls.map(row => [row.sessionGroup, row.content]),
+      [[sessionGroup, expected], ['origin', ORIGIN_SYNC_PROMPT]], `${mode}/${runtime}/${sessionGroup}`);
+  }
+
+  assert.match(CLAUDE_GROUP_SYNC_PROMPT,
+    /Agent tool once with subagent_type: "zylos-group-sync", run_in_background: true, and prompt: "group Sync"\./);
+  assert.doesNotMatch(CLAUDE_GROUP_SYNC_PROMPT, /SKILL\.md/);
+
+  const f = localFixture(t, SupervisorLifecycle, { db: {
+    getLastActivity: () => null,
+    getLatestContentCheckpoint: () => null,
+    getDeliveredFrontier: () => 20,
+  } });
+  f.scene.createdAt = f.now - 3_300_000;
+  await f.lifecycle.checkTtl(f.scene, f.context);
+  assert.deepEqual(f.controls.map(row => row.content),
+    [PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT]);
 });
 
 // Boundary: real C4 binding, acknowledgment and drain-fence persistence; tmux is fake.

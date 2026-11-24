@@ -53,7 +53,7 @@ function fixture(mode = 'multi', configuration = {}) {
     requests: { read: () => [] },
     groupRunDir: group => `/isolated/${group}`,
     bindTarget: scene => ({ expectedRunId: scene.runId }),
-    prompts: { GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
+    prompts: { GROUP_SYNC_PROMPT: 'group sync', CLAUDE_GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
       PRE_RECLAIM_CHECK_PROMPT: 'check', PRE_RECLAIM_SYNC_PROMPT: 'prepare', SYNC_BACKLOG_ALERT: kind => `alert:${kind}` },
   };
   f.deps = deps;

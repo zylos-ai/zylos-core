@@ -25,9 +25,13 @@ If the snapshot cannot be read, use the runtime identity observed from that
 session's live process. Do not choose from machine defaults or a newer desired
 configuration. Origin Sync uses Origin's actual runtime.
 
-- Claude: launch `zylos-group-sync`, `zylos-origin-sync`, or `zylos-global-sync`
-  with `run_in_background: true`; these definitions use `sonnet`. Never use a
-  `fork` type or any mechanism that inherits the parent conversation for Sync.
+- Claude: for ordinary group Sync, immediately call Agent with
+  `subagent_type: "zylos-group-sync"`, `run_in_background: true`, and the exact
+  prompt `"group Sync"`. The direct control needs no skill read or launch
+  preparation. For pre-reclaim, Origin, and global Sync, launch the selected
+  `zylos-group-sync`, `zylos-origin-sync`, or `zylos-global-sync` worker in
+  the background with the instructions below. These definitions use `sonnet`.
+  Never use a `fork` type or inherit the parent conversation for Sync.
 - Codex: use this session's native `spawn_agent` with `fork_turns: "none"`.
   Before launch, inspect the current `spawn_agent` tool's exposed model list.
   If it lists a Terra-tier model, pass that exact ID in `model`; do not omit
@@ -57,14 +61,20 @@ configuration. Origin Sync uses Origin's actual runtime.
   If background tools or the restricted memory tool are unavailable, report
   `TOOL_UNAVAILABLE` and stop; do not silently run an unrestricted writer.
 
-Before launch, the parent discovers the exposed restricted memory tool and
-passes its exact name in the worker message. Claude normally exposes
+Except for ordinary Claude group Sync, the parent discovers the exposed
+restricted memory tool before launch and passes its exact name in the worker
+message. Claude normally exposes
 `mcp__zylos-memory__edit_memory`; Codex normally exposes
 `mcp__zylos_memory__edit_memory`. If that name is absent, discover an exposed
 tool ending in `edit_memory` before declaring `TOOL_UNAVAILABLE`. Never select
 an unrestricted writer as a substitute.
 
-Pass the exact restricted tool name, inherited bindings, selected procedure's installed absolute path, and relevant facts absent from C4/inbox (code findings, unmentioned actions and pitfalls). Capture these as they arise with memory-append.js rather than waiting for Sync. The worker cannot see the parent conversation.
+For launches that require a worker message, pass the exact restricted tool
+name, inherited bindings, selected procedure's installed absolute path, and
+relevant facts absent from C4/inbox (code findings, unmentioned actions and
+pitfalls). For ordinary Claude group Sync the worker finds its own tool,
+bindings, and procedure. Record relevant facts in the inbox as they arise
+using `memory-append.js`. The worker cannot see the parent conversation.
 
 Select the job named in the control prompt, then check the inherited environment:
 
@@ -78,7 +88,7 @@ Select the job named in the control prompt, then check the inherited environment
   or a user's manual request to sync memory), use group Sync when a group is
   bound and global Sync when no group is bound; never infer Origin Sync.
 
-Never infer Origin Sync merely from being in origin. Never invent or replace these bindings. The parent reads only this skill; the worker reads only the files listed under Worker procedures for its selected procedure: [group](references/group-sync.md), [Origin](references/origin-sync.md), or [global](references/global-sync.md), with the exact common-file list below. Pass these installed absolute paths in the worker task. Old queued prompts saying "Read the zylos-memory skill" use this same dispatch and result handling.
+Never infer Origin Sync merely from being in origin. Never invent or replace these bindings. The parent reads only this skill; the worker reads only the files listed under Worker procedures for its selected procedure: [group](references/group-sync.md), [Origin](references/origin-sync.md), or [global](references/global-sync.md), with the exact common-file list below. Include these installed absolute paths when the launch requires a worker message. Old queued prompts saying "Read the zylos-memory skill" use this same dispatch and result handling.
 
 ## Parent result handling
 

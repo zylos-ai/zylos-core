@@ -42,7 +42,7 @@ function fixture(mode = 'multi', kind = 'origin') {
       return f.shouldPropose;
     },
     prompts: { REFERENCE_REORG_PROMPT: 'reference proposal', ORIGIN_SYNC_PROMPT: 'origin sync',
-      GROUP_SYNC_PROMPT: 'group sync', SYNC_BACKLOG_ALERT: () => 'backlog alert',
+      GROUP_SYNC_PROMPT: 'group sync', CLAUDE_GROUP_SYNC_PROMPT: 'group sync', SYNC_BACKLOG_ALERT: () => 'backlog alert',
       PRE_RECLAIM_CHECK_PROMPT: 'reclaim check', PRE_RECLAIM_ORIGIN_SYNC_PROMPT: 'reclaim origin sync' },
     reportError: (cause, context) => f.errors.push({ cause, context }),
   };

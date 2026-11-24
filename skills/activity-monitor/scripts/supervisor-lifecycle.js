@@ -1029,7 +1029,11 @@ export class SupervisorLifecycle {
     if (marker.held && !marker.stale) return;
     if (!await this.beforeWrite(scene.sessionGroup, context, kind === 'origin' ? undefined : scene)) return;
     const checkpointId = await this.syncCheckpoint(scene, kind);
-    const control = await this.d.db.insertControl(this.prompt(kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT'), {
+    // Single mode uses the regular group trigger for its global Sync.
+    const directClaudeGroup = kind === 'group' && scene.runtime === 'claude' && modeOf(context) === 'multi';
+    const prompt = kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' :
+      directClaudeGroup ? 'CLAUDE_GROUP_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT';
+    const control = await this.d.db.insertControl(this.prompt(prompt), {
       sessionGroup: scene.sessionGroup, priority: 2, appendAckSuffix: false,
       ...(kind === 'origin' ? {} : { ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000), createdAt: Math.floor(now / 1000) }),
     });
