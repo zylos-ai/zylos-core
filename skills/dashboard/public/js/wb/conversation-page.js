@@ -593,7 +593,52 @@ export function mountConversationPage({
   rowMenu.append(rowMenuGrab, rowPin, rowDelete);
   page.append(rowMenuScrim, rowMenu);
   let menuRow = null;
+  let rowPress = null, ignoreRowHoldClick = false, touchRowPress = false;
+  const isContact = event => event.pointerType === 'touch' || event.pointerType === 'pen';
+  function cancelRowPress() {
+    if (rowPress) view.clearTimeout(rowPress.timer);
+    rowPress = null;
+  }
+  page.addEventListener('pointerdown', event => {
+    ignoreRowHoldClick = false;
+    touchRowPress = isContact(event);
+  }, true);
+  list.addEventListener('pointerdown', event => {
+    cancelRowPress();
+    if (!event.isPrimary || event.button !== 0 || !isContact(event)) return;
+    const row = listRows.get(event.target.closest?.('.conversation-list-item')?.dataset.conversationId);
+    if (!row || row.menuToggle.hidden) return;
+    rowPress = {
+      id: event.pointerId, x: event.clientX, y: event.clientY,
+      timer: view.setTimeout(() => {
+        rowPress = null;
+        if (!opened || !row.wrapper.isConnected || row.menuToggle.hidden) return;
+        ignoreRowHoldClick = true;
+        openRowMenu(row, true);
+      }, 500)
+    };
+  });
+  list.addEventListener('pointermove', event => {
+    if (rowPress?.id === event.pointerId && Math.hypot(event.clientX - rowPress.x, event.clientY - rowPress.y) > 10) {
+      cancelRowPress();
+    }
+  });
+  function endRowPress(event) {
+    if (rowPress?.id === event.pointerId) cancelRowPress();
+  }
+  list.addEventListener('pointerup', endRowPress);
+  list.addEventListener('pointercancel', endRowPress);
+  list.addEventListener('contextmenu', event => {
+    if ((isContact(event) || touchRowPress) && event.target.closest?.('.conversation-list-item')) event.preventDefault();
+  });
+  page.addEventListener('click', event => {
+    if (!ignoreRowHoldClick || event.detail === 0) return;
+    ignoreRowHoldClick = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
   function closeOutsideRowMenu(event) {
+    if (ignoreRowHoldClick && event.detail > 0 && page.contains(event.target)) return;
     if (!rowMenu.contains(event.target) && !menuRow?.menuToggle.contains(event.target)) closeRowMenu();
   }
   function closeRowMenu(focus = true) {
@@ -616,7 +661,7 @@ export function mountConversationPage({
     rowMenu.setAttribute('aria-label', row.menuToggle.getAttribute('aria-label'));
     rowMenuScrim.setAttribute('aria-label', t('chat.page.cancel'));
   }
-  function openRowMenu(row) {
+  function openRowMenu(row, fromHold = false) {
     if (menuRow === row) {
       closeRowMenu();
       return;
@@ -640,7 +685,7 @@ export function mountConversationPage({
       rowMenu.style.removeProperty('left');
       rowMenu.style.removeProperty('top');
     } else {
-      const anchor = row.menuToggle.getBoundingClientRect();
+      const anchor = (fromHold ? row.button : row.menuToggle).getBoundingClientRect();
       const { width, height } = rowMenu.getBoundingClientRect();
       rowMenu.style.left = Math.max(4, anchor.right - width) + 'px';
       const below = anchor.bottom + 4;
@@ -669,10 +714,13 @@ export function mountConversationPage({
       (buttons[next] ?? rowMenu).focus();
     }
   });
-  const dismissRowMenu = () => closeRowMenu();
+  const dismissRowMenu = () => {
+    cancelRowPress();
+    closeRowMenu();
+  };
   list.addEventListener('scroll', dismissRowMenu);
   function resizeRowMenu() {
-    closeRowMenu();
+    dismissRowMenu();
     for (const row of listRows.values()) {
       row.menuToggle.setAttribute('aria-haspopup', view.innerWidth <= 760 ? 'dialog' : 'menu');
     }
@@ -2193,6 +2241,7 @@ export function mountConversationPage({
     },
     close() {
       closeCopyMenu();
+      cancelRowPress();
       closeRowMenu(false);
       leaveTextSelection();
       autoSelectPending = false;
@@ -2212,6 +2261,7 @@ export function mountConversationPage({
     clearDrafts(scope) { uploadTray.clearForAuthentication(scope?.instance ? { instance: scope.instance } : undefined); state.clearDrafts(scope); },
     destroy() {
       closeCopyMenu();
+      cancelRowPress();
       closeRowMenu(false);
       view?.removeEventListener('resize', resizeRowMenu);
       leaveTextSelection();
