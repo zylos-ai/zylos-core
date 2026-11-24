@@ -4,8 +4,9 @@ Read [common safety and reading rules](sync-common.md) and [writing rules](sync-
 
 ## Single global Sync
 
-Use kind=global, no `ZYLOS_SESSION_GROUP`, global memory paths, and the global
-C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, summary, temporary state, commit, and failure sequence, with these differences:
+Use kind=global, global memory paths, and the global C4 chain. Follow the
+working-state steps below: read-before-cleanup, recovery, summary, temporary
+state, commit, and failure sequence, with these differences:
 
 - Omit every `--group` on unsummarized/checkpoint reads. Never read group folders.
   Multiple source groups still yield one global checkpoint.

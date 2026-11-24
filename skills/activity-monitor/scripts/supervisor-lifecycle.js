@@ -1027,14 +1027,14 @@ export class SupervisorLifecycle {
     const marker = await this.d.readSyncMarker({ runDir: scene.runDir, kind, currentRunId: scene.runId });
     if (!marker || typeof marker.held !== 'boolean' || typeof marker.stale !== 'boolean') throw error('INVALID_OBSERVATION', 'Invalid Sync marker result');
     if (marker.held && !marker.stale) return;
-    // Single mode uses the regular group trigger for its global Sync.
     const runtimePrompt = kind === 'group' && modeOf(context) === 'multi'
       ? (await findRuntime(scene.runtime))?.instructions.groupSyncPrompt
       : undefined;
     if (!await this.beforeWrite(scene.sessionGroup, context, kind === 'origin' ? undefined : scene)) return;
     const checkpointId = await this.syncCheckpoint(scene, kind);
-    const prompt = typeof runtimePrompt === 'string'
-      ? runtimePrompt : this.prompt(kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT');
+    const promptName = kind === 'origin' ? 'ORIGIN_SYNC_PROMPT'
+      : kind === 'global' || modeOf(context) === 'single' ? 'GLOBAL_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT';
+    const prompt = typeof runtimePrompt === 'string' ? runtimePrompt : this.prompt(promptName);
     const control = await this.d.db.insertControl(prompt, {
       sessionGroup: scene.sessionGroup, priority: 2, appendAckSuffix: false,
       ...(kind === 'origin' ? {} : { ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000), createdAt: Math.floor(now / 1000) }),

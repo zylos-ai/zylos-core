@@ -8,7 +8,7 @@ import * as runtimes from '../../../../cli/lib/runtime/index.js';
 import { UNSUPPORTED } from '../../../../cli/lib/runtime/contract.js';
 import { fixture as databaseFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
-import { GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
+import { GROUP_SYNC_PROMPT, GLOBAL_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
   PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT } from '../../../zylos-memory/scripts/sync-prompts.js';
 import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
 import { groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
@@ -46,7 +46,7 @@ function localFixture(t, Class = SupervisorLifecycle, options = {}) {
     requests: { read: () => [] }, diagnostic: e => f.events.push(e),
     groupRunDir: () => f.root,
     readSyncMarker: args => { f.markerCalls.push(args); return f.marker; },
-    prompts: { GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
+    prompts: { GROUP_SYNC_PROMPT, GLOBAL_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
       PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT, ROTATION_PROMPT: 'rotate' },
     ...options.deps };
   const configuration = f.context.configuration;
@@ -96,7 +96,7 @@ test('Sync reads group and Origin marker scopes and failed writes do not mark a 
   await syncScopeScenario(t, SupervisorLifecycle);
 });
 
-test('ordinary group Sync uses the runtime prompt when available', async t => {
+test('ordinary Sync selects the prompt for the session mode and runtime', async t => {
   const adapterCases = await Promise.all(runtimes.SUPPORTED_RUNTIMES.map(async runtime => {
     const { instructions: { groupSyncPrompt } } = await runtimes.findRuntime(runtime);
     assert.equal(typeof groupSyncPrompt, 'string', runtime);
@@ -108,7 +108,7 @@ test('ordinary group Sync uses the runtime prompt when available', async t => {
     ['multi', 'claude', 'origin', groupSyncPrompt],
     ['multi', runtimeWithoutPrompt, 'telegram:room', GROUP_SYNC_PROMPT],
     ['multi', 'unknown', 'telegram:room', GROUP_SYNC_PROMPT],
-    ['single', 'claude', 'origin', GROUP_SYNC_PROMPT],
+    ['single', 'claude', 'origin', GLOBAL_SYNC_PROMPT],
   ]) {
     const f = localFixture(t);
     f.context.configuration.mode = mode;
