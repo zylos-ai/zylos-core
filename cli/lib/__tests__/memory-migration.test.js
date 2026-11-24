@@ -86,6 +86,15 @@ test('apply backs up exact initial bytes, reuses backup, complete cannot regress
   assert.equal(record.evidence.agent.runId, 'run1'); assert.equal(record.attempts, 1);
 });
 
+test('native single-session Origin can apply and complete the references migration', async t => {
+  const f = fixture(t, { readMode: () => ({ mode: 'single' }) });
+  init(f);
+  await f.service.apply(patch);
+  assert.equal(fs.readFileSync(f.references, 'utf8'), 'new marker\n');
+  await f.service.complete('Moved history into topics');
+  assert.equal(f.service.status().state, 'done');
+});
+
 test('authorization priority, stale runs, modes, transitions, and ordinary groups reject without writes', async t => {
   const f = fixture(t); init(f); const bytes = fs.readFileSync(f.record);
   const cases = [

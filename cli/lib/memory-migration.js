@@ -197,15 +197,14 @@ export function createMigration({ env = process.env, now = Date.now, version = V
       if (mode === null) mode = 'single';
       if (!['single', 'multi'].includes(mode) || await readTransition()) throw Error('Session mode unavailable or transitioning');
     } catch (cause) { throw error('MODE_UNAVAILABLE', cause.message); }
-    const grouped = Object.hasOwn(env, 'ZYLOS_SESSION_GROUP');
-    if ((mode === 'multi' && env.ZYLOS_SESSION_GROUP !== 'origin') || (mode === 'single' && grouped)) {
+    if (env.ZYLOS_SESSION_GROUP !== 'origin' && (mode === 'multi' || Object.hasOwn(env, 'ZYLOS_SESSION_GROUP'))) {
       throw error('NOT_MAIN_SESSION', 'Migration requires the current main session');
     }
     let live;
     try { live = await observe(); } catch (cause) { throw error('RUN_MISMATCH', cause.message); }
     if (!live?.present) throw error('RUN_MISMATCH', 'Main session is absent');
-    if ((mode === 'multi' && live.rawF2?.ZYLOS_SESSION_GROUP !== 'origin') ||
-        (mode === 'single' && Object.hasOwn(live.rawF2 || {}, 'ZYLOS_SESSION_GROUP'))) {
+    const liveEnv = live.rawF2 ?? {};
+    if (liveEnv.ZYLOS_SESSION_GROUP !== 'origin' && (mode === 'multi' || Object.hasOwn(liveEnv, 'ZYLOS_SESSION_GROUP'))) {
       throw error('NOT_MAIN_SESSION', 'Main session environment differs from current mode');
     }
     if (!env.ZYLOS_RUN_ID || !live.present || live.runId !== env.ZYLOS_RUN_ID || !live.ready || live.f3?.runId !== env.ZYLOS_RUN_ID) {
