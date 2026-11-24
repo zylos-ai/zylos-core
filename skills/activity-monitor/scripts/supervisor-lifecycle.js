@@ -1033,7 +1033,7 @@ export class SupervisorLifecycle {
     if (!await this.beforeWrite(scene.sessionGroup, context, kind === 'origin' ? undefined : scene)) return;
     const checkpointId = await this.syncCheckpoint(scene, kind);
     const promptName = kind === 'origin' ? 'ORIGIN_SYNC_PROMPT'
-      : kind === 'global' || modeOf(context) === 'single' ? 'GLOBAL_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT';
+      : modeOf(context) === 'single' ? 'GLOBAL_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT';
     const prompt = typeof runtimePrompt === 'string' ? runtimePrompt : this.prompt(promptName);
     const control = await this.d.db.insertControl(prompt, {
       sessionGroup: scene.sessionGroup, priority: 2, appendAckSuffix: false,
