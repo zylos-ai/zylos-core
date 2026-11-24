@@ -253,6 +253,8 @@
   "wb.schedule.result.started": "送达中",
   "wb.schedule.result.unknown": "未知",
   "wb.schedule.search": "搜索任务名",
+  "wb.schedule.tab.overview": "总览",
+  "wb.schedule.tab.tasks": "任务",
   "wb.schedule.new": "新建任务",
   "wb.schedule.in": "{span}后",
   "wb.schedule.ago": "{span}前",

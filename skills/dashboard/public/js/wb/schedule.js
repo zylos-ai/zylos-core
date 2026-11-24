@@ -292,6 +292,9 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   const aside = element(document, 'aside', undefined, 'wb-sched-side');
   const layer = element(document, 'div', undefined, 'wb-sched-layer');
   let mounted = false, sideKey = null, sideBody = null;
+  let mobileTab;
+  let timelineLabel = null;
+  const mobileWidth = window?.matchMedia?.('(max-width: 760px)');
   aside.hidden = true;
   const level = () => document.documentElement?.dataset?.detail === 'technical' ? 'technical' : 'plain';
   const tz = () => data?.tz ?? null;
@@ -315,6 +318,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     detailError = false;
     listBusy = false;
     pageCount = 1;
+    setMobileTab('overview');
     filter = { status: 'all', query: '', target: null };
     closePicker();
     form = null;
@@ -684,6 +688,45 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     box.append(body);
     return box;
   }
+  function dismissTimelineLabel() {
+    timelineLabel?.remove();
+    timelineLabel = null;
+  }
+  const dismissOutside = event => {
+    if (timelineLabel && !timelineLabel.contains(event.target)) dismissTimelineLabel();
+  };
+  function timelineMarker(lane, id, title, className) {
+    let pressedWith;
+    const marker = button(document, '', event => {
+      // Some browsers expose pointerType on pointerdown but dispatch a MouseEvent for click.
+      const pointerType = event.pointerType ?? (event.detail > 0 ? pressedWith : undefined);
+      pressedWith = undefined;
+      activateTimelineMarker(event, lane, marker, id, pointerType);
+    }, className);
+    marker.addEventListener('pointerdown', event => { pressedWith = event.pointerType; });
+    marker.addEventListener('pointercancel', () => { pressedWith = undefined; });
+    marker.title = title;
+    marker.setAttribute('aria-label', title);
+    return marker;
+  }
+  function activateTimelineMarker(event, lane, marker, id, pointerType) {
+    if (pointerType !== 'touch' || !mobileWidth?.matches) {
+      select(id);
+      return;
+    }
+    dismissTimelineLabel();
+    const label = button(document, marker.title, () => select(id), 'wb-btn wb-sched-marker-label');
+    const bounds = lane.getBoundingClientRect();
+    const mark = marker.getBoundingClientRect();
+    const center = marker.classList.contains('wb-sched-band')
+      ? event.clientX : mark.left + mark.width / 2;
+    lane.append(label);
+    const width = label.getBoundingClientRect().width;
+    const anchor = center - bounds.left - lane.clientLeft;
+    label.style.left = `${Math.max(0, Math.min(anchor - width / 2, lane.clientWidth - width))}px`;
+    label.style.top = marker.style.top;
+    timelineLabel = label;
+  }
   function renderTimeline() {
     const box = element(document, 'section', undefined, 'wb-sched-block wb-sched-lane');
     box.append(sectionHead(document, 'clock', t('wb.schedule.kpi.next24h')));
@@ -709,20 +752,16 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       const runs = task.nextRuns.in24h;
       const first = Math.max(0, Math.min(100, (runs[0] - start) / 864));
       const last = Math.max(first, Math.min(100, (runs.at(-1) - start) / 864));
-      const band = button(document, '', () => select(task.id), 'wb-sched-band' +
-        (task.priority === 1 ? ' wb-p1' : '') + (task.id === selected ? ' active' : ''));
-      band.title = `${task.name} · ${t('wb.schedule.times', { n: runs.length })}`;
-      band.setAttribute('aria-label', band.title);
+      const band = timelineMarker(lane, task.id, `${task.name} · ${t('wb.schedule.times', { n: runs.length })}`,
+        'wb-sched-band' + (task.priority === 1 ? ' wb-p1' : '') + (task.id === selected ? ' active' : ''));
       band.style.setProperty('left', `${first}%`);
       band.style.setProperty('width', `${last - first}%`);
       band.style.setProperty('top', `${46 + index * 44}px`);
       lane.append(band);
     }
     for (const dot of laneDots(timeline.filter(task => (task.nextRuns?.in24h?.length ?? 0) <= 96), start)) {
-      const node = button(document, '', () => select(dot.task.id), 'wb-sched-dot' +
-        (dot.task.priority === 1 ? ' wb-p1' : '') + (dot.task.id === selected ? ' active' : ''));
-      node.title = `${dot.task.name} · ${day(dot.at)}`;
-      node.setAttribute('aria-label', node.title);
+      const node = timelineMarker(lane, dot.task.id, `${dot.task.name} · ${day(dot.at)}`,
+        'wb-sched-dot' + (dot.task.priority === 1 ? ' wb-p1' : '') + (dot.task.id === selected ? ' active' : ''));
       node.style.setProperty('left', `${dot.left}%`);
       node.style.setProperty('top', `${10 + dot.row * 7.5}px`);
       lane.append(node);
@@ -730,6 +769,54 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     box.append(lane, axis);
     return box;
   }
+  const mobileBar = element(document, 'div', undefined, 'wb-sched-mobile-bar');
+  const tabs = element(document, 'nav', undefined, 'wb-detail-tabs');
+  const tasksPanel = element(document, 'div', undefined, 'wb-sched-tasks');
+  tasksPanel.id = 'wb-sched-panel-tasks';
+  tasksPanel.setAttribute('role', 'tabpanel');
+  tasksPanel.setAttribute('aria-labelledby', 'wb-sched-tab-tasks');
+  tabs.setAttribute('role', 'tablist');
+  mobileBar.append(tabs);
+  const tabButtons = new Map();
+  for (const name of ['overview', 'tasks']) {
+    const tab = button(document, '', () => setMobileTab(name));
+    tab.id = 'wb-sched-tab-' + name;
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-controls', 'wb-sched-panel-' + name);
+    tabButtons.set(name, tab);
+    tabs.append(tab);
+  }
+  tabs.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const next = { Home: 'overview', End: 'tasks' }[event.key] ?? (mobileTab === 'overview' ? 'tasks' : 'overview');
+    setMobileTab(next);
+    tabButtons.get(next).focus();
+  });
+  function setMobileTab(name) {
+    mobileTab = name;
+    main.dataset.scheduleTab = name;
+    for (const [key, tab] of tabButtons) {
+      tab.setAttribute('aria-selected', String(key === name));
+      tab.tabIndex = key === name ? 0 : -1;
+    }
+    dismissTimelineLabel();
+    fitAxis();
+  }
+  function createTaskButton(className) {
+    const label = t('wb.schedule.new');
+    const create = button(document, '', () => openForm(null), 'wb-btn wb-btn-primary wb-sched-new ' + className);
+    create.append(icon(document, 'plus', 'xs'), element(document, 'span', label));
+    return create;
+  }
+  function renderMobileBar() {
+    tabButtons.get('overview').textContent = t('wb.schedule.tab.overview');
+    tabButtons.get('tasks').replaceChildren(t('wb.schedule.tab.tasks'),
+      element(document, 'span', data.counts?.all ?? 0, 'wb-n'));
+    placeChildren(mobileBar, writable() ? [tabs, createTaskButton('wb-sched-new-mobile')] : [tabs]);
+    return mobileBar;
+  }
+  setMobileTab('overview');
   function renderFilters() {
     const bar = filterBar;
     const counts = data.counts ?? {};
@@ -759,11 +846,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     searchWrap.append(icon(document, 'search', 'xs'), search);
     renderPicker();
     const parts = [seg, pickerWrap, searchWrap];
-    if (writable()) {
-      const create = button(document, t('wb.schedule.new'), () => openForm(null), 'wb-btn wb-btn-primary wb-sched-new');
-      create.replaceChildren(icon(document, 'plus', 'xs'), element(document, 'span', t('wb.schedule.new')));
-      parts.push(create);
-    }
+    if (writable()) parts.push(createTaskButton('wb-sched-new-desktop'));
     placeChildren(bar, parts);
     return bar;
   }
@@ -1009,6 +1092,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   }
   function redraw() {
     if (stopped) return;
+    dismissTimelineLabel();
     const notes = [];
     if (data && !data.tz) notes.push(element(document, 'p', t('wb.schedule.tzUnknown'), 'wb-sched-tz wb-txt-warn'));
     if (error) notes.push(element(document, 'p', t('wb.readFailed'), 'wb-sched-error'));
@@ -1021,8 +1105,12 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const task = data?.available && detailTask?.id === selected ? detailTask : null;
     if (data?.available) {
       const top = element(document, 'div', undefined, 'wb-sched-top');
+      top.id = 'wb-sched-panel-overview';
+      top.setAttribute('role', 'tabpanel');
+      top.setAttribute('aria-labelledby', 'wb-sched-tab-overview');
       top.append(renderKpi(), renderWeek(), renderTimeline());
-      notes.push(top, renderFilters(), renderList());
+      placeChildren(tasksPanel, [renderFilters(), renderList()]);
+      notes.push(renderMobileBar(), top, tasksPanel);
     }
     placeChildren(main, notes);
     const showForm = data?.available && form && (form.taskId === null || form.taskId === task?.id);
@@ -1063,7 +1151,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     if (!frame) return;
     frame(() => {
       const axis = root.querySelector?.('.wb-sched-axis');
-      if (!axis?.getBoundingClientRect) return;
+      if (!axis?.getClientRects().length) return;
       const lane = axis.getBoundingClientRect();
       let last = null;
       for (const label of axis.children) {
@@ -1099,9 +1187,14 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     else if (form?.handle.dirty()) return;
     else if (form) form = null;
     else if (selected) { close(); event.preventDefault?.(); return; }
+    else if (timelineLabel) { dismissTimelineLabel(); event.preventDefault?.(); return; }
     else return;
     event.preventDefault?.();
     redraw();
+  };
+  const resize = () => {
+    dismissTimelineLabel();
+    fitAxis();
   };
   const toggle = document.querySelector('#wb-detail-toggle');
   const redrawLater = () => redraw();
@@ -1118,7 +1211,8 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   document.addEventListener('keydown', keydown);
   toggle?.addEventListener('change', redrawLater);
   window?.addEventListener('popstate', visibility);
-  window?.addEventListener('resize', fitAxis);
+  document.addEventListener('click', dismissOutside, true);
+  window?.addEventListener('resize', resize);
   const timer = setInterval(refresh, 30000);
   refresh();
   return () => {
@@ -1133,6 +1227,8 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     document.removeEventListener('keydown', keydown);
     toggle?.removeEventListener('change', redrawLater);
     window?.removeEventListener('popstate', visibility);
-    window?.removeEventListener('resize', fitAxis);
+    dismissTimelineLabel();
+    document.removeEventListener('click', dismissOutside, true);
+    window?.removeEventListener('resize', resize);
   };
 }
