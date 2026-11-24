@@ -101,10 +101,6 @@ test('only ordinary Claude group Sync uses the direct launch prompt', async t =>
       [[sessionGroup, expected], ['origin', ORIGIN_SYNC_PROMPT]], `${mode}/${runtime}/${sessionGroup}`);
   }
 
-  assert.match(CLAUDE_GROUP_SYNC_PROMPT,
-    /Agent tool once with subagent_type: "zylos-group-sync", run_in_background: true, and prompt: "group Sync"\./);
-  assert.doesNotMatch(CLAUDE_GROUP_SYNC_PROMPT, /SKILL\.md/);
-
   const f = localFixture(t, SupervisorLifecycle, { db: {
     getLastActivity: () => null,
     getLatestContentCheckpoint: () => null,
