@@ -20,7 +20,7 @@
   --fs-title-sm: 16px;
   --fs-title-md: 18px;
   --fs-title-lg: 20px;
-  --fs-input-mobile: var(--fs-title-sm);
+  --fs-input-mobile: 16px;
   --c-input-fs: var(--fs-body);
 
   --fw-body: 400;
@@ -31,14 +31,16 @@
   --lh-body: 24px;
   --lh-caption: 18px;
   --lh-label: 20px;
+  --lh-control: 1.2;
   --lh-chart-label: 1.3;
   --lh-diagram: 22px;
-  --lh-compact-badge: 1;
-  --lh-badge-compact: 1.2;
+  --lh-close-glyph: 1;
+  --lh-activity-pill: 1;
+  --lh-pill: 1.2;
   --lh-badge: 16px;
-  --lh-badge-bordered: var(--lh-caption);
+  --lh-badge-bordered: 18px;
   --lh-badge-price: 15px;
-  --lh-composer-mobile: var(--lh-diagram);
+  --lh-composer-mobile: 22px;
 
   --radius: 12px;
   --radius-sm: 8px;
@@ -70,9 +72,6 @@ body {
 }
 
 button, select { font: inherit; }
-:where(input:not([type]), input[type="text"], input[type="search"], input[type="password"], input[type="email"], input[type="url"], input[type="tel"], input[type="number"], input[type="date"], input[type="time"], textarea) {
-  font-size: var(--c-input-fs);
-}
 
 h1, h2, p { margin-top: 0; }
 h1 { margin-bottom: 0; font-size: var(--fs-title-lg); font-weight: var(--fw-strong); letter-spacing: -0.01em; }
@@ -353,8 +352,12 @@ main { padding: var(--space-md) var(--space-lg) var(--space-xl); }
   background: var(--bg);
   color: var(--text);
   font-family: "JetBrains Mono", monospace;
-  font-size: var(--c-input-fs);
-  line-height: var(--lh-body);
+  font-size: var(--fs-small);
+  line-height: var(--lh-caption);
+}
+
+@media (max-width: 760px) {
+  .memory-editor { line-height: var(--lh-root); }
 }
 
 .memory-notice {
@@ -673,7 +676,7 @@ main { padding: var(--space-md) var(--space-lg) var(--space-xl); }
 }
 .sum-costs small {
   color: var(--text-muted);
-  font-size: var(--fs-tiny);
+  font-size: var(--fs-caption);
 }
 .sum-costs strong {
   color: var(--text);
@@ -696,7 +699,7 @@ main { padding: var(--space-md) var(--space-lg) var(--space-xl); }
   color: var(--link-color, var(--text-dim));
   font-family: "JetBrains Mono", ui-monospace, monospace;
   font-size: var(--fs-tiny);
-  line-height: var(--lh-badge-compact);
+  line-height: var(--lh-pill);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -843,7 +846,7 @@ main { padding: var(--space-md) var(--space-lg) var(--space-xl); }
   background: transparent;
   color: var(--text-muted);
   font-size: var(--fs-title-md);
-  line-height: var(--lh-compact-badge);
+  line-height: var(--lh-close-glyph);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -976,7 +979,7 @@ main { padding: var(--space-md) var(--space-lg) var(--space-xl); }
 .settings-price-table td { padding: 3px 4px; }
 .settings-price-table th:last-child, .settings-price-table td:last-child { width: 28px; text-align: center; }
 
-.settings-input { width: 100%; padding: 4px 6px; border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg-primary); color: var(--text-primary); font-size: var(--c-input-fs); }
+.settings-input { width: 100%; padding: 4px 6px; border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg-primary); color: var(--text-primary); font-size: var(--fs-body-sm); }
 .settings-input:focus { border-color: var(--border-focus); outline: none; }
 .settings-input[readonly] { background: var(--bg-secondary); color: var(--text-secondary); }
 
@@ -1050,7 +1053,7 @@ main { padding: var(--space-md) var(--space-lg) var(--space-xl); }
 .history-marker { border-style: dashed; background: transparent; }
 .history-field { margin-top: 8px; min-width: 0; }
 .history-field > strong { display: block; font-size: var(--fs-caption); color: var(--text-dim); }
-.history-content { line-height: var(--lh-root); font-size: var(--fs-body-sm); overflow-wrap: anywhere; }
+.history-content { line-height: var(--lh-label); font-size: var(--fs-body-sm); overflow-wrap: anywhere; }
 .history-content pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .history-content table { display: block; max-width: 100%; overflow-x: auto; }
 .history-content img { max-width: 100%; }

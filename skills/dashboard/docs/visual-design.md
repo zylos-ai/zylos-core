@@ -96,17 +96,18 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 | Tier | Variable | Use |
 |---|---|---|
 | 9 px | `--fs-micro` | Smallest chart marks and badges |
-| 10 px | `--fs-tiny` | Chart ticks and tiny badges |
-| 10.5 px | `--fs-badge` | Dedicated small badges and chart labels |
+| 10 px | `--fs-tiny` | Tick labels and compact badges such as draft and fleet link badges |
+| 10.5 px | `--fs-badge` | Chart annotations and dedicated channel, mode, and price badges |
 | 11 px | `--fs-caption` | Compact descriptions and metadata |
 | 12 px | `--fs-small` | Regular descriptions and compact controls |
-| 12.5 px | `--fs-control` | Regular compact control labels |
+| 12.5 px | `--fs-control` | Compact controls such as filters, toolbar actions, and menu options |
 | 13 px | `--fs-body-sm` | Compact body text and field labels |
-| 14 px | `--fs-body` | Body text and desktop text entry |
+| 14 px | `--fs-body` | Body text |
 | 16 px | `--fs-title-sm` | Small headings |
 | 18 px | `--fs-title-md` | Intermediate headings |
 | 20 px | `--fs-title-lg` | Page headings |
-| 14 / 16 px | `--c-input-fs` | Text entry uses body on desktop and `--fs-input-mobile` at 760 px and below. The latter aliases the existing 16 px tier. |
+| 16 px | `--fs-input-mobile` | Text fields and selects at 760 px and below |
+| 14 / 16 px | `--c-input-fs` | Rich conversation question fields use the body tier on desktop and the mobile input tier at 760 px and below. |
 
 [Approved] Weight uses three tiers (Howard, TG topic 5950 msg 9680). The variable font still declares its supported weight range of 100–900.
 
@@ -123,11 +124,19 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 | 1.5 | `--lh-root` | Root and other multiline text |
 | 14 / 24 px | `--lh-body` | Multiline body and conversation text |
 | 12 / 18 px | `--lh-caption` | Descriptions and help text |
-| 13 / 20 px | `--lh-label` | Multiline field labels |
-| Dedicated | `--lh-chart-label`, `--lh-diagram`, `--lh-compact-badge`, `--lh-badge-compact`, `--lh-badge`, `--lh-badge-bordered`, `--lh-badge-price` | Existing line boxes for chart labels, diagrams, glyphs and badges |
-| 22 px | `--lh-composer-mobile` | Preserve the approved mobile composer frame. Aliases the existing 22 px line box. |
+| 13 / 20 px | `--lh-label` | Multiline labels and compact body text |
+| 1.2 | `--lh-control` | Single-line buttons, segmented controls, tabs and chips in their existing vertically centered frames |
+| 1.3 | `--lh-chart-label` | Chart labels |
+| 22 px | `--lh-diagram` | Diagram connector glyphs |
+| 1 | `--lh-close-glyph` | Modal close glyph |
+| 1 | `--lh-activity-pill` | Compact phone conversation activity pills |
+| 1.2 | `--lh-pill` | Small fleet and memory badges |
+| 16 px | `--lh-badge` | Question status and mode badges |
+| 18 px | `--lh-badge-bordered` | Bordered badges and fixed annotation counters |
+| 15 px | `--lh-badge-price` | Price badges |
+| 22 px | `--lh-composer-mobile` | Decision 4 exception for the mobile message input. The line box preserves the 44 px frame with the existing padding and borders. |
 
-[Approved] CSS declarations and inline styles in HTML and JS use these variables for font size, weight and line height. Retain inherited sizes, the existing relative `0.92em` size and zero for hidden labels. Numeric values belong in shared token definitions. The font face's supported weight range is a font descriptor. Attach the zero-match typography scan to the delivery comment.
+[Approved] CSS declarations and inline styles in HTML and JS use these variables for font size, weight and line height. Retain inherited sizes, the existing relative `0.92em` size and zero for hidden labels. Numeric values belong in shared token definitions. The font face's supported weight range is a font descriptor.
 
 [Current] See the complete value snapshot for long-tail radii, shadows, borders, spacing, and icon overrides. Geometry, column widths, safe areas, and chart-specific values are outside bulk font-size or spacing-tier migrations.
 
