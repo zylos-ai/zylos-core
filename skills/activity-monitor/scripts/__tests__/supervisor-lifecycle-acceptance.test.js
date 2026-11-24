@@ -8,8 +8,9 @@ import * as runtimes from '../../../../cli/lib/runtime/index.js';
 import { UNSUPPORTED } from '../../../../cli/lib/runtime/contract.js';
 import { fixture as databaseFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
-import { GROUP_SYNC_PROMPT, GLOBAL_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
+import { GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
   PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT } from '../../../zylos-memory/scripts/sync-prompts.js';
+import { acquire, release } from '../../../zylos-memory/scripts/sync-lock.js';
 import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
 import { groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
 import { renderStateSkeleton } from '../../../zylos-memory/scripts/state-format.js';
@@ -46,7 +47,7 @@ function localFixture(t, Class = SupervisorLifecycle, options = {}) {
     requests: { read: () => [] }, diagnostic: e => f.events.push(e),
     groupRunDir: () => f.root,
     readSyncMarker: args => { f.markerCalls.push(args); return f.marker; },
-    prompts: { GROUP_SYNC_PROMPT, GLOBAL_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
+    prompts: { GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
       PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT, ROTATION_PROMPT: 'rotate' },
     ...options.deps };
   const configuration = f.context.configuration;
@@ -96,28 +97,26 @@ test('Sync reads group and Origin marker scopes and failed writes do not mark a 
   await syncScopeScenario(t, SupervisorLifecycle);
 });
 
-test('ordinary Sync selects the prompt for the session mode and runtime', async t => {
+test('ordinary multi-session Sync selects the prompt for the runtime', async t => {
   const adapterCases = await Promise.all(runtimes.SUPPORTED_RUNTIMES.map(async runtime => {
     const { instructions: { groupSyncPrompt } } = await runtimes.findRuntime(runtime);
     assert.equal(typeof groupSyncPrompt, 'string', runtime);
-    return ['multi', runtime, 'telegram:room', groupSyncPrompt];
+    return [runtime, 'telegram:room', groupSyncPrompt];
   }));
   const { instructions: { groupSyncPrompt } } = await runtimes.findRuntime('claude');
-  for (const [mode, runtime, sessionGroup, expected] of [
+  for (const [runtime, sessionGroup, expected] of [
     ...adapterCases,
-    ['multi', 'claude', 'origin', groupSyncPrompt],
-    ['multi', runtimeWithoutPrompt, 'telegram:room', GROUP_SYNC_PROMPT],
-    ['multi', 'unknown', 'telegram:room', GROUP_SYNC_PROMPT],
-    ['single', 'claude', 'origin', GLOBAL_SYNC_PROMPT],
+    ['claude', 'origin', groupSyncPrompt],
+    [runtimeWithoutPrompt, 'telegram:room', GROUP_SYNC_PROMPT],
+    ['unknown', 'telegram:room', GROUP_SYNC_PROMPT],
   ]) {
     const f = localFixture(t);
-    f.context.configuration.mode = mode;
     f.scene.sessionGroup = sessionGroup;
     f.scene.runtime = runtime;
     f.scene.launchConfig.runtime = runtime;
     await f.lifecycle.checkSync([f.scene], f.context);
     assert.deepEqual(f.controls.map(row => [row.sessionGroup, row.content]),
-      [[sessionGroup, expected], ['origin', ORIGIN_SYNC_PROMPT]], `${mode}/${runtime}/${sessionGroup}`);
+      [[sessionGroup, expected], ['origin', ORIGIN_SYNC_PROMPT]], `${runtime}/${sessionGroup}`);
   }
   assert.ok(findRuntime.mock.calls.some(call => call.arguments[0] === runtimeWithoutPrompt));
 
@@ -130,6 +129,20 @@ test('ordinary Sync selects the prompt for the session mode and runtime', async 
   await f.lifecycle.checkTtl(f.scene, f.context);
   assert.deepEqual(f.controls.map(row => row.content),
     [PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT]);
+});
+
+test('native single-session Origin can acquire the lock for its periodic group Sync', async t => {
+  const f = localFixture(t);
+  f.context.configuration.mode = 'single';
+  f.scene.sourceScope = 'origin';
+  const env = { ZYLOS_DIR: f.root, ZYLOS_SESSION_GROUP: f.scene.sessionGroup, ZYLOS_RUN_ID: f.scene.runId };
+
+  await f.lifecycle.checkSync([f.scene], f.context);
+  assert.deepEqual(f.controls.map(row => [row.sessionGroup, row.content]),
+    [['origin', GROUP_SYNC_PROMPT], ['origin', ORIGIN_SYNC_PROMPT]]);
+
+  const token = await acquire({ env, kind: 'group' }, { currentRunId: () => f.scene.runId });
+  await release({ env, kind: 'group', token });
 });
 
 // Boundary: real C4 binding, acknowledgment and drain-fence persistence; tmux is fake.

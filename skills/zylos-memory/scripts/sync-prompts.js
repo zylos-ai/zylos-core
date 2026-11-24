@@ -3,7 +3,6 @@
 // as pasted material, so these stay short pointers: the result-handling rules live only in
 // the skill's "Parent result handling" section.
 export const GROUP_SYNC_PROMPT = 'Read only the zylos-memory SKILL.md parent instructions and start a background group Sync as it specifies, then keep working and handle its result per its Parent result handling section.';
-export const GLOBAL_SYNC_PROMPT = 'Read only the zylos-memory SKILL.md parent instructions and start a background global Sync as it specifies, then keep working and handle its result per its Parent result handling section.';
 export const ORIGIN_SYNC_PROMPT = 'Read only the zylos-memory SKILL.md parent instructions and start a background Origin Sync as it specifies, then keep working and handle its result per its Parent result handling section.';
 export const PRE_RECLAIM_SYNC_PROMPT = 'Read only the zylos-memory SKILL.md parent instructions and start a background group Sync subagent in this running session’s runtime. Wait for it to finish before acknowledging this control. Report any failure; do not acknowledge while the Sync is still running.';
 export const PRE_RECLAIM_ORIGIN_SYNC_PROMPT = 'Read only the zylos-memory SKILL.md parent instructions and start a background Origin Sync subagent in this running session’s runtime. Wait for it to finish before acknowledging this control. Report any failure; do not acknowledge while the Sync is still running.';
