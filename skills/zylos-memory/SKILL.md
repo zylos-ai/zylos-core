@@ -27,7 +27,7 @@ configuration. Origin Sync uses Origin's actual runtime.
 
 An ordinary group Sync control from the runtime adapter contains the complete
 launch instruction. Follow it immediately with one background tool call.
-The worker finds its own procedure, binding, and restricted memory tool.
+The worker finds its own procedure and restricted memory tool.
 Record relevant facts in the inbox as they arise using `memory-append.js`.
 A successful Sync or `SYNC_BUSY` requires no action after the final result.
 For other outcomes, follow Parent result handling below.
@@ -51,8 +51,8 @@ Sync, and for a generic control that asks you to read this skill.
   > You are this session's already-launched Memory Sync subagent; do not read the zylos-memory SKILL.md or launch another subagent.
 
   Then give the worker self-contained instructions to read
-  only the files listed for that job under Worker procedures. Include their paths, the requested job,
-  and all facts and environment bindings it needs; it cannot see the parent
+  only the files listed for that job under Worker procedures. Include their
+  paths, the requested job, and all facts it needs; it cannot see the parent
   conversation.
 - Antigravity: use `invoke_subagent` with `Model` set to `flash`. It runs in the
   background and its result returns to this conversation automatically; do not
@@ -60,8 +60,8 @@ Sync, and for a generic control that asks you to read this skill.
   > You are this session's already-launched Memory Sync subagent; do not read the zylos-memory SKILL.md or launch another subagent.
 
   Then give the worker self-contained instructions to read
-  only the files listed for that job under Worker procedures. Include their paths, the requested job,
-  and all facts and environment bindings it needs; it cannot see the parent
+  only the files listed for that job under Worker procedures. Include their
+  paths, the requested job, and all facts it needs; it cannot see the parent
   conversation.
 - Never use a new `codex exec`, PM2 service, or detached shell as a substitute.
   If background tools or the restricted memory tool are unavailable, report
@@ -74,24 +74,20 @@ tool and passes its exact name in the worker message. Claude normally exposes
 tool ending in `edit_memory` before declaring `TOOL_UNAVAILABLE`. Never select
 an unrestricted writer as a substitute.
 
-Pass the exact restricted tool name, inherited bindings, selected procedure's
-installed absolute path, and relevant facts absent from C4/inbox (code
-findings, unmentioned actions and pitfalls). Capture these as they arise using
+Pass the exact restricted tool name, the selected procedure's installed absolute
+path, and relevant facts absent from C4/inbox (code findings, unmentioned
+actions and pitfalls). Capture these as they arise using
 `memory-append.js`. The worker cannot see the parent conversation.
 
-Select the job named in the control prompt, then check the inherited environment:
+Run the job named in the control prompt:
 
-- `group Sync` with a nonempty `ZYLOS_SESSION_GROUP` uses kind=group and
-  `zylos-group-sync`, including in `origin`: it syncs origin's own working state.
-- Only a prompt naming `Origin Sync` selects kind=origin and `zylos-origin-sync`;
-  this job can run only in the `origin` group.
-- `group Sync` with no group and a `ZYLOS_RUN_ID` uses single global Sync
-  (kind=global, `zylos-global-sync`).
-- If the prompt does not name a job (an old prompt queued before an upgrade,
-  or a user's manual request to sync memory), use group Sync when a group is
-  bound and global Sync when no group is bound; never infer Origin Sync.
+- `group Sync` uses `zylos-group-sync`, including for Origin's own working state.
+- `Origin Sync` uses `zylos-origin-sync` and runs only in the `origin` group.
+- `global Sync` uses `zylos-global-sync`.
 
-Never infer Origin Sync merely from being in origin. Never invent or replace these bindings. The parent reads only this skill; the worker reads only the files listed under Worker procedures for its selected procedure: [group](references/group-sync.md), [Origin](references/origin-sync.md), or [global](references/global-sync.md), with the exact common-file list below. Include these installed absolute paths when the launch requires a worker message. Old queued prompts saying "Read the zylos-memory skill" use this same dispatch and result handling.
+If the request does not name a job, use group Sync when the session has a group and global Sync otherwise.
+
+The parent reads only this skill; the worker reads only the files listed under Worker procedures for its selected procedure: [group](references/group-sync.md), [Origin](references/origin-sync.md), or [global](references/global-sync.md), with the exact common-file list below. Include these installed absolute paths when the launch requires a worker message.
 
 ## Parent result handling
 

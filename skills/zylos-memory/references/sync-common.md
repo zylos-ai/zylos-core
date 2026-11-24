@@ -22,7 +22,7 @@ The zylos-memory scripts, c4-fetch.js, and c4-db.js accept `--help` or `-h`
 without reading/writing run data or acquiring a lock. Use argv, or safely
 quoted shell commands. Send summaries, JSON, and
 message bodies on stdin using a quoted heredoc. Never interpolate body text
-into a command. Group names come only from the inherited session binding.
+into a command.
 
 Never call `c4-checkpoint.js create` or directly mutate an Origin cursor; use only the guarded progress scripts for the selected procedure.
 
