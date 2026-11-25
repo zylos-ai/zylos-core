@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { END_TYPES, MAIN_ACTION_TYPES, STOP_HOOK_LAG_MS, inputAfterStop } from '../workbench/working.js';
-import { claudeCommentary, claudeTurnBoundaries, RESTART_EXIT_MS, runRestartEffect } from '../../../public/js/wb/timeline-rows.js';
+import { commentaryTurnBoundaries, RESTART_EXIT_MS, resolveCommentary, runRestartEffect,
+  toolEventTypes, transcriptTools } from '../../../public/js/wb/timeline-rows.js';
 import { loadCoreModule } from '../core-modules.js';
 import { getDashboardRuntime } from '../runtime/index.js';
 import { UNSUPPORTED } from '../runtime/contract.js';
@@ -18,9 +19,9 @@ import { UNSUPPORTED } from '../runtime/contract.js';
  */
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
-const STEP_TYPES = ['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'tool_call', 'tool_result',
+const STEP_TYPES = [...toolEventTypes, ...transcriptTools,
   'subagent_start', 'subagent_stop', 'assistant_message', 'deliver',
-  ...claudeTurnBoundaries.filter(type => type !== 'dashboard_interrupt')];
+  ...commentaryTurnBoundaries.filter(type => type !== 'dashboard_interrupt')];
 // Collectors read transcripts every 5 s, so a step's end or a queued message the runtime took after the stop may be
 // recorded a little later. For this long after a stop, steps without an end keep running, and work that ended without
 // a reply is still settling: the page already says it was handled, but keeps reading often.
@@ -98,8 +99,21 @@ export function stepLabel(event) {
 }
 
 export function commentaryText(event) {
-  return event.type === 'assistant_message' && event.runtime === 'codex' && event.meta.phase === 'commentary'
+  const { commentary } = vocab(event.runtime);
+  return event.type === 'assistant_message' && typeof commentary === 'function' && commentary(event)
     ? plain(event.summary) : null;
+}
+
+export function commentaryRole(event) {
+  if (event.type === 'dashboard_interrupt') return 'boundary';
+  if (vocab(event.runtime).commentary !== 'beforeTool') return null;
+  if (commentaryTurnBoundaries.includes(event.type)) return 'boundary';
+  if (event.type === 'assistant_message') return 'candidate';
+  return opensStep(event) ? 'tool' : null;
+}
+
+export function isActivityToolEvent(event) {
+  return (vocab(event.runtime).toolEvents === 'transcript' ? transcriptTools : toolEventTypes).includes(event.type);
 }
 
 /**
@@ -165,17 +179,17 @@ export function opensStep(event) {
 export function buildSteps(events, { agent = null, ends = [], now, restartCut = () => false }) {
   let steps = [], truncated = false;
   const open = new Map(), cells = new Map();
-  const progress = claudeCommentary([...events].sort((left, right) =>
-    (right.recorded ?? right.at) - (left.recorded ?? left.at) || (right.seq ?? 0) - (left.seq ?? 0)));
+  const progress = resolveCommentary([...events].sort((left, right) =>
+    (right.recorded ?? right.at) - (left.recorded ?? left.at) || (right.seq ?? 0) - (left.seq ?? 0)), event => ({
+    role: commentaryRole(event), run: event.run, session: event.session, agent: event.meta.agent_id, summary: event.summary,
+  }));
   for (const event of events) {
     if (agentOf(event) !== agent) continue;
     const meta = event.meta;
     const commentary = progress.get(event) ?? commentaryText(event);
     if (commentary) steps.push({ kind: 'commentary', at: event.at, text: commentary });
-    if (!['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'tool_call', 'tool_result'].includes(event.type)) continue;
+    if (!isActivityToolEvent(event)) continue;
     const vocabulary = vocab(event.runtime);
-    if (vocabulary.toolEvents === 'transcript' && ['pre_tool_use', 'post_tool_use', 'post_tool_failure'].includes(event.type)) continue;
-    if (vocabulary.toolEvents === 'hooks' && ['tool_call', 'tool_result'].includes(event.type)) continue;
     // A `wait` on a code-mode cell reads more of the `exec` that yielded it; the exec's step ends when one reports the
     // script finished.
     if (vocabulary.resumesCells && typeof meta.resumes_cell === 'string') {
@@ -200,7 +214,7 @@ export function buildSteps(events, { agent = null, ends = [], now, restartCut = 
       if (!step || step.end !== null) continue;
       // An `exec` that yielded while its script still runs goes on until a `wait` on its cell sees it finish.
       if (event.type === 'tool_result' && meta.cell_running && typeof meta.cell_id === 'string') { cells.set(meta.cell_id, step); continue; }
-      if (event.runtime === 'codex' && meta.command_activity) step.label = stepLabel(event);
+      if (meta.command_activity) step.label = stepLabel(event);
       step.end = event.at;
       step.status = event.type === 'post_tool_failure' && restartCut(event) ? 'interrupted'
         : event.type === 'post_tool_failure' || meta.outcome === 'failed' ? 'failed' : 'done';

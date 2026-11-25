@@ -7,19 +7,19 @@ import { mergeActivitySteps } from './activity-labels.js';
 export const toolEventTypes = ['pre_tool_use', 'post_tool_use', 'post_tool_failure'];
 export const plainEventTypes = [...labelledEvents];
 export const lifecycleEventTypes = plainEventTypes.filter(type => !toolEventTypes.includes(type));
-const transcriptTools = ['tool_call', 'tool_result'];
-export const claudeTurnBoundaries = ['user_prompt_submit', 'input_dequeue', 'stop', 'turn_complete', 'dashboard_interrupt'];
-const commentaryContextTypes = claudeTurnBoundaries.filter(type => !labelledEvents.has(type));
+export const transcriptTools = ['tool_call', 'tool_result'];
+export const commentaryTurnBoundaries = ['user_prompt_submit', 'input_dequeue', 'stop', 'turn_complete', 'dashboard_interrupt'];
+const commentaryContextTypes = commentaryTurnBoundaries.filter(type => !labelledEvents.has(type));
 
-export function claudeCommentary(newestEvents, read = event => event) {
+export function resolveCommentary(newestEvents, read) {
   const nextTool = new Set(), commentary = new Map();
   for (const item of newestEvents) {
-    const { runtime, type, group, run, session, meta, summary } = read(item);
-    if (runtime !== 'claude' && type !== 'dashboard_interrupt') continue;
-    const key = JSON.stringify([group, run, session, meta.agent_id]);
-    if (claudeTurnBoundaries.includes(type)) nextTool.delete(key);
-    else if (type === 'pre_tool_use' && meta.tool_use_id && !['Agent', 'Task'].includes(meta.tool_name)) nextTool.add(key);
-    else if (type === 'assistant_message' && nextTool.has(key) && summary?.trim()) {
+    const { role, group, run, session, agent, summary } = read(item);
+    if (!role) continue;
+    const key = JSON.stringify([group, run, session, agent]);
+    if (role === 'boundary') nextTool.delete(key);
+    else if (role === 'tool') nextTool.add(key);
+    else if (role === 'candidate' && nextTool.has(key) && summary?.trim()) {
       commentary.set(item, summary.trim().replace(/\s+/g, ' '));
     }
   }
@@ -91,8 +91,8 @@ export function runRestartEffect(events) {
 export function eventRows(events, { plain = false } = {}) {
   const rows = events.map(event => ({ at: timeValue(event.timestamp), event, ...(event.interrupted === true ? { interrupted: true } : {}) }));
   if (!plain) return rows;
-  const commentary = claudeCommentary(newestFirst(rows.filter(({ event }) => Object.hasOwn(event, 'activity'))), ({ event }) => ({
-    runtime: event.runtime, type: event.event_type, summary: event.summary, meta: event.metadata ?? {},
+  const commentary = resolveCommentary(newestFirst(rows), ({ event }) => ({
+    role: event.commentaryRole, summary: event.summary, agent: event.metadata?.agent_id,
     group: event.session_group, run: event.run_id, session: event.session_id,
   }));
   for (const [row, text] of commentary) {
@@ -114,7 +114,7 @@ export function plainActivityRows(rows, t) {
     if (!activity) {
       if (event && Object.hasOwn(event, 'activity') && (event.event_type === 'assistant_message' ||
           commentaryContextTypes.includes(event.event_type) || transcriptTools.includes(event.event_type) ||
-          event.runtime === 'codex' && toolEventTypes.includes(event.event_type))) continue;
+          toolEventTypes.includes(event.event_type))) continue;
       visible.push(row);
       continue;
     }
@@ -125,7 +125,7 @@ export function plainActivityRows(rows, t) {
     const step = meta.resumes_cell ? cells.get(cellKey) : calls.get(key);
     if (!activity.start && step) {
       if (activity.status !== 'running') {
-        if (event.runtime === 'codex' && event.metadata?.command_activity) step.label = activity.label;
+        if (event.metadata?.command_activity) step.label = activity.label;
         step.status = activity.status;
         step.duration = activity.duration ?? Math.max(0, row.at - step.at);
       }

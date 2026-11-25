@@ -11,6 +11,7 @@ const plain = value => typeof value === 'string' && value.trim() ? value.trim().
 
 export default Object.freeze({
   toolEvents: 'transcript',
+  commentary: event => event.meta.phase === 'commentary',
   stepLabel(event, { tool }) {
     if (event.meta.command_activity || CODEX_COMMANDS.has(tool)) {
       return commandActivityLabel(event.meta.command_activity) ?? { key: 'runCommand' };

@@ -2,14 +2,12 @@ import { eventTypesFor } from '../../../public/js/wb/timeline-rows.js';
 import { listFailure } from '../list-query.js';
 import { isRestartExit, restartAssociated } from './restart-effects.js';
 import { levels, timelinePage, timelineQuery } from './timeline-page.js';
-import { commentaryText, opensStep, stepLabel } from '../chat/activity.js';
+import { commentaryRole, commentaryText, isActivityToolEvent, opensStep, stepLabel } from '../chat/activity.js';
 
-export function projectTimelineActivity(row) {
-  const event = { type: row.event_type, runtime: row.runtime, summary: row.summary, meta: row.metadata ?? {} };
+function projectActivity(event, row) {
   const text = commentaryText(event);
   if (text) return { kind: 'commentary', text };
-  if (!['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'tool_call', 'tool_result'].includes(event.type)) return null;
-  if (row.runtime === 'codex' && !['tool_call', 'tool_result'].includes(event.type)) return null;
+  if (!isActivityToolEvent(event)) return null;
   if (event.type === 'tool_call' && !opensStep(event)) return null;
   if (event.type === 'tool_result' && (event.meta.wraps_agent_tools || (!event.meta.resumes_cell &&
       !opensStep({ ...event, type: 'tool_call' })))) return null;
@@ -17,6 +15,12 @@ export function projectTimelineActivity(row) {
   const status = start || event.meta.cell_running ? 'running' : row.interrupted ? 'interrupted' :
     event.type === 'post_tool_failure' || event.meta.outcome === 'failed' ? 'failed' : 'done';
   return { kind: 'tool', label: stepLabel(event), status, start, duration: row.duration_ms ?? null };
+}
+
+export function projectTimelineEvent(row) {
+  const event = { type: row.event_type, runtime: row.runtime, summary: row.summary, meta: row.metadata ?? {} };
+  const role = commentaryRole(event);
+  return { ...row, activity: projectActivity(event, row), ...(role ? { commentaryRole: role } : {}) };
 }
 
 export async function readTimelineEvents(store, key, singleOrigin, search, sanitize) {
@@ -54,5 +58,5 @@ export async function readTimelineEvents(store, key, singleOrigin, search, sanit
       ({ ...row, metadata: row.metadata ? JSON.parse(row.metadata) : null, ...(restart_interrupted ? { interrupted: true } : {}) }));
   } catch { throw listFailure(503, 'unavailable', 'Group events unavailable'); }
   const items = await sanitize(page.items);
-  return { ...page, items: level === 'technical' ? items : items.map(row => ({ ...row, activity: projectTimelineActivity(row) })) };
+  return { ...page, items: level === 'technical' ? items : items.map(projectTimelineEvent) };
 }

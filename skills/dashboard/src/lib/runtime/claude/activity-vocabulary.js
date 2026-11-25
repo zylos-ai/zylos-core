@@ -3,6 +3,7 @@ import { safeBasename, skillNameFromPath } from '../activity-path.js';
 
 export default Object.freeze({
   toolEvents: 'hooks',
+  commentary: 'beforeTool',
   stepLabel(event, { tool, detail }) {
     const skill = tool === 'Read' ? skillNameFromPath(detail)
       : tool === 'Skill' && detail && !detail.includes('/') ? safeBasename(detail) : null;

@@ -7,7 +7,7 @@ import { Store } from '../src/lib/store.js';
 import { CodexRolloutCollector } from '../src/lib/runtime/codex/collector.js';
 import { summarizeCommandActivity } from '../src/lib/runtime/codex/command-activity.js';
 import { buildSteps } from '../src/lib/chat/activity.js';
-import { projectTimelineActivity } from '../src/lib/workbench/timeline-events.js';
+import { projectTimelineEvent } from '../src/lib/workbench/timeline-events.js';
 import { eventRows, eventTypesFor, recentRows } from '../public/js/wb/timeline-rows.js';
 import { mergeActivitySteps } from '../public/js/wb/activity-labels.js';
 
@@ -25,11 +25,15 @@ test('Claude commentary needs a later tool in the same turn on both activity sur
   const timeline = events.filter(event => eventTypesFor('all', 'plain').includes(event.type)).map(event => {
     const row = { event_type: event.type, event_seq: event.seq, timestamp: new Date(event.at).toISOString(),
       runtime: event.runtime, run_id: event.run, session_id: event.session, summary: event.summary, metadata: event.meta };
-    return { ...row, activity: projectTimelineActivity(row) };
+    return projectTimelineEvent(row);
   });
   const chat = buildSteps(events, { now: at });
   assert.deepEqual(chat.steps.filter(step => step.kind === 'commentary').map(step => step.text), ['Checking the files']);
   assert.equal(timeline[2].activity, null);
+  assert.deepEqual(timeline.slice(1, 4).map(row => row.commentaryRole), ['boundary', 'candidate', 'tool']);
+  assert.equal(projectTimelineEvent({ ...timeline[3], commentaryRole: undefined,
+    metadata: { ...timeline[3].metadata, tool_name: 'Agent' } }).commentaryRole, undefined);
+  assert.equal(projectTimelineEvent({ ...timeline[3], commentaryRole: undefined, event_type: 'tool_call' }).activity, null);
   assert.equal(eventRows(timeline.slice(0, 3), { plain: true }).some(row => row.event.activity?.kind === 'commentary'), false);
   const loaded = eventRows([...timeline.slice(3), ...timeline.slice(0, 3)], { plain: true });
   assert.deepEqual(loaded.flatMap(({ event }) => event.activity?.kind === 'commentary' ? [event.activity.text] : []), ['Checking the files']);
@@ -42,10 +46,18 @@ test('conversation steps and group event projections share Codex activity labels
   const meta = { tool_name: 'exec', call_id: 'call' };
   const event = { runtime: 'codex', type: 'tool_call', meta, at: 1 };
   const result = { ...event, type: 'tool_result', at: 2, meta: { ...meta, command_activity } };
-  const group = projectTimelineActivity({ runtime: result.runtime, event_type: result.type, metadata: result.meta });
-  const chat = buildSteps([event, result], { now: 2 });
+  const group = projectTimelineEvent({ runtime: result.runtime, event_type: result.type, metadata: result.meta }).activity;
+  const progress = { ...event, type: 'assistant_message', at: 3, summary: 'Checking the result', meta: { phase: 'commentary' } };
+  const final = { ...progress, at: 4, meta: { phase: 'final_answer' } };
+  const chat = buildSteps([event, result, progress, final], { now: 4 });
   assert.deepEqual(group.label, { key: 'skill', arg: 'comm-bridge', count: 2, more: 'files' });
   assert.deepEqual(chat.steps[0].label, group.label);
+  assert.deepEqual(chat.steps.slice(1), [{ kind: 'commentary', at: 3, text: 'Checking the result' }]);
+  const project = message => projectTimelineEvent({ runtime: message.runtime, event_type: message.type,
+    summary: message.summary, metadata: message.meta });
+  assert.deepEqual(project(progress).activity, { kind: 'commentary', text: 'Checking the result' });
+  assert.equal(project(final).activity, null);
+  assert.equal(project({ ...event, type: 'pre_tool_use' }).activity, null);
 });
 
 test('Codex activity drops shell arguments, search text, unsafe basenames and heredoc content', () => {
