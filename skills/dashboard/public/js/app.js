@@ -309,6 +309,7 @@ async function refreshViewedMachineAccess(name) {
     refreshSettingsLocks();
     syncAccessControls();
     renderObserverPage();
+    renderMemory();
   } catch { /* Keep the last known access. The proxy enforces authorization. */ }
 }
 
