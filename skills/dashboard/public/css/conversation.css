@@ -1000,6 +1000,7 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .conversation-activity-steps { display:grid; grid-template-columns:13px minmax(0,1fr) auto; column-gap:8px; row-gap:1px; align-items:center; margin:2px 0 0 13px; padding-left:12px; border-left:1px solid var(--wb-line); }
 .conversation-activity-steps:empty,.conversation-activity-steps[hidden] { display:none; }
 .conversation-activity-step { display:contents; }
+.conversation-activity-commentary { grid-column:2 / -1; color:var(--text-muted); overflow-wrap:anywhere; }
 .conversation-activity-step>.wb-ico { width:13px; height:13px; color:var(--text-muted); }
 .conversation-activity-label { min-width:0; min-height:24px; padding:3px 0; font-size:var(--fs-small); line-height:var(--lh-caption); overflow-wrap:anywhere; color:var(--text-dim); }
 .conversation-activity-time { justify-self:end; font-size:var(--fs-caption); color:var(--text-muted); font-variant-numeric:tabular-nums; white-space:nowrap; }

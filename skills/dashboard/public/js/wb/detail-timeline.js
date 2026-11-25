@@ -5,7 +5,7 @@ import { listen } from './detail-update.js';
 import { element, icon } from './plain-text.js';
 import { endReasonLabel, timeValue } from './event-labels.js';
 import { eventRow, eventTime, repeatRow } from './detail-overview.js';
-import { eventRows, mergeRepeats, newestFirst, showsEvent } from './timeline-rows.js';
+import { eventRows, mergeRepeats, newestFirst, plainActivityRows, showsEvent } from './timeline-rows.js';
 
 export { timeValue };
 
@@ -117,8 +117,16 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
       page = await readPage('events', parameters, null, null, gen);
     }
     if (filterGen !== filterGeneration) return;
-    const existing = cursor ? state.events.get(runId) ?? [] : [];
-    const incoming = page.items ?? [];
+    let existing = cursor ? state.events.get(runId) ?? [] : [];
+    const incoming = [...(page.items ?? [])];
+    if (cursor && direction === 'after' && state.level !== 'technical' && plainActivityRows(newestFirst(eventRows(existing))).some(row =>
+      row.event.runtime === 'codex' && row.start && row.status === 'running')) {
+      const overlap = await readPage('events', parameters, null, null, gen);
+      if (filterGen !== filterGeneration) return;
+      const older = new Map(existing.map(event => [event.id, event]));
+      for (const event of overlap.items ?? []) if (older.has(event.id)) older.set(event.id, event);
+      existing = [...older.values()];
+    }
     const ordered = cursor && direction === 'before' ? [...incoming, ...existing] : [...existing, ...incoming];
     const events = [...new Map(ordered.map(event => [event.id, event])).values()];
     state.events.set(runId, events);
@@ -332,7 +340,8 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
         }
       }
       // Newest first inside a run as across runs, so "back to latest" (the top) is the latest row.
-      for (const group of mergeRepeats(newestFirst(rows))) {
+      const ordered = newestFirst(rows);
+      for (const group of mergeRepeats(level === 'technical' ? ordered : plainActivityRows(ordered, t))) {
         const { event, message } = group.newest;
         section.append(message
           ? eventRow(document, message, { level, t, label: messageLabel(message), className: 'wb-ev wb-timeline-message' })

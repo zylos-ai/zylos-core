@@ -1,3 +1,5 @@
+import { commandActivityLabel } from './command-activity.js';
+
 // Calls that manage subagents rather than do work (both multi-agent tool generations, including an `exec` that
 // calls them from code mode); the subagent itself is a subtask row. A code-mode `wait` with a cell id is not one of
 // them: it resumes a yielded `exec`, whose step it ends.
@@ -11,7 +13,9 @@ const plain = value => typeof value === 'string' && value.trim() ? value.trim().
 export default Object.freeze({
   toolEvents: 'transcript',
   stepLabel(event, { tool }) {
-    if (CODEX_COMMANDS.has(tool)) return { key: 'runCommand' };
+    if (event.meta.command_activity || CODEX_COMMANDS.has(tool)) {
+      return commandActivityLabel(event.meta.command_activity) ?? { key: 'runCommand' };
+    }
     if (tool === 'apply_patch') {
       const files = (plain(event.summary) ?? '').replace(/^Edit files:?\s*/, '').split(', ').filter(Boolean);
       return files.length === 1 ? { key: 'edit', arg: shortPath(files[0]) } : { key: 'editFiles' };

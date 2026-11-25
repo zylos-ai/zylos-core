@@ -280,6 +280,8 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 ## 7. Copy: Preserve Factual Distinctions Without Exposing Development Processes
 
+[Current] Conversation and plain group activity use the same localized step labels. Progress commentary is muted and separate from final replies. Consecutive completed steps with the same label and outcome show a repeat count and the sum of their durations. Codex command labels show only a recognized activity and, where appropriate, a safe basename, never command lines or output. Technical group activity keeps its event view.
+
 [Current] Overview account items include the seven-day quota reset time and remaining duration only in hover tooltips, without adding on-screen text. Local host details show account quotas after the host and pool sections, reusing `wb-ip-card`, heading icons, and `wb-kvs`; each account with a future reset time gets one row, in the same order as the Overview account items. Within each account, remaining quota and reset time occupy separate lines; older records add a third line naming the recorded basis. Each line stays intact, except that reset time may wrap between its duration phrase and parenthesized timestamp when space is insufficient. Neither part splits, and neither is truncated. Join duration components with non-breaking spaces; use the instance time zone, and omit missing, invalid, or expired reset times.
 
 [Approved] User-facing interfaces use understandable status words and do not show development-plan numbers or internal jargon. Visual consistency must not alter delivery or execution facts; error codes must not be the only explanation.

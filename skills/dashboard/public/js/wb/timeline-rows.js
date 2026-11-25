@@ -1,4 +1,5 @@
 import { labelledEvents, timeValue } from './event-labels.js';
+import { mergeActivitySteps } from './activity-labels.js';
 
 // Which recorded events a person sees on the timeline and in recent activity.
 // The plain view lists only events that have a plain-language label; router and
@@ -6,6 +7,7 @@ import { labelledEvents, timeValue } from './event-labels.js';
 export const toolEventTypes = ['pre_tool_use', 'post_tool_use', 'post_tool_failure'];
 export const plainEventTypes = [...labelledEvents];
 export const lifecycleEventTypes = plainEventTypes.filter(type => !toolEventTypes.includes(type));
+const transcriptTools = ['tool_call', 'tool_result'];
 
 /** The filter chip an event belongs to, or null when no chip lists it (technical detail only). */
 export function eventChip(event) {
@@ -21,14 +23,15 @@ export function eventChip(event) {
  */
 export function eventTypesFor(filter, level = 'plain') {
   if (filter === 'messages') return [];
-  if (filter === 'tools') return toolEventTypes;
+  if (filter === 'tools') return level === 'technical' ? toolEventTypes : [...toolEventTypes, ...transcriptTools];
   if (filter === 'lifecycle') return lifecycleEventTypes;
   if (filter === 'subagents') return ['subagent_start', 'subagent_stop'];
-  return level === 'technical' ? null : plainEventTypes;
+  return level === 'technical' ? null : [...plainEventTypes, ...transcriptTools];
 }
 
 /** Whether an event shows with these chips on: unlisted events only in technical view with every chip on. */
 export function showsEvent(event, { chips, chipCount, level = 'plain' }) {
+  if (level !== 'technical' && transcriptTools.includes(event.event_type)) return chips.has('tools');
   const chip = eventChip(event);
   return chip ? chips.has(chip) : level === 'technical' && chips.size === chipCount;
 }
@@ -72,6 +75,44 @@ export function eventRows(events) {
   return events.map(event => ({ at: timeValue(event.timestamp), event, ...(event.interrupted === true ? { interrupted: true } : {}) }));
 }
 
+const pairedTool = row => {
+  const event = row.event;
+  const id = event?.metadata?.tool_use_id ?? event?.metadata?.call_id;
+  return id == null ? null : JSON.stringify([event.run_id, event.session_id, id]);
+};
+
+export function plainActivityRows(rows, t) {
+  const visible = [], calls = new Map(), cells = new Map();
+  for (const row of [...rows].reverse()) {
+    const event = row.event, activity = event?.activity;
+    if (!activity) {
+      if (event && Object.hasOwn(event, 'activity') && (event.event_type === 'assistant_message' ||
+          transcriptTools.includes(event.event_type) || event.runtime === 'codex' && toolEventTypes.includes(event.event_type))) continue;
+      visible.push(row);
+      continue;
+    }
+    if (activity.kind === 'commentary') { visible.push({ ...row, ...activity }); continue; }
+    const key = pairedTool(row), meta = event.metadata ?? {};
+    const cell = meta.resumes_cell ?? meta.cell_id;
+    const cellKey = cell ? JSON.stringify([event.run_id, event.session_id, cell]) : null;
+    const step = meta.resumes_cell ? cells.get(cellKey) : calls.get(key);
+    if (!activity.start && step) {
+      if (event.runtime === 'codex' && event.metadata?.command_activity) step.label = activity.label;
+      if (activity.status !== 'running') {
+        step.status = activity.status;
+        step.duration = activity.duration ?? Math.max(0, row.at - step.at);
+      }
+      if (cellKey) cells.set(cellKey, step);
+      continue;
+    }
+    if (meta.resumes_cell) continue;
+    const projected = { ...row, ...activity };
+    visible.push(projected);
+    if (key && activity.start) calls.set(key, projected);
+  }
+  return mergeActivitySteps(visible.reverse(), t);
+}
+
 const sequence = row => row.event?.event_seq ?? -Infinity;
 /** Newest first; events recorded at the same moment keep their recorded order, latest first. */
 export function newestFirst(rows) {
@@ -80,7 +121,7 @@ export function newestFirst(rows) {
 
 // Two events read the same when they have the same type and, for tool events, the same tool; a tool call an automatic
 // restart cut off never reads the same as one that failed.
-const repeatKey = row => row.event ? `${row.event.event_type}\u0000${row.event.metadata?.tool_name ?? ''}\u0000${row.interrupted ? 'interrupted' : ''}` : null;
+const repeatKey = row => row.event && !row.kind ? `${row.event.event_type}\u0000${row.event.metadata?.tool_name ?? ''}\u0000${row.interrupted ? 'interrupted' : ''}` : null;
 
 /**
  * Consecutive rows that read the same become one group: { count, newest, oldest }. Rows come
@@ -107,10 +148,11 @@ export const recentLimit = 5;
  * cuts the window by recorded order, which can differ from timestamp order, so the open group is found
  * by recorded order, not by position.
  */
-export function recentRows(events, { window = recentWindow, limit = recentLimit } = {}) {
-  const rows = newestFirst(eventRows(events));
+export function recentRows(events, { window = recentWindow, limit = recentLimit, level = 'technical', t } = {}) {
+  const ordered = newestFirst(eventRows(events));
+  const rows = level === 'technical' ? ordered : plainActivityRows(ordered, t);
   const groups = mergeRepeats(rows);
-  if (events.length >= window && groups.length) {
+  if (events.length >= window && groups.length && level === 'technical') {
     let edge = rows.length - 1;
     rows.forEach((row, index) => { if (sequence(row) < sequence(rows[edge])) edge = index; });
     let end = 0;

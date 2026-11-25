@@ -5,7 +5,8 @@ import { element, icon, lastReceived, runtimeName } from './plain-text.js';
 import { annotateStatus, modelCell, pendingModel, shortDuration } from './board.js';
 import { toolLabel, waitText } from './view-mode.js';
 import { displayTime, eventLabel, timeValue } from './event-labels.js';
-import { recentRows } from './timeline-rows.js';
+import { eventRows, newestFirst, plainActivityRows, recentRows } from './timeline-rows.js';
+import { formatDuration, stepText } from './conversation-activity.js';
 import { formatZoned, zonedDay } from './instance-zone.js';
 
 export function activeSubagents(events, runId) {
@@ -88,7 +89,7 @@ const badEvents = new Set(['crash_detected', 'activate_failed', 'activate_timeou
 export function eventKind(event) {
   if (event.direction) return event.direction === 'in' ? 'in' : 'out';
   const type = event.event_type;
-  if (toolEvents.has(type)) return 'tool';
+  if (toolEvents.has(type) || event.activity?.kind === 'tool') return 'tool';
   if (inEvents.has(type)) return 'in';
   if (outEvents.has(type)) return 'out';
   if (String(type ?? '').startsWith('subagent')) return 'bot';
@@ -145,6 +146,18 @@ export function eventRow(document, event, { level = 'plain', t = key => key, lab
  * group may continue before what was read: "100+ 次 · 至 10:08". Full or raw times stay in the tooltip.
  */
 export function repeatRow(document, group, { level = 'plain', t = key => key, className = 'wb-ev', now = null } = {}) {
+  const step = group.newest;
+  if (!technical(level) && step.kind === 'commentary') {
+    return eventRow(document, step.event, { level, t, className: `${className} wb-ev-commentary`, now, label: step.text });
+  }
+  if (!technical(level) && step.kind === 'tool') {
+    const label = stepText(step, t) + (step.count > 1 ? ` ×${step.count}` : '');
+    const values = [step.status === 'done' ? null : t(`chat.activity.${step.status}`),
+      step.duration == null ? null : formatDuration(step.duration, t)].filter(Boolean);
+    return eventRow(document, step.event, { level, t, className: `${className}${step.status === 'failed' ? ' wb-ev-bad' : ''}`,
+      now, label, interrupted: step.status === 'interrupted',
+      after: values.length ? element(document, 'span', values.join(' · '), 'wb-ev-rep') : null });
+  }
   const interrupted = group.newest.interrupted === true;
   if (group.count < 2 && !group.open) return eventRow(document, group.newest.event, { level, t, className, now, interrupted });
   const lang = document.documentElement?.lang;
@@ -199,12 +212,24 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastRecei
   card.append(title);
   const tools = row.tools ?? [];
   if (!technical(level)) {
+    const recent = newestFirst(eventRows((data.recent ?? []).filter(event => event.run_id === row.live?.runId)));
+    const end = recent.findIndex(item => ['stop', 'turn_complete', 'dashboard_interrupt'].includes(item.event.event_type));
+    if (end >= 0) recent.length = end;
+    const running = plainActivityRows(recent, t).filter(step => step.kind === 'tool' && step.start && step.status === 'running');
+    const labels = tools.length ? tools.map(tool => {
+      const named = running.filter(item => item.event.metadata?.tool_name === tool.name);
+      const step = running.find(item => tool.id != null && tool.id === (item.event.metadata?.tool_use_id ?? item.event.metadata?.call_id)) ??
+        (named.length === 1 ? named[0] : null);
+      return step ? stepText(step, t) : toolLabel(tool.name, 'plain', t);
+    }) : running.map(step => stepText(step, t));
     const waiting = row.wait && (row.flags?.waitingSlot || row.flags?.blocked || row.flags?.startFailed || kind === 'unknown');
     const status = waiting ? waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, 'plain', t)
-      : kind === 'working' ? [tools.length ? tools.map(tool => toolLabel(tool.name, 'plain', t)).join(t('wb.detail.toolSeparator')) : t('wb.state.working'),
+      : kind === 'working' ? [labels.length ? labels.join(t('wb.detail.toolSeparator')) : t('wb.state.working'),
         agents.length ? countLabel(t, 'wb.detail.backgroundAgents', agents.length) : null].filter(Boolean).join(' · ')
         : kind === 'offline' ? t('wb.detail.standby') : t('wb.state.' + kind);
     title.append(icon(document, kind === 'working' ? 'tool' : row.flags?.startFailed ? 'alert' : kind === 'unknown' ? 'help' : 'clock'), element(document, 'span', status));
+    const progress = kind === 'working' && recent.find(item => item.event.activity?.kind === 'commentary');
+    if (progress) card.append(element(document, 'p', progress.event.activity.text, 'wb-now-sub'));
     if (kind === 'idle' && row.duration != null) title.append(element(document, 'span', ' · ' + t('wb.detail.idleElapsed', { duration: idleDuration(row.duration, t) }), 'wb-dur'));
     if (kind === 'working') card.classList.add('wb-now-work');
     else if (waiting || kind === 'unknown') card.classList.add(row.flags?.startFailed ? 'wb-now-err' : kind === 'unknown' ? 'wb-now-unk' : 'wb-now-wait');
@@ -319,7 +344,7 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
   }
   // Newest first, dated when not from today. The count covers the same events: those in runs and those in none.
   const recent = section('wb.detail.recent', 'wb-detail-recent', 'clock');
-  for (const group of recentRows(data.recent ?? [])) recent.append(repeatRow(document, group, { level, t, now: currentTime }));
+  for (const group of recentRows(data.recent ?? [], { level, t })) recent.append(repeatRow(document, group, { level, t, now: currentTime }));
   const events = groupEventCount(data), runs = data.totalRuns ?? 0;
   const timeline = element(document, 'button', t('wb.detail.fullTimeline', { events: t(events === 1 ? 'wb.detail.timelineEvent' : 'wb.detail.timelineEvents', { count: events }),
     runs: t(runs === 1 ? 'wb.detail.timelineRun' : 'wb.detail.timelineRuns', { count: runs }) }), 'wb-link-btn wb-chev');

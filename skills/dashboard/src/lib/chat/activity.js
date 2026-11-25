@@ -14,8 +14,7 @@ import { UNSUPPORTED } from '../runtime/contract.js';
  * (whichever is later), a mark where a new input reached the session or a subtask began, and one row per subtask
  * that has not ended. Whether the group works at all comes from the same reading as the conversation header, and the
  * page's header takes its reading from this read too.
- * Steps carry only the one-line summaries the event store already holds: no tool output, no command text, no
- * thinking and none of the words the agent writes between steps.
+ * Steps carry display labels and short progress messages, not tool output, command text or reasoning.
  */
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
@@ -97,6 +96,13 @@ export function stepLabel(event) {
   return vocab(event.runtime).stepLabel(event, { tool, detail });
 }
 
+export function commentaryText(event) {
+  if (event.type !== 'assistant_message') return null;
+  if (event.runtime === 'codex' ? event.meta.phase !== 'commentary' :
+      event.runtime !== 'claude' || event.meta.has_tool_use !== true) return null;
+  return plain(event.summary);
+}
+
 /**
  * A subtask's name: Memory Sync by what it does, otherwise the short description of the Claude call that launched it,
  * otherwise a plain "subtask". What Codex records with a start is the message the subtask was given or a generated
@@ -163,6 +169,8 @@ export function buildSteps(events, { agent = null, ends = [], now, restartCut = 
   for (const event of events) {
     if (agentOf(event) !== agent) continue;
     const meta = event.meta;
+    const commentary = commentaryText(event);
+    if (commentary) steps.push({ kind: 'commentary', at: event.at, text: commentary });
     if (!['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'tool_call', 'tool_result'].includes(event.type)) continue;
     const vocabulary = vocab(event.runtime);
     if (vocabulary.toolEvents === 'transcript' && ['pre_tool_use', 'post_tool_use', 'post_tool_failure'].includes(event.type)) continue;

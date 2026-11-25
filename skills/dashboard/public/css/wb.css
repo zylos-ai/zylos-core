@@ -474,6 +474,7 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-ev-bad .wb-ev-k, .wb-ev-bad .wb-ev-t { color: var(--wb-err); }
 .wb-ev-bad .wb-ev-k { border-color: color-mix(in srgb, var(--wb-err) 45%, transparent); }
 .wb-ev-t { padding-top: 1px; overflow: hidden; text-overflow: ellipsis; }
+.wb-ev-commentary .wb-ev-t { color: var(--text-muted); overflow-wrap: anywhere; }
 .wb-ev-t .wb-tool { color: var(--text); font-weight: var(--fw-control); }
 .wb-ev-args { margin-left: 6px; color: var(--text-dim); font-size: var(--fs-caption); }
 .wb-ev-rep { margin-left: 6px; color: var(--text-dim); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; white-space: nowrap; }
