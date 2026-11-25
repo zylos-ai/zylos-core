@@ -45,6 +45,20 @@ const path = require('path');
 module.exports = myFunction;
 ```
 
+## Agent Runtime Adapters
+
+Agent runtimes (Claude, Codex, Antigravity and any added later) differ only through their adapters. Shared code reaches runtime-specific behavior through the adapter contract and never by naming a runtime:
+
+- **Core:** the contract is `RUNTIME_CONTRACT` in `cli/lib/runtime/contract.js`; each runtime implements it under `cli/lib/runtime/<runtime>/` and is reached through `cli/lib/runtime/index.js`.
+- **Dashboard:** the contract is `DASHBOARD_CAPABILITIES` in `skills/dashboard/src/lib/runtime/contract.js`; each runtime implements it under `skills/dashboard/src/lib/runtime/<runtime>/` and is reached through `skills/dashboard/src/lib/runtime/index.js`.
+
+Rules:
+
+- Outside a runtime's own adapter directory, code does not branch on a runtime name (`runtime === 'codex'`, `runtime !== 'claude'`) and does not hard-code a runtime's tool names, file locations, event formats or prompts. It asks the adapter.
+- When the adapter has no member for what the code needs, add one to the contract (marked required or optional) and implement it in every adapter that supports it. A new runtime must then need only its own adapter, with no change to shared code.
+- Browser code that cannot load adapters uses fields the server derived from the adapter, not runtime names.
+- Existing runtime-name checks in shared code are not a precedent for new ones.
+
 ## Dashboard Visual Design
 
 Before changing Dashboard CSS, HTML, or frontend components, read [the Dashboard visual design specification](skills/dashboard/docs/visual-design.md). Keep the specification in sync with visual changes and self-check the delivery against its review checklist. Values marked pending Howard's decision are proposals, not approved implementation requirements.
