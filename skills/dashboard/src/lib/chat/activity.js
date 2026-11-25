@@ -4,6 +4,7 @@ import { RESTART_EXIT_MS, runRestartEffect } from '../../../public/js/wb/timelin
 import { loadCoreModule } from '../core-modules.js';
 import { getDashboardRuntime } from '../runtime/index.js';
 import { UNSUPPORTED } from '../runtime/contract.js';
+import { claudeCommentary } from './claude-commentary.js';
 
 /**
  * What the agent is doing right now, for a Dashboard conversation page.
@@ -99,7 +100,7 @@ export function stepLabel(event) {
 export function commentaryText(event) {
   if (event.type !== 'assistant_message') return null;
   if (event.runtime === 'codex' ? event.meta.phase !== 'commentary' :
-      event.runtime !== 'claude' || event.meta.has_tool_use !== true) return null;
+      event.runtime !== 'claude' || !event.claudeProgress) return null;
   return plain(event.summary);
 }
 
@@ -180,6 +181,7 @@ export function buildSteps(events, { agent = null, ends = [], now, restartCut = 
     if (vocabulary.resumesCells && typeof meta.resumes_cell === 'string') {
       const step = event.type === 'tool_result' && !meta.cell_running ? cells.get(meta.resumes_cell) : null;
       if (step && step.end === null) {
+        if (meta.command_activity) step.label = stepLabel(event);
         step.end = event.at;
         step.status = meta.outcome === 'failed' ? 'failed' : 'done';
         cells.delete(meta.resumes_cell);
@@ -198,6 +200,7 @@ export function buildSteps(events, { agent = null, ends = [], now, restartCut = 
       if (!step || step.end !== null) continue;
       // An `exec` that yielded while its script still runs goes on until a `wait` on its cell sees it finish.
       if (event.type === 'tool_result' && meta.cell_running && typeof meta.cell_id === 'string') { cells.set(meta.cell_id, step); continue; }
+      if (event.runtime === 'codex' && meta.command_activity) step.label = stepLabel(event);
       step.end = event.at;
       step.status = event.type === 'post_tool_failure' && restartCut(event) ? 'interrupted'
         : event.type === 'post_tool_failure' || meta.outcome === 'failed' ? 'failed' : 'done';
@@ -265,7 +268,7 @@ export class ChatActivity {
   _row(row) {
     const meta = parse(row.metadata);
     return { type: row.event_type, at: ms(row.timestamp), session: row.session_id ?? null, runtime: row.runtime,
-      summary: row.summary, meta, seq: row.event_seq, run: row.run_id ?? null };
+      summary: row.summary, meta, seq: row.event_seq, run: row.run_id ?? null, claudeProgress: row.claude_progress === 1 };
   }
 
   /**
@@ -524,8 +527,9 @@ export class ChatActivity {
     // its wait on the page from the window's start, which stays at the reply.
     const resumed = busy && reply?.at != null && stops[0]?.at > reply.at + 1000 ? stops[0].at : -Infinity;
     const from = Math.max(reply?.at != null ? reply.at + 1000 : -Infinity, quiet ?? -Infinity, resumed, now - 24 * 3600_000);
-    const read = this._events(`SELECT event_seq, timestamp, runtime, session_id, run_id, event_type, summary, metadata
-      FROM runtime_events WHERE session_group=@group AND event_type IN (${STEP_TYPES.map(type => `'${type}'`).join(',')})
+    const read = this._events(`SELECT event_seq, timestamp, runtime, session_id, run_id, event_type, summary, metadata,
+      ${claudeCommentary()} AS claude_progress
+      FROM runtime_events event WHERE session_group=@group AND event_type IN (${STEP_TYPES.map(type => `'${type}'`).join(',')})
       AND timestamp >= @from AND timestamp <= @now
       AND NOT (event_type IN ('pre_tool_use','post_tool_use','post_tool_failure') AND (CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.agent_id') END) IS NOT NULL)
       ORDER BY timestamp DESC, event_seq DESC LIMIT ${STEP_LIMIT}`, { group, from: iso(from - STOP_HOOK_LAG_MS), now: iso(now + 60_000) })

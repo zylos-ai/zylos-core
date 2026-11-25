@@ -1,11 +1,6 @@
-const BASENAME = /^[\p{L}\p{N}_-][\p{L}\p{N}_.-]{0,79}$/u;
-const SECRET_NAME = /^(?:sk-|xox[a-z]-|gh[pousr]_|github_pat_|AKIA|eyJ)/i;
+import { safeBasename, skillNameFromPath } from '../activity-path.js';
 
-function basename(value) {
-  if (typeof value !== 'string' || /[:@?\s#$=`"'\\]/u.test(value)) return null;
-  const name = value.split('/').at(-1);
-  return BASENAME.test(name) && !SECRET_NAME.test(name) ? name : null;
-}
+export const CODEX_COMMANDS = new Set(['exec', 'exec_command', 'shell', 'local_shell', 'container.exec', 'write_stdin', 'unified_exec']);
 
 function commandKind(command) {
   if (typeof command !== 'string') return null;
@@ -24,7 +19,7 @@ function commandKind(command) {
   if (['node', 'python', 'python3'].includes(executable)) {
     if (typeof action === 'string' && /(?:^|\/)c4-send\.js$/.test(action)) return { key: 'sendMessage' };
     if (action === '--test' || /(?:^|\/)run-node-tests\.js$/.test(action ?? '')) return { key: 'runTests' };
-    const name = basename(action);
+    const name = safeBasename(action);
     if (name && /\.(?:[cm]?js|ts|py)$/.test(name)) return { key: 'runScript', arg: name };
   }
   return null;
@@ -36,14 +31,15 @@ export function summarizeCommandActivity(item, previous) {
   for (const part of parsed) {
     let label = null;
     if (part?.type === 'read') {
-      const name = basename(part.path ?? part.name);
-      if (name) label = { key: 'viewFile', arg: name };
+      const name = safeBasename(part.path ?? part.name), skill = skillNameFromPath(part.path);
+      if (skill) label = { key: 'skill', arg: skill };
+      else if (name) label = { key: 'read', arg: name };
     } else if (part?.type === 'search') label = { key: 'searchFiles' };
     else if (part?.type === 'list_files') label = { key: 'listDirectory' };
     else label = commandKind(part?.cmd);
     first ??= label;
     count++;
-    allReads &&= label?.key === 'viewFile';
+    allReads &&= label?.key === 'read' || label?.key === 'skill';
   }
   return { first, count, allReads };
 }

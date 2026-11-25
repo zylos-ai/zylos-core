@@ -414,7 +414,7 @@ Returns `{items, nextCursor, afterCursor}` with the same direction semantics as 
 
 **Errors:** 400 `invalid_parameter` with `error.param`, `invalid_cursor`, or `SESSION_GROUP_INVALID`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; 503 `unavailable` when events cannot be read; common read errors.
 
-Plain `all` and `tools` also select Codex transcript tool events. Plain event rows include `activity`: `null`, `{kind:"commentary",text:string}`, or `{kind:"tool",label:{key,arg?,count?,more?},status,start:boolean,duration:number|null}`. `start` distinguishes a call from a result and `duration` is in milliseconds. The technical view omits `activity`. Codex may enrich existing tool events with `metadata.command_activity` (`first`: null or `{key,arg?}`, `count`: integer, `allReads`: boolean), containing only the label inputs, not command text or output.
+Plain `all` and `tools` also select Codex transcript tool events. Plain event rows include `activity`: `null`, `{kind:"commentary",text:string}`, or `{kind:"tool",label:{key,arg?,count?,more?},status,start:boolean,duration:number|null}`. `start` distinguishes a call from a result and `duration` is in milliseconds. Plain commentary shows Codex's commentary phase and Claude text followed by a tool step within the same turn; final replies are shown as C4 message rows. The technical view omits `activity`. Codex may attach `metadata.command_activity` (`first`: null or `{key,arg?}`, `count`: integer, `allReads`: boolean) to a final tool result, with no command text or output. Claude Read hooks may carry a safe skill basename in `metadata.skill_read`.
 
 Example: `GET /api/groups/origin/events?filter=tools&limit=20`.
 

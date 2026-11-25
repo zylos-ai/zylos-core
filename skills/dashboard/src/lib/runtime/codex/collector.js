@@ -11,7 +11,7 @@ import { Sanitizer } from '../../sanitizer.js';
 import { UsageTranscripts, groupMainTranscript, childTranscript } from '../../collectors/usage-transcripts.js';
 import { sameSourceFile } from '../../source-file-identity.js';
 import { codexToolOutputFailed, codexToolOutputText } from './tool-outcome.js';
-import { summarizeCommandActivity } from './command-activity.js';
+import { CODEX_COMMANDS, summarizeCommandActivity } from './command-activity.js';
 
 const { getRuntime } = await loadCoreModule('runtime/index.js');
 const { transcript } = (await getRuntime('codex')).usage;
@@ -336,8 +336,7 @@ export class CodexRolloutCollector {
       const call = calls?.get(item.call_id ?? item.id) ?? (calls?.size === 1 ? calls.values().next().value : null);
       if (!call) return 0;
       call.activity = summarizeCommandActivity(item, call.activity);
-      return this.store.db.prepare(`UPDATE runtime_events SET metadata = json_set(metadata, '$.command_activity', json(@activity))
-        WHERE ingest_id = @id`).run({ activity: JSON.stringify(call.activity), id: call.ingestId }).changes;
+      return 0;
     }
     if (item.type === 'SubAgentActivity') {
       const agentId = firstString(item.agent_path, item.agent_thread_id);
@@ -582,9 +581,9 @@ export class CodexRolloutCollector {
 
     const ingestId = `codex-rollout-${mapping.session_id || 'unknown'}-${eventKey}-${item.type}`;
     let calls = this._commandCallsByPath.get(mapping.transcript_path);
-    if (callId && !isOutput && ['exec', 'exec_command', 'shell', 'local_shell', 'unified_exec'].includes(normalizedName) && !wraps) {
+    if (callId && !isOutput && CODEX_COMMANDS.has(normalizedName) && !wraps) {
       if (!calls) this._commandCallsByPath.set(mapping.transcript_path, calls = new Map());
-      calls.set(callId, { ingestId });
+      calls.set(callId, {});
     }
     const commandCall = isOutput && (cellId ? [...(calls?.values() ?? [])].find(call => call.cellId === cellId) : calls?.get(callId));
     if (commandCall) {
@@ -611,7 +610,7 @@ export class CodexRolloutCollector {
         raw_type: item.type,
         rollout_offset: position.byteOffset ?? null,
         rollout_line: position.lineIndex ?? null,
-        ...(commandCall?.activity ? { command_activity: commandCall.activity } : {}),
+        ...(commandCall?.activity && !running ? { command_activity: commandCall.activity } : {}),
         ...(wraps ? { wraps_agent_tools: wraps } : {}),
         // The cell a yielded exec left running, or the cell a `wait` resumes (its result names no tool).
         ...(cellId ? { resumes_cell: cellId } : running ? { cell_id: running } : {}),

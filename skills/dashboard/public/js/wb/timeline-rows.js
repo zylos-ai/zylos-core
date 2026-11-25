@@ -8,6 +8,7 @@ export const toolEventTypes = ['pre_tool_use', 'post_tool_use', 'post_tool_failu
 export const plainEventTypes = [...labelledEvents];
 export const lifecycleEventTypes = plainEventTypes.filter(type => !toolEventTypes.includes(type));
 const transcriptTools = ['tool_call', 'tool_result'];
+export const claudeTurnBoundaries = ['user_prompt_submit', 'input_dequeue', 'stop', 'turn_complete', 'dashboard_interrupt'];
 
 /** The filter chip an event belongs to, or null when no chip lists it (technical detail only). */
 export function eventChip(event) {
@@ -71,8 +72,22 @@ export function runRestartEffect(events) {
   return event => effects.get(event.run_id)?.(event) ?? null;
 }
 
-export function eventRows(events) {
-  return events.map(event => ({ at: timeValue(event.timestamp), event, ...(event.interrupted === true ? { interrupted: true } : {}) }));
+export function eventRows(events, { plain = false } = {}) {
+  const rows = events.map(event => ({ at: timeValue(event.timestamp), event, ...(event.interrupted === true ? { interrupted: true } : {}) }));
+  if (!plain) return rows;
+  const next = new Map();
+  for (const row of newestFirst(rows)) {
+    const { event } = row;
+    if (event.runtime !== 'claude' || !Object.hasOwn(event, 'activity')) continue;
+    const meta = event.metadata ?? {};
+    const key = JSON.stringify([event.session_group, event.run_id, event.session_id, meta.agent_id]);
+    if (claudeTurnBoundaries.includes(event.event_type)) next.delete(key);
+    else if (event.event_type === 'pre_tool_use' && meta.tool_use_id && !['Agent', 'Task'].includes(meta.tool_name)) next.set(key, true);
+    else if (event.event_type === 'assistant_message' && !event.activity && next.has(key) && event.summary?.trim()) {
+      row.event = { ...event, activity: { kind: 'commentary', text: event.summary.trim().replace(/\s+/g, ' ') } };
+    }
+  }
+  return rows;
 }
 
 const pairedTool = row => {
@@ -97,8 +112,8 @@ export function plainActivityRows(rows, t) {
     const cellKey = cell ? JSON.stringify([event.run_id, event.session_id, cell]) : null;
     const step = meta.resumes_cell ? cells.get(cellKey) : calls.get(key);
     if (!activity.start && step) {
-      if (event.runtime === 'codex' && event.metadata?.command_activity) step.label = activity.label;
       if (activity.status !== 'running') {
+        if (event.runtime === 'codex' && event.metadata?.command_activity) step.label = activity.label;
         step.status = activity.status;
         step.duration = activity.duration ?? Math.max(0, row.at - step.at);
       }
@@ -149,7 +164,7 @@ export const recentLimit = 5;
  * by recorded order, not by position.
  */
 export function recentRows(events, { window = recentWindow, limit = recentLimit, level = 'technical', t } = {}) {
-  const ordered = newestFirst(eventRows(events));
+  const ordered = newestFirst(eventRows(events, { plain: level !== 'technical' }));
   const rows = level === 'technical' ? ordered : plainActivityRows(ordered, t);
   const groups = mergeRepeats(rows);
   if (events.length >= window && groups.length && level === 'technical') {

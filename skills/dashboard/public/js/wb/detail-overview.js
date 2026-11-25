@@ -212,7 +212,7 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastRecei
   card.append(title);
   const tools = row.tools ?? [];
   if (!technical(level)) {
-    const recent = newestFirst(eventRows((data.recent ?? []).filter(event => event.run_id === row.live?.runId)));
+    const recent = newestFirst(eventRows((data.recent ?? []).filter(event => event.run_id === row.live?.runId), { plain: true }));
     const end = recent.findIndex(item => ['stop', 'turn_complete', 'dashboard_interrupt'].includes(item.event.event_type));
     if (end >= 0) recent.length = end;
     const running = plainActivityRows(recent, t).filter(step => step.kind === 'tool' && step.start && step.status === 'running');

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { skillNameFromPath } from './runtime/activity-path.js';
 
 const CREDENTIAL_PATTERNS = [
   [/sk-[a-zA-Z0-9_-]{20,}/g, '[REDACTED]'],
@@ -38,6 +39,8 @@ export class Sanitizer {
       if (tool_name) metadata.tool_name = tool_name;
       if (tool_use_id) metadata.tool_use_id = tool_use_id;
       if (tool_detail) metadata.tool_detail = tool_detail;
+      const skill = tool_name === 'Read' ? skillNameFromPath(rawPayload.tool_input?.file_path) : null;
+      if (skill) metadata.skill_read = skill;
       // A command's own description is safe to show as a step; a summarized command line is not.
       if (tool_name === 'Bash' && tool_detail) {
         const description = rawPayload.tool_input?.description;

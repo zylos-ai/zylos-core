@@ -12,13 +12,14 @@ import { projectTimelineActivity } from '../src/lib/workbench/timeline-events.js
 const readCommand = path => ({ type: 'CommandExecution', parsed_cmd: [{ type: 'read', path }] });
 
 test('conversation steps and group event projections share Codex activity labels', () => {
-  const command_activity = ['SKILL.md', 'README.md'].reduce((summary, name) =>
+  const command_activity = ['.claude/skills/comm-bridge/SKILL.md', 'README.md'].reduce((summary, name) =>
     summarizeCommandActivity(readCommand(`/workspace/${name}`), summary), undefined);
-  const meta = { tool_name: 'exec', call_id: 'call', command_activity };
+  const meta = { tool_name: 'exec', call_id: 'call' };
   const event = { runtime: 'codex', type: 'tool_call', meta, at: 1 };
-  const group = projectTimelineActivity({ runtime: event.runtime, event_type: event.type, metadata: meta });
-  const chat = buildSteps([event], { now: 2 });
-  assert.deepEqual(group.label, { key: 'viewFile', arg: 'SKILL.md', count: 2, more: 'files' });
+  const result = { ...event, type: 'tool_result', at: 2, meta: { ...meta, command_activity } };
+  const group = projectTimelineActivity({ runtime: result.runtime, event_type: result.type, metadata: result.meta });
+  const chat = buildSteps([event, result], { now: 2 });
+  assert.deepEqual(group.label, { key: 'skill', arg: 'comm-bridge', count: 2, more: 'files' });
   assert.deepEqual(chat.steps[0].label, group.label);
 });
 
@@ -36,7 +37,7 @@ test('Codex activity drops shell arguments, search text, unsafe basenames and he
   assert.deepEqual(summarizeCommandActivity({ command: payload.parsed_cmd[1].cmd }), { first: null, count: 1, allReads: false });
 });
 
-test('collector enriches an existing Codex exec event with only structured command activity', t => {
+test('collector appends structured command activity only on the final result, without changing the call', t => {
   const root = mkdtempSync(join(tmpdir(), 'readable-activity-'));
   const file = join(root, 'fixture.jsonl');
   const store = new Store(join(root, 'fixture.db'));
@@ -52,5 +53,10 @@ test('collector enriches an existing Codex exec event with only structured comma
     id: 'inner', command: 'ignored', cwd: '/fixture', aggregated_output: 'ignored', exit_code: 0 } }));
   collector.collectMapping(mapping);
   assert.equal(calls().length, 1);
-  assert.deepEqual(calls()[0].command_activity, { first: { key: 'viewFile', arg: 'message.txt' }, count: 1, allReads: true });
+  assert.equal(calls()[0].command_activity, undefined);
+  appendFileSync(file, envelope('response_item', { type: 'custom_tool_call_output', call_id: 'outer', output: 'Script completed' }));
+  collector.collectMapping(mapping);
+  assert.equal(calls()[0].command_activity, undefined);
+  const result = store.db.prepare("SELECT metadata FROM runtime_events WHERE event_type = 'tool_result'").get();
+  assert.deepEqual(JSON.parse(result.metadata).command_activity, { first: { key: 'read', arg: 'message.txt' }, count: 1, allReads: true });
 });
