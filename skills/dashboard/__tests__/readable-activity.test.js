@@ -8,8 +8,32 @@ import { CodexRolloutCollector } from '../src/lib/runtime/codex/collector.js';
 import { summarizeCommandActivity } from '../src/lib/runtime/codex/command-activity.js';
 import { buildSteps } from '../src/lib/chat/activity.js';
 import { projectTimelineActivity } from '../src/lib/workbench/timeline-events.js';
+import { eventRows, eventTypesFor, recentRows } from '../public/js/wb/timeline-rows.js';
 
 const readCommand = path => ({ type: 'CommandExecution', parsed_cmd: [{ type: 'read', path }] });
+
+test('Claude commentary needs a later tool in the same turn on both activity surfaces', () => {
+  const at = Date.parse('2026-01-01T12:00:00Z');
+  const events = [
+    { type: 'assistant_message', summary: 'Previous final reply' },
+    { type: 'input_dequeue' },
+    { type: 'assistant_message', summary: '  Checking\n the files ', meta: { message_id: 'message' } },
+    { type: 'pre_tool_use', meta: { tool_use_id: 'call', tool_name: 'Read' } },
+    { type: 'assistant_message', summary: 'Current final reply' },
+  ].map((event, seq) => ({ at, seq, runtime: 'claude', run: 'run', session: 'session', meta: {}, ...event }));
+  const timeline = events.filter(event => eventTypesFor('all', 'plain').includes(event.type)).map(event => {
+    const row = { event_type: event.type, event_seq: event.seq, timestamp: new Date(event.at).toISOString(),
+      runtime: event.runtime, run_id: event.run, session_id: event.session, summary: event.summary, metadata: event.meta };
+    return { ...row, activity: projectTimelineActivity(row) };
+  });
+  const chat = buildSteps(events, { now: at });
+  assert.deepEqual(chat.steps.filter(step => step.kind === 'commentary').map(step => step.text), ['Checking the files']);
+  assert.equal(timeline[2].activity, null);
+  assert.equal(eventRows(timeline.slice(0, 3), { plain: true }).some(row => row.event.activity?.kind === 'commentary'), false);
+  const loaded = eventRows([...timeline.slice(3), ...timeline.slice(0, 3)], { plain: true });
+  assert.deepEqual(loaded.flatMap(({ event }) => event.activity?.kind === 'commentary' ? [event.activity.text] : []), ['Checking the files']);
+  assert.deepEqual(recentRows(timeline, { level: 'plain' }).map(({ newest }) => newest.kind), ['tool', 'commentary']);
+});
 
 test('conversation steps and group event projections share Codex activity labels', () => {
   const command_activity = ['.claude/skills/comm-bridge/SKILL.md', 'README.md'].reduce((summary, name) =>

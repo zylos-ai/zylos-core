@@ -1,10 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { END_TYPES, MAIN_ACTION_TYPES, STOP_HOOK_LAG_MS, inputAfterStop } from '../workbench/working.js';
-import { RESTART_EXIT_MS, runRestartEffect } from '../../../public/js/wb/timeline-rows.js';
+import { claudeCommentary, claudeTurnBoundaries, RESTART_EXIT_MS, runRestartEffect } from '../../../public/js/wb/timeline-rows.js';
 import { loadCoreModule } from '../core-modules.js';
 import { getDashboardRuntime } from '../runtime/index.js';
 import { UNSUPPORTED } from '../runtime/contract.js';
-import { claudeCommentary } from './claude-commentary.js';
 
 /**
  * What the agent is doing right now, for a Dashboard conversation page.
@@ -20,7 +19,8 @@ import { claudeCommentary } from './claude-commentary.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const STEP_TYPES = ['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'tool_call', 'tool_result',
-  'subagent_start', 'subagent_stop', 'assistant_message', 'deliver', 'input_dequeue', 'user_prompt_submit'];
+  'subagent_start', 'subagent_stop', 'assistant_message', 'deliver',
+  ...claudeTurnBoundaries.filter(type => type !== 'dashboard_interrupt')];
 // Collectors read transcripts every 5 s, so a step's end or a queued message the runtime took after the stop may be
 // recorded a little later. For this long after a stop, steps without an end keep running, and work that ended without
 // a reply is still settling: the page already says it was handled, but keeps reading often.
@@ -98,10 +98,8 @@ export function stepLabel(event) {
 }
 
 export function commentaryText(event) {
-  if (event.type !== 'assistant_message') return null;
-  if (event.runtime === 'codex' ? event.meta.phase !== 'commentary' :
-      event.runtime !== 'claude' || !event.claudeProgress) return null;
-  return plain(event.summary);
+  return event.type === 'assistant_message' && event.runtime === 'codex' && event.meta.phase === 'commentary'
+    ? plain(event.summary) : null;
 }
 
 /**
@@ -167,10 +165,12 @@ export function opensStep(event) {
 export function buildSteps(events, { agent = null, ends = [], now, restartCut = () => false }) {
   let steps = [], truncated = false;
   const open = new Map(), cells = new Map();
+  const progress = claudeCommentary([...events].sort((left, right) =>
+    (right.recorded ?? right.at) - (left.recorded ?? left.at) || (right.seq ?? 0) - (left.seq ?? 0)));
   for (const event of events) {
     if (agentOf(event) !== agent) continue;
     const meta = event.meta;
-    const commentary = commentaryText(event);
+    const commentary = progress.get(event) ?? commentaryText(event);
     if (commentary) steps.push({ kind: 'commentary', at: event.at, text: commentary });
     if (!['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'tool_call', 'tool_result'].includes(event.type)) continue;
     const vocabulary = vocab(event.runtime);
@@ -268,7 +268,7 @@ export class ChatActivity {
   _row(row) {
     const meta = parse(row.metadata);
     return { type: row.event_type, at: ms(row.timestamp), session: row.session_id ?? null, runtime: row.runtime,
-      summary: row.summary, meta, seq: row.event_seq, run: row.run_id ?? null, claudeProgress: row.claude_progress === 1 };
+      summary: row.summary, meta, seq: row.event_seq, run: row.run_id ?? null };
   }
 
   /**
@@ -311,7 +311,7 @@ export class ChatActivity {
 
   /** The main agent's latest stops, newest first, each with whether a subtask was still open at that moment. */
   _stops(group, now) {
-    const rows = this._deliveredInterrupts(this._events(`SELECT event_seq, timestamp, runtime, session_id, event_type, summary, metadata
+    const rows = this._deliveredInterrupts(this._events(`SELECT event_seq, timestamp, runtime, session_id, run_id, event_type, summary, metadata
       FROM runtime_events WHERE session_group=@group AND event_type IN (${END_TYPES.map(type => `'${type}'`).join(',')})
       AND (CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.agent_id') END) IS NULL AND timestamp <= @now
       ORDER BY timestamp DESC, event_seq DESC LIMIT ${QUIET_LOOKBACK}`, { group, now: iso(now) }).map(row => this._row(row)));
@@ -527,17 +527,18 @@ export class ChatActivity {
     // its wait on the page from the window's start, which stays at the reply.
     const resumed = busy && reply?.at != null && stops[0]?.at > reply.at + 1000 ? stops[0].at : -Infinity;
     const from = Math.max(reply?.at != null ? reply.at + 1000 : -Infinity, quiet ?? -Infinity, resumed, now - 24 * 3600_000);
-    const read = this._events(`SELECT event_seq, timestamp, runtime, session_id, run_id, event_type, summary, metadata,
-      ${claudeCommentary()} AS claude_progress
+    const read = this._events(`SELECT event_seq, timestamp, runtime, session_id, run_id, event_type, summary, metadata
       FROM runtime_events event WHERE session_group=@group AND event_type IN (${STEP_TYPES.map(type => `'${type}'`).join(',')})
       AND timestamp >= @from AND timestamp <= @now
       AND NOT (event_type IN ('pre_tool_use','post_tool_use','post_tool_failure') AND (CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.agent_id') END) IS NOT NULL)
       ORDER BY timestamp DESC, event_seq DESC LIMIT ${STEP_LIMIT}`, { group, from: iso(from - STOP_HOOK_LAG_MS), now: iso(now + 60_000) })
       .reverse().map(row => this._row(row));
     // A queued message taken as a turn ended can be timed before that stop: it counts just after it.
-    const ordered = [...read, ...stops].sort((a, b) => a.at - b.at || (a.seq ?? 0) - (b.seq ?? 0));
+    const ordered = [...read.filter(event => !END_TYPES.includes(event.type)), ...stops]
+      .sort((a, b) => a.at - b.at || (a.seq ?? 0) - (b.seq ?? 0));
     const counted = inputAfterStop(ordered, { type: event => event.type, at: event => event.at, child: agentOf });
-    const events = read.map(event => counted(event) === event.at ? event : { ...event, at: counted(event), recorded: event.at })
+    const events = [...read, ...stops.filter(event => event.type === 'dashboard_interrupt')]
+      .map(event => counted(event) === event.at ? event : { ...event, at: counted(event), recorded: event.at })
       .filter(event => event.at >= from).sort((a, b) => a.at - b.at || (a.seq ?? 0) - (b.seq ?? 0));
     const ends = stops.filter(stop => stop.at >= from).map(stop => ({ at: stop.at, stopped: stop.type === 'dashboard_interrupt' }))
       .sort((a, b) => a.at - b.at);

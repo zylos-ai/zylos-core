@@ -3,10 +3,9 @@ import { listFailure } from '../list-query.js';
 import { isRestartExit, restartAssociated } from './restart-effects.js';
 import { levels, timelinePage, timelineQuery } from './timeline-page.js';
 import { commentaryText, opensStep, stepLabel } from '../chat/activity.js';
-import { claudeCommentary } from '../chat/claude-commentary.js';
 
-export function projectTimelineActivity(row, claudeProgress = false) {
-  const event = { type: row.event_type, runtime: row.runtime, summary: row.summary, meta: row.metadata ?? {}, claudeProgress };
+export function projectTimelineActivity(row) {
+  const event = { type: row.event_type, runtime: row.runtime, summary: row.summary, meta: row.metadata ?? {} };
   const text = commentaryText(event);
   if (text) return { kind: 'commentary', text };
   if (!['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'tool_call', 'tool_result'].includes(event.type)) return null;
@@ -46,18 +45,14 @@ export async function readTimelineEvents(store, key, singleOrigin, search, sanit
   const restartGroup = singleOrigin ? "restart.session_group IS NULL OR restart.session_group = 'origin'" : undefined;
   clauses.push(`NOT ${isRestartExit(restartGroup)}`);
   let page;
-  const progress = new Set();
   try {
     const rows = store.db.prepare(`SELECT event.*, (event.event_type = 'post_tool_failure'
-      AND ${restartAssociated(restartGroup)}) AS restart_interrupted,
-      ${level === 'technical' ? 'NULL' : claudeCommentary()} AS claude_progress FROM runtime_events event WHERE ${clauses.join(' AND ')}
+      AND ${restartAssociated(restartGroup)}) AS restart_interrupted FROM runtime_events event WHERE ${clauses.join(' AND ')}
       ORDER BY event.event_seq ${query.order}, event.id ${query.order} LIMIT @limit`).all(args);
     page = timelinePage(rows, query, row => [row.event_seq, row.id], [0, '']);
-    page.items = page.items.map(({ restart_interrupted, claude_progress, ...row }) => {
-      if (claude_progress === 1) progress.add(row.id);
-      return { ...row, metadata: row.metadata ? JSON.parse(row.metadata) : null, ...(restart_interrupted ? { interrupted: true } : {}) };
-    });
+    page.items = page.items.map(({ restart_interrupted, ...row }) =>
+      ({ ...row, metadata: row.metadata ? JSON.parse(row.metadata) : null, ...(restart_interrupted ? { interrupted: true } : {}) }));
   } catch { throw listFailure(503, 'unavailable', 'Group events unavailable'); }
   const items = await sanitize(page.items);
-  return { ...page, items: level === 'technical' ? items : items.map(row => ({ ...row, activity: projectTimelineActivity(row, progress.has(row.id)) })) };
+  return { ...page, items: level === 'technical' ? items : items.map(row => ({ ...row, activity: projectTimelineActivity(row) })) };
 }

@@ -9,6 +9,22 @@ export const plainEventTypes = [...labelledEvents];
 export const lifecycleEventTypes = plainEventTypes.filter(type => !toolEventTypes.includes(type));
 const transcriptTools = ['tool_call', 'tool_result'];
 export const claudeTurnBoundaries = ['user_prompt_submit', 'input_dequeue', 'stop', 'turn_complete', 'dashboard_interrupt'];
+const commentaryContextTypes = claudeTurnBoundaries.filter(type => !labelledEvents.has(type));
+
+export function claudeCommentary(newestEvents, read = event => event) {
+  const nextTool = new Set(), commentary = new Map();
+  for (const item of newestEvents) {
+    const { runtime, type, group, run, session, meta, summary } = read(item);
+    if (runtime !== 'claude' && type !== 'dashboard_interrupt') continue;
+    const key = JSON.stringify([group, run, session, meta.agent_id]);
+    if (claudeTurnBoundaries.includes(type)) nextTool.delete(key);
+    else if (type === 'pre_tool_use' && meta.tool_use_id && !['Agent', 'Task'].includes(meta.tool_name)) nextTool.add(key);
+    else if (type === 'assistant_message' && nextTool.has(key) && summary?.trim()) {
+      commentary.set(item, summary.trim().replace(/\s+/g, ' '));
+    }
+  }
+  return commentary;
+}
 
 /** The filter chip an event belongs to, or null when no chip lists it (technical detail only). */
 export function eventChip(event) {
@@ -27,7 +43,7 @@ export function eventTypesFor(filter, level = 'plain') {
   if (filter === 'tools') return level === 'technical' ? toolEventTypes : [...toolEventTypes, ...transcriptTools];
   if (filter === 'lifecycle') return lifecycleEventTypes;
   if (filter === 'subagents') return ['subagent_start', 'subagent_stop'];
-  return level === 'technical' ? null : [...plainEventTypes, ...transcriptTools];
+  return level === 'technical' ? null : [...plainEventTypes, ...transcriptTools, ...commentaryContextTypes];
 }
 
 /** Whether an event shows with these chips on: unlisted events only in technical view with every chip on. */
@@ -75,17 +91,12 @@ export function runRestartEffect(events) {
 export function eventRows(events, { plain = false } = {}) {
   const rows = events.map(event => ({ at: timeValue(event.timestamp), event, ...(event.interrupted === true ? { interrupted: true } : {}) }));
   if (!plain) return rows;
-  const next = new Map();
-  for (const row of newestFirst(rows)) {
-    const { event } = row;
-    if (event.runtime !== 'claude' || !Object.hasOwn(event, 'activity')) continue;
-    const meta = event.metadata ?? {};
-    const key = JSON.stringify([event.session_group, event.run_id, event.session_id, meta.agent_id]);
-    if (claudeTurnBoundaries.includes(event.event_type)) next.delete(key);
-    else if (event.event_type === 'pre_tool_use' && meta.tool_use_id && !['Agent', 'Task'].includes(meta.tool_name)) next.set(key, true);
-    else if (event.event_type === 'assistant_message' && !event.activity && next.has(key) && event.summary?.trim()) {
-      row.event = { ...event, activity: { kind: 'commentary', text: event.summary.trim().replace(/\s+/g, ' ') } };
-    }
+  const commentary = claudeCommentary(newestFirst(rows.filter(({ event }) => Object.hasOwn(event, 'activity'))), ({ event }) => ({
+    runtime: event.runtime, type: event.event_type, summary: event.summary, meta: event.metadata ?? {},
+    group: event.session_group, run: event.run_id, session: event.session_id,
+  }));
+  for (const [row, text] of commentary) {
+    row.event = { ...row.event, activity: { kind: 'commentary', text } };
   }
   return rows;
 }
@@ -102,7 +113,8 @@ export function plainActivityRows(rows, t) {
     const event = row.event, activity = event?.activity;
     if (!activity) {
       if (event && Object.hasOwn(event, 'activity') && (event.event_type === 'assistant_message' ||
-          transcriptTools.includes(event.event_type) || event.runtime === 'codex' && toolEventTypes.includes(event.event_type))) continue;
+          commentaryContextTypes.includes(event.event_type) || transcriptTools.includes(event.event_type) ||
+          event.runtime === 'codex' && toolEventTypes.includes(event.event_type))) continue;
       visible.push(row);
       continue;
     }
