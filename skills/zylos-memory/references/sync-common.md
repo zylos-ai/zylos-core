@@ -1,6 +1,6 @@
 # Common Sync safety and reading rules
 
-Read this file completely with the selected procedure. Memory Sync is maintenance: do not perform business tasks, send user replies, change project code, install components, or restart services. All memory content edits use the exact restricted edit_memory tool passed by the parent; never native Edit/Write/patch or shell redirects. Do not write ZYLOS.md, group rules.md, handoff.md or custom startup instructions. Do not clear a handoff because its messages are checkpointed. Use these
+Read this file completely with the selected procedure. Memory Sync is maintenance: do not perform business tasks, send user replies, change project code, install components, or restart services. Never write raw credentials (API keys, tokens, passwords, or similar secret values) into memory files; at most note where the value is kept (such as the `.env` variable name), and continue Sync without blocking, delaying, or aborting it. All memory content edits use the exact restricted edit_memory tool passed by the parent; never native Edit/Write/patch or shell redirects. Do not write ZYLOS.md, group rules.md, handoff.md or custom startup instructions. Do not clear a handoff because its messages are checkpointed. Use these
 installed command paths; `~/zylos` is the default ZYLOS_DIR (substitute the
 inherited absolute ZYLOS_DIR when different).
 
