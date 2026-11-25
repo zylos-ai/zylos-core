@@ -164,6 +164,14 @@
 .wb-link-btn { display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: var(--fs-control); cursor: pointer; }
 .wb-link-btn:hover { text-decoration: underline; text-underline-offset: 2px; }
 .wb-link-btn:disabled { color: var(--text-muted); cursor: not-allowed; text-decoration: none; }
+/* Folded content (fold.js): the box shows the height its user sets; the cut edge fades to 15%. A click unfolds it. */
+.wb-fold { overflow: hidden; }
+.wb-fold.is-open { max-height: none; }
+.wb-fold.is-cut { cursor: pointer; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - .75lh), rgb(0 0 0 / .15)); mask-image: linear-gradient(to bottom, #000 calc(100% - .75lh), rgb(0 0 0 / .15)); }
+.wb-fold-end { display: flex; flex-direction: column; justify-content: flex-end; }
+.wb-fold-end.is-cut { -webkit-mask-image: linear-gradient(to bottom, rgb(0 0 0 / .15), #000 25%); mask-image: linear-gradient(to bottom, rgb(0 0 0 / .15), #000 25%); }
+.wb-fold.is-cut:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.wb-fold-collapse { align-self: flex-start; min-height: 24px; }
 /* Pseudo-element icons take their shape from wb-icons.css (same set and stroke as .wb-ico). */
 .wb-chev::after, .wb-inst-more::after { content: ""; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--wb-ico) center/contain no-repeat; mask: var(--wb-ico) center/contain no-repeat; }
 .wb-bot::before { content: ""; width: 13px; height: 13px; background: currentColor; -webkit-mask: var(--wb-ico) center/contain no-repeat; mask: var(--wb-ico) center/contain no-repeat; }

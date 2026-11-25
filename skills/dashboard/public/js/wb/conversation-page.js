@@ -2274,6 +2274,9 @@ export function mountConversationPage({
       groupSide?.close({ focus: false });
       quickConfig?.update(null);
       annotations.hide();
+      // Leaving the page folds long relays and the activity steps again for the next visit.
+      for (const record of messages.values()) record.resource?.refold?.();
+      liveArea?.refold();
       page.hidden = true;
       syncMobileFocus();
       state.close();

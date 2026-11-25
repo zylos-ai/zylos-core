@@ -2,6 +2,7 @@ import { countLabel } from '../count-label.js';
 import { element, icon } from './plain-text.js';
 import { formatZoned } from './instance-zone.js';
 import { mergeActivitySteps, stepText } from './activity-labels.js';
+import { createFold } from './fold.js';
 
 export { stepText };
 
@@ -108,6 +109,12 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
   const headText = node('span');
   head.append(icon(document, 'loader'), headText);
   const list = node('div', undefined, 'conversation-activity-steps');
+  // The steps sit in a window of about seven rows showing the newest, until clicked; the waiting line stays
+  // under it (Howard, Dashboard 2026-11-26).
+  const stepWindow = node('div', undefined, 'conversation-activity-window');
+  stepWindow.append(list);
+  const fold = createFold({ document, box: stepWindow, t, expandKey: 'chat.activity.expand', collapseKey: 'chat.activity.collapse', keepEnd: true });
+  const waitList = node('div', undefined, 'conversation-activity-steps conversation-activity-wait');
   const rows = node('div', undefined, 'conversation-activity-subtasks');
   const note = node('div', undefined, 'conversation-activity-handled');
   let structure = null, times = [], subtaskNodes = new Map(), current = null;
@@ -223,7 +230,8 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
       return;
     }
     root.dataset.state = view.head ?? 'subtasks';
-    const parts = view.head ? [head, list, rows] : [rows];
+    if (!view.head) fold.reset();
+    const parts = view.head ? [head, stepWindow, fold.collapse, waitList, rows] : [rows];
     if (root.children.length !== parts.length || parts.some((part, index) => root.children[index] !== part)) root.replaceChildren(...parts);
     if (view.head) {
       const state = t(`chat.activity.${view.head}`);
@@ -233,14 +241,16 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
       if (shape !== structure) {
         structure = shape;
         times = [];
-        list.replaceChildren();
-        if (view.truncated) list.append(node('p', t('chat.activity.truncated'), 'conversation-activity-more'));
-        for (const step of mergeActivitySteps(view.steps, t)) { const row = stepRow(step, list); if (row) times.push(row); }
-        if (view.waiting) list.append(waitingRow(view.waiting));
+        fold.grow(() => {
+          list.replaceChildren();
+          if (view.truncated) list.append(node('p', t('chat.activity.truncated'), 'conversation-activity-more'));
+          for (const step of mergeActivitySteps(view.steps, t)) { const row = stepRow(step, list); if (row) times.push(row); }
+        });
+        waitList.replaceChildren(...(view.waiting ? [waitingRow(view.waiting)] : []));
       }
       for (const { step, time } of times) { const text = stepTime(step, now); if (time.textContent !== text) time.textContent = text; }
     }
     updateSubtasks(view, { now, open, details });
   }
-  return { node: root, update, get view() { return current; } };
+  return { node: root, update, refold: () => fold.reset(), get view() { return current; } };
 }
