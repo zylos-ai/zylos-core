@@ -9,6 +9,7 @@ import { summarizeCommandActivity } from '../src/lib/runtime/codex/command-activ
 import { buildSteps } from '../src/lib/chat/activity.js';
 import { projectTimelineActivity } from '../src/lib/workbench/timeline-events.js';
 import { eventRows, eventTypesFor, recentRows } from '../public/js/wb/timeline-rows.js';
+import { mergeActivitySteps } from '../public/js/wb/activity-labels.js';
 
 const readCommand = path => ({ type: 'CommandExecution', parsed_cmd: [{ type: 'read', path }] });
 
@@ -50,15 +51,33 @@ test('conversation steps and group event projections share Codex activity labels
 test('Codex activity drops shell arguments, search text, unsafe basenames and heredoc content', () => {
   const secret = 'sk-test-XXXX';
   const url = 'https://demo:password@example.invalid/script.py';
-  const payload = { parsed_cmd: [
+  const heredoc = `TOKEN=${secret} curl ${url} <<EOF\n${secret}\nEOF`;
+  const directory = '/private/dir';
+  const parts = [
     { type: 'unknown', cmd: `git status --token=${secret} ${url}` },
-    { type: 'unknown', cmd: `TOKEN=${secret} curl ${url} <<EOF\n${secret}\nEOF` },
-    { type: 'read', path: `/fixtures/${secret}.txt` },
+    { type: 'unknown', cmd: heredoc },
+    { type: 'read', path: `${directory}/${secret}.txt` },
     { type: 'search', query: secret, cmd: `rg ${secret} ${url}` },
     { type: 'unknown', cmd: `python ${url}` },
-  ] };
-  assert.deepEqual(summarizeCommandActivity(payload), { first: { key: 'codeStatus' }, count: 5, allReads: false });
-  assert.deepEqual(summarizeCommandActivity({ command: payload.parsed_cmd[1].cmd }), { first: null, count: 1, allReads: false });
+  ];
+  const script = { type: 'unknown', cmd: `python3 ${directory}/run.py` };
+  const summarizePart = part => summarizeCommandActivity({ parsed_cmd: [part] });
+  for (const part of [...parts, script]) {
+    const json = JSON.stringify(summarizePart(part));
+    for (const fragment of [secret, 'https://', 'demo:password', 'example.invalid', directory]) {
+      assert.ok(!json.includes(fragment), `Activity exposed a private fragment for a ${part.type} command`);
+    }
+  }
+  assert.deepEqual(summarizePart(script).first, { key: 'runScript', arg: 'run.py' });
+  assert.deepEqual(summarizeCommandActivity({ command: heredoc }), { first: null, count: 1, allReads: false });
+});
+
+test('activity keeps a failed step separate from consecutive successes with the same label', () => {
+  const step = { kind: 'tool', label: { key: 'searchFiles' } };
+  const first = { ...step, status: 'done', start: 0, end: 1000 };
+  const second = { ...step, status: 'done', start: 1000, end: 3000 };
+  const failed = { ...step, status: 'failed', start: 3000, end: 4000 };
+  assert.deepEqual(mergeActivitySteps([first, second, failed]), [{ ...first, count: 2, duration: 3000 }, failed]);
 });
 
 test('collector appends structured command activity only on the final result, without changing the call', t => {
