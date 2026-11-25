@@ -56,7 +56,9 @@ export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, origi
   }
   return async function getMemoryBacklog(at = now()) {
     const [snapshot, config, limits] = await Promise.all([getSnapshot(at), thresholds(), budgets()]);
-    const rows = new Map(snapshot.rows.filter(row => row.sessionGroup !== null).map(row => [row.sessionGroup, row]));
+    const rows = new Map(snapshot.rows
+      .map(row => [snapshot.view === 'single' ? row.sessionGroup ?? 'origin' : row.sessionGroup, row])
+      .filter(([key]) => key !== null));
     const keys = [...rows.keys()];
     const threshold = positive(config?.syncThreshold);
     const backlogs = snapshot.view === 'multi' ? null : readAll(groupBacklog, keys);
