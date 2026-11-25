@@ -5,7 +5,7 @@ import { listen } from './detail-update.js';
 import { element, icon } from './plain-text.js';
 import { endReasonLabel, timeValue } from './event-labels.js';
 import { eventRow, eventTime, repeatRow } from './detail-overview.js';
-import { eventRows, mergeRepeats, newestFirst, showsEvent } from './timeline-rows.js';
+import { eventRows, mergeRepeats, newestFirst, plainActivityRows, showsEvent } from './timeline-rows.js';
 
 export { timeValue };
 
@@ -320,7 +320,7 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
     if (open) {
       const rows = [];
       const events = state.filter === 'messages' ? [] : state.events.get(run.runId) ?? [];
-      rows.push(...eventRows(events.filter(showEvent)));
+      rows.push(...eventRows(events, { plain: level !== 'technical' }).filter(row => showEvent(row.event)));
       if (showMessages && ['all', 'messages'].includes(state.filter)) {
         const page = state.eventPages?.get(run.runId);
         const earliest = page?.nextCursor
@@ -332,7 +332,8 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
         }
       }
       // Newest first inside a run as across runs, so "back to latest" (the top) is the latest row.
-      for (const group of mergeRepeats(newestFirst(rows))) {
+      const ordered = newestFirst(rows);
+      for (const group of mergeRepeats(level === 'technical' ? ordered : plainActivityRows(ordered, t))) {
         const { event, message } = group.newest;
         section.append(message
           ? eventRow(document, message, { level, t, label: messageLabel(message), className: 'wb-ev wb-timeline-message' })

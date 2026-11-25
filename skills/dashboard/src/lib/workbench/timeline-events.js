@@ -2,6 +2,26 @@ import { eventTypesFor } from '../../../public/js/wb/timeline-rows.js';
 import { listFailure } from '../list-query.js';
 import { isRestartExit, restartAssociated } from './restart-effects.js';
 import { levels, timelinePage, timelineQuery } from './timeline-page.js';
+import { commentaryRole, commentaryText, isActivityToolEvent, opensStep, stepLabel } from '../chat/activity.js';
+
+function projectActivity(event, row) {
+  const text = commentaryText(event);
+  if (text) return { kind: 'commentary', text };
+  if (!isActivityToolEvent(event)) return null;
+  if (event.type === 'tool_call' && !opensStep(event)) return null;
+  if (event.type === 'tool_result' && (event.meta.wraps_agent_tools || (!event.meta.resumes_cell &&
+      !opensStep({ ...event, type: 'tool_call' })))) return null;
+  const start = ['pre_tool_use', 'tool_call'].includes(event.type);
+  const status = start || event.meta.cell_running ? 'running' : row.interrupted ? 'interrupted' :
+    event.type === 'post_tool_failure' || event.meta.outcome === 'failed' ? 'failed' : 'done';
+  return { kind: 'tool', label: stepLabel(event), status, start, duration: row.duration_ms ?? null };
+}
+
+export function projectTimelineEvent(row) {
+  const event = { type: row.event_type, runtime: row.runtime, summary: row.summary, meta: row.metadata ?? {} };
+  const role = commentaryRole(event);
+  return { ...row, activity: projectActivity(event, row), ...(role ? { commentaryRole: role } : {}) };
+}
 
 export async function readTimelineEvents(store, key, singleOrigin, search, sanitize) {
   const query = timelineQuery(`group-events:${key}:${singleOrigin}`, search, {
@@ -34,8 +54,9 @@ export async function readTimelineEvents(store, key, singleOrigin, search, sanit
       AND ${restartAssociated(restartGroup)}) AS restart_interrupted FROM runtime_events event WHERE ${clauses.join(' AND ')}
       ORDER BY event.event_seq ${query.order}, event.id ${query.order} LIMIT @limit`).all(args);
     page = timelinePage(rows, query, row => [row.event_seq, row.id], [0, '']);
-    page.items = page.items.map(({ restart_interrupted, ...row }) => ({ ...row,
-      metadata: row.metadata ? JSON.parse(row.metadata) : null, ...(restart_interrupted ? { interrupted: true } : {}) }));
+    page.items = page.items.map(({ restart_interrupted, ...row }) =>
+      ({ ...row, metadata: row.metadata ? JSON.parse(row.metadata) : null, ...(restart_interrupted ? { interrupted: true } : {}) }));
   } catch { throw listFailure(503, 'unavailable', 'Group events unavailable'); }
-  return { ...page, items: await sanitize(page.items) };
+  const items = await sanitize(page.items);
+  return { ...page, items: level === 'technical' ? items : items.map(projectTimelineEvent) };
 }

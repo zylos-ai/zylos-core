@@ -37,5 +37,6 @@ export const DASHBOARD_CAPABILITIES = Object.freeze({
     opensStep: 'optional',
     subagentLaunchTools: 'required',
     resumesCells: 'required',
+    commentary: 'optional',
   }) }),
 });

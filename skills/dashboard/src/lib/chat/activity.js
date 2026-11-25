@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { END_TYPES, MAIN_ACTION_TYPES, STOP_HOOK_LAG_MS, inputAfterStop } from '../workbench/working.js';
-import { RESTART_EXIT_MS, runRestartEffect } from '../../../public/js/wb/timeline-rows.js';
+import { commentaryTurnBoundaries, RESTART_EXIT_MS, resolveCommentary, runRestartEffect,
+  toolEventTypes, transcriptTools } from '../../../public/js/wb/timeline-rows.js';
 import { loadCoreModule } from '../core-modules.js';
 import { getDashboardRuntime } from '../runtime/index.js';
 import { UNSUPPORTED } from '../runtime/contract.js';
@@ -14,13 +15,13 @@ import { UNSUPPORTED } from '../runtime/contract.js';
  * (whichever is later), a mark where a new input reached the session or a subtask began, and one row per subtask
  * that has not ended. Whether the group works at all comes from the same reading as the conversation header, and the
  * page's header takes its reading from this read too.
- * Steps carry only the one-line summaries the event store already holds: no tool output, no command text, no
- * thinking and none of the words the agent writes between steps.
+ * Steps carry display labels and short progress messages, not tool output, command text or reasoning.
  */
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
-const STEP_TYPES = ['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'tool_call', 'tool_result',
-  'subagent_start', 'subagent_stop', 'assistant_message', 'deliver', 'input_dequeue', 'user_prompt_submit'];
+const STEP_TYPES = [...toolEventTypes, ...transcriptTools,
+  'subagent_start', 'subagent_stop', 'assistant_message', 'deliver',
+  ...commentaryTurnBoundaries.filter(type => type !== 'dashboard_interrupt')];
 // Collectors read transcripts every 5 s, so a step's end or a queued message the runtime took after the stop may be
 // recorded a little later. For this long after a stop, steps without an end keep running, and work that ended without
 // a reply is still settling: the page already says it was handled, but keeps reading often.
@@ -97,6 +98,24 @@ export function stepLabel(event) {
   return vocab(event.runtime).stepLabel(event, { tool, detail });
 }
 
+export function commentaryText(event) {
+  const { commentary } = vocab(event.runtime);
+  return event.type === 'assistant_message' && typeof commentary === 'function' && commentary(event)
+    ? plain(event.summary) : null;
+}
+
+export function commentaryRole(event) {
+  if (event.type === 'dashboard_interrupt') return 'boundary';
+  if (vocab(event.runtime).commentary !== 'beforeTool') return null;
+  if (commentaryTurnBoundaries.includes(event.type)) return 'boundary';
+  if (event.type === 'assistant_message') return 'candidate';
+  return opensStep(event) ? 'tool' : null;
+}
+
+export function isActivityToolEvent(event) {
+  return (vocab(event.runtime).toolEvents === 'transcript' ? transcriptTools : toolEventTypes).includes(event.type);
+}
+
 /**
  * A subtask's name: Memory Sync by what it does, otherwise the short description of the Claude call that launched it,
  * otherwise a plain "subtask". What Codex records with a start is the message the subtask was given or a generated
@@ -160,18 +179,23 @@ export function opensStep(event) {
 export function buildSteps(events, { agent = null, ends = [], now, restartCut = () => false }) {
   let steps = [], truncated = false;
   const open = new Map(), cells = new Map();
+  const progress = resolveCommentary([...events].sort((left, right) =>
+    (right.recorded ?? right.at) - (left.recorded ?? left.at) || (right.seq ?? 0) - (left.seq ?? 0)), event => ({
+    role: commentaryRole(event), run: event.run, session: event.session, agent: event.meta.agent_id, summary: event.summary,
+  }));
   for (const event of events) {
     if (agentOf(event) !== agent) continue;
     const meta = event.meta;
-    if (!['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'tool_call', 'tool_result'].includes(event.type)) continue;
+    const commentary = progress.get(event) ?? commentaryText(event);
+    if (commentary) steps.push({ kind: 'commentary', at: event.at, text: commentary });
+    if (!isActivityToolEvent(event)) continue;
     const vocabulary = vocab(event.runtime);
-    if (vocabulary.toolEvents === 'transcript' && ['pre_tool_use', 'post_tool_use', 'post_tool_failure'].includes(event.type)) continue;
-    if (vocabulary.toolEvents === 'hooks' && ['tool_call', 'tool_result'].includes(event.type)) continue;
     // A `wait` on a code-mode cell reads more of the `exec` that yielded it; the exec's step ends when one reports the
     // script finished.
     if (vocabulary.resumesCells && typeof meta.resumes_cell === 'string') {
       const step = event.type === 'tool_result' && !meta.cell_running ? cells.get(meta.resumes_cell) : null;
       if (step && step.end === null) {
+        if (meta.command_activity) step.label = stepLabel(event);
         step.end = event.at;
         step.status = meta.outcome === 'failed' ? 'failed' : 'done';
         cells.delete(meta.resumes_cell);
@@ -190,6 +214,7 @@ export function buildSteps(events, { agent = null, ends = [], now, restartCut = 
       if (!step || step.end !== null) continue;
       // An `exec` that yielded while its script still runs goes on until a `wait` on its cell sees it finish.
       if (event.type === 'tool_result' && meta.cell_running && typeof meta.cell_id === 'string') { cells.set(meta.cell_id, step); continue; }
+      if (meta.command_activity) step.label = stepLabel(event);
       step.end = event.at;
       step.status = event.type === 'post_tool_failure' && restartCut(event) ? 'interrupted'
         : event.type === 'post_tool_failure' || meta.outcome === 'failed' ? 'failed' : 'done';
@@ -300,7 +325,7 @@ export class ChatActivity {
 
   /** The main agent's latest stops, newest first, each with whether a subtask was still open at that moment. */
   _stops(group, now) {
-    const rows = this._deliveredInterrupts(this._events(`SELECT event_seq, timestamp, runtime, session_id, event_type, summary, metadata
+    const rows = this._deliveredInterrupts(this._events(`SELECT event_seq, timestamp, runtime, session_id, run_id, event_type, summary, metadata
       FROM runtime_events WHERE session_group=@group AND event_type IN (${END_TYPES.map(type => `'${type}'`).join(',')})
       AND (CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.agent_id') END) IS NULL AND timestamp <= @now
       ORDER BY timestamp DESC, event_seq DESC LIMIT ${QUIET_LOOKBACK}`, { group, now: iso(now) }).map(row => this._row(row)));
@@ -517,15 +542,17 @@ export class ChatActivity {
     const resumed = busy && reply?.at != null && stops[0]?.at > reply.at + 1000 ? stops[0].at : -Infinity;
     const from = Math.max(reply?.at != null ? reply.at + 1000 : -Infinity, quiet ?? -Infinity, resumed, now - 24 * 3600_000);
     const read = this._events(`SELECT event_seq, timestamp, runtime, session_id, run_id, event_type, summary, metadata
-      FROM runtime_events WHERE session_group=@group AND event_type IN (${STEP_TYPES.map(type => `'${type}'`).join(',')})
+      FROM runtime_events event WHERE session_group=@group AND event_type IN (${STEP_TYPES.map(type => `'${type}'`).join(',')})
       AND timestamp >= @from AND timestamp <= @now
       AND NOT (event_type IN ('pre_tool_use','post_tool_use','post_tool_failure') AND (CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.agent_id') END) IS NOT NULL)
       ORDER BY timestamp DESC, event_seq DESC LIMIT ${STEP_LIMIT}`, { group, from: iso(from - STOP_HOOK_LAG_MS), now: iso(now + 60_000) })
       .reverse().map(row => this._row(row));
     // A queued message taken as a turn ended can be timed before that stop: it counts just after it.
-    const ordered = [...read, ...stops].sort((a, b) => a.at - b.at || (a.seq ?? 0) - (b.seq ?? 0));
+    const ordered = [...read.filter(event => !END_TYPES.includes(event.type)), ...stops]
+      .sort((a, b) => a.at - b.at || (a.seq ?? 0) - (b.seq ?? 0));
     const counted = inputAfterStop(ordered, { type: event => event.type, at: event => event.at, child: agentOf });
-    const events = read.map(event => counted(event) === event.at ? event : { ...event, at: counted(event), recorded: event.at })
+    const events = [...read, ...stops.filter(event => event.type === 'dashboard_interrupt')]
+      .map(event => counted(event) === event.at ? event : { ...event, at: counted(event), recorded: event.at })
       .filter(event => event.at >= from).sort((a, b) => a.at - b.at || (a.seq ?? 0) - (b.seq ?? 0));
     const ends = stops.filter(stop => stop.at >= from).map(stop => ({ at: stop.at, stopped: stop.type === 'dashboard_interrupt' }))
       .sort((a, b) => a.at - b.at);

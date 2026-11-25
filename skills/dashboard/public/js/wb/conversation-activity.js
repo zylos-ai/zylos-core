@@ -1,6 +1,9 @@
 import { countLabel } from '../count-label.js';
 import { element, icon } from './plain-text.js';
 import { formatZoned } from './instance-zone.js';
+import { mergeActivitySteps, stepText } from './activity-labels.js';
+
+export { stepText };
 
 /**
  * What the AI is doing right now, shown on the conversation page right below the latest message (a user message or a
@@ -18,14 +21,6 @@ export function formatDuration(ms, t = key => key) {
   if (seconds < 60) return t('chat.activity.seconds').replace('{s}', String(seconds));
   if (seconds < 3600) return t('chat.activity.minutes').replace('{m}', String(Math.floor(seconds / 60))).replace('{s}', String(seconds % 60));
   return t('chat.activity.hours').replace('{h}', String(Math.floor(seconds / 3600))).replace('{m}', String(Math.floor(seconds % 3600 / 60)));
-}
-
-/** One line per step, in the page language; the label never carries a tool name or raw input. */
-export function stepText(step, t = key => key) {
-  const label = step.label ?? { key: 'tool' };
-  if (label.key === 'described') return label.arg ?? t('chat.activity.label.runCommand');
-  const text = t(`chat.activity.label.${label.key}`);
-  return text.includes('{arg}') ? text.replace('{arg}', label.arg ?? '') : text;
 }
 
 /** A subtask's name: Memory Sync by what it does, otherwise the description it was started with. */
@@ -119,6 +114,10 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
   const clock = at => formatZoned(new Date(at), locale, { hour: '2-digit', minute: '2-digit' });
 
   function stepRow(step, into) {
+    if (step.kind === 'commentary') {
+      into.append(node('div', step.text, 'conversation-activity-commentary'));
+      return null;
+    }
     if (step.kind === 'mark') {
       const mark = node('div', undefined, 'conversation-activity-mark');
       mark.dataset.mark = step.mark;
@@ -130,7 +129,8 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
     }
     const row = node('div', undefined, 'conversation-activity-step');
     row.dataset.status = step.status;
-    const text = step.status === 'interrupted' ? `${stepText(step, t)} · ${t('chat.activity.interrupted')}` : stepText(step, t);
+    const name = stepText(step, t) + (step.count > 1 ? ` ×${step.count}` : '');
+    const text = step.status === 'interrupted' ? `${name} · ${t('chat.activity.interrupted')}` : name;
     const label = node('span', text, 'conversation-activity-label');
     label.title = label.textContent;
     const time = node('span', '', 'conversation-activity-time');
@@ -140,7 +140,7 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
   }
   function stepTime(step, now) {
     if (step.status === 'running') return t('chat.activity.running');
-    const duration = formatDuration((step.end ?? now) - step.start, t);
+    const duration = formatDuration(step.duration ?? ((step.end ?? now) - step.start), t);
     return step.status === 'failed' || step.status === 'incomplete' || step.status === 'stopped'
       ? `${t(`chat.activity.${step.status}`)} · ${duration}` : duration;
   }
@@ -185,7 +185,7 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
       if (item.rest.textContent !== rest) item.rest.textContent = rest;
       item.button.title = `${t('chat.activity.subtask.prefix')}${name}${rest}`;
       const detail = expanded ? details?.get(subtask.id) : null;
-      const shape = JSON.stringify([expanded, detail ? detail.steps.map(step => [step.kind, step.status, step.label?.key, step.label?.arg]) : null]);
+      const shape = JSON.stringify([expanded, detail?.steps]);
       if (shape !== item.shape) {
         item.shape = shape;
         item.times = [];
@@ -194,7 +194,7 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
         else if (expanded && !detail.steps.length) item.steps.append(node('p', t('chat.activity.subtask.empty'), 'conversation-activity-more'));
         else if (expanded) {
           if (detail.truncated) item.steps.append(node('p', t('chat.activity.truncated'), 'conversation-activity-more'));
-          for (const step of detail.steps) { const row = stepRow(step, item.steps); if (row) item.times.push(row); }
+          for (const step of mergeActivitySteps(detail.steps, t)) { const row = stepRow(step, item.steps); if (row) item.times.push(row); }
         }
       }
       item.steps.hidden = !expanded;
@@ -229,14 +229,13 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
       const state = t(`chat.activity.${view.head}`);
       const text = Number.isFinite(view.since) ? t('chat.activity.elapsed').replace('{state}', state).replace('{time}', formatDuration(now - view.since, t)) : state;
       if (headText.textContent !== text) headText.textContent = text;
-      const shape = JSON.stringify([view.waiting, view.truncated, view.steps.map(step => step.kind === 'mark' ? ['mark', step.mark, step.at, step.label?.arg]
-        : [step.kind, step.status, step.label?.key, step.label?.arg])]);
+      const shape = JSON.stringify([view.waiting, view.truncated, view.steps]);
       if (shape !== structure) {
         structure = shape;
         times = [];
         list.replaceChildren();
         if (view.truncated) list.append(node('p', t('chat.activity.truncated'), 'conversation-activity-more'));
-        for (const step of view.steps) { const row = stepRow(step, list); if (row) times.push(row); }
+        for (const step of mergeActivitySteps(view.steps, t)) { const row = stepRow(step, list); if (row) times.push(row); }
         if (view.waiting) list.append(waitingRow(view.waiting));
       }
       for (const { step, time } of times) { const text = stepTime(step, now); if (time.textContent !== text) time.textContent = text; }

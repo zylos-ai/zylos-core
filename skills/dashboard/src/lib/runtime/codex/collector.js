@@ -11,6 +11,7 @@ import { Sanitizer } from '../../sanitizer.js';
 import { UsageTranscripts, groupMainTranscript, childTranscript } from '../../collectors/usage-transcripts.js';
 import { sameSourceFile } from '../../source-file-identity.js';
 import { codexToolOutputFailed, codexToolOutputText } from './tool-outcome.js';
+import { CODEX_COMMANDS, summarizeCommandActivity } from './command-activity.js';
 
 const { getRuntime } = await loadCoreModule('runtime/index.js');
 const { transcript } = (await getRuntime('codex')).usage;
@@ -42,6 +43,7 @@ export class CodexRolloutCollector {
     this._spawnedThreadsByCallId = new Map();
     // The code-mode cell each `wait` resumes.
     this._waitCellByCallId = new Map();
+    this._commandCallsByPath = new Map();
     this._onEvent = null;
     this._onMetric = null;
     this._sanitizer = config.sanitizer || new Sanitizer(config.zylosDir || process.cwd());
@@ -311,6 +313,7 @@ export class CodexRolloutCollector {
       });
     }
     if (payload.type === 'task_complete') {
+      this._commandCallsByPath.delete(mapping.transcript_path);
       return this._ingestTaskComplete(payload, timestamp, mapping, position, { turnEvent: !subagentThread });
     }
     if (subagentThread) return 0;
@@ -324,14 +327,17 @@ export class CodexRolloutCollector {
   }
 
   /**
-   * Codex reports subagent activity as completed items: multi-agent v2 writes `SubAgentActivity` (`started` /
-   * `completed` / `interrupted` / `interacted`, naming the agent by its task path); code mode writes
-   * `CollabAgentToolCall` for the agent tools an `exec` called, naming the threads it spawned. Other items, such as
-   * the `CommandExecution` of a command finishing inside a still-running code-mode cell, are neither steps nor ends,
-   * and nothing of them (command, directory, output) is kept.
+   * Completed items describe subagent activity or commands inside a tool call, not new activity steps.
    */
   _ingestItemCompleted(item, timestamp, mapping, position = {}) {
     if (!item || typeof item !== 'object') return 0;
+    if (['CommandExecution', 'command_execution'].includes(item.type)) {
+      const calls = this._commandCallsByPath.get(mapping.transcript_path);
+      const call = calls?.get(item.call_id ?? item.id) ?? (calls?.size === 1 ? calls.values().next().value : null);
+      if (!call) return 0;
+      call.activity = summarizeCommandActivity(item, call.activity);
+      return 0;
+    }
     if (item.type === 'SubAgentActivity') {
       const agentId = firstString(item.agent_path, item.agent_thread_id);
       if (!agentId) return 0;
@@ -574,6 +580,16 @@ export class CodexRolloutCollector {
     if (callId && !isOutput) this._toolSummaryByCallId.set(callId, summary);
 
     const ingestId = `codex-rollout-${mapping.session_id || 'unknown'}-${eventKey}-${item.type}`;
+    let calls = this._commandCallsByPath.get(mapping.transcript_path);
+    if (callId && !isOutput && CODEX_COMMANDS.has(normalizedName) && !wraps) {
+      if (!calls) this._commandCallsByPath.set(mapping.transcript_path, calls = new Map());
+      calls.set(callId, {});
+    }
+    const commandCall = isOutput && (cellId ? [...(calls?.values() ?? [])].find(call => call.cellId === cellId) : calls?.get(callId));
+    if (commandCall) {
+      if (running) commandCall.cellId = running;
+      else for (const [id, call] of calls) if (call === commandCall) calls.delete(id);
+    }
     let written = 0;
     const toolEvent = {
       id: stableEventId(ingestId),
@@ -594,6 +610,7 @@ export class CodexRolloutCollector {
         raw_type: item.type,
         rollout_offset: position.byteOffset ?? null,
         rollout_line: position.lineIndex ?? null,
+        ...(commandCall?.activity && !running ? { command_activity: commandCall.activity } : {}),
         ...(wraps ? { wraps_agent_tools: wraps } : {}),
         // The cell a yielded exec left running, or the cell a `wait` resumes (its result names no tool).
         ...(cellId ? { resumes_cell: cellId } : running ? { cell_id: running } : {}),
