@@ -9,7 +9,7 @@ export function readSnapshot(file) {
     const text = fs.readFileSync(fd, 'utf8');
     const after = fs.fstatSync(fd);
     if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) return { error: 'unparseable', mtime: before.mtimeMs };
-    return { text, mtime: before.mtimeMs };
+    return { text, mtime: before.mtimeMs, size: before.size };
   } catch (error) { return { error: error.code === 'ENOENT' ? 'missing' : 'unparseable', mtime: null }; }
   finally { if (fd !== undefined) fs.closeSync(fd); }
 }

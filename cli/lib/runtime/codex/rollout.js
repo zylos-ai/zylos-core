@@ -1,5 +1,6 @@
+import fs from 'node:fs';
 import path from 'node:path';
-import { groupRunDir } from '../../session-group-paths.js';
+import { groupRunDir, sessionGroupRunRoot } from '../../session-group-paths.js';
 import { currentRecordedWeekly, readSnapshot } from '../../session-usage-reader.js';
 
 function completeRows(text) {
@@ -35,10 +36,11 @@ function readCodexEventSample(event, identity, account) {
   return codexSampleFromRow(source, row, identity);
 }
 
-function readCodexEventSource(event) {
+function readCodexEventSource(event, files) {
   if (event?.v > 1) process.emitWarning('Reading known fields from a newer session event version');
   if (typeof event?.transcript_path !== 'string' || !path.isAbsolute(event.transcript_path)) return null;
   const rollout = readSnapshot(event.transcript_path);
+  files?.push(fileVersion(event.transcript_path, rollout));
   if (rollout.error) return null;
   return { rows: completeRows(rollout.text), mtime: rollout.mtime };
 }
@@ -62,7 +64,13 @@ function codexSampleFromRow({ rows, mtime }, row, identity) {
 
 /** Recorded account evidence uses its recorded run/session, never a live identity. */
 export function readRecordedCodexSample({ sessionGroup, env = process.env, now = Date.now(), includeWithoutQuota = false }) {
-  const events = readSnapshot(path.join(groupRunDir(sessionGroup, env), 'events.jsonl'));
+  const found = recordedCodexSample(sessionGroup, env, includeWithoutQuota);
+  return found && (includeWithoutQuota || currentRecordedWeekly(found.sample.rateLimits, found.sample.capturedAt, now)) ? found : null;
+}
+
+function selectRecordedCodexSample(sessionGroup, file, includeWithoutQuota, files) {
+  const events = readSnapshot(file);
+  files.push(fileVersion(file, events));
   if (events.error) return null;
   const starts = completeRows(events.text).filter(row => row.v === 1 && row.event === 'session_start' &&
     row.runtime === 'codex' && row.session_group === sessionGroup && typeof row.run_id === 'string' &&
@@ -74,7 +82,7 @@ export function readRecordedCodexSample({ sessionGroup, env = process.env, now =
     const key = JSON.stringify([event.run_id, event.session_id]);
     if (seen.has(key)) continue;
     seen.add(key);
-    const source = readCodexEventSource(event);
+    const source = readCodexEventSource(event, files);
     if (!source) continue;
     // Empty token updates can occur transiently within subscription runs. Once
     // this run reports quota, retain its latest quota-bearing update.
@@ -82,8 +90,60 @@ export function readRecordedCodexSample({ sessionGroup, env = process.env, now =
     const last = source.rows.findLast(token);
     const row = includeWithoutQuota ? source.rows.findLast(item => token(item) && item.payload.rate_limits) ?? last : last;
     if (!row) continue;
-    const sample = codexSampleFromRow(source, row, { runId: event.run_id, sessionId: event.session_id });
-    return sample && (includeWithoutQuota || currentRecordedWeekly(sample.sample.rateLimits, sample.sample.capturedAt, now)) ? sample : null;
+    return codexSampleFromRow(source, row, { runId: event.run_id, sessionId: event.session_id });
   }
   return null;
+}
+
+// Dashboard rereads every group's recorded sample on each account poll, while most
+// groups' files are unchanged. A group's selection is kept in this process with the
+// size and modification time of every file it read (events.jsonl and each rollout
+// examined) and reused while all of them still match. A read that saw a file change
+// mid-read is not kept. Entries for group directories that no longer exist are
+// dropped when the run root directory changes.
+const recordedSelections = new Map();
+
+function fileVersion(file, snapshot) {
+  if (snapshot.error === 'missing') return { file, size: null, mtimeMs: null };
+  return snapshot.error ? null : { file, size: snapshot.size, mtimeMs: snapshot.mtime };
+}
+
+function unchanged(files) {
+  return files.every(({ file, size, mtimeMs }) => {
+    let stat;
+    try { stat = fs.statSync(file); } catch (error) { return error.code === 'ENOENT' && size === null; }
+    return stat.size === size && stat.mtimeMs === mtimeMs;
+  });
+}
+
+function recordedGroups(root) {
+  let version;
+  try {
+    const stat = fs.statSync(root);
+    version = `${stat.mtimeMs}:${stat.nlink}`;
+  } catch {
+    recordedSelections.delete(root);
+    return null;
+  }
+  let cache = recordedSelections.get(root);
+  if (!cache) recordedSelections.set(root, cache = { version, groups: new Map() });
+  else if (cache.version !== version) {
+    cache.version = version;
+    let names;
+    try { names = new Set(fs.readdirSync(root)); } catch { names = new Set(); }
+    for (const group of cache.groups.keys()) if (!names.has(group)) cache.groups.delete(group);
+  }
+  return cache.groups;
+}
+
+function recordedCodexSample(sessionGroup, env, includeWithoutQuota) {
+  const file = path.join(groupRunDir(sessionGroup, env), 'events.jsonl');
+  const groups = recordedGroups(sessionGroupRunRoot(env));
+  const cached = groups?.get(sessionGroup);
+  if (cached?.includeWithoutQuota === includeWithoutQuota && unchanged(cached.files)) return structuredClone(cached.found);
+  const files = [];
+  const found = selectRecordedCodexSample(sessionGroup, file, includeWithoutQuota, files);
+  if (groups && files.every(Boolean)) groups.set(sessionGroup, { includeWithoutQuota, files, found: structuredClone(found) });
+  else groups?.delete(sessionGroup);
+  return found;
 }
