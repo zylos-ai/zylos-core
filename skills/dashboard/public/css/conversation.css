@@ -110,7 +110,33 @@
   flex:none;
   color:var(--text-dim)
 }
-.conversation-list-icon { position:relative; }
+.conversation-list-icon { position:relative; --conversation-ring-inset:-5.5px; --conversation-ring-radius:12.5px; }
+/* The group's state as the conversation header shows it: a 2px ring 2.5px outside the icon in that state's color.
+   Working turns a three-quarter arc once every 2s; offline fades the icon; an unreadable state draws nothing. */
+.conversation-list-icon:is([data-presence=working],[data-presence=idle],[data-presence=waiting],[data-presence=stuck])::after {
+  content:'';
+  position:absolute;
+  inset:var(--conversation-ring-inset);
+  border:2px solid var(--conversation-ring);
+  border-radius:var(--conversation-ring-radius);
+  pointer-events:none
+}
+.conversation-list-icon[data-presence=working] { --conversation-ring:var(--wb-work); }
+.conversation-list-icon[data-presence=idle] { --conversation-ring:var(--wb-idle); }
+.conversation-list-icon[data-presence=waiting] { --conversation-ring:var(--text-muted); }
+.conversation-list-icon[data-presence=stuck] { --conversation-ring:var(--wb-wait); }
+.conversation-list-icon[data-presence=offline] { opacity:.45; }
+@property --conversation-ring-turn { syntax:'<angle>'; inherits:false; initial-value:0deg; }
+.conversation-list-icon[data-presence=working]::after {
+  border-color:transparent;
+  background:conic-gradient(from var(--conversation-ring-turn),var(--conversation-ring) 0 75%,transparent 0) border-box;
+  -webkit-mask:linear-gradient(#000 0 0) padding-box,linear-gradient(#000 0 0) border-box;
+  -webkit-mask-composite:xor;
+  mask:linear-gradient(#000 0 0) padding-box exclude,linear-gradient(#000 0 0) border-box;
+  animation:conversation-ring-turn 2s linear infinite
+}
+@keyframes conversation-ring-turn { to { --conversation-ring-turn:360deg; } }
+@media (prefers-reduced-motion:reduce) { .conversation-list-icon[data-presence=working]::after { animation:none; } }
 .conversation-pin-badge:not([hidden]) {
   position:absolute;
   inset:-1px auto auto -1px;
@@ -2022,7 +2048,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .conversation-list-body { gap:2px; }
   .conversation-page .conversation-list-title { gap:6px; align-items:baseline; }
   .conversation-page .conversation-list-title strong { font-size:var(--fs-title-sm); font-weight:var(--fw-strong); }
-  .conversation-page .conversation-list-icon { width:36px; height:36px; border:0; border-radius:10px; background:var(--accent-dim); color:var(--accent); }
+  .conversation-page .conversation-list-icon { width:36px; height:36px; border:0; border-radius:10px; background:var(--accent-dim); color:var(--accent); --conversation-ring-inset:-4.5px; --conversation-ring-radius:14.5px; }
   .conversation-page .conversation-list-icon>.wb-ico { width:20px; height:20px; }
   .conversation-page .conversation-pin-badge { inset:0 auto auto 0; }
   .conversation-page :is(.conversation-draft,.conversation-list-channel) { flex:none; font-size:var(--fs-caption); line-height:var(--lh-badge-bordered); padding:0 6px; border:1px solid var(--wb-line-strong); border-radius:999px; white-space:nowrap; }
