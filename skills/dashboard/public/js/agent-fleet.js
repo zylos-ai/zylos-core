@@ -9,6 +9,8 @@ import { fallbackName, platformOf, runtimeName } from './wb/plain-text.js';
 
 const REASON_BADGE_REASONS = new Set(['unreachable', 'auth_failed', 'version_unsupported', 'timeout', 'conn_refused', 'bad_payload', 'offline']);
 const LINK_CHIP_QUALITIES = new Set(['slow', 'degraded', 'stale']);
+// Twelve fills whole rows at three, two and one card columns.
+export const FLEET_PAGE_SIZE = 12;
 
 export function escapeHtml(value) {
   return String(value ?? '')
@@ -252,7 +254,7 @@ export function buildAgentFleetView(fleet, options = {}) {
     page,
     nextCursor: fleet?.nextCursor ?? null,
     total,
-    offset: (page - 1) * 8,
+    offset: (page - 1) * FLEET_PAGE_SIZE,
     tiles,
     t: options.t || (key => ({ 'wb.term.origin': 'Origin', 'chat.unnamed': 'Untitled conversation' }[key] || key.replace('wb.platform.', ''))),
     counts: fleet?.summary?.counts ?? { busy: 0, idle: 0, stuck: 0, offline: 0 },
