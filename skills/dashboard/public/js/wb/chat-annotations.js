@@ -1,5 +1,6 @@
 import { countLabel } from '../count-label.js';
 import { element, icon } from './plain-text.js';
+import { composerKeySends, touchFirst } from './conversation-page.js';
 import { chars, composeContent, storedContent, contentBytes, shortStamp, MAX_ANNOTATIONS, MAX_CHARS, MAX_CONTENT_BYTES } from './chat-compose-text.js';
 
 const BLOCK = /^(P|LI|OL|UL|H[1-6]|PRE|BLOCKQUOTE|TABLE|TR|DIV|HR)$/;
@@ -161,7 +162,12 @@ export function createAnnotationUi({ document, t, root, composer, composeBox, na
   editor.foot.append(node('span', undefined, 'conversation-annotation-spacer'), editorCancel, editorSave);
   const charCount = value => `${chars(value)} / ${MAX_CHARS}`;
   comment.addEventListener('input', () => { fieldCount.textContent = charCount(comment.value); });
-  comment.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); editorSave.click(); } });
+  comment.addEventListener('keydown', event => {
+    if (composerKeySends(event, { touch: touchFirst(view) })) {
+      event.preventDefault();
+      editorSave.click();
+    }
+  });
   function closeEditor() {
     editing = null;
     editor.el.hidden = true;
