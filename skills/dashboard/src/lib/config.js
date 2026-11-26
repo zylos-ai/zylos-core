@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { avatarFileInfo } from './instance-avatar.js';
 import { validateFleetRegistry } from './fleet-registry.js';
 import { UNSUPPORTED } from './runtime/contract.js';
 
@@ -28,7 +29,7 @@ export function resolveAgentIdentity(loaded = {}, zylosDir = getZylosDir()) {
   const fallbackName = process.env.ZYLOS_AGENT_NAME || os.hostname() || path.basename(zylosDir) || 'zylos';
   const name = String(configured.name || loaded.agentName || fallbackName).trim() || fallbackName;
   const id = String(configured.id || loaded.agentId || slugifyIdentity(name)).trim() || slugifyIdentity(name);
-  return { name, id };
+  return { name, id, avatar: avatarFileInfo(configured.avatar) ? configured.avatar : null };
 }
 
 export function loadConfig({ zylosDir = getZylosDir(), pricing = {} } = {}) {

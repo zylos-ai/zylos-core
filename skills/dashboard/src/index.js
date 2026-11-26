@@ -73,6 +73,7 @@ import { HistoryService } from './lib/history/history-service.js';
 import { rejectObserverUpgrade } from './lib/observer-websocket.js';
 import { shutdownDashboardTransports } from './lib/dashboard-shutdown.js';
 import { MemoryBrowser, memoryErrorPayload } from './lib/memory-browser.js';
+import { avatarFileInfo, handleInstanceAvatar } from './lib/instance-avatar.js';
 import { agentColor } from './lib/agent-color.js';
 import { C4Reader } from './lib/c4-reader.js';
 import { createDisplayNames } from './lib/workbench/display-names.js';
@@ -408,7 +409,9 @@ function buildInstancePayload() {
   const zylosConfig = { ...loadZylosConfig(config.zylosDir), zylosDir: config.zylosDir };
   const defaults = runtimeDefaults(zylosConfig);
   const resources = getSystemMetrics();
-  return { agent: { ...config.agent, ...agentColor(config.agent?.name) }, tz: instanceTz(),
+  const { avatar, ...identity } = config.agent;
+  return { agent: { ...identity, ...agentColor(identity.name), avatar_version: avatarFileInfo(avatar)?.version ?? null },
+    tz: instanceTz(),
     session_mode: observed.sessionModeStatus ?? { sessionMode: readFleetSessionMode(), transition: null, globalGate: null, blocked: null, supervisor: 'unknown', lastCompleted: null, lastEvents: [] }, default_runtime: defaultRuntime(zylosConfig), defaults,
     versions: Object.fromEntries(['zylos', ...DASHBOARD_RUNTIMES].map(runtime => [runtime, runtimeVersionRecord(runtime)])),
     runtimeHealth: observed.runtimeHealth ?? null, accounts: observed.accounts ?? null,
@@ -1624,6 +1627,21 @@ export function createServer() {
           sendJson(res, 500, { error: 'internal_error' });
         }
       }
+      return;
+    }
+
+    if (pathname === '/api/instance/avatar') {
+      await handleInstanceAvatar(req, res, {
+        dataDir: config.dataDir,
+        avatar: config.agent.avatar,
+        saveAvatar: async (filename) => {
+          await persistFleetConfig(({ agent }) => {
+            agent.avatar = filename;
+          });
+          scheduleFleetStateBroadcast();
+          broadcastFleet(fleetPoller.getFleet());
+        }
+      });
       return;
     }
 

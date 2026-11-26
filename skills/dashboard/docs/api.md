@@ -34,7 +34,7 @@ An API key's scope is `read`, `admin`, or a custom list of permissions. Read and
 
 | Permission | Routes |
 |---|---|
-| `instance.read` | `GET /api/instance`, `/api/instance/resources`, `/api/instance/runtime-options`, `/api/instance/core-update`; `GET /api/stream` without `chat`; the signed-in details of `GET /api/health`; `GET /api/settings/timezone`, `/api/settings/pricing`, `/api/settings/chat` |
+| `instance.read` | `GET /api/instance`, `/api/instance/resources`, `/api/instance/runtime-options`, `/api/instance/core-update`, `/api/instance/avatar`; `GET /api/stream` without `chat`; the signed-in details of `GET /api/health`; `GET /api/settings/timezone`, `/api/settings/pricing`, `/api/settings/chat` |
 | `instance.settings` | `PUT /api/instance/defaults`, `PUT /api/instance/name`, `PUT /api/settings/pricing`, `PUT /api/settings/timezone`, `POST /api/instance/actions/recheck-runtime-cli` |
 | `instance.ops` | `POST /api/instance/actions/switch-mode`, `switch-runtime`, `upgrade-runtime`; `POST /api/settings/timezone/actions/restart-services` |
 | `groups.read` | `GET /api/groups`, `/api/groups/counts`, `/api/groups/activity`, `/api/groups/:id`, `/api/groups/:id/runs`, `events`, `messages`, `backlog`, `usage`, `/api/groups/:id/restarts/:requestId` |
@@ -91,7 +91,7 @@ Use the spelling below as returned: `session_mode` and `sessionMode` intentional
 | `GET /api/health/ready` | Public | `ready:boolean`, `reason:"supervisor_unavailable"\|null`, `session_mode:"single"\|"multi"\|"unreadable"`, `session_running:boolean\|null`; `runtime_health.claude`, `.codex` and `.agy` each contain `source:"record"\|"missing"\|"unreadable"`, `health:"ok"\|"auth_failed"\|"rate_limited"\|"unavailable"\|"down"\|"recovering"\|null` |
 | `GET /api/health` | Public | `ok:boolean`, `service:string`, `bootId:string` identifies this Dashboard process and changes when it restarts |
 | `POST /api/auth/token` | Public credential exchange | Bearer `zylos_ak_...` key returns `ok:true`, `token:string` (`zylos_st_...`), `expires_at:string` (ISO), `ttl_seconds:number` (86400), `scope:string` (`read`, `admin` or a custom permission list, see [API key scopes](#api-key-scopes)) |
-| `GET /api/instance` | Read | `agent.name:string`, `default_runtime:string`, `session_mode:object` with `sessionMode:"single"\|"multi"\|"unreadable"`; see [instance fields](#get-apiinstance) for additional observations |
+| `GET /api/instance` | Read | `agent.name:string`, `agent.avatar_version:string|null`, `default_runtime:string`, `session_mode:object` with `sessionMode:"single"\|"multi"\|"unreadable"`; see [instance fields](#get-apiinstance) for additional observations |
 | `GET /api/groups/origin` | Read | `presence:"running"\|"starting"\|"not_running"\|"unknown"`, `state.kind:"working"\|"idle"\|"starting"\|"stopping"\|"offline"\|"unknown"`, `flags:object`, `run:{runId:string\|null,sessionId:string\|null,createdAt:string\|null}\|null` |
 | `POST /api/groups/origin/actions/interrupt` | Admin | JSON `{runId:string,sessionId?:string\|null}`; result fields described below |
 | `POST /api/groups/origin/actions/chop-chop` | Admin | Same target body as interrupt; result fields described below |
@@ -143,7 +143,7 @@ Example: `GET /api/health/ready` → `{"ok":false,"error":{"code":"supervisor_un
 
 | Field | Type | Meaning |
 |---|---|---|
-| `agent` | object | Configured instance identity, including `name:string` and generated color fields |
+| `agent` | object | Configured instance identity, including `name:string`, generated color fields, and `avatar_version:string|null`. The version is a SHA-256 hex digest when configured |
 | `tz` | string | Instance time zone used for display and usage calendar windows |
 | `session_mode` | object | Core mode and transition state, described below |
 | `default_runtime` | string | Configured default runtime |
@@ -228,6 +228,28 @@ Returns `{ok:true,self:{name:string}}`. The new name is persisted in instance co
 **Errors:** 400 `invalid_name`, `reserved_name` or `duplicate_name`; 500 `failed_to_save_config`; common write errors.
 
 Example: `PUT /api/instance/name` with `{"name":"my-agent"}`.
+
+### GET /api/instance/avatar
+
+**Access:** Read (custom keys need `instance.read`), including the Fleet GET proxy. **Parameters:** none. HEAD returns the same headers without the image body.
+
+Returns the local machine's stored image bytes with the original `Content-Type` and `Cache-Control: no-store`.
+
+**Errors:** 404 `avatar_not_found` when the avatar is unset or the image file is missing. Common read errors also apply.
+
+Example: `GET /fleet/worker/api/instance/avatar`.
+
+### PUT /api/instance/avatar
+
+**Access:** Admin. Send the request directly to the target Dashboard. The Fleet proxy returns 403 `not_allowed_via_fleet` for this write.
+
+**Body:** Raw PNG, JPEG or WebP bytes with matching `Content-Type` (`image/png`, `image/jpeg` or `image/webp`), up to 512 KiB. The client crops and scales the image to 256×256 before upload. Dashboard checks the format signature and stores the submitted bytes.
+
+Returns `{ok:true,avatar_version:string}`. The version is also published by `GET /api/instance` under `agent.avatar_version` and by `GET /api/fleet` on the machine's status row.
+
+**Errors:** 400 `invalid_image` for a mismatched or missing signature, 413 `payload_too_large`, 415 `unsupported_image_type` for a missing or unsupported content type. Common write errors also apply.
+
+Example: `PUT /api/instance/avatar` with `Content-Type: image/png` and the PNG file as the request body.
 
 ### POST /api/instance/actions/switch-mode
 
@@ -760,7 +782,7 @@ Missing/disabled observer history returns 404. Rejected `/observer/stream` upgra
 
 Both Fleet lists accept `limit` (1–100, default 50), `cursor`, `q` (trimmed, case-insensitive name substring, up to 64 characters), and `include=total` (matching row count). A bad parameter returns 400 `invalid_parameter` with `error.param`. An invalid cursor returns 400 `invalid_cursor`. An unavailable source returns 503 `unavailable`. The client starts from page one if a cursor expires after a restart.
 
-`summary` covers the whole fleet even when filters are active. It contains `count`, `counts:{busy,idle,stuck,offline}`, and `daily_cost` and `weekly_cost` (numbers, or null when no machine reports that tier). The Fleet wall reloads its current page after a `fleet` event and plays start/finish cues for machines on that page. Wall rows carry the current `link` observation. Probe sample history is returned on the configured-machine list.
+`summary` covers the whole fleet even when filters are active. It contains `count`, `counts:{busy,idle,stuck,offline}`, and `daily_cost` and `weekly_cost` (numbers, or null when no machine reports that tier). The Fleet wall reloads its current page after a `fleet` event and plays start/finish cues for machines on that page. Wall rows carry the current `link` observation and an `avatar_version` (string or null). A remote row uses the last version reported by the peer's instance API. Unset avatars and older peers without the field report null. Probe sample history is returned on the configured-machine list.
 
 Fleet rejects unknown agents with 404, invalid memory path queries with 400 `invalid_memory_path`, and upstream failures with 502/504. Suffix handling depends on the path:
 
