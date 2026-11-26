@@ -34,7 +34,7 @@ import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js';
 import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js';
 import { createFleetSounds } from './fleet-sounds.js';
 import { refreshDashboardState } from './state-refresh.js';
-import { formatActionResult, actionFailureMessage } from './action-result.js';
+import { formatActionResult, actionFailureMessage, createActionFeedback } from './action-result.js';
 import { copyText, runtimeName } from './wb/plain-text.js';
 import { countLabel } from './count-label.js';
 
@@ -2396,7 +2396,9 @@ function settingsWiring() {
     },
     writable: () => !remoteIsReadOnly(), onGroup: openWorkbenchGroup,
     engineVersion: (root, runtime) => renderEngineVersion(root, state.dashboardState?.versions, {
-      runtime, upgrade: runtimeNotFound({ instance: state.dashboardState }, runtime) ? null : settingsUpgrade,
+      runtime, actions: engineActions, feedbackRuntime: upgradeRuntime,
+      pending: inlineActions['upgrade-cc']?.pending, busy: inlineActions['upgrade-cc']?.busy,
+      canUpgrade: !runtimeNotFound({ instance: state.dashboardState }, runtime),
       t, readOnly: remoteIsReadOnly(),
     }),
   });
@@ -2860,7 +2862,8 @@ function mountSettingsList(list, rowSelector, placeholderKey, server = null) {
 let settingsLoader = null;
 let settingsPricing = null;
 let settingsDefaults = null;
-let settingsUpgrade = null;
+let engineActions = null;
+let upgradeRuntime = null;
 let settingsVersionRoot = null;
 let settingsChat = null;
 let settingsHosts = null;
@@ -2893,8 +2896,8 @@ function initSettingsPage() {
     onError: error => fleetManageStatus(error.message, 'error', '#fleet-agent-list'),
   });
   settingsModal = root; fleetManageModal = root; actionsModal = settingsPage.actionsScope;
-  // The upgrade button is drawn into the default engine card each time that card renders.
-  settingsUpgrade = oldActions.querySelector('[data-action="upgrade-cc"]');
+  // Keep these controls and their notices when the default engine card redraws.
+  engineActions = oldActions.querySelector('#settings-engine-actions');
   settingsVersionRoot = settingsPage.slots.version;
   let theme = 'light'; try { theme = localStorage.getItem(THEME_KEY) || theme; } catch {}
   mountThemeControl(settingsPage.prefs.theme, { t, value: theme, onChange: initTheme });
@@ -3008,23 +3011,36 @@ async function saveSettings() { return settingsPricing?.save(); }
 // ─── Actions Modal ───
 let actionsModal = null;
 let pendingManualRestart = null;
+const inlineActions = {};
+let actionTargetGeneration = 0;
 
 function createActionsModal() {
   if (actionsModal) return actionsModal;
   const overlay = document.createElement('div');
   overlay.id = 'actions-modal';
   overlay.hidden = true;
+  const spinner = '<i class="wb-ico wb-ico-loader wb-ico-xs wb-action-spinner" aria-hidden="true"></i>';
+  const modeButton = mode => `<button type="button" data-mode="${mode}">${spinner}<span data-i18n="wb.settings.session.${mode}">${esc(t('wb.settings.session.' + mode))}</span></button>`;
   overlay.innerHTML = `
     <div class="action-field wb-fld"><label class="wb-fld-l" for="action-mode" data-i18n="actions.session_mode">${esc(t('actions.session_mode'))}</label>
-      <div class="wb-seg2" id="action-mode-seg" role="group" aria-label="${esc(t('actions.session_mode'))}"><button type="button" data-mode="multi">${esc(t('wb.settings.session.multi'))}</button><button type="button" data-mode="single">${esc(t('wb.settings.session.single'))}</button></div>
+      <div class="wb-seg2" id="action-mode-seg" role="group" aria-label="${esc(t('actions.session_mode'))}">${modeButton('multi')}${modeButton('single')}</div>
+      <span class="wb-note wb-action-result" id="action-mode-result" role="status"></span>
       <select id="action-mode" class="wb-vh" tabindex="-1" aria-hidden="true"><option value="single">single</option><option value="multi">multi</option></select></div>
     <p id="action-mode-status" class="wb-note"></p>
     <p id="action-instance-status" class="wb-note"></p>
     <p id="action-restart-status" class="wb-note"></p>
-    <button class="wb-btn" data-action="upgrade-cc" type="button"><i class="wb-ico wb-ico-up wb-ico-xs" aria-hidden="true"></i><span id="action-cli-label">${esc(t('actions.upgrade_runtime', { runtime: '' }).trim())}</span></button>
-  <div class="wb-note" id="action-status" role="status" hidden></div>`;
+    <div id="settings-engine-actions">
+      <div class="wb-action-row">
+        <button class="wb-btn" data-action="upgrade-cc" type="button"><i class="wb-ico wb-ico-up wb-ico-xs" aria-hidden="true"></i>${spinner}<span id="action-cli-label"></span></button>
+        <span class="wb-note wb-action-result" id="action-upgrade-result" role="status"></span>
+      </div>
+    </div>`;
   document.body.appendChild(overlay);
   actionsModal = overlay;
+
+  inlineActions['switch-mode'] = createActionFeedback(overlay.querySelector('#action-mode-result'), syncModeSegment);
+  const refreshEngine = () => settingsDefaults?.refreshVersion();
+  inlineActions['upgrade-cc'] = createActionFeedback(overlay.querySelector('#action-upgrade-result'), refreshEngine);
 
   bindActionControls(overlay, pageActions(), {
     // The upgrade button sits in the default engine card and upgrades the engine chosen there.
@@ -3037,9 +3053,12 @@ function createActionsModal() {
 function syncModeSegment() {
   const select = actionsModal?.querySelector('#action-mode');
   if (!select) return;
-  actionsModal.querySelectorAll('#action-mode-seg button').forEach(button => {
+  const group = actionsModal.querySelector('#action-mode-seg');
+  const busy = Boolean(group.querySelector('[aria-busy="true"]'));
+  group.setAttribute('aria-label', t('actions.session_mode'));
+  group.querySelectorAll('button').forEach(button => {
     button.setAttribute('aria-pressed', String(button.dataset.mode === select.value));
-    button.disabled = select.disabled;
+    button.disabled = select.disabled || busy;
   });
 }
 
@@ -3081,8 +3100,9 @@ async function refreshModeStatus() {
 
 function closeActionsModal() {
   if (!actionsModal) return;
-  const status = actionsModal.querySelector('#action-status');
-  if (status) status.hidden = true;
+  actionTargetGeneration++;
+  for (const action of Object.values(inlineActions)) action.reset();
+  upgradeRuntime = null;
   setModalBodyDisabled(false);
 }
 
@@ -3096,8 +3116,9 @@ function setModalBodyDisabled(disabled) {
 }
 
 async function showConfirm(text, options) {
+  const generation = actionTargetGeneration;
   setModalBodyDisabled(true);
-  try { return await confirmSetting(text, options); }
+  try { return await confirmSetting(text, options) && generation === actionTargetGeneration; }
   finally { setModalBodyDisabled(false); }
 }
 
@@ -3115,26 +3136,30 @@ function pageActions() {
   });
 }
 
-// Asks first for actions that change the running agent; see createPageActions.
-function execAction(action, body) {
-  return pageActions().exec(action, body);
-}
-
-// Sends a dashboard action. Only the page actions call this, after they have checked access and asked when needed.
-async function sendAction(action, body) {
+// Sends a dashboard action after the page has checked access and asked when needed.
+async function sendAction(action, body, followUp) {
   const targetKey = observerTargetKey();
-  const actionRuntime = action === 'upgrade-cc' && body?.runtime ? body.runtime : state.dashboardState?.default_runtime;
-  const statusEl = actionsModal?.querySelector('#action-status');
-  if (statusEl) {
-    statusEl.hidden = false;
-    statusEl.className = 'modal-status running';
-    statusEl.textContent = t('status.executing');
+  const upgrading = action === 'upgrade-cc';
+  const actionRuntime = body?.runtime ?? state.dashboardState?.default_runtime;
+  const inline = inlineActions[action];
+  let feedback = followUp?.feedback;
+  if (inline) {
+    if (inline.pending) return false;
+    const button = upgrading
+      ? engineActions.querySelector('[data-action="upgrade-cc"]')
+      : actionsModal.querySelector(`#action-mode-seg [data-mode="${body?.mode === 'multi' ? 'multi' : 'single'}"]`);
+    if (upgrading) upgradeRuntime = actionRuntime;
+    feedback = inline.start(button);
   }
-
+  if (followUp && !feedback.resume()) return false;
+  const showResult = (message, success) => {
+    feedback?.show(followUp ? [followUp.upgradeMessage, message].join('\n') : message, success);
+  };
+  let upgradeMessage;
   try {
     if (action === 'restart-session' && !body?.runId) {
       const origin = await fetchJson('/api/groups/origin?include=');
-      if (observerTargetKey() !== targetKey) return false;
+      if (observerTargetKey() !== targetKey || (feedback && !feedback.isCurrent())) return false;
       if (!origin.live?.runId) throw new Error(t('wb.actions.targetRequired'));
       body = { ...body, sessionGroup: origin.sessionGroup, runId: origin.live.runId, sessionId: origin.live?.sessionId };
     }
@@ -3146,7 +3171,8 @@ async function sendAction(action, body) {
       body: JSON.stringify(request.body)
     });
     const result = await r.json();
-    if (action === 'upgrade-cc' && r.status >= 500
+    if (feedback && !feedback.isCurrent()) return false;
+    if (upgrading && r.status >= 500
       && !['upgrade_failed', 'deadline_exceeded'].includes(result.error?.code ?? result.error)) {
       result.messageKey = 'result.runtime_upgrade_unknown';
       result.messageParams = { runtime: runtimeName(actionRuntime) || t('wb.unknown') };
@@ -3155,51 +3181,40 @@ async function sendAction(action, body) {
       pendingManualRestart = result.submission === 'unknown' ? { requestId: result.requestId, submission: result.submission, runId: body?.runId } : null;
       if (pendingManualRestart) refreshModeStatus();
     }
-    if (statusEl) {
-      const isInfo = !result.ok && result.error?.code === 'already_set';
-      statusEl.className = result.ok ? 'modal-status success' : isInfo ? 'modal-status success' : 'modal-status error';
-      statusEl.style.whiteSpace = 'pre-line';
-      statusEl.textContent = formatActionResult(result, t) || (result.ok ? t('status.done') : result.error?.message);
-      if (result.ok || isInfo) setTimeout(() => { statusEl.hidden = true; }, 5000);
-    }
+    const errorCode = typeof result.error === 'string' ? result.error : result.error?.code;
+    const message = formatActionResult(result, t) || (result.ok ? t('status.done') :
+      t('status.failed', { error: errorCode || t('wb.unknown') }));
+    const needsRestart = upgrading && result.ok && result.requires_restart;
+    if (needsRestart) {
+      upgradeMessage = message;
+      feedback.show(message, true, { awaitingConfirmation: true });
+    } else showResult(message, Boolean(result.ok));
     if (result.refreshState) await refreshState();
-    if (result.ok && result.requires_restart) {
+    if (needsRestart) {
       let origin;
       try { origin = await fetchJson('/api/groups/origin?include='); }
-      catch { /* The configuration was saved even if its current session cannot be read. */ }
-      if (observerTargetKey() !== targetKey) return false;
+      catch { /* The engine was upgraded even if its current session cannot be read. */ }
+      if (observerTargetKey() !== targetKey || !feedback.isCurrent()) return false;
       if (origin?.presence !== 'running' || !origin.live?.runId) {
-        if (statusEl) {
-          statusEl.hidden = false;
-          statusEl.className = 'modal-status success';
-          statusEl.textContent = t('actions.next_start');
-        }
+        feedback.show(t('actions.next_start'), true);
         return true;
       }
       state.originGroup = origin;
       await new Promise(r => setTimeout(r, 1500));
-      if (observerTargetKey() !== targetKey) return false;
-      if (statusEl) statusEl.hidden = true;
-      await execAction('restart-session');
+      if (observerTargetKey() !== targetKey || !feedback.isCurrent()) return false;
+      await pageActions().exec('restart-session', undefined, { feedback, upgradeMessage: message });
     }
-    if (action === 'switch-runtime') {
-      if (observerTargetKey() !== targetKey) return false;
-      if (!result.ok) throw new Error(formatActionResult(result, t) || t('wb.settings.saveFailed'));
-      return result;
-    }
-    if (action === 'switch-model' && body?.runtime) {
-      if (observerTargetKey() !== targetKey) return false;
-      if (result.ok) return result;
-      if (result.error?.code === 'CONFIRMATION_REQUIRED') throw new Error(formatActionResult(result, t));
-    }
-    return result.ok;
+    if (feedback) return Boolean(result.ok);
+    if (observerTargetKey() !== targetKey) return false;
+    if (!result.ok) throw new Error(message);
+    return result;
   } catch (err) {
-    if (action === 'switch-runtime' || (action === 'switch-model' && body?.runtime)) throw err;
-    if (statusEl) {
-      statusEl.className = 'modal-status error';
-      statusEl.textContent = actionFailureMessage(action, runtimeName(actionRuntime) || t('wb.unknown'), err, t);
-    }
+    if (!feedback) throw err;
+    if (upgradeMessage) feedback.show([upgradeMessage, t('status.failed', { error: err.message })].join('\n'), false);
+    else showResult(actionFailureMessage(action, runtimeName(actionRuntime) || t('wb.unknown'), err, t), false);
     return false;
+  } finally {
+    if (upgradeMessage && inline.pending && feedback.isCurrent()) feedback.show(upgradeMessage, true);
   }
 }
 

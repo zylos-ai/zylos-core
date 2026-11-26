@@ -133,7 +133,6 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   const pricingTop = element(document, 'div', undefined, 'wb-set-pricing-top'); pricingTop.id = 'settings-pricing-top'; sections.pricing.append(pricingTop);
   for (const selector of ['#settings-model-pricing-group', '#settings-priority-pricing-group', '#settings-fast-mode-group', '#settings-readonly-note', '#settings-status', '.settings-footer']) move(settings, selector, sections.pricing);
   move(fleet, '#fleet-manage-status', status);
-  for (const selector of ['#action-status']) move(actions, selector, status);
 
   layout.append(nav, body); root.append(layout);
   let current = null;

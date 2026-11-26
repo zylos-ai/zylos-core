@@ -1332,6 +1332,29 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-set-body :is(.wb-input, .wb-select, .wb-btn) { height: var(--wb-h); }
 .wb-engine-version .wb-btn { max-width: 100%; height: auto; min-height: var(--wb-h); white-space: normal; }
 .wb-engine-version .wb-btn span { overflow-wrap: anywhere; }
+
+/* Give the version and upgrade their own flex items so a result can wrap independently. */
+#settings-engine-actions, #settings-engine-actions > .wb-action-row { display: contents; }
+/* Settings action results stay beside their controls and wrap within the card. */
+.wb-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.wb-action-row[hidden], .wb-action-row > button[hidden] { display: none; }
+.wb-action-result { min-width: 0; max-width: 100%; margin: 0; overflow-wrap: anywhere; white-space: pre-line; }
+.wb-action-result:empty { position: absolute; }
+.wb-action-result.wb-status-success { color: var(--wb-work); }
+.wb-action-result.wb-status-error { color: var(--wb-err); }
+.wb-action-row .wb-action-spinner, #action-mode-seg .wb-action-spinner { display: none; }
+:is(.wb-action-row, #action-mode-seg) button[aria-busy="true"] { opacity: 1; }
+:is(.wb-action-row, #action-mode-seg) button[aria-busy="true"] > .wb-ico { display: none; }
+:is(.wb-action-row, #action-mode-seg) button[aria-busy="true"] > .wb-action-spinner {
+  display: inline-block;
+  flex: none;
+  animation: wb-action-spin 1s linear infinite;
+}
+#action-mode-seg button { gap: 4px; }
+@keyframes wb-action-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  :is(.wb-action-row, #action-mode-seg) button[aria-busy="true"] > .wb-action-spinner { animation: none; }
+}
 .wb-seg2 { display: inline-flex; height: var(--wb-h); }
 .wb-seg2 button { padding: 0 12px; font-size: var(--fs-control); white-space: nowrap; cursor: pointer; }
 .wb-hdot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--wb-work); }

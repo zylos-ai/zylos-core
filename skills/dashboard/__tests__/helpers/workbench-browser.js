@@ -1077,7 +1077,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       await dialog.waitFor({ state: 'detached' });
       const copy = JSON.parse(fs.readFileSync(path.join(publicDir, 'i18n/zh.json'), 'utf8'));
       assert.equal(typeof copy['actions.next_start'], 'string');
-      await page.locator('#action-status.modal-status.success').filter({ hasText: copy['actions.next_start'] }).waitFor({ state: 'visible' });
+      await page.locator('#action-upgrade-result.wb-status-success').filter({ hasText: copy['actions.next_start'] }).waitFor({ state: 'visible' });
       await page.waitForTimeout(1700);
       assert.equal(await dialog.count(), 0, 'an absent or uncertain Origin does not ask for a restart');
       assert.deepEqual(restartPosts, []);
