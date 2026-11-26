@@ -1,4 +1,4 @@
-import { agentColor } from './agent-color.js';
+import { agentColor } from '../../public/js/agent-color.js';
 import { sanitizeFleetGroupSummary, fleetGroupSummary } from './workbench/fleet-summary.js';
 import { compareVersions } from './version-utils.js';
 

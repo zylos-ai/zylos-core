@@ -87,8 +87,8 @@ export function renderCreatedKey(panel, created, { document = panel.ownerDocumen
   acts.append(copy, done); panel.append(title, code, acts);
 }
 
-/** Configured remote machines: name, address, connection state, technical latency bars and remove. */
-export function renderRemoteAgents(root, agents = [], { document = root.ownerDocument, t = key => key, technical = false, latency, onRemove = () => {} } = {}) {
+/** Configured remote machines: avatar, name, address, connection state, technical latency bars and remove. */
+export function renderRemoteAgents(root, agents = [], { document = root.ownerDocument, t = key => key, technical = false, latency, onRemove = () => {}, avatar = () => icon(document, 'server', 'xs') } = {}) {
   if (!agents.length) { root.replaceChildren(element(document, 'p', t('fleet_manage.empty'), 'wb-note')); return; }
   root.replaceChildren(...agents.map(agent => {
     const status = agent.connection;
@@ -103,7 +103,7 @@ export function renderRemoteAgents(root, agents = [], { document = root.ownerDoc
     if (technical && agent.latency?.samples?.length && latency) { const chart = latency(state, agent.latency.samples); chart.dataset.settingsLatency = ''; }
     const remove = element(document, 'button', t('wb.settings.fleet.remove'), 'wb-btn wb-btn-sm wb-btn-danger-text fleet-agent-remove'); remove.type = 'button';
     remove.addEventListener('click', () => onRemove(agent.name));
-    row.append(icon(document, 'server', 'xs'), name, url, state, remove);
+    row.append(avatar(agent), name, url, state, remove);
     return row;
   }));
 }

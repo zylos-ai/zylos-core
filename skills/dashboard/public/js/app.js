@@ -37,6 +37,8 @@ import { refreshDashboardState } from './state-refresh.js';
 import { formatActionResult, actionFailureMessage, createActionFeedback } from './action-result.js';
 import { copyText, runtimeName } from './wb/plain-text.js';
 import { countLabel } from './count-label.js';
+import { avatarNode, createAvatarStore } from './wb/machine-avatar.js';
+import { cropAvatarDialog } from './wb/avatar-crop.js';
 
 const BASE_PATH = document.documentElement.dataset.basePath || '';
 const ASSET_ROOT = `${BASE_PATH}/_assets`;
@@ -121,6 +123,14 @@ const state = {
 const $ = (sel) => document.querySelector(sel);
 
 function api(path) { return `${BASE_PATH}${path}`; }
+
+// Machine avatars are read once per machine and version; a picture that arrives redraws where it shows.
+const avatars = createAvatarStore({ fetch: (url, init) => draftFetch(url, init), onChange: () => {
+  const hovering = window.matchMedia('(hover: hover)').matches && $('#agent-fleet-root')?.matches(':hover');
+  if (hovering) state.fleetRenderPending = true; else renderFleet();
+  renderIdentityChrome();
+  if (fleetManageModal?._agents) renderFleetManage(fleetManageModal._agents);
+} });
 
 // ─── In-page remote agent viewing (#203 Option B) ───
 // While a remote agent is being viewed, agent-scoped data paths are re-rooted
@@ -262,7 +272,14 @@ function renderIdentityChrome() {
   const nameEl = $('#tab-bar-agent-name');
   if (nameEl) {
     const name = viewedAgentName();
-    nameEl.textContent = name;
+    // A machine opened from the fleet also shows its avatar before its name.
+    const agent = state.dashboardState?.agent;
+    const avatar = name && (state.remoteAgent || REMOTE_AGENT) && agent ? avatarNode(document, { name, color: agent.color, size: 'xs',
+      src: avatars.src(api(agentPath('/api/instance/avatar')), agent.avatar_version ?? null) }) : null;
+    if (avatar) {
+      const text = document.createElement('span'); text.className = 'wb-brand-name'; text.textContent = name;
+      nameEl.replaceChildren(avatar, text);
+    } else nameEl.textContent = name;
     nameEl.hidden = !name;
   }
   // dashboardState is the viewed instance's own state (cleared while switching), like the name above.
@@ -349,7 +366,7 @@ function renderFleet() {
   if (!container) return;
   renderFleetPage(container, state.fleet, {
     t, fmtAge, basePath: BASE_PATH, labels: agentFleetLabels(), self: state.fleetSelf,
-    layout: fleetLayout, page: fleetPage
+    layout: fleetLayout, page: fleetPage, avatarSrc: avatars.src
   });
   $('#fleet-layout')?.setAttribute('aria-label', t('wb.fleet.layout'));
   for (const button of document.querySelectorAll('#fleet-layout button')) {
@@ -2197,13 +2214,16 @@ function createFleetManageModal() {
     <div class="manage-panel" data-panel="fleet">
       <div class="wb-set-card">
         ${head('server', 'wb.settings.fleet.localName')}
-        <div class="wb-set-inline" id="fleet-self-view"><b class="wb-self-name" id="fleet-self-label"></b>
-          <button class="wb-btn" id="fleet-rename-open" type="button"><i class="wb-ico wb-ico-edit wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.settings.fleet.rename">${esc(t('wb.settings.fleet.rename'))}</span></button></div>
+        <div class="wb-self-machine" id="fleet-self-view"><span id="fleet-self-avatar"></span>
+          <div class="wb-self-text"><b class="wb-self-name" id="fleet-self-label"></b><small class="wb-note" id="fleet-self-avatar-none" data-i18n="wb.settings.fleet.avatarNone" hidden>${esc(t('wb.settings.fleet.avatarNone'))}</small></div>
+          <div class="wb-self-acts"><button class="wb-btn" id="fleet-rename-open" type="button"><i class="wb-ico wb-ico-edit wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.settings.fleet.rename">${esc(t('wb.settings.fleet.rename'))}</span></button>
+          <button class="wb-btn" id="fleet-avatar-open" type="button"><i class="wb-ico wb-ico-user wb-ico-xs" aria-hidden="true"></i><span></span></button></div>
+          <input id="fleet-avatar-file" type="file" accept="image/*" hidden /></div>
         <div class="wb-set-inline fleet-self-row" id="fleet-self-edit" hidden>
           <input class="wb-input" id="fleet-self-name" type="text" autocomplete="off" maxlength="32" />
           <button class="wb-btn wb-btn-primary" id="fleet-rename-save" type="button" data-i18n="btn.save">${esc(t('btn.save'))}</button>
           <button class="wb-btn" id="fleet-rename-cancel" type="button" data-i18n="btn.cancel">${esc(t('btn.cancel'))}</button></div>
-        <p class="wb-note"><span data-i18n="wb.settings.fleetNameNote">${esc(t('wb.settings.fleetNameNote'))}</span><span class="wb-sent-gap"> </span><span data-i18n="fleet_manage.rename_hint">${esc(t('fleet_manage.rename_hint'))}</span></p>
+        <p class="wb-note"><span data-i18n="wb.settings.fleetNameNote">${esc(t('wb.settings.fleetNameNote'))}</span><span class="wb-sent-gap"> </span><span data-i18n="fleet_manage.rename_hint">${esc(t('fleet_manage.rename_hint'))}</span><span class="wb-sent-gap"> </span><span data-i18n="wb.settings.fleet.avatarNote">${esc(t('wb.settings.fleet.avatarNote'))}</span></p>
       </div>
       <div class="wb-set-card">
         ${head('fleet', 'wb.settings.fleet.remotes', `<span class="wb-set-card-sub" id="fleet-agent-count"></span><span class="wb-set-card-acts"><button class="wb-btn" id="fleet-add-open" type="button"><i class="wb-ico wb-ico-plus wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.settings.fleet.add">${esc(t('wb.settings.fleet.add'))}</span></button></span>`)}
@@ -2251,6 +2271,11 @@ function createFleetManageModal() {
   overlay.querySelector('#fleet-rename-open').addEventListener('click', () => selfEdit(true));
   overlay.querySelector('#fleet-rename-cancel').addEventListener('click', () => { $m('#fleet-self-name').value = $m('#fleet-self-label').textContent; selfEdit(false); });
   overlay.querySelector('#fleet-rename-save').addEventListener('click', async () => { if (await saveFleetSelfName()) selfEdit(false); });
+  overlay.querySelector('#fleet-avatar-open').addEventListener('click', () => $m('#fleet-avatar-file').click());
+  overlay.querySelector('#fleet-avatar-file').addEventListener('change', event => {
+    const file = event.target.files?.[0]; event.target.value = '';
+    if (file) changeLocalAvatar(file);
+  });
   const addForm = open => { $m('#fleet-add-form').hidden = !open; $m('#fleet-add-open').hidden = open; if (open) $m('#fleet-add-name').focus(); };
   overlay.querySelector('#fleet-add-open').addEventListener('click', () => addForm(true));
   overlay.querySelector('#fleet-add-cancel').addEventListener('click', () => addForm(false));
@@ -2348,6 +2373,54 @@ function fleetManageError(code, fallback) {
   return translated === key ? (fallback || code) : translated;
 }
 
+// This machine as the fleet wall and its own instance data know it. The machines card in Settings always describes
+// this machine, also while another machine is open in the page, so the viewed instance's data is used only when it
+// is this machine. undefined version: not known yet.
+function localMachine() {
+  const row = state.fleet?.items?.find(agent => agent.self === true);
+  const own = !state.remoteAgent && !REMOTE_AGENT ? state.dashboardState?.agent : null;
+  return { color: row?.color ?? own?.color, version: row ? row.avatar_version ?? null : own ? own.avatar_version ?? null : undefined };
+}
+
+function renderLocalAvatar() {
+  const name = fleetManageModal.querySelector('#fleet-self-label').textContent;
+  const { color, version } = localMachine();
+  const src = avatars.src(api('/api/instance/avatar'), version);
+  const has = Boolean(src) || typeof version === 'string';
+  fleetManageModal.querySelector('#fleet-self-avatar').replaceChildren(avatarNode(document, { name, color, src, size: 'lg' }));
+  fleetManageModal.querySelector('#fleet-self-avatar-none').hidden = has;
+  const label = fleetManageModal.querySelector('#fleet-avatar-open span');
+  label.dataset.i18n = has ? 'wb.settings.fleet.avatarChange' : 'wb.settings.fleet.avatarUpload';
+  label.textContent = t(label.dataset.i18n);
+}
+
+// Crop in the browser, then upload straight to this machine (the server refuses avatar writes through the fleet).
+async function changeLocalAvatar(file) {
+  const has = typeof localMachine().version === 'string';
+  const blob = await cropAvatarDialog(document, { t, file, title: t(has ? 'wb.settings.fleet.avatarChangeTitle' : 'wb.settings.fleet.avatarUploadTitle') });
+  if (!blob) return;
+  fleetManageStatus(t('fleet_manage.saving'), 'running', '#fleet-self-view');
+  try {
+    const resp = await fetch(api('/api/instance/avatar'), { method: 'PUT', headers: { 'Content-Type': blob.type }, body: blob });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(fleetManageError(data.error?.code ?? data.error, t('fleet_manage.save_failed')));
+    const self = state.fleet?.items?.find(agent => agent.self === true);
+    if (self) self.avatar_version = data.avatar_version;
+    if (!state.remoteAgent && !REMOTE_AGENT && state.dashboardState?.agent) state.dashboardState.agent.avatar_version = data.avatar_version;
+    avatars.put(api('/api/instance/avatar'), data.avatar_version, blob);
+    fleetManageStatus(t('fleet_manage.saved'), 'success', '#fleet-self-view');
+    refreshFleet().catch(() => {});
+  } catch (err) {
+    fleetManageStatus(err.message, 'error', '#fleet-self-view');
+  }
+}
+
+function remoteAvatar(agent) {
+  const row = state.fleet?.items?.find(item => item.name === agent.name && item.self !== true);
+  return avatarNode(document, { name: agent.name, color: row?.color, size: 'xs',
+    src: avatars.src(api(`/fleet/${encodeURIComponent(agent.name)}/api/instance/avatar`), row ? row.avatar_version ?? null : undefined) });
+}
+
 function renderFleetManage(agents, data = null) {
   if (data) {
     const selfName = data.self.name || viewedAgentName();
@@ -2356,9 +2429,11 @@ function renderFleetManage(agents, data = null) {
     if (Number.isSafeInteger(data.total)) fleetManageModal._agentTotal = data.total;
   }
   fleetManageModal._agents = agents;
+  renderLocalAvatar();
   fleetManageModal.querySelector('#fleet-agent-count').textContent = t('wb.settings.fleet.count', { count: fleetManageModal._agentTotal ?? 0 });
   renderRemoteAgents(fleetManageModal.querySelector('#fleet-agent-list'), agents, { t,
-    technical: document.documentElement.dataset.detail === 'technical', latency: (root, samples) => renderLatency(root, samples, { t }), onRemove: removeFleetAgent });
+    technical: document.documentElement.dataset.detail === 'technical', latency: (root, samples) => renderLatency(root, samples, { t }), onRemove: removeFleetAgent,
+    avatar: remoteAvatar });
 }
 
 /** One page of keys from the server, with the counts of all active and revoked keys for the card header. */

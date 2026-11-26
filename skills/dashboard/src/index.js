@@ -74,7 +74,7 @@ import { rejectObserverUpgrade } from './lib/observer-websocket.js';
 import { shutdownDashboardTransports } from './lib/dashboard-shutdown.js';
 import { MemoryBrowser, memoryErrorPayload } from './lib/memory-browser.js';
 import { avatarFileInfo, handleInstanceAvatar } from './lib/instance-avatar.js';
-import { agentColor } from './lib/agent-color.js';
+import { agentColor } from '../public/js/agent-color.js';
 import { C4Reader } from './lib/c4-reader.js';
 import { createDisplayNames } from './lib/workbench/display-names.js';
 import { workbenchGroupKey, workbenchGroupDetailKey, workbenchFailure } from './lib/workbench/group-http.js';
