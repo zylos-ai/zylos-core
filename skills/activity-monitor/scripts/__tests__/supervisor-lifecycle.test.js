@@ -131,6 +131,46 @@ test('restarting the lifecycle object completes crash-after-stop and preserves m
   const manual = f.fence('manual_restart', 'origin');
   assert.equal(await f.lifecycle.advanceReclaim(manual, f.context), 'ignored'); assert.equal(f.fences.size, 1);
 });
+test('TTL reclaim expires running controls only through the cutoff allowed by the observed run', async t => {
+  const currentSessionTs = 1_990_000;
+  const currentSessionSeconds = currentSessionTs / 1000;
+  const cases = [
+    { name: 'run is absent', scenes: [], runEnded: true },
+    { name: 'same run process exited', scenes: [scene('origin', { currentSessionTs, processRunning: false })], runEnded: true },
+    { name: 'replacement run is present', scenes: [scene('origin', { currentSessionTs, runId: 'run-replacement', processRunning: false })] },
+    { name: 'same run process is alive', scenes: [scene('origin', { currentSessionTs })] },
+    { name: 'same run process state is unknown', scenes: [scene('origin', { currentSessionTs, processRunning: undefined })] },
+  ];
+
+  for (const { name, scenes, runEnded } of cases) {
+    await t.test(name, async () => {
+      const f = fixture();
+      const fence = f.fence('ttl', 'origin');
+      f.scenes = scenes;
+      f.runningControls = 1;
+      const deliveredAt = f.now / 1000;
+      const cutoffs = [];
+      f.db.expireStaleRunningControls = (target, { deliveredBefore }) => {
+        assert.deepEqual(target, { sessionGroup: 'origin' });
+        cutoffs.push(deliveredBefore);
+        if (deliveredAt >= deliveredBefore) return [];
+        f.runningControls = 0;
+        return [{ id: 1 }];
+      };
+
+      const result = await f.lifecycle.advanceReclaim(fence, f.context);
+      assert.equal(result, runEnded ? 'done' : 'waiting_inflight');
+      assert.deepEqual(cutoffs, [runEnded ? deliveredAt + 1 : currentSessionSeconds]);
+      assert.equal(f.runningControls, runEnded ? 0 : 1);
+      assert.equal(f.fences.has('origin'), !runEnded);
+      assert.deepEqual(f.endings ?? [], runEnded ? [{ ...fence, clearFence: true }] : []);
+      assert.deepEqual(f.events, runEnded ? [
+        { event: 'control_expired', session_group: 'origin', control_id: 1, run_id: fence.runId },
+        { event: 'reclaim_done', session_group: 'origin', run_id: fence.runId, reason: 'ttl' },
+      ] : []);
+    });
+  }
+});
 // reclaim-policy: TTL preparation is cancellable; all real terminal statuses recheck.
 test('TTL preparation cancels on new messages or replaced run without fencing', async () => {
   for (const change of ['message', 'replacement']) {
