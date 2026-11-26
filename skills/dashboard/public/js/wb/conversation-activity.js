@@ -113,7 +113,13 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
   // under it (Howard, Dashboard 2026-11-26).
   const stepWindow = node('div', undefined, 'conversation-activity-window');
   stepWindow.append(list);
-  const fold = createFold({ document, box: stepWindow, t, expandKey: 'chat.activity.expand', collapseKey: 'chat.activity.collapse', keepEnd: true });
+  let truncated = false;
+  // The row above the window counts the steps hidden above it; the earlier-steps note, when shown, is the first child.
+  const fold = createFold({ document, box: stepWindow, t, expandKey: 'chat.activity.expand', collapseKey: 'chat.activity.collapse', keepEnd: true,
+    hiddenLabel: hidden => {
+      const steps = truncated ? hidden - 1 : hidden;
+      return steps > 0 ? countLabel(t, 'chat.activity.hidden', steps) : t('chat.activity.expand');
+    } });
   const waitList = node('div', undefined, 'conversation-activity-steps conversation-activity-wait');
   const rows = node('div', undefined, 'conversation-activity-subtasks');
   const note = node('div', undefined, 'conversation-activity-handled');
@@ -231,7 +237,7 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
     }
     root.dataset.state = view.head ?? 'subtasks';
     if (!view.head) fold.reset();
-    const parts = view.head ? [head, stepWindow, fold.collapse, waitList, rows] : [rows];
+    const parts = view.head ? [head, fold.toggle, stepWindow, waitList, rows] : [rows];
     if (root.children.length !== parts.length || parts.some((part, index) => root.children[index] !== part)) root.replaceChildren(...parts);
     if (view.head) {
       const state = t(`chat.activity.${view.head}`);
@@ -241,6 +247,7 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
       if (shape !== structure) {
         structure = shape;
         times = [];
+        truncated = Boolean(view.truncated);
         fold.grow(() => {
           list.replaceChildren();
           if (view.truncated) list.append(node('p', t('chat.activity.truncated'), 'conversation-activity-more'));

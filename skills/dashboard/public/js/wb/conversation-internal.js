@@ -22,7 +22,7 @@ export function renderInternalMessage({ document, row, t = key => key, onOpenPee
   const text = element(document, 'div');
   foldBox.append(text);
   const fold = createFold({ document, box: foldBox, t, expandKey: 'chat.internal.expand', collapseKey: 'chat.internal.collapse' });
-  content.append(foldBox, fold.collapse);
+  content.append(foldBox, fold.toggle);
   bubble.append(content);
   const raw = element(document, 'details', undefined, 'conversation-internal-raw');
   const summary = element(document, 'summary');

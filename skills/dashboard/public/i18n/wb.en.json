@@ -1183,6 +1183,8 @@
   "chat.activity.truncated": "Earlier steps are not shown",
   "chat.activity.expand": "Show all steps",
   "chat.activity.collapse": "Collapse",
+  "chat.activity.hidden": "{count} earlier steps",
+  "chat.activity.hiddenOne": "1 earlier step",
   "chat.activity.failed": "Error",
   "chat.activity.incomplete": "Did not finish",
   "chat.activity.stopped": "Stopped",

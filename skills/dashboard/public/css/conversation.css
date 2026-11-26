@@ -1028,7 +1028,7 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .conversation-activity-window { max-height:calc(7 * 25px); }
 .conversation-activity-window>.conversation-activity-steps { flex:none; }
 .conversation-activity-wait { margin-top:0; }
-.conversation-activity>.wb-fold-collapse { margin-left:26px; font-size:var(--fs-small); }
+.conversation-activity>.wb-fold-toggle { margin:2px 0 0 26px; font-size:var(--fs-small); }
 .conversation-activity-step { display:contents; }
 .conversation-activity-commentary { grid-column:2 / -1; color:var(--text-muted); overflow-wrap:anywhere; }
 .conversation-activity-step>.wb-ico { width:13px; height:13px; color:var(--text-muted); }
@@ -1195,7 +1195,7 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 }
 .conversation-internal-heading { flex-wrap:wrap; }
 .conversation-internal-fold { max-height:calc(2 * var(--lh-body)); max-height:2lh; }
-.conversation-internal-content>.wb-fold-collapse { display:flex; margin-top:4px; font-size:var(--fs-small); }
+.conversation-internal-content>.wb-fold-toggle { display:flex; margin-top:4px; font-size:var(--fs-small); }
 .conversation-internal-route {
   display:inline-flex;
   align-items:center;
