@@ -337,7 +337,7 @@ function initFleetHoverPause() {
 
 const fleetLayoutStorageKey = 'zylos-dashboard-fleet-view';
 let fleetLayout = 'cards';
-const FLEET_PAGE_SIZE = 8;
+const FLEET_PAGE_SIZE = 12;
 let fleetPage = 1;
 let fleetCursors = [null];
 let fleetRequest = null;
