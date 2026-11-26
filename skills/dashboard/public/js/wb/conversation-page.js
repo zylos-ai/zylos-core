@@ -2180,7 +2180,9 @@ export function mountConversationPage({
     }
     tray.hidden = trayLabel.hidden = !upload.items.length;
     text(trayLabel, countLabel(t, 'chat.upload.trayCount', upload.items.length, {}).replace('{count}', String(upload.items.length)));
-    const uploadError = upload.error || (s.error === 'chat_attachment_unavailable' ? s.error : null);
+    // A server rejection with a known reason (file too large and the like) names it; other failures keep the row's generic "upload failed".
+    const itemError = upload.items.find(item => item.status === 'failed' && t('chat.upload.' + item.error) !== 'chat.upload.' + item.error)?.error;
+    const uploadError = upload.error || itemError || (s.error === 'chat_attachment_unavailable' ? s.error : null);
     uploadNotice.hidden = !uploadError;
     text(uploadNotice, uploadError ? t('chat.upload.' + uploadError).replace('{count}', String(upload.config?.maxAttachments || 20)) : '');
     // A quote alone is not a message: the text, an annotation or an attachment makes it sendable.

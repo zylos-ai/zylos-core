@@ -176,7 +176,7 @@ export function createUploadTray({ fetch: read = globalThis.fetch,
         if (xhr.status < 200 || xhr.status >= 300 || !result || typeof result.id !== 'string' || !result.id
           || typeof result.name !== 'string' || !Number.isSafeInteger(result.size) || result.size < 0
           || !['image', 'file'].includes(result.kind)) {
-          item.status = 'failed'; item.error = typeof result?.error?.code === 'string' ? result.error.code : 'chat_upload_failed'; notify(); return;
+          item.status = 'failed'; item.error = typeof result?.error === 'string' ? result.error : 'chat_upload_failed'; notify(); return;
         }
         Object.assign(item, { id: result.id, name: result.name, size: result.size, mime: typeof result.mime === 'string' ? result.mime : '',
           kind: result.kind, progress: 100,
