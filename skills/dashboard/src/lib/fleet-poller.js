@@ -244,6 +244,7 @@ function sanitizeLink(link) {
 function sanitizeRecord(record) {
   return {
     name: record.name,
+    avatar_version: stringOrNull(record.avatar_version),
     supervisor_paused: typeof record.supervisor_paused === 'boolean' ? record.supervisor_paused : null,
     session_mode: ['single', 'multi'].includes(record.session_mode) ? record.session_mode : null,
     group_summary: record.session_mode === 'multi' ? sanitizeFleetGroupSummary(record.group_summary) : null,
@@ -299,6 +300,7 @@ export function stateToFleetRecord(agentConfig = {}, statePayload = {}, opts = {
     color: color?.color,
     hue: color?.hue,
     state: liveState,
+    avatar_version: statePayload?.agent?.avatar_version,
     supervisor_paused: statePayload?.supervisor_paused,
     session_mode: statePayload?.session_mode,
     group_summary: statePayload?.group_summary,
@@ -1185,6 +1187,7 @@ export class FleetPoller {
     const color = agentColor(agent.name);
     this.records.set(agent.name, sanitizeRecord({
       name: agent.name,
+      avatar_version: existing.avatar_version,
       base_url: agent.base_url,
       color: color.color,
       hue: color.hue,

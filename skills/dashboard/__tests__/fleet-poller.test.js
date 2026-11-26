@@ -3,7 +3,8 @@ import { registerHooks } from 'node:module';
 import test from 'node:test';
 
 import { agentColor } from '../src/lib/agent-color.js';
-import { stateToFleetRecord } from '../src/lib/fleet-poller.js';
+import { FleetPoller, stateToFleetRecord } from '../src/lib/fleet-poller.js';
+import { objectResponse } from './fixtures/fleet-object-api.js';
 import { assertFleetPayloadSafe, buildSafeFleetPayload } from '../src/lib/fleet-payload.js';
 
 const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
@@ -48,3 +49,24 @@ test('buildSafeFleetPayload redacts string-leaf leaks for shared HTTP and SSE pa
 
 // The object API exposes installed-version updates only. This pure projection
 // uses no services, sockets, timers or external requests.
+
+test('Fleet polls carry avatar versions from the peer instance identity', async () => {
+  const versions = [undefined, 'a'.repeat(64), 'b'.repeat(64)];
+  let version;
+  const poller = new FleetPoller({
+    fleet: { agents: [{ name: 'remote-alias', base_url: 'https://remote.example.test', read_api_key: 'fixture-key' }] }
+  }, {
+    now: () => 1000,
+    fetch: async (url) => url.endsWith('/api/auth/token')
+      ? Response.json({ token: 'fixture-token', ttl_seconds: 3600 })
+      : objectResponse(url, { instance: { agent: { name: 'peer', avatar_version: version } } })
+  });
+
+  for (version of versions) {
+    await poller.pollOnce();
+    const [record] = poller.getFleet().agents;
+    assert.equal(record.name, 'remote-alias');
+    assert.equal(record.health_reason, 'idle');
+    assert.equal(record.avatar_version, version ?? null);
+  }
+});

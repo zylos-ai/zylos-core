@@ -13,7 +13,7 @@ const GROUP = '[^/]+';
  * hosts, deletion and the /fleet/<name>/ proxy are deliberately absent.
  */
 const ROUTE_PERMISSIONS = [
-  [['GET'], /^\/api\/instance(?:\/(?:resources|runtime-options|core-update))?$/, 'instance.read'],
+  [['GET'], /^\/api\/instance(?:\/(?:resources|runtime-options|core-update|avatar))?$/, 'instance.read'],
   [['GET'], /^\/api\/health$/, 'instance.read'],
   [['GET'], /^\/api\/settings\/(?:timezone|pricing|chat)$/, 'instance.read'],
   [['PUT'], /^\/api\/instance\/(?:defaults|name)$/, 'instance.settings'],
