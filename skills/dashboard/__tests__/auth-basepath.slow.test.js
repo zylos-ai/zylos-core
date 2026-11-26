@@ -43,7 +43,8 @@ const emptyAuthObservations = {
   peek: () => ({ mode: 'single', group: null, observations: new Map() }),
 };
 let buildAuthSnapshot = options => createGroupSnapshot({ ...options, sessionObservations: emptyAuthObservations,
-    cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
+    core: { groups: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
+      groupQueues: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
       readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },
     loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };

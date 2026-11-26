@@ -121,18 +121,19 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
   let workbench = null;
   const activity = new ChatActivity({ history, store, working: group => snapshotWorking(workbench, { origin: ORIGIN })(group) });
   const query = createQueryHandlers(c4);
+  const coreReads = { groups: async (options = {}) => ({ ok: true, data: query.groups(options) }),
+    groupQueues: async () => ({ ok: true, data: query.groupQueues() }),
+    readOverrides: async () => ({ ok: false, reason: 'fixture_no_runtime' }) };
+  // Display names read the catalog through the Core command; answer its one argument shape from the same C4 store.
   const runC4Db = async args => {
-    const argument = key => args.includes(key) ? args[args.indexOf(key) + 1] : undefined;
-    if (args[0] === 'group-queues') return { ok: true, data: query.groupQueues() };
     if (args[0] !== 'groups') throw Error('Unexpected workbench Core query');
-    return { ok: true, data: query.groups({ ...(argument('--active-since') ? { activeSince: Number(argument('--active-since')) } : {}),
-      ...(argument('--key-match') ? { keyMatch: argument('--key-match') } : {}), ...(argument('--limit') ? { limit: Number(argument('--limit')) } : {}), ...(args.includes('--raw') ? { raw: true } : {}) }) };
+    return coreReads.groups(args.includes('--active-since') ? { activeSince: Number(args[args.indexOf('--active-since') + 1]) } : {});
   };
   // Runtime observation is deliberately unavailable in this HTTP-only fixture;
   // actual C4 queue/history, dashboard event store and sanitizer remain real.
   const displayNames = createDisplayNames({ store, zylosDir: zylos, runC4Db });
   workbench = createGroupSnapshot({ zylosDir: zylos, store, c4Reader: reader,
-    cli: { runC4Db, readOverrides: async () => ({ ok: false, reason: 'fixture_no_runtime' }) },
+    core: coreReads,
     displayNames,
     loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => ({ mode: readMode() }) };

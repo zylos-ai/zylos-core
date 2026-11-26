@@ -44,11 +44,13 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
     reads.push(runtime); if (runtime === 'codex') throw new Error('unreadable');
     return { value: { seven_day: { used_percentage: 23 }, five_hour: { used_percentage: 99 } }, recordedAt: clock - 3600000, live: false };
   } };
-  const cli = { runC4Db: async args => {
-    calls.push(args);
-    if (args[0] === 'groups') return c4Error ? { ok: false, reason: 'c4_groups_failed', detail: 'timeout', readAt: clock }
+  const core = { groups: async options => {
+    calls.push(['groups', options]);
+    return c4Error ? { ok: false, reason: 'c4_groups_failed', detail: 'timeout', readAt: clock }
       : { ok: true, readAt: clock, data: { groups: keys.map(sessionGroup => ({ sessionGroup, componentName: 'telegram', sessionGroupName: sessionGroup.slice(9), lastActivityAt: clock,
         preview: { text: 'sk-123456789012345678901234', timestamp: clock } })), hasOlder: true } };
+  }, groupQueues: async () => {
+    calls.push(['groupQueues']);
     return queueError ? { ok: false, reason: 'queue_summary_failed', readAt: clock }
       : { ok: true, readAt: clock, data: { groups: [], globalFence: null } };
   }, readOverrides: async groups => {
@@ -73,7 +75,7 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
     },
     peek() { return null; },
   };
-  const service = createGroupSnapshot({ zylosDir: root, store, cli, now: () => clock, readPm2, readSystem, displayNames, sessionObservations,
+  const service = createGroupSnapshot({ zylosDir: root, store, core, now: () => clock, readPm2, readSystem, displayNames, sessionObservations,
     readChannels: () => [{ channel: 'telegram', service: 'zylos-telegram' }],
     c4Reader, readConfigRuntime: () => { if (configFailure) throw new Error('config'); return configRuntime; }, loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => { if (modeError) throw new Error('config'); return { mode }; } };
@@ -90,7 +92,7 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
           health: () => healthRecord });
       } };
     } });
-  return { service, root, calls, observations, live, reads, events, reader, cli, store, c4Reader,
+  return { service, root, calls, observations, live, reads, events, reader, core, store, c4Reader,
     addCleanup: close => cleanup.push(close),
     failStatusRead: (group, error) => statusReadErrors.set(group, error),
     setHealth: value => { healthRecord = value; }, setConfigRuntime: value => { configRuntime = value; }, failConfig: value => { configFailure = value; },
@@ -199,38 +201,16 @@ test('full and summary responses preserve metadata-only C4 and redact messages a
 // events/internal/outbound messages. The official runner isolates all paths;
 // fixture teardown closes HTTP/auth/SQLite before removing its private root.
 
-test('Core CLI uses bounded argv children, exact envelopes, and the complete runtime override catalog and bounded model batches', async () => {
-  const calls = []; let active = 0, peak = 0;
+test('Core CLI uses bounded argv children and exact envelopes', async () => {
+  const calls = [];
   const cli = createCoreCli({ zylosDir: '/isolated/zylos', env: { PATH: '/fixture', ZYLOS_SESSION_GROUP: 'old' },
-    execute: async (file, argv, options) => {
-      calls.push({ file, argv, options }); active++; peak = Math.max(peak, active);
-      await Promise.resolve(); active--;
-      const secondBatch = calls.length === 5;
-      return { stdout: JSON.stringify({ ok: true, data: {
-        baseline: { runtime: secondBatch ? 'claude' : 'codex' },
-        runtime: calls.length === 2 ? [{ sessionGroup: 'tg:g0', runtime: 'claude' }]
-          : calls.length === 3 ? [{ sessionGroup: 'tg:unlisted', runtime: 'codex' }] : [],
-        nextAfter: calls.length === 2 ? 'tg:g0' : null,
-        model: secondBatch ? [{ sessionGroup: 'tg:g499', runtime: 'codex', model: 'selected', effort: 'high' }] : [],
-      } }) };
-    } });
+    execute: async (file, argv, options) => { calls.push({ file, argv, options }); return { stdout: JSON.stringify({ ok: true, data: [] }) }; } });
   await cli.runC4Db(['groups', '--active-since', '1', '--json']);
   assert.equal(calls[0].file, process.execPath);
   assert.equal(calls[0].argv[0], '/isolated/zylos/.claude/skills/comm-bridge/scripts/c4-db.js');
   assert.equal(calls[0].options.timeout, 15000); assert.equal(calls[0].options.maxBuffer, 1024 * 1024);
   assert.equal(calls[0].options.env.ZYLOS_DIR, '/isolated/zylos');
   assert.equal(Object.hasOwn(calls[0].options.env, 'ZYLOS_SESSION_GROUP'), false);
-  const groups = ['origin', ...Array.from({ length: 500 }, (_, i) => `tg:g${i}`)];
-  const result = await cli.readOverrides([...groups, null]);
-  assert.equal(result.ok, true); assert.equal(calls.length, 5); assert.equal(peak, 1);
-  const requested = calls.slice(1).flatMap(call => call.argv.filter((value, i, all) => all[i - 1] === '--group'));
-  assert.equal(requested.length, 502); assert.equal(new Set(requested).size, 502);
-  assert.equal(requested.includes(null), false); assert.equal(calls[4].argv.filter(v => v === '--group').length, 2);
-  assert.deepEqual(calls[1].argv, ['group', 'overrides', '--json']);
-  assert.deepEqual(calls[2].argv, ['group', 'overrides', '--after', 'tg:g0', '--json']);
-  assert.deepEqual(result.data.baseline, { runtime: 'codex' });
-  assert.deepEqual(result.data.runtime, [{ sessionGroup: 'tg:g0', runtime: 'claude' }, { sessionGroup: 'tg:unlisted', runtime: 'codex' }]);
-  assert.deepEqual(result.data.model, [{ sessionGroup: 'tg:g499', runtime: 'codex', model: 'selected', effort: 'high' }]);
 });
 
 // Read-only integration: private SQLite fixture, no tmux/PM2/network. Run for
@@ -339,30 +319,29 @@ test('a group\'s stored message is read on request, for that exact group, redact
   const stored = (sessionGroup, messageRaw) => ({ sessionGroup, preview: { message: 'x', messageSource: { kind: 'header' }, messageRaw } });
   // Key search puts the exact key first; without one, its single row is a newer group containing the key.
   const groups = { 'telegram:g1': stored('telegram:g1', '[Bot] line one\nuse ' + secret), origin: stored('origin', '[Scheduled Task: t1] check') };
-  f.cli.runC4Db = async args => {
-    reads.push(args);
-    const key = args[args.indexOf('--key-match') + 1];
-    return { ok: true, readAt: f.now(), data: [groups[key] ?? stored(key + '0', 'other group')] };
+  f.core.groups = async options => {
+    reads.push(options);
+    return { ok: true, readAt: f.now(), data: [groups[options.keyMatch] ?? stored(options.keyMatch + '0', 'other group')] };
   };
   const value = await f.service.raw('telegram:g1', snapshot);
   assert.deepEqual(value, { raw: '[Bot] line one\nuse [REDACTED]' });
-  assert.deepEqual(reads, [['groups', '--key-match', 'telegram:g1', '--limit', '1', '--raw', '--json']]);
+  assert.deepEqual(reads, [{ keyMatch: 'telegram:g1', limit: 1, raw: true }]);
   assert.deepEqual(await f.service.raw('telegram:g2', snapshot), { raw: null }, 'a group not found has no stored message');
   // Scheduled tasks often land in the origin group, whose key is not a channel key.
   assert.deepEqual(await f.service.raw('origin', snapshot), { raw: '[Scheduled Task: t1] check' });
-  f.cli.runC4Db = async args => { reads.push(args); return { ok: false, reason: 'c4_groups_failed', readAt: f.now() }; };
+  f.core.groups = async options => { reads.push(options); return { ok: false, reason: 'c4_groups_failed', readAt: f.now() }; };
   await assert.rejects(f.service.raw('telegram:g1', snapshot), { statusCode: 502, code: 'group_raw_failed' });
   const before = reads.length;
   for (const bad of ['%E0%A4%A', '--x', 'a%20b', 'tg%3A']) {
     assert.throws(() => { let key; try { key = decodeURIComponent(bad); } catch {} groupKey(key); }, { statusCode: 400, code: 'SESSION_GROUP_INVALID' });
   }
-  assert.equal(reads.length, before, 'invalid keys never reach the CLI');
+  assert.equal(reads.length, before, 'invalid keys never reach Core');
   // The polled snapshot never asks for stored messages.
   const polled = [];
-  f.cli.runC4Db = async args => { polled.push(args); return { ok: true, readAt: f.now(), data: args[0] === 'groups' ? { groups: [], hasOlder: false } : { groups: [], globalFence: null } }; };
+  f.core.groups = async options => { polled.push(options); return { ok: true, readAt: f.now(), data: { groups: [], hasOlder: false } }; };
   f.advance(5000);
   await f.service.getSnapshot();
-  assert.ok(polled.length > 0 && polled.every(args => !args.includes('--raw')));
+  assert.ok(polled.length > 0 && polled.every(options => !options?.raw));
 });
 
 // Integration: actual event Store plus snapshot/API and activity projection, on
