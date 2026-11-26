@@ -64,7 +64,7 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 | Border `--border` | `rgba(15,118,110,.16)` | `#334656` |
 | Focus `--border-focus` | `rgba(14,165,163,.45)` | `#43c7b5` |
 | Navigation background `--nav-bg` | `rgba(255,255,255,.82)` | `#19222b` |
-| Offline / idle | `#64748b` / `#16a34a` | `#8b99a8` / `#50c996` |
+| Sleeping (not running) / idle | `#64748b` / `#16a34a` | `#8b99a8` / `#50c996` |
 | Busy / waiting | `#a16207` / `#2563eb` | `#e9ba62` / `#70a9ff` |
 | Possibly stuck / stuck / unknown | `#ea580c` / `#dc2626` / `#6b7280` | `#f8a369` / `#f77c87` / `#9ba7b4` |
 
