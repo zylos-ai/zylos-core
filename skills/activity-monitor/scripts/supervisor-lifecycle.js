@@ -312,7 +312,10 @@ export class SupervisorLifecycle {
     if (fence.reason === 'delete' && scene.present && scene.runId && scene.runId !== fence.runId) return 'changed';
     const switchingGroup = context.transition?.phase === 'gating' && group !== 'origin';
     if (switchingGroup && scene.present) return 'waiting_inflight';
-    const staleBefore = switchingGroup ? Math.floor(this.now() / 1000) + 1 : Math.floor(scene.currentSessionTs / 1000);
+    const runEnded = scene.present === false || (scene.runId === fence.runId && scene.processRunning === false);
+    const staleBefore = switchingGroup || runEnded
+      ? Math.floor(this.now() / 1000) + 1
+      : Math.floor(scene.currentSessionTs / 1000);
     if (finite(staleBefore)) {
       const expired = await this.reclaimRead(fence, () => this.d.db.expireStaleRunningControls({ sessionGroup: group }, { deliveredBefore: staleBefore }));
       for (const row of expired) await this.event('control_expired', { session_group: group, control_id: row.id, run_id: fence.runId });
