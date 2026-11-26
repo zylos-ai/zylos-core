@@ -559,7 +559,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     chartsRoot.append(card);
     return body;
   }
-  // `cross` is the machine-wide Origin Sync backlog: not a group of its own, so its name selects nothing.
+  // Both cross-group Sync and single-session Origin represent machine-wide backlog, with no group directory to select.
   function backlogItem(row, cross = false) {
     const item = element(document, 'div', undefined, 'wb-memory-chart-row wb-memory-bl' + (cross ? ' wb-memory-bl-cross' : ''));
     // Name and its badges share one cell: one line beside the bar on wide screens, a line of its own on phones.
@@ -570,6 +570,8 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       // A plain-words explanation with the row's actual threshold; without one, the count clause is left out.
       name.title = isNumber(row.threshold) ? t('wb.memory.originSyncHint', { count: row.threshold }) : t('wb.memory.originSyncHintNoThreshold');
       head.append(name);
+    } else if (row.sessionGroup === 'origin') {
+      head.append(element(document, 'span', memoryGroupLabel(row, t), 'wb-memory-chart-label wb-memory-chart-label-static'));
     } else {
       const label = memoryGroupLabel(row, t);
       const name = button(head, label, () => selectGroup(row.sessionGroup), 'wb-memory-chart-label');
