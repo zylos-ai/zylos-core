@@ -1,5 +1,6 @@
 import { zonedDay, zonedInputValue } from './wb/instance-zone.js';
 import cjkFriendly from './markdown-it-cjk-friendly/index.js';
+import { endLinksAtCjkPunctuation } from './markdown-config.js';
 import { countLabel } from './count-label.js';
 function historyTime(value) {
   const date = value ? new Date(value) : null;
@@ -13,7 +14,7 @@ export function escapeHistory(value) {
 }
 export function createHistoryMarkdown(factory) {
   if (!factory) return text => `<pre>${escapeHistory(text)}</pre>`;
-  const md = factory({ html: false, linkify: true }).use(cjkFriendly);
+  const md = endLinksAtCjkPunctuation(factory({ html: false, linkify: true }).use(cjkFriendly));
   md.validateLink = url => /^https?:\/\//i.test(url);
   md.renderer.rules.link_open = (tokens, i, options, env, renderer) => {
     tokens[i].attrSet('rel', 'noopener noreferrer');

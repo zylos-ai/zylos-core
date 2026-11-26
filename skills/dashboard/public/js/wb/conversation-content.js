@@ -4,6 +4,7 @@ import { createChatAttachment } from './chat-attachments.js';
 import { applyChatView } from './chat-view.js';
 import { conversationChartResource } from './conversation-charts.js';
 import cjkFriendly from '../markdown-it-cjk-friendly/index.js';
+import { endLinksAtCjkPunctuation } from '../markdown-config.js';
 export function conversationErrorKey(code) {
   if (['chat_auth_required', 'chat_conversation_forbidden', 'insufficient_scope'].includes(code)) {
     return 'chat.error.forbidden';
@@ -80,6 +81,7 @@ export function renderConversationContent({
       linkify: true,
       breaks: true
     }).use(cjkFriendly);
+    endLinksAtCjkPunctuation(markdown);
     // Images are not part of this renderer's capability. Keep their descriptions as text.
     markdown.renderer.rules.image = (tokens, index) => markdown.utils.escapeHtml(tokens[index].content);
     // A wide table scrolls sideways inside its own box instead of squeezing every cell to a character per line.
