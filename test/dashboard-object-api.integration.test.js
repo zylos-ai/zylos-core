@@ -91,8 +91,14 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     if (!catalogReadable && args[0] === 'groups') return { ok: false, reason: 'fixture_catalog_failed' };
     return { ok: true, data: args[0] === 'groups' ? args.includes('--raw') ? catalog().filter(row => row.sessionGroup === args[2]) : args.includes('--active-since') ? { groups: catalog(), hasOlder: false } : catalog()
       : args[0] === 'unsummarized' ? { count: 0, firstAt: null } : { groups: [{ sessionGroup: 'telegram:working', pending: { count: 3, oldestAt: clock - 1000, head: { id: 1, priority: 0 } }, running: { count: 0 } }], globalFence: null } };
-  }, readOverrides: async () => ({ ok: true, data: { baseline: { runtime: JSON.parse(fs.readFileSync(configFile)).runtime },
-    runtime: pinWorking ? [{ sessionGroup: 'telegram:working', runtime: workingRuntime }] : overrideFixture, model: [] } }) };
+  } };
+  // The snapshot reads the same fixture catalog and queues in process; calls are recorded in the command's argument form.
+  const coreReads = {
+    groups: (options = {}) => cli.runC4Db(options.keyMatch === undefined ? ['groups', '--json']
+      : ['groups', '--key-match', options.keyMatch, '--limit', String(options.limit), '--raw', '--json']),
+    groupQueues: () => cli.runC4Db(['group-queues', '--json']),
+    readOverrides: async () => ({ ok: true, data: { baseline: { runtime: JSON.parse(fs.readFileSync(configFile)).runtime },
+      runtime: pinWorking ? [{ sessionGroup: 'telegram:working', runtime: workingRuntime }] : overrideFixture, model: [] } }) };
   const fakeExecute = (file, args, options, callback) => {
     if (typeof options === 'function') callback = options;
     cliCalls.push([String(file), ...args]);
@@ -213,7 +219,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   t.mock.method(SystemCollector.prototype, 'getLatestSystemData', () => ({ collectedAt: clock, resource_scope: 'container', cpu_source: 'container', mem_source: 'container', disk_total_bytes: 4096, cpu_pct: 20, cpu_count: 2, mem_pct: 25, mem_used_bytes: 256, mem_total_bytes: 1024, disk_used_pct: 40, disk_free_bytes: 2048 }));
   const { collectStatus } = await import('../cli/lib/status-view.js');
   t.mock.module('../skills/dashboard/src/lib/workbench/group-snapshot.js', { namedExports: { systemSample,
-    createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => clock, cli,
+    createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => clock, core: coreReads,
       loadCoreModule: async name => name === 'status-view.js' ? { collectStatus: options => collectStatus({ ...options,
         mode: () => ({ mode }), resolveRoot: () => root, configIssue: () => null, requests: () => [], now: () => clock,
         list: () => {

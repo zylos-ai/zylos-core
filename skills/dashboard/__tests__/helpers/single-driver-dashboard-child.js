@@ -16,8 +16,8 @@ const reader = new C4Reader(zylosDir);
 const coreState = new CoreState({ zylosDir });
 const store = new Store(path.join(zylosDir, 'components', 'dashboard', 'dashboard.db'));
 // The Core command-line reads run in child processes of their own; this process's driver use is what is measured.
-const cli = { runC4Db: async () => [], readOverrides: async () => ({}) };
-const snapshot = createGroupSnapshot({ zylosDir, store, c4Reader: reader, cli });
+const core = { groups: async () => [], groupQueues: async () => [], readOverrides: async () => ({}) };
+const snapshot = createGroupSnapshot({ zylosDir, store, c4Reader: reader, core });
 
 const drivers = () => [...new Set(fs.readFileSync('/proc/self/maps', 'utf8').split('\n')
   .map(line => line.slice(line.indexOf('/'))).filter(file => file.endsWith('/better_sqlite3.node')))];

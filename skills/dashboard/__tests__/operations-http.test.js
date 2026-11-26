@@ -132,8 +132,9 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
   t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
     createGroupSnapshot: options => {
       const real = createGroupSnapshot({ ...options,
-        cli: {
-          runC4Db: async args => ({ ok: true, data: args[0] === 'groups' ? [] : { groups: [], globalFence: null } }),
+        core: {
+          groups: async () => ({ ok: true, data: [] }),
+          groupQueues: async () => ({ ok: true, data: { groups: [], globalFence: null } }),
           readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }),
         },
         sessionObservations: {

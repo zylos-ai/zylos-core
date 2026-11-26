@@ -3,7 +3,7 @@ import { loadCoreModule as defaultLoadCoreModule } from '../core-modules.js';
 import { Sanitizer } from '../sanitizer.js';
 import { isDeepStrictEqual } from 'node:util';
 import { createSessionObservations } from '../session-observations.js';
-import { createCoreCli } from './core-cli.js';
+import { createCoreReads } from './core-reads.js';
 import { mergeGroups, previewTaskIds, safePreview, safeRaw } from './group-merge.js';
 import { readTaskNames as defaultReadTaskNames } from './schedule-read.js';
 import { waitingReason } from './waiting-reason.js';
@@ -61,7 +61,7 @@ export function systemSample(sample) {
 
 /** No timers: collection happens only in response to a read request. */
 export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule = defaultLoadCoreModule,
-  now = Date.now, cli = createCoreCli({ zylosDir }), sanitizer = new Sanitizer(zylosDir),
+  now = Date.now, core = createCoreReads({ zylosDir, loadCoreModule, now }), sanitizer = new Sanitizer(zylosDir),
   displayNames = emptyNames, readConfigRuntime = () => null, channelRestartCounter = createChannelRestartCounter(),
   readChannels = () => installedChannels(zylosDir, loadCoreModule),
   readPm2 = () => null, readSystem = () => null, readTaskNames = ids => defaultReadTaskNames(zylosDir, ids),
@@ -136,10 +136,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         transition: null, globalGate: null, blocked: null, supervisor: 'unknown', lastCompleted: null, lastEvents: [],
         error: { code: error.code ?? 'READ_FAILED', message: 'Session mode status could not be read' } };
     }
-    const [c4, q] = await Promise.all([
-      cli.runC4Db(['groups', '--json']),
-      cli.runC4Db(['group-queues', '--json']),
-    ]);
+    const [c4, q] = await Promise.all([core.groups(), core.groupQueues()]);
     // Counts and the offline page include the complete catalog, including groups
     // older than the activity window. The public APIs select their own rows.
     if (c4.ok && Array.isArray(c4.data)) c4.data = { groups: c4.data, hasOlder: false };
@@ -148,7 +145,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     const names = await displayNames.listAll();
     const { rows, hasOlder } = mergeGroups({ status, c4, q, names, taskNames, statusError }, sanitizer);
     const listKnown = status != null && status.groupListError == null;
-    const ov = await cli.readOverrides([...new Set([...rows.map(row => row.sessionGroup).filter(group => group !== null), 'origin'])]);
+    const ov = await core.readOverrides([...new Set([...rows.map(row => row.sessionGroup).filter(group => group !== null), 'origin'])]);
     sources.ov = source(ov);
     const runtimeOverrides = new Map((ov.ok ? ov.data.runtime : []).map(item => [item.sessionGroup, item.runtime]));
     const modelsByGroup = new Map();
@@ -372,7 +369,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     const rawGroups = snapshot.groupEvidence?.rawGroups;
     if (rawGroups?.has(key)) key = rawGroups.get(key);
     if (key === null) return { raw: null };
-    const result = await cli.runC4Db(['groups', '--key-match', key, '--limit', '1', '--raw', '--json']);
+    const result = await core.groups({ keyMatch: key, limit: 1, raw: true });
     if (!result.ok) throw Object.assign(new Error('Group read failed'), { statusCode: 502, code: 'group_raw_failed', reason: 'c4_groups_failed' });
     return { raw: safeRaw(result.data.find(item => item.sessionGroup === key)?.preview?.messageRaw, sanitizer) };
   }
