@@ -57,7 +57,12 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
         result[key].ids.push(row.id); result[key].count++;
         if (row.status === 'failed') enqueueReceipt(c, row.id, row.delivery_action);
       }
-      return result;
+      // An interrupted delivery may already have pasted the control.
+      const controlIds = all(c, `UPDATE control_queue
+        SET status='timeout', last_error='ORPHAN_EXPIRED', updated_at=?
+        WHERE status='running' AND ack_deadline_at IS NULL RETURNING id`, seconds())
+        .map(row => row.id).sort((a, b) => a - b);
+      return { ...result, controlsExpired: { ids: controlIds, count: controlIds.length } };
     }),
     listGroupQueues: () => snapshot(c => {
       const groups = new Map();
