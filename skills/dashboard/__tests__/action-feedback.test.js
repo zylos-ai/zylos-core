@@ -66,3 +66,28 @@ test('a retry cancels the earlier success timeout and keeps its failure until th
   assert.equal(button.hasAttribute('aria-busy'), false);
   assert.equal(status.textContent, '');
 });
+
+test('a follow-up confirmation keeps the first result readable until the combined operation settles', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const status = notice(), button = control();
+  const actions = createActionFeedback(status, () => {});
+  const operation = actions.start(button);
+
+  operation.show('Upgrade saved', true, { awaitingConfirmation: true });
+  t.mock.timers.tick(10_000);
+  assert.equal(status.textContent, 'Upgrade saved');
+  assert.equal(actions.pending, true);
+  assert.equal(actions.busy, false);
+  assert.equal(button.hasAttribute('aria-busy'), false);
+  assert.equal(actions.start(button), null);
+
+  assert.equal(operation.resume(), true);
+  assert.equal(button.hasAttribute('aria-busy'), true);
+  assert.equal(status.textContent, 'Upgrade saved');
+  operation.show('Upgrade saved\nRestart accepted', true);
+  assert.equal(actions.pending, false);
+  assert.equal(button.hasAttribute('aria-busy'), false);
+  assert.equal(operation.resume(), false);
+  t.mock.timers.tick(5000);
+  assert.equal(status.textContent, '');
+});

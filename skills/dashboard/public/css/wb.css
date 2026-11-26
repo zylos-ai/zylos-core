@@ -1334,7 +1334,6 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-engine-version .wb-btn span { overflow-wrap: anywhere; }
 /* Settings action results stay beside their controls and wrap within the card. */
 .wb-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-.wb-action-row + .wb-action-row { margin-top: 6px; }
 .wb-action-row[hidden], .wb-action-row > button[hidden] { display: none; }
 .wb-action-result { min-width: 0; max-width: 100%; margin: 0; overflow-wrap: anywhere; white-space: pre-line; }
 .wb-action-result:empty { position: absolute; }

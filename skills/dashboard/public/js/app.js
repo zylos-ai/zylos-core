@@ -2396,7 +2396,9 @@ function settingsWiring() {
     },
     writable: () => !remoteIsReadOnly(), onGroup: openWorkbenchGroup,
     engineVersion: (root, runtime) => renderEngineVersion(root, state.dashboardState?.versions, {
-      runtime, actions: engineActions, canUpgrade: !runtimeNotFound({ instance: state.dashboardState }, runtime),
+      runtime, actions: engineActions, feedbackRuntime: upgradeRuntime,
+      pending: inlineActions['upgrade-cc']?.pending, busy: inlineActions['upgrade-cc']?.busy,
+      canUpgrade: !runtimeNotFound({ instance: state.dashboardState }, runtime),
       t, readOnly: remoteIsReadOnly(),
     }),
   });
@@ -2861,6 +2863,7 @@ let settingsLoader = null;
 let settingsPricing = null;
 let settingsDefaults = null;
 let engineActions = null;
+let upgradeRuntime = null;
 let settingsVersionRoot = null;
 let settingsChat = null;
 let settingsHosts = null;
@@ -3031,20 +3034,13 @@ function createActionsModal() {
         <button class="wb-btn" data-action="upgrade-cc" type="button"><i class="wb-ico wb-ico-up wb-ico-xs" aria-hidden="true"></i>${spinner}<span id="action-cli-label"></span></button>
         <span class="wb-note wb-action-result" id="action-upgrade-result" role="status"></span>
       </div>
-      <div class="wb-action-row" id="action-restart-row" hidden>
-        <button class="wb-btn" data-action="restart-session" type="button"><i class="wb-ico wb-ico-restart wb-ico-xs" aria-hidden="true"></i>${spinner}<span data-i18n="wb.settings.confirm.restartSession">${esc(t('wb.settings.confirm.restartSession'))}</span></button>
-        <span class="wb-note wb-action-result" id="action-restart-result" role="status"></span>
-      </div>
     </div>`;
   document.body.appendChild(overlay);
   actionsModal = overlay;
 
   inlineActions['switch-mode'] = createActionFeedback(overlay.querySelector('#action-mode-result'), syncModeSegment);
   const refreshEngine = () => settingsDefaults?.refreshVersion();
-  const restartRow = overlay.querySelector('#action-restart-row');
   inlineActions['upgrade-cc'] = createActionFeedback(overlay.querySelector('#action-upgrade-result'), refreshEngine);
-  inlineActions['restart-session'] = createActionFeedback(overlay.querySelector('#action-restart-result'), refreshEngine, () => { restartRow.hidden = true; });
-  overlay.querySelector('[data-action="restart-session"]').addEventListener('click', () => execAction('restart-session'));
 
   bindActionControls(overlay, pageActions(), {
     // The upgrade button sits in the default engine card and upgrades the engine chosen there.
@@ -3106,7 +3102,7 @@ function closeActionsModal() {
   if (!actionsModal) return;
   actionTargetGeneration++;
   for (const action of Object.values(inlineActions)) action.reset();
-  engineActions.querySelector('#action-restart-row').hidden = true;
+  upgradeRuntime = null;
   setModalBodyDisabled(false);
 }
 
@@ -3140,22 +3136,26 @@ function pageActions() {
   });
 }
 
-// Asks first for actions that change the running agent; see createPageActions.
-function execAction(action, body) {
-  return pageActions().exec(action, body);
-}
-
-// Sends a dashboard action. Only the page actions call this, after they have checked access and asked when needed.
-async function sendAction(action, body) {
+// Sends a dashboard action after the page has checked access and asked when needed.
+async function sendAction(action, body, followUp) {
   const targetKey = observerTargetKey();
-  const actionRuntime = action === 'upgrade-cc' && body?.runtime ? body.runtime : state.dashboardState?.default_runtime;
+  const upgrading = action === 'upgrade-cc';
+  const actionRuntime = body?.runtime ?? state.dashboardState?.default_runtime;
   const inline = inlineActions[action];
-  const actionButton = action === 'switch-mode'
-    ? actionsModal?.querySelector(`#action-mode-seg [data-mode="${body?.mode === 'multi' ? 'multi' : 'single'}"]`)
-    : engineActions?.querySelector(`[data-action="${action}"]`);
-  const feedback = inline && actionButton ? inline.start(actionButton) : null;
-  if (inline && !feedback) return false;
-  if (action === 'restart-session') actionButton.closest('.wb-action-row').hidden = false;
+  let feedback = followUp?.feedback;
+  if (inline) {
+    if (inline.pending) return false;
+    const button = upgrading
+      ? engineActions.querySelector('[data-action="upgrade-cc"]')
+      : actionsModal.querySelector(`#action-mode-seg [data-mode="${body?.mode === 'multi' ? 'multi' : 'single'}"]`);
+    if (upgrading) upgradeRuntime = actionRuntime;
+    feedback = inline.start(button);
+  }
+  if (followUp && !feedback.resume()) return false;
+  const showResult = (message, success) => {
+    feedback?.show(followUp ? [followUp.upgradeMessage, message].join('\n') : message, success);
+  };
+  let upgradeMessage;
   try {
     if (action === 'restart-session' && !body?.runId) {
       const origin = await fetchJson('/api/groups/origin?include=');
@@ -3172,7 +3172,7 @@ async function sendAction(action, body) {
     });
     const result = await r.json();
     if (feedback && !feedback.isCurrent()) return false;
-    if (action === 'upgrade-cc' && r.status >= 500
+    if (upgrading && r.status >= 500
       && !['upgrade_failed', 'deadline_exceeded'].includes(result.error?.code ?? result.error)) {
       result.messageKey = 'result.runtime_upgrade_unknown';
       result.messageParams = { runtime: runtimeName(actionRuntime) || t('wb.unknown') };
@@ -3184,27 +3184,25 @@ async function sendAction(action, body) {
     const errorCode = typeof result.error === 'string' ? result.error : result.error?.code;
     const message = formatActionResult(result, t) || (result.ok ? t('status.done') :
       t('status.failed', { error: errorCode || t('wb.unknown') }));
-    feedback?.show(message, Boolean(result.ok));
+    const needsRestart = upgrading && result.ok && result.requires_restart;
+    if (needsRestart) {
+      upgradeMessage = message;
+      feedback.show(message, true, { awaitingConfirmation: true });
+    } else showResult(message, Boolean(result.ok));
     if (result.refreshState) await refreshState();
-    if (result.ok && result.requires_restart) {
+    if (needsRestart) {
       let origin;
       try { origin = await fetchJson('/api/groups/origin?include='); }
-      catch { /* The configuration was saved even if its current session cannot be read. */ }
-      if (observerTargetKey() !== targetKey || (feedback && !feedback.isCurrent())) return false;
+      catch { /* The engine was upgraded even if its current session cannot be read. */ }
+      if (observerTargetKey() !== targetKey || !feedback.isCurrent()) return false;
       if (origin?.presence !== 'running' || !origin.live?.runId) {
-        feedback?.show(t('actions.next_start'), true);
+        feedback.show(t('actions.next_start'), true);
         return true;
       }
       state.originGroup = origin;
       await new Promise(r => setTimeout(r, 1500));
-      if (observerTargetKey() !== targetKey || (feedback && !feedback.isCurrent())) return false;
-      const row = engineActions.querySelector('#action-restart-row');
-      const button = row.querySelector('button');
-      if (button.getAttribute('aria-busy') !== 'true') {
-        row.hidden = false;
-        await execAction('restart-session');
-        if (!button.hasAttribute('aria-busy') && !row.querySelector('#action-restart-result').textContent) row.hidden = true;
-      }
+      if (observerTargetKey() !== targetKey || !feedback.isCurrent()) return false;
+      await pageActions().exec('restart-session', undefined, { feedback, upgradeMessage: message });
     }
     if (feedback) return Boolean(result.ok);
     if (observerTargetKey() !== targetKey) return false;
@@ -3212,8 +3210,11 @@ async function sendAction(action, body) {
     return result;
   } catch (err) {
     if (!feedback) throw err;
-    feedback.show(actionFailureMessage(action, runtimeName(actionRuntime) || t('wb.unknown'), err, t), false);
+    if (upgradeMessage) feedback.show([upgradeMessage, t('status.failed', { error: err.message })].join('\n'), false);
+    else showResult(actionFailureMessage(action, runtimeName(actionRuntime) || t('wb.unknown'), err, t), false);
     return false;
+  } finally {
+    if (upgradeMessage && inline.pending && feedback.isCurrent()) feedback.show(upgradeMessage, true);
   }
 }
 

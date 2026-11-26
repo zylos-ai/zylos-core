@@ -23,38 +23,48 @@ export function formatActionResult(result, t) {
 }
 
 // One notice and timeout per control. A retry or machine change invalidates the previous feedback.
-export function createActionFeedback(status, sync, onSuccessExpired = () => {}) {
-  let timer, activeButton, current;
+export function createActionFeedback(status, sync) {
+  let timer, activeButton, current, busy = false;
   function clear() {
     clearTimeout(timer);
     status.textContent = '';
   }
+  function setBusy(value) {
+    busy = value;
+    if (value) activeButton.setAttribute('aria-busy', 'true');
+    else activeButton?.removeAttribute('aria-busy');
+  }
   function unlock() {
-    activeButton?.removeAttribute('aria-busy');
+    setBusy(false);
     activeButton = null;
   }
   return {
+    get busy() { return busy; },
+    get pending() { return Boolean(activeButton); },
     start(button) {
       if (activeButton) return null;
       clear();
       activeButton = button;
-      button.setAttribute('aria-busy', 'true');
+      setBusy(true);
       sync();
       const feedback = {
         isCurrent: () => current === feedback,
-        show(text, success) {
+        resume() {
+          if (!feedback.isCurrent() || !activeButton) return false;
+          setBusy(true);
+          sync();
+          return true;
+        },
+        show(text, success, { awaitingConfirmation = false } = {}) {
           if (!feedback.isCurrent()) return;
           clear();
-          unlock();
+          if (awaitingConfirmation) setBusy(false);
+          else unlock();
           status.classList.toggle('wb-status-success', success);
           status.classList.toggle('wb-status-error', !success);
           status.textContent = text;
           sync();
-          if (success) timer = setTimeout(() => {
-            clear();
-            onSuccessExpired();
-            sync();
-          }, 5000);
+          if (success && !awaitingConfirmation) timer = setTimeout(() => { clear(); sync(); }, 5000);
         },
       };
       current = feedback;

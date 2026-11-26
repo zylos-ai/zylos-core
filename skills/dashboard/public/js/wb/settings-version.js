@@ -39,7 +39,7 @@ export function coreUpgradePrompt(current, latest, t = key => key) {
 }
 
 // The chosen AI engine's CLI version, with persistent controls and feedback across card redraws.
-export function renderEngineVersion(root, info, { actions, canUpgrade = true, document = root.ownerDocument, t = key => key, readOnly = false, runtime = DEFAULT_RUNTIME } = {}) {
+export function renderEngineVersion(root, info, { actions, feedbackRuntime, pending = false, busy = false, canUpgrade = true, document = root.ownerDocument, t = key => key, readOnly = false, runtime = DEFAULT_RUNTIME } = {}) {
   const name = runtimeName(runtime);
   const version = info?.[runtime];
   const unsupported = version?.update_check === 'unsupported';
@@ -53,15 +53,18 @@ export function renderEngineVersion(root, info, { actions, canUpgrade = true, do
   else root.prepend(element(document, 'p', versionLabel, 'wb-version-line'));
   if (!actions) return;
   const upgrade = actions.querySelector('[data-action="upgrade-cc"]');
-  const isBusy = button => button.getAttribute('aria-busy') === 'true';
   const upgradeResult = actions.querySelector('#action-upgrade-result');
-  upgrade.hidden = !isBusy(upgrade) && !upgradeResult.textContent && (!canUpgrade || Boolean(version?.installed && latest && !update));
+  const ownsFeedback = runtime === feedbackRuntime;
+  upgradeResult.hidden = !ownsFeedback;
+  const keepVisible = ownsFeedback && (pending || upgradeResult.textContent);
+  upgrade.hidden = !keepVisible && (!canUpgrade || Boolean(version?.installed && latest && !update));
+
+  if (ownsFeedback && busy) upgrade.setAttribute('aria-busy', 'true');
+  else upgrade.removeAttribute('aria-busy');
 
   const label = upgrade.querySelector('#action-cli-label');
   if (label) label.textContent = t('actions.upgrade_runtime', { runtime: name }) + (update ? ' v' + update : '');
-  upgrade.disabled = readOnly || isBusy(upgrade);
-  const restart = actions.querySelector('[data-action="restart-session"]');
-  restart.disabled = readOnly || isBusy(restart);
+  upgrade.disabled = readOnly || pending || !canUpgrade || Boolean(version?.installed && latest && !update);
   upgrade.title = readOnly ? t('remote.actions_read_only_tooltip') : '';
   if (actions.parentElement !== root) root.append(actions);
 }
