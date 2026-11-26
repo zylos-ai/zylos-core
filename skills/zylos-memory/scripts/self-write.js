@@ -35,7 +35,7 @@ export function resolveAllowedMemoryPath({ root, path: requested, allowed = isSe
 }
 
 /** Caller owns F8 and authorization. Only this fragment is changed. */
-export function applyFragmentLocked({ target, expected, replacement }) {
+export function applyFragmentLocked({ target, expected, replacement, validate }) {
   if (!(expected === null || typeof expected === 'string') || typeof replacement !== 'string') throw inputError('Expected a string replacement and string/null expected fragment');
   let old = null;
   try { old = fs.readFileSync(target, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -52,6 +52,7 @@ export function applyFragmentLocked({ target, expected, replacement }) {
       next = old.slice(0, first) + replacement + old.slice(first + expected.length);
     }
   }
+  validate?.(old, next);
   const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomBytes(16).toString('hex')}.tmp`);
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });

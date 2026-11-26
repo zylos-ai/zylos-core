@@ -73,3 +73,21 @@ test('unsummarized cursor pages traverse one group without gaps or duplicates', 
   assert.equal(seen, 120);
   assert.equal(store.queries.unsummarized({ group: 'foo', afterConversationId, limit: 50 }).rows.length, 0);
 });
+
+test('dream export samples coverage through each delivered frontier and leaves other groups independent', t => {
+  const { db, store, seed } = fixture(t);
+  seed(1);
+  store.createCheckpoint('foo', 1, 'covered');
+  seed(2);
+  seed(3, 'foo', 'failed');
+  seed(4, 'foo', 'pending');
+  seed(5, 'foo', 'delivered', 'out');
+  seed(6, 'bar');
+  seed(7, 'empty');
+  store.createCheckpoint('empty', 7, 'covered');
+  db.exec('INSERT INTO group_heads(session_group, head_id) SELECT session_group, MAX(id) FROM conversations GROUP BY session_group');
+  const exportIds = () => store.getDreamConversations().map(({ group, rows }) => [group, rows.map(({ id }) => id)]);
+  assert.deepEqual(exportIds(), [['bar', [6]], ['foo', [2]]]);
+  db.prepare("UPDATE conversations SET status='delivered' WHERE id=4").run();
+  assert.deepEqual(exportIds(), [['bar', [6]], ['foo', [2, 4, 5]]]);
+});

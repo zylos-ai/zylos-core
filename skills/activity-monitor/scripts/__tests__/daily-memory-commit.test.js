@@ -72,7 +72,7 @@ function machine(t, day) {
     zylosDir,
     readMode: () => ({ mode: 'single' }),
     readConfig: () => ({ upgrade_check_enabled: false, daily_upgrade_enabled: false, health_check_enabled: false,
-      usage_monitor_enabled: false, usage_alert_enabled: false }),
+      usage_monitor_enabled: false, usage_alert_enabled: false, memory_dream_hour: 23 }),
     resolveTargetRuntime: () => { throw new Error('nothing else is due'); },
     readHealth: () => { throw new Error('nothing else is due'); },
     now: () => new Date(2026, 10, clock.day, 3, 5).getTime(),
@@ -110,6 +110,19 @@ describe('daily memory commit', () => {
     await run.round();
     assert.equal(commits(), '1', 'no second commit the same day');
     assert.equal(run.attempts(), 1);
+  });
+
+  it('uses the hour and date in the workspace .env for the snapshot', async t => {
+    fs.writeFileSync(path.join(zylosDir, '.env'), 'TZ=Asia/Singapore\n');
+    const run = machine(t, 10);
+    run.tasks.now = () => Date.UTC(2026, 10, 10, 18, 59);
+    await run.round();
+    assert.equal(run.state(), null);
+
+    run.tasks.now = () => Date.UTC(2026, 10, 10, 19);
+    await run.round();
+    assert.equal(run.state().last_date, '2026-11-11');
+    assert.equal(commits(), '1');
   });
 
   it('leaves files over 50 MB out of the commit, logs them, and never streams a file over 512 MB into a pack', async t => {

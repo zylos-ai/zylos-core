@@ -4,7 +4,6 @@ import path from 'path';
 import { parse } from 'dotenv';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const ENV_PATH = path.join(ZYLOS_DIR, '.env');
 
 function isValidTimezone(timezone) {
   try {
@@ -30,18 +29,19 @@ function invalidTzError(source, timezone) {
   );
 }
 
-export function loadTimezone() {
+export function loadTimezone(root = ZYLOS_DIR) {
+  const envPath = path.join(root, '.env');
   try {
-    const envText = fs.readFileSync(ENV_PATH, 'utf8');
+    const envText = fs.readFileSync(envPath, 'utf8');
     const env = parse(envText);
     const value = env.TZ;
 
     if (value !== undefined) {
       if (!value) {
-        throw new TimezoneConfigError('INVALID_TZ', `Invalid TZ in ${ENV_PATH}: TZ is empty`);
+        throw new TimezoneConfigError('INVALID_TZ', `Invalid TZ in ${envPath}: TZ is empty`);
       }
       if (!isValidTimezone(value)) {
-        throw invalidTzError(ENV_PATH, value);
+        throw invalidTzError(envPath, value);
       }
       return value;
     }
@@ -52,7 +52,7 @@ export function loadTimezone() {
     if (error.code !== 'ENOENT') {
       throw new TimezoneConfigError(
         'TZ_ENV_READ_ERROR',
-        `Failed to read ${ENV_PATH}: ${error.message}`
+        `Failed to read ${envPath}: ${error.message}`
       );
     }
   }

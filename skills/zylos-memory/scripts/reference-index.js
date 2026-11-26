@@ -31,7 +31,7 @@ function moveWithoutOverwrite(source, target) {
   catch (error) { error.message = `Destination was published but source removal failed: ${error.message}`; throw error; }
 }
 
-function publish(target, content, create = false) {
+export function publishReferenceFile(target, content, create = false) {
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   const temporary = temporaryPath(target);
   try {
@@ -45,7 +45,7 @@ function publish(target, content, create = false) {
   }
 }
 
-function header(text, kind) {
+export function inspectReferenceHeader(text, kind) {
   const block = text.split(/\r?\n\s*\r?\n/, 1)[0].split(/\r?\n/);
   const title = /^# (\S.*)$/.exec(block[0])?.[1];
   const fields = {};
@@ -55,10 +55,16 @@ function header(text, kind) {
       fields[match[1]] = match[2];
     }
   }
-  if (!title || !block.includes(`<!-- zylos:entry kind=${kind} -->`) ||
-      !statuses[kind].includes(fields.Status) || !/^\d{4}-\d{2}-\d{2}$/.test(fields.Updated ?? '') ||
-      !Number.isFinite(Date.parse(fields.Updated)) || new Date(fields.Updated).toISOString().slice(0, 10) !== fields.Updated) return null;
-  return { title, ...fields };
+  if (!title) return { error: 'Missing title. The first line must be # <title>.' };
+  if (!block.includes(`<!-- zylos:entry kind=${kind} -->`)) return { error: `Missing <!-- zylos:entry kind=${kind} --> marker.` };
+  if (!statuses[kind].includes(fields.Status)) {
+    return { error: `Invalid Status ${JSON.stringify(fields.Status ?? '')}. Allowed: ${statuses[kind].join(', ')}.` };
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.Updated ?? '') || !Number.isFinite(Date.parse(fields.Updated)) ||
+      new Date(fields.Updated).toISOString().slice(0, 10) !== fields.Updated) {
+    return { error: `Invalid Updated ${JSON.stringify(fields.Updated ?? '')}. Use a calendar date (YYYY-MM-DD) on its own line.` };
+  }
+  return { page: { title, ...fields } };
 }
 const cell = text => (text ?? '').replaceAll('|', '／');
 
@@ -69,7 +75,7 @@ function indexText(root, kind, archived) {
   const pages = [], malformed = [];
   for (const entry of fs.readdirSync(path.dirname(target), { withFileTypes: true })) {
     if (!entry.isFile() || entry.name.startsWith('.') || entry.name === 'INDEX.md' || !entry.name.endsWith('.md')) continue;
-    const parsed = header(fs.readFileSync(path.join(path.dirname(target), entry.name), 'utf8'), kind);
+    const { page: parsed } = inspectReferenceHeader(fs.readFileSync(path.join(path.dirname(target), entry.name), 'utf8'), kind);
     if (parsed) pages.push({ ...parsed, file: entry.name }); else malformed.push(entry.name);
   }
   pages.sort((a, b) => statuses[kind].indexOf(a.Status) - statuses[kind].indexOf(b.Status) ||
@@ -84,13 +90,17 @@ function indexText(root, kind, archived) {
     '|---|---|---|---|---|'];
   for (const row of pages) lines.push(`| ${row.Status} | ${row.Updated} | ${cell(row.title)} | ${cell(row.file)} | ${cell(row[kind === 'projects' ? 'Keys' : 'Scope'])} |`);
   if (malformed.length) lines.push('', '## Unparsable page headers', '', ...malformed.sort().map(file => `- ${cell(file)}`));
-  return { target, content: lines.join('\n') + '\n' };
+  return { target, content: lines.join('\n') + '\n', pages, malformed };
+}
+
+export function readReferenceIndex(root, kind) {
+  return indexText(root, kind, false);
 }
 
 export function rebuild(root) {
   for (const kind of Object.keys(statuses)) for (const archived of [false, true]) {
     const { target, content } = indexText(root, kind, archived);
-    publish(target, content);
+    publishReferenceFile(target, content);
   }
   return { ok: true };
 }
@@ -99,18 +109,18 @@ export function createPage(root, requested, content) {
   const permitted = p => pagePath(p);
   if (!permitted(requested)) throw memoryError('PATH_NOT_ALLOWED', PAGE_FILENAME_GUIDANCE);
   const { target } = resolveAllowedMemoryPath({ root, path: requested, allowed: permitted });
-  publish(target, content, true);
+  publishReferenceFile(target, content, true);
   return { ok: true, path: requested, bytes: Buffer.byteLength(content) };
 }
 
-export function movePage(root, requested, unarchive = false) {
+export function movePage(root, requested, unarchive = false, { rebuildIndex = true } = {}) {
   if (!pagePath(requested, unarchive)) throw memoryError('PATH_NOT_ALLOWED', 'Expected a reference page path');
   const source = resolveAllowedMemoryPath({ root, path: requested, allowed: p => pagePath(p, unarchive) }).target;
   const destination = unarchive ? requested.replace('/archive/', '/') : requested.replace(/\/([^/]+)$/, '/archive/$1');
   const target = resolveAllowedMemoryPath({ root, path: destination, allowed: p => pagePath(p, !unarchive) }).target;
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   moveWithoutOverwrite(source, target);
-  rebuild(root);
+  if (rebuildIndex) rebuild(root);
   return { ok: true, path: destination };
 }
 

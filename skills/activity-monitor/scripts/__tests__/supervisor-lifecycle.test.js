@@ -176,7 +176,7 @@ test('TTL preparation cancels on new messages or replaced run without fencing', 
   for (const change of ['message', 'replacement']) {
     const f = fixture(); f.unsummarized = SYNC_DUE;
     await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
-    assert.deepEqual(f.controls.map(control => control.content), ['check', 'prepare']);
+    assert.deepEqual(f.controls.map(control => control.content), ['check']);
     for (const control of f.controls) { assert.equal(control.requireIdle, true); assert.equal(control.appendAckSuffix, true); }
     if (change === 'message') f.lastActivity = f.now + 1; else f.scenes[0].runId = 'new';
     f.settle(); f.now += 10;
@@ -189,21 +189,21 @@ test('completed TTL preparation waits for every held Sync marker to release', as
       const f = fixture(); f.scenes = [scene(group)]; f.unsummarized = SYNC_DUE;
       await f.lifecycle.checkTtl(f.scenes[0], f.context);
       const preparation = f.lifecycle.ttlPreparation.get(group);
-      f.publishSyncFacts(); f.settle();
+      f.settle();
       f.deps.readSyncMarker = args => { f.markerReads.push(args); return { held: args.kind === heldKind, stale: false }; };
       for (const elapsed of [1, 90_000]) {
         f.now = preparation.at + elapsed; f.scenes[0].lastActivityAt = f.now;
         await f.lifecycle.checkTtl(f.scenes[0], f.context);
         assert.equal(f.lifecycle.ttlPreparation.get(group), preparation);
         assert.equal(f.fences.size, 0);
-        assert.equal(f.controls.length, 2);
+        assert.equal(f.controls.length, 1);
       }
       assert.ok(f.markerReads.some(args => args.kind === heldKind && args.currentRunId === preparation.runId));
       f.deps.readSyncMarker = () => ({ held: false, stale: false });
       await f.lifecycle.checkTtl(f.scenes[0], f.context);
       assert.equal(f.fences.get(group)?.reason, 'ttl');
       assert.equal(f.lifecycle.ttlPreparation.get(group), preparation);
-      assert.equal(f.controls.length, 2);
+      assert.equal(f.controls.length, 1);
       assert.equal(f.lifecycle.ttlReset.has(group), false);
       assert.equal(await f.lifecycle.advanceReclaim(f.fences.get(group), f.context), 'done');
       assert.equal(f.lifecycle.ttlPreparation.has(group), false);

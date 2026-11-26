@@ -1,3 +1,4 @@
+import { dream } from './dream.js';
 import { health } from './health.js';
 import { auth } from './auth.js';
 import { context } from './context.js';
@@ -38,6 +39,7 @@ export default Object.freeze({
     postUpgradeSync: UNSUPPORTED,
   }),
   auth,
+  dream,
   health,
   launch: Object.freeze({ modelConfig, prepare, preAccept, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags, checkAutonomous }),
   instructions: Object.freeze({

@@ -4,6 +4,8 @@ import { isMainModule } from './is-main-module.js';
 import { createInterface } from 'node:readline';
 import { guard, memoryError, requireSyncToken } from './sync-lock.js';
 import { resolveAllowedMemoryPath, applyFragmentLocked, isSelfPath } from './self-write.js';
+import { dreamLock } from './dream-lock.js';
+import { DREAM_READ_TOOLS, readDreamTool } from './dream-read-tools.js';
 import { PAGE_FILENAME_GUIDANCE, pagePath } from './reference-index.js';
 
 const codes = new Set(['PATH_NOT_ALLOWED', 'TOKEN_MISMATCH', 'FRAGMENT_CONFLICT', 'EXISTS', 'INVALID_INPUT', 'LOCK_TIMEOUT', 'SCOPE_UNBOUND', 'WRITE_FAILED', 'LOCK_UNAVAILABLE', 'LEGACY_READ_ONLY']);
@@ -20,6 +22,18 @@ export const EDIT_MEMORY_TOOL = {
 /** Bind once to the server's environment; requests cannot supply an identity. */
 export function createMemoryEditor(env = process.env, { fragment = applyFragmentLocked } = {}) {
   const binding = Object.freeze({ ...env });
+  const dreamRoot = binding.ZYLOS_MEMORY_DREAM_ROOT;
+  const repairPage = dreamRoot && binding.ZYLOS_MEMORY_DREAM_PAGE;
+  const checkRepair = repairPage ? (old, next) => {
+    const body = text => {
+      const boundary = /\r?\n[^\S\r\n]*\r?\n/.exec(text);
+      return boundary ? text.slice(boundary.index) : '';
+    };
+    if (old === null || body(old) !== body(next)) throw memoryError('PATH_NOT_ALLOWED', 'A header repair may only edit the page header');
+  } : undefined;
+  const owned = (token, action) => dreamRoot
+    ? dreamLock(dreamRoot).guard(token, () => action({ root: dreamRoot, marker: { kind: 'origin' } }))
+    : guard({ kind: 'auto', token, env: binding }, action);
   return async input => {
     try {
       if (!input || Array.isArray(input) || typeof input !== 'object' ||
@@ -30,9 +44,12 @@ export function createMemoryEditor(env = process.env, { fragment = applyFragment
         throw memoryError('INVALID_INPUT', 'Expected an edit or create memory operation');
       }
       requireSyncToken(input.token);
-      return await guard({ kind: 'auto', token: input.token, env: binding }, scope => {
+      return await owned(input.token, scope => {
+        if (repairPage && (input.path !== repairPage || input.op !== 'edit')) {
+          throw memoryError('PATH_NOT_ALLOWED', 'A header repair may only edit the designated page');
+        }
         const { marker } = scope;
-        const temporary = path.relative(path.join(scope.root, 'memory'),
+        const temporary = marker.kind === 'origin' ? null : path.relative(path.join(scope.root, 'memory'),
           path.join(scope.memoryDir, `state.md.${input.token}.tmp`)).split(path.sep).join('/');
         const allowed = relative => (marker.kind !== 'origin' && relative === temporary) ||
           (marker.kind !== 'group' && isSelfPath(relative));
@@ -52,7 +69,7 @@ export function createMemoryEditor(env = process.env, { fragment = applyFragment
           return true;
         } });
         const result = fragment({ target: resolved.target, expected: input.op === 'create' ? null : input.expected,
-          replacement: input.replacement });
+          replacement: input.replacement, ...(checkRepair ? { validate: checkRepair } : {}) });
         return { ok: true, path: resolved.path, bytes: result.bytes };
       });
     } catch (error) {
@@ -63,9 +80,14 @@ export function createMemoryEditor(env = process.env, { fragment = applyFragment
 }
 
 // Small stdio-only MCP endpoint. No user MCP or runtime configuration is written.
-export async function serveMemoryTools({ input = process.stdin, output = process.stdout, editor = createMemoryEditor() } = {}) {
+export async function serveMemoryTools({ input = process.stdin, output = process.stdout, env = process.env, editor = createMemoryEditor(env) } = {}) {
   const lines = createInterface({ input, crlfDelay: Infinity });
   let initialized = false;
+  const dreamRoot = env.ZYLOS_MEMORY_DREAM_ROOT;
+  const tools = dreamRoot ? [
+    { ...EDIT_MEMORY_TOOL, description: 'Create or edit a memory fragment. Supply the dream token from the request.' },
+    ...DREAM_READ_TOOLS.filter(tool => !env.ZYLOS_MEMORY_DREAM_PAGE || tool.name === 'read_memory'),
+  ] : [EDIT_MEMORY_TOOL];
   const rpcError = (id, code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
   async function dispatch(request) {
     if (!request || typeof request !== 'object' || request.jsonrpc !== '2.0' || typeof request.method !== 'string') {
@@ -81,11 +103,18 @@ export async function serveMemoryTools({ input = process.stdin, output = process
     }
     if (request.method === 'ping') return reply({});
     if (!initialized) return rpcError(request.id, -32000, 'Initialize first');
-    if (request.method === 'tools/list') return reply({ tools: [EDIT_MEMORY_TOOL] });
+    if (request.method === 'tools/list') return reply({ tools });
     if (request.method === 'tools/call') {
-      if (request.params?.name !== 'edit_memory') return rpcError(request.id, -32602, 'Unknown tool');
+      const { name, arguments: args } = request.params ?? {};
+      if (!tools.some(tool => tool.name === name)) return rpcError(request.id, -32602, 'Unknown tool');
       try {
-        const result = await editor(request.params.arguments);
+        if (name !== 'edit_memory') {
+          if (env.ZYLOS_MEMORY_DREAM_PAGE && args?.path !== env.ZYLOS_MEMORY_DREAM_PAGE) {
+            return rpcError(request.id, -32602, 'A header repair may only read the designated page');
+          }
+          return reply({ content: [{ type: 'text', text: readDreamTool(dreamRoot, name, args) }] });
+        }
+        const result = await editor(args);
         return reply({ content: [{ type: 'text', text: JSON.stringify(result) }], isError: !result.ok });
       } catch (error) {
         return rpcError(request.id, -32603, error.message);

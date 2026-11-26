@@ -9,12 +9,7 @@ import * as coreDb from '../../skills/comm-bridge/scripts/c4-db.js';
 import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
 import { requestRelease, deferReclaim } from '../../skills/activity-monitor/scripts/supervisor-request.js';
 import { tmuxNameForGroup, supervisorDiagnosticPath } from '../../cli/lib/session-group-paths.js';
-import { PRE_RECLAIM_SYNC_PROMPT } from '../../skills/zylos-memory/scripts/sync-prompts.js';
 import { parseStateHeader, renderStateSkeleton } from '../../skills/zylos-memory/scripts/state-format.js';
-import { acquire, release } from '../../skills/zylos-memory/scripts/sync-lock.js';
-import { list, checkpoint, commit } from '../../skills/zylos-memory/scripts/sync-files.js';
-import { createBatchReceipt } from '../../skills/comm-bridge/scripts/c4-sync-batch.js';
-import { projectConversation } from '../../skills/comm-bridge/scripts/c4-query-format.js';
 import { PRE_RECLAIM_CHECK_PROMPT } from '../../skills/activity-monitor/scripts/reclaim-prompts.js';
 const Database = createRequire(new URL('../../skills/comm-bridge/package.json', import.meta.url))('better-sqlite3');
 const [socketPath, binary, group, scenario] = process.argv.slice(2);
@@ -78,7 +73,7 @@ try {
   });
   service = await start();
   // 16 new results exceed the default Sync threshold of 15.
-  if (scenario === 'sync') for (let n = 1; n <= 16; n++) db.insertConversation('out', 'telegram', 'test-chat', `new completed result ${n}`, { groupName: 'release' });
+  if (scenario === 'backlog') for (let n = 1; n <= 16; n++) db.insertConversation('out', 'telegram', 'test-chat', `new completed result ${n}`, { groupName: 'release' });
   if (scenario === 'child') children = [{ agentId: 'working-child', lastActivityAt: now }];
   if (scenario.endsWith('-before-intent')) {
     // The real socket hint has already been processed when the requester
@@ -172,38 +167,12 @@ try {
     await tick();
     await stillRunning();
     const pending = controls();
-    assert.deepEqual(pending.map(row => row.raw_content), scenario === 'sync'
-      ? [PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT] : [PRE_RECLAIM_CHECK_PROMPT]);
+    assert.deepEqual(pending.map(row => row.raw_content), [PRE_RECLAIM_CHECK_PROMPT]);
     for (const row of pending) {
       assert.equal(row.session_group, group); assert.equal(row.require_idle, 1);
       assert.ok(JSON.stringify(JSON.parse(row.target_binding)).includes('run-1'));
     }
     const check = pending[0];
-    // Even completed Sync cannot bypass a CHECK that has not been acknowledged.
-    if (scenario === 'sync') {
-      const sync = pending[1];
-      assert.equal(db.claimControl(sync.id), true);
-      assert.equal((await notify({ controlId: sync.id })).type, 'ack');
-      // Execute the protected checkpoint/state publication before ack. The
-      // lifecycle now proves these durable facts rather than trusting the ack.
-      const env = { ...process.env, ZYLOS_SESSION_GROUP: group, ZYLOS_RUN_ID: 'run-1' };
-      const token = await acquire({ kind: 'group', env }, {
-        currentRunId: async () => (await scenes.observeGroup(group)).runId, now: () => now,
-      });
-      const settings = { env, token };
-      const memoryDatabase = { ...db, getConversationsByRange: coreDb.getConversationsByRange };
-      try {
-        const inputs = await list(settings), after = db.getCoverageEnd(group), end = db.getDeliveredFrontier(group);
-        const rows = db.getUnsummarizedConversations(group, { upToConversationId: end }).map(projectConversation);
-        const batch = createBatchReceipt(rows, { scope: group, after, end });
-        await checkpoint({ ...settings, end, summary: 'fixture synchronized result', batch }, { database: memoryDatabase });
-        const stateFile = path.join(root, 'memory/session-groups', group, 'state.md');
-        fs.writeFileSync(`${stateFile}.${token}.tmp`, renderStateSkeleton({ scope: group, syncedAt: new Date(now).toISOString() })
-          .replace('coverage= |', `coverage=${end} |`));
-        assert.equal((await commit({ ...settings, input: { followedUpIds: [], inputs, batch } }, { database: memoryDatabase, now: () => now })).committed, true);
-      } finally { await release({ ...settings, kind: 'group' }); }
-      assert.equal(coreDb.ackControl(sync.id).status, 'done');
-    }
     await tick(); await stillRunning();
     assert.equal(db.claimControl(check.id), true);
     assert.equal((await notify({ controlId: check.id })).type, 'ack');
@@ -239,7 +208,7 @@ try {
       assert.equal(ending[0].runId, 'run-1'); assert.equal(ending[0].continuationPending, 0);
       assert.deepEqual(db.listPendingContinuations(), []); assert.deepEqual(db.listSlotOccupancy(), []);
       assert.equal(db.getDrainFence(group), null);
-      assert.equal(controls().length, scenario === 'sync' ? 2 : 1);
+      assert.equal(controls().length, 1);
       // Cold demand reaches actual C4 routing/slot admission; model launch is out of scope.
       const row = inbound('new inbound');
       assert.equal(row.session_group, group);

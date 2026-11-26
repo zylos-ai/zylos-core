@@ -12,8 +12,6 @@ import { GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT,
   PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT } from '../../../zylos-memory/scripts/sync-prompts.js';
 import { acquire, release } from '../../../zylos-memory/scripts/sync-lock.js';
 import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
-import { groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
-import { renderStateSkeleton } from '../../../zylos-memory/scripts/state-format.js';
 
 const contexts = await loadRuntimeContexts();
 
@@ -128,7 +126,7 @@ test('ordinary multi-session Sync selects the prompt for the runtime', async t =
   f.scene.createdAt = f.now - 3_300_000;
   await f.lifecycle.checkTtl(f.scene, f.context);
   assert.deepEqual(f.controls.map(row => row.content),
-    [PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT]);
+    [PRE_RECLAIM_CHECK_PROMPT]);
 });
 
 test('native single-session Origin can acquire the lock for its periodic group Sync', async t => {
@@ -147,7 +145,7 @@ test('native single-session Origin can acquire the lock for its periodic group S
 
 // Boundary: real C4 binding, acknowledgment and drain-fence persistence; tmux is fake.
 // Run for Origin TTL preparation/reclaim changes; unrelated machine tasks may skip.
-test('Origin TTL persists its check and requires durable group and Origin repair before reclaim', async t => {
+test('Origin TTL keeps its bound reclaim check with group and Origin backlog', async t => {
   const sql = databaseFixture(t), f = localFixture(t, SupervisorLifecycle, { db: sql.store });
   f.deps.env = { ZYLOS_DIR: f.root };
   f.scene.createdAt = f.now - 3_300_000;
@@ -156,45 +154,25 @@ test('Origin TTL persists its check and requires durable group and Origin repair
   // Threshold 1 with two Origin group rows keeps the group Sync due before reclaim.
   f.context.configuration.syncThreshold = 1;
   sql.store.insertConversation('out', 'system', null, 'isolated earlier group result');
-  const groupRow = sql.store.insertConversation('out', 'system', null, 'isolated group result');
-  const originRow = sql.store.insertConversation('out', 'telegram', 'fixture', 'isolated Origin input', { groupName: 'room' });
+  sql.store.insertConversation('out', 'system', null, 'isolated group result');
+  sql.store.insertConversation('out', 'telegram', 'fixture', 'isolated Origin input', { groupName: 'room' });
   f.deps.prompts = { PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT };
   let stops = 0; f.deps.stop = () => { stops++; f.scene = { ...f.scene, present: false, ready: false }; };
   await f.lifecycle.checkTtl(f.scene, f.context);
   const rows = sql.db.prepare('SELECT * FROM control_queue ORDER BY id').all();
-  assert.deepEqual(rows.map(row => row.raw_content), [PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT]);
+  assert.deepEqual(rows.map(row => row.raw_content), [PRE_RECLAIM_CHECK_PROMPT]);
   for (const row of rows) {
     assert.equal(row.session_group, 'origin'); assert.equal(row.require_idle, 1); assert.ok(row.content.includes(' ---- ack via:'));
     assert.equal(JSON.parse(row.target_binding).expectedRunId, 'old-run'); assert.ok(Number.isInteger(row.ack_deadline_at));
   }
   assert.equal(sql.store.getOriginNeed().controls.count, 0);
   await f.lifecycle.checkTtl(f.scene, f.context); assert.equal(sql.store.getDrainFence('origin'), null);
-  for (const row of rows.slice(0, -1)) {
-    sql.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(row.id);
-    await f.lifecycle.checkTtl(f.scene, f.context); assert.equal(sql.store.getDrainFence('origin'), null);
-  }
-  // Acknowledgments alone cannot prove publication. Publish group state against
-  // the real checkpoint; Origin's first failed round must still get one retry.
-  const checkpoint = sql.store.createCheckpoint('origin', groupRow.id, 'isolated summary');
-  const stateDir = groupMemoryDir('origin', { ZYLOS_DIR: f.root });
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(path.join(stateDir, 'state.md'), renderStateSkeleton({ scope: 'origin', syncedAt: new Date(f.now).toISOString() })
-    .replace('coverage= |', `coverage=${groupRow.id} |`));
-  assert.equal(checkpoint.end_conversation_id, groupRow.id);
-  f.deps.env = { ZYLOS_DIR: f.root };
-  sql.db.prepare("UPDATE control_queue SET status='timeout' WHERE id=?").run(rows.at(-1).id);
-  await f.lifecycle.checkTtl(f.scene, f.context);
-  assert.equal(sql.store.getDrainFence('origin'), null);
-  const retry = sql.db.prepare('SELECT * FROM control_queue ORDER BY id DESC LIMIT 1').get();
-  assert.equal(retry.raw_content, PRE_RECLAIM_ORIGIN_SYNC_PROMPT);
-  assert.ok(retry.id > rows.at(-1).id);
-  sql.store.advanceOriginSyncCursor('telegram:room', { syncedId: originRow.id, checkpointId: 0 });
-  sql.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(retry.id);
+  sql.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(rows[0].id);
   await f.lifecycle.checkTtl(f.scene, f.context);
   const fence = sql.store.getDrainFence('origin'); assert.equal(fence.reason, 'ttl'); assert.equal(fence.runId, 'old-run');
   assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
   assert.equal(stops, 1); assert.equal(sql.store.getDrainFence('origin'), null);
-  assert.equal(sql.db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 4);
+  assert.equal(sql.db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 1);
   assert.equal(sql.store.getOriginNeed().controls.count, 0);
 });
 

@@ -530,40 +530,23 @@ export class SupervisorLifecycle {
     await this.event('reclaim_cancelled', { session_group: sessionGroup, run_id: runId, reason: 'new_work' });
   }
 
-  async prepareRelease(scene, context, intent) {
-    this.reclaimSyncFailures.delete(scene.sessionGroup);
+  async enqueueReclaimCheck(scene, context) {
     const group = scene.sessionGroup;
-    const range = await this.d.db.getUnsummarizedRange(group);
-    if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid unsummarized count');
-    const todo = ['PRE_RECLAIM_CHECK_PROMPT'];
-    // A backlog at or below the Sync threshold stays in C4 for the group's next session.
-    if (range.count > groupSyncThreshold(context.configuration)) todo.push('PRE_RECLAIM_SYNC_PROMPT');
-    if (group === 'origin') {
-      const backlog = await this.d.db.getOriginSyncBacklog();
-      if (backlog.total > 0 || backlog.groups.some(item => item.pendingCheckpoints > 0)) todo.push('PRE_RECLAIM_ORIGIN_SYNC_PROMPT');
-    }
-    intent.prepared = false;
-    // Reuse TTL check/Sync prompts and their bound-control wait before fencing.
-    for (const prompt of todo) {
-      if (!await this.beforeWrite(group, context, scene)) return;
-      const targetBinding = await this.bindCurrentRun(scene);
-      if (!targetBinding) return;
-      const now = this.now();
-      const syncKind = prompt === 'PRE_RECLAIM_ORIGIN_SYNC_PROMPT' ? 'origin' : 'group';
-      const syncTarget = prompt === 'PRE_RECLAIM_CHECK_PROMPT' ? null :
-        await captureSyncTarget({ db: this.d.db, scene, kind: syncKind, range, now });
-      const checkpointId = syncTarget?.checkpointId ?? null;
-      const control = await this.d.db.insertControl(this.prompt(prompt), {
-        sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true,
-        ackDeadlineAt: Math.floor((now + (prompt === 'PRE_RECLAIM_CHECK_PROMPT' ? this.ackTimeoutMs : PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS)) / 1000), createdAt: Math.floor(now / 1000),
-      });
-      if (prompt !== 'PRE_RECLAIM_CHECK_PROMPT') await this.recordSyncTrigger(scene, syncKind, ['pre_reclaim'], range, control, checkpointId);
-      intent.controlIds.push(control.id);
-      if (syncTarget) {
-        intent.syncs ??= [];
-        intent.syncs.push({ target: syncTarget, prompt, range, controlId: control.id, at: now, deadline: now + PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS });
-      }
-    }
+    if (!await this.beforeWrite(group, context, scene)) return null;
+    const targetBinding = await this.bindCurrentRun(scene);
+    if (!targetBinding) return null;
+    const now = this.now();
+    const control = await this.d.db.insertControl(this.prompt('PRE_RECLAIM_CHECK_PROMPT'), {
+      sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true,
+      ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000), createdAt: Math.floor(now / 1000),
+    });
+    return { id: control.id, at: now };
+  }
+
+  async prepareRelease(scene, context, intent) {
+    const control = await this.enqueueReclaimCheck(scene, context);
+    if (!control) return;
+    intent.controlIds.push(control.id);
     intent.prepared = true;
   }
 
@@ -651,7 +634,6 @@ export class SupervisorLifecycle {
         if (!await this.preparationControlsSettled(intent)) return;
         if (!intent.prepared) return;
       }
-      if (!await this.advancePreparationSync(scene, context, intent)) return;
       if (await this.beginReclaim(scene, 'release', context)) this.releasePreparation.delete(sessionGroup);
     });
   }
@@ -663,8 +645,7 @@ export class SupervisorLifecycle {
     if (legacy(context) || !group || !await this.allowed(group, context)) return;
     if (!scene.present || !scene.ready) { this.ttlPreparation.delete(group); return; }
     const preparation = this.ttlPreparation.get(group);
-    // Preparation starts only after TTL expiry. Its own Sync activity must not
-    // restart that clock; C4 messages and the other activity sources still can.
+    // Ignore the preparation check itself when testing for new activity.
     const now = this.now(), last = await this.lastActivity(scene,
       preparation?.runId === scene.runId ? preparation.at : Infinity);
     const ttl = (context.configuration.hotTtlSeconds ?? 3300) * 1000;
@@ -678,44 +659,14 @@ export class SupervisorLifecycle {
       if (!preparation.partial && (this.activeSubagents(scene, context) || !await this.idle(scene, context,
         { ignoreSyncMarker: Boolean(preparation.syncs?.length) }))) return;
       if (preparation.partial) { this.ttlPreparation.delete(group); return; }
-      if (!await this.advancePreparationSync(scene, context, preparation)) return;
       // Keep the preparation cutoff through the fence's final activity recheck.
       await this.beginReclaim(scene, 'ttl', context);
       return;
     }
     if (this.activeSubagents(scene, context)) return;
     if (oldUnique(scene, context)) { await this.beginReclaim(scene, 'ttl', context); return; }
-    const range = await this.d.db.getUnsummarizedRange(group);
-    if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid unsummarized count');
-    // Every TTL reclaim first asks for a check of work waiting on external events; Sync, when due, follows it.
-    const todo = ['PRE_RECLAIM_CHECK_PROMPT'];
-    // A backlog at or below the Sync threshold stays in C4 for the group's next session.
-    if (range.count > groupSyncThreshold(context.configuration)) todo.push('PRE_RECLAIM_SYNC_PROMPT');
-    if (group === 'origin') {
-      const backlog = await this.d.db.getOriginSyncBacklog();
-      if (backlog.total > 0 || backlog.groups.some(item => item.pendingCheckpoints > 0)) todo.push('PRE_RECLAIM_ORIGIN_SYNC_PROMPT');
-    }
-    const controlIds = [];
-    const syncs = [];
-    this.reclaimSyncFailures.delete(group);
-    let partial = false;
-    for (const prompt of todo) {
-      if (!await this.beforeWrite(group, context, scene)) { partial = controlIds.length > 0; break; }
-      const targetBinding = await this.bindCurrentRun(scene);
-      if (!targetBinding) { partial = controlIds.length > 0; break; }
-      const syncKind = prompt === 'PRE_RECLAIM_ORIGIN_SYNC_PROMPT' ? 'origin' : 'group';
-      const syncTarget = prompt === 'PRE_RECLAIM_CHECK_PROMPT' ? null :
-        await captureSyncTarget({ db: this.d.db, scene, kind: syncKind, range, now });
-      const checkpointId = syncTarget?.checkpointId ?? null;
-      const control = await this.d.db.insertControl(this.prompt(prompt), {
-        sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true, ackDeadlineAt: Math.floor((now + (prompt === 'PRE_RECLAIM_CHECK_PROMPT' ? this.ackTimeoutMs : PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS)) / 1000),
-        createdAt: Math.floor(now / 1000),
-      });
-      if (prompt !== 'PRE_RECLAIM_CHECK_PROMPT') await this.recordSyncTrigger(scene, syncKind, ['pre_reclaim'], range, control, checkpointId);
-      controlIds.push(control.id);
-      if (syncTarget) syncs.push({ target: syncTarget, prompt, range, controlId: control.id, at: now, deadline: now + PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS });
-    }
-    if (controlIds.length) this.ttlPreparation.set(group, { controlIds, syncs, runId: scene.runId, at: now, partial });
+    const control = await this.enqueueReclaimCheck(scene, context);
+    if (control) this.ttlPreparation.set(group, { controlIds: [control.id], runId: scene.runId, at: control.at });
   }
 
   async checkEviction(scenes, context) {

@@ -185,8 +185,6 @@ export class SupervisorLoop {
         try { await d.checkEviction(context.scenes, context); }
         catch (error) { await d.reportError(error, { phase: 'eviction' }); }
       }
-      try { await d.checkSync(context.scenes, context); }
-      catch (error) { await d.reportError(error, { phase: 'sync' }); }
     });
     await d.writeMetricsAndMaintain(context);
   }

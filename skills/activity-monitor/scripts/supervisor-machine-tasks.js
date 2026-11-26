@@ -6,6 +6,9 @@ import { loadCoreModule } from './core-modules.js';
 import { durableJson } from './runtime-generation.js';
 import { enqueueMachineControl } from './machine-control.js';
 import { UsageMonitor } from './usage-monitor.js';
+import { systemSendEnvironment } from '../../comm-bridge/scripts/c4-system-send-env.js';
+import { calendarInTimeZone } from '../../zylos-memory/scripts/shared.js';
+import { loadTimezone } from '../../scheduler/scripts/tz.js';
 
 const { findRuntime, getRuntime, runtimesWith } = await loadCoreModule('runtime/index.js');
 const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
@@ -17,8 +20,8 @@ const enabled = (value, fallback) => value === undefined ? fallback : value === 
 const MAX_ERROR_LENGTH=500;
 const truncate=text=>text.length>MAX_ERROR_LENGTH?`${text.slice(0,MAX_ERROR_LENGTH)}…`:text;
 /** Preserve stderr as the failure message; state and log each bound the original text once. */
-function runScript(script, timeoutMs) {
-  return new Promise((resolve,reject)=>execFile(process.execPath,[script],{encoding:'utf8',timeout:timeoutMs,maxBuffer:1024*1024},(error,stdout,stderr)=>{
+function runScript(script, timeoutMs, { args = [], signal, env } = {}) {
+  return new Promise((resolve,reject)=>execFile(process.execPath,[script,...args],{encoding:'utf8',...(timeoutMs ? { timeout: timeoutMs } : {}),signal,env,maxBuffer:1024*1024},(error,stdout,stderr)=>{
     if(!error)return resolve(stdout);
     const detail=String(stderr??'').trim();
     reject(detail?new Error(`${error.killed?'timed out: ':''}${detail}`):error);
@@ -33,6 +36,7 @@ export class SupervisorMachineTasks {
     enqueue=enqueueMachineControl,execute=runScript,log=()=>{}}={}) {
     Object.assign(this,{zylosDir,readMode,readConfig,resolveTargetRuntime,readHealth,readUsage,now,enqueue,execute,log});
     this.pending=new Map();this.monitors=new Map();this.stopped=false;
+    this.dreamAbort = new AbortController();
   }
   state(name) {try{return JSON.parse(fs.readFileSync(path.join(this.zylosDir,'activity-monitor',name+'.json'),'utf8'));}catch{return null;}}
   write(name,value) {durableJson(path.join(this.zylosDir,'activity-monitor',name+'.json'),value);}
@@ -81,12 +85,22 @@ export class SupervisorMachineTasks {
   async tick(context) {
     if(this.stopped||!context)return;
     const config=await this.readConfig();const now=this.now(),seconds=Math.floor(now/1000);
-    const date=new Date(now),parts={hour:date.getHours(),date:`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`};
+    const date = new Date(now);
+    const timezone = loadTimezone(this.zylosDir);
+    const parts = calendarInTimeZone(date, timezone);
     // Retrying cannot fix what makes a commit fail (a large or unreadable file, a full disk) and each retry repeats the work.
     this.daily('daily-memory-commit-state',3,parts,async()=>{
       const output=String(await this.execute(fileURLToPath(new URL('../../zylos-memory/scripts/daily-commit.js',import.meta.url)),30000)??'').trim();
       if(output)this.log(`daily-memory-commit-state: ${output}`);
     },{recordFailure:true});
+    if (!context.transition) {
+      this.daily('daily-memory-dream-state', Number(config.memory_dream_hour ?? 2), parts, async () => {
+        const output = await this.execute(fileURLToPath(new URL('../../zylos-memory/scripts/dream.js', import.meta.url)), undefined, {
+          args: [parts.date], signal: this.dreamAbort.signal, env: systemSendEnvironment({ ...process.env, ZYLOS_DIR: this.zylosDir }),
+        });
+        if (output?.trim()) this.log(`daily-memory-dream-state: ${output.trim()}`);
+      }, { catchUp: true, recordFailure: true });
+    }
     if(context.transition || context.configuration?.legacy)return;
     const dailyDue=(id,hour)=>parts.hour>=hour && this.state(id)?.last_date!==parts.date && !this.pending.has(id);
     const upgradeDue=enabled(config.upgrade_check_enabled,true) && dailyDue('upgrade-check-state',6);
@@ -125,5 +139,5 @@ export class SupervisorMachineTasks {
       }else if(alert &&monitor.canRunTask({activeHoursOnly:true}))this.schedule(`usage:${runtime}`,()=>monitor.runAlert({currentTime:seconds}));
     }
   }
-  async stop(){this.stopped=true;await Promise.allSettled([...this.pending.values()]);}
+  async stop(){this.stopped=true;this.dreamAbort.abort();await Promise.allSettled([...this.pending.values()]);}
 }

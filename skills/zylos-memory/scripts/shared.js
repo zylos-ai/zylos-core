@@ -87,22 +87,22 @@ export function walkFiles(rootDir, prefix = '', depth = 0) {
 }
 
 export function dateInTimeZone(date, tz) {
+  return calendarInTimeZone(date, tz).date;
+}
+
+export function calendarInTimeZone(date, tz) {
   if (tz) {
     try {
       const parts = new Intl.DateTimeFormat('en-CA', {
         timeZone: tz,
         year: 'numeric',
         month: '2-digit',
-        day: '2-digit'
+        day: '2-digit',
+        hour: '2-digit',
+        hourCycle: 'h23',
       }).formatToParts(date);
-
-      const year = parts.find((p) => p.type === 'year')?.value;
-      const month = parts.find((p) => p.type === 'month')?.value;
-      const day = parts.find((p) => p.type === 'day')?.value;
-
-      if (year && month && day) {
-        return `${year}-${month}-${day}`;
-      }
+      const { year, month, day, hour } = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+      return { date: `${year}-${month}-${day}`, hour: Number(hour) };
     } catch {
       // Invalid TZ value falls back to local date below
     }
@@ -111,5 +111,5 @@ export function dateInTimeZone(date, tz) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return { date: `${year}-${month}-${day}`, hour: date.getHours() };
 }

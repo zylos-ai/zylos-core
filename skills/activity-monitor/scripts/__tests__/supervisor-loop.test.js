@@ -8,7 +8,7 @@ function fixture(overrides={}) {
 }
 
 // supervisor-loop: fixed stages and fresh capacity after reclaim.
-test('restore precedes admission and lifecycle shares one scene sample',async()=>{const f=fixture({listDrainFences:async()=>[{sessionGroup:'tg:one'}]});await f.loop.start();assert.deepEqual(f.calls,['restore','open','observe','manual','restarts','exits','probe:origin','probe:tg:one','reclaim','rotation','rotation','ttl','ttl','evict','sync','metrics']);assert.equal(f.timers[0].ms,1000);await f.loop.stop();});
+test('restore precedes admission and lifecycle shares one scene sample',async()=>{const f=fixture({listDrainFences:async()=>[{sessionGroup:'tg:one'}]});await f.loop.start();assert.deepEqual(f.calls,['restore','open','observe','manual','restarts','exits','probe:origin','probe:tg:one','reclaim','rotation','rotation','ttl','ttl','evict','metrics']);assert.equal(f.timers[0].ms,1000);await f.loop.stop();});
 // one group failure does not starve another.
 test('group failure preserves other observations and next tick',async()=>{const f=fixture();f.deps.probeAndPublish=async s=>{if(s.sessionGroup==='origin')throw new Error('unobservable');f.calls.push('second');};await f.loop.start();assert.ok(f.calls.includes('error:observe'));assert.ok(f.calls.includes('second'));assert.equal(f.timers.length,1);await f.loop.stop();});
 // permits observations and existing reclaim only.
@@ -20,7 +20,7 @@ test('every loop step exception reports its phase and schedules the next round',
   getModeTransition:'round',readConfiguration:'round',listDrainFences:'round',readRestartRequests:'restart-requests',
   observe:'round',checkManualFences:'manual-fences',advanceManual:'advanceManual',advanceRestarts:'advanceRestarts',
   observeExits:'round',probeAndPublish:'observe',updateCapacity:'capacity',advanceReclaim:'reclaim',
-  checkRotation:'rotation',checkTtl:'ttl',checkEviction:'eviction',checkSync:'sync',writeMetricsAndMaintain:'round',afterRound:'after-round',
+  checkRotation:'rotation',checkTtl:'ttl',checkEviction:'eviction',writeMetricsAndMaintain:'round',afterRound:'after-round',
  })) await t.test(method,async()=>{
   const f=fixture({listDrainFences:async()=>[{sessionGroup:'origin'},{sessionGroup:'tg:one'}]});
   await f.loop.start();f.calls.length=0;const original=f.deps[method];
