@@ -96,6 +96,7 @@ import { createNamingRequest } from './lib/workbench/naming-request.js';
 import { createGroupSnapshot } from './lib/workbench/group-snapshot.js';
 import { createScheduleRead, scheduleReadResponse } from './lib/workbench/schedule-read.js';
 import { apiKeyPayload, apiKeysPage } from './lib/api-key-list.js';
+import { apiKeyRequestDecision, insufficientScopeBody, normalizeApiKeyScope } from './lib/api-key-scope.js';
 import { createScheduleWrite } from './lib/workbench/schedule-write.js';
 import { createScheduleTz } from './lib/workbench/schedule-tz.js';
 import { createInstanceTimezone, handleInstanceTimezone, handleInstanceTimezoneRestart } from './lib/instance-timezone.js';
@@ -511,8 +512,19 @@ function validateApiKeyName(name) {
   return null;
 }
 
-function validateApiKeyScope(scope) {
-  return scope === 'read' || scope === 'admin';
+// No API key, admin included, may hand out admin power (create, promote to, rotate or edit an admin key); only the
+// local password session can. Revoking and deleting admin keys stay open to admin keys.
+function refusesAdminKeyChange(req) {
+  return auth.resolveAuthContext(req, { touch: false })?.kind !== 'cookie';
+}
+
+function decodeApiKeyName(encodedName) {
+  try {
+    const name = decodeURIComponent(encodedName);
+    return /^[\w.-]{1,64}$/.test(name) ? name : null;
+  } catch {
+    return null;
+  }
 }
 
 function isUniqueConstraintError(err) {
@@ -812,9 +824,13 @@ async function handleApiKeys(req, res, url) {
     sendJson(res, 400, { error: nameError });
     return;
   }
-  const scope = String(body.scope || 'read').trim();
-  if (!validateApiKeyScope(scope)) {
+  const scope = normalizeApiKeyScope(String(body.scope || 'read'));
+  if (!scope) {
     sendJson(res, 400, { error: 'invalid_scope' });
+    return;
+  }
+  if (scope === 'admin' && refusesAdminKeyChange(req)) {
+    sendJson(res, 403, { error: 'local_cookie_required' });
     return;
   }
   const key = generateApiKey();
@@ -841,16 +857,14 @@ async function handleApiKeyRotate(req, res, pathname) {
     sendJson(res, 404, { error: 'not_found' });
     return;
   }
-  const encodedName = pathname.slice('/api/keys/'.length, -'/rotate'.length);
-  let name = '';
-  try {
-    name = decodeURIComponent(encodedName);
-  } catch {
+  const name = decodeApiKeyName(pathname.slice('/api/keys/'.length, -'/rotate'.length));
+  if (!name) {
     sendJson(res, 400, { error: 'invalid_name' });
     return;
   }
-  if (!/^[\w.-]{1,64}$/.test(name)) {
-    sendJson(res, 400, { error: 'invalid_name' });
+  // Rotating returns a new plaintext key with the same scope, which for an admin key is a new admin key.
+  if (store.getApiKeyByName(name)?.scope === 'admin' && refusesAdminKeyChange(req)) {
+    sendJson(res, 403, { error: 'local_cookie_required' });
     return;
   }
   const key = generateApiKey();
@@ -864,6 +878,41 @@ async function handleApiKeyRotate(req, res, pathname) {
     key: apiKeyPayload(rotated),
     plaintext_key: key,
   });
+}
+
+async function handleApiKeyScope(req, res, pathname) {
+  const name = decodeApiKeyName(pathname.slice('/api/keys/'.length));
+  if (!name) {
+    sendJson(res, 400, { error: 'invalid_name' });
+    return;
+  }
+  let body;
+  try {
+    body = await readJsonBody(req, 4096);
+  } catch (err) {
+    sendJson(res, err.status || 400, { error: err.message });
+    return;
+  }
+  const scope = normalizeApiKeyScope(body?.scope);
+  if (!scope) {
+    sendJson(res, 400, { error: 'invalid_scope' });
+    return;
+  }
+  const existing = store.getApiKeyByName(name);
+  if (!existing) {
+    sendJson(res, 404, { error: 'unknown_key' });
+    return;
+  }
+  if ((existing.scope === 'admin' || scope === 'admin') && refusesAdminKeyChange(req)) {
+    sendJson(res, 403, { error: 'local_cookie_required' });
+    return;
+  }
+  const updated = store.setApiKeyScope(name, scope);
+  if (!updated) {
+    sendJson(res, 404, { error: 'unknown_key' });
+    return;
+  }
+  sendJson(res, 200, { ok: true, key: apiKeyPayload(updated) });
 }
 
 async function handleApiKeysPurge(req, res) {
@@ -949,7 +998,8 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, readiness.ready ? 200 : 503, readiness);
       return true;
     }
-    const details = auth.resolveAuthContext(req, { touch: false });
+    const context = auth.resolveAuthContext(req, { touch: false });
+    const details = context && (context.kind !== 'api' || apiKeyRequestDecision(context.scope, 'GET', pathname).allowed);
     res.setHeader('Vary', 'Cookie, Authorization');
     sendJson(res, 200, {
       ok: true,
@@ -1124,7 +1174,11 @@ async function handleApi(req, res, pathname, url) {
     const initialCounts = groupCounts(await workbench.getSnapshot(), { allowUnreadable: true });
     const initialInstance = buildInstancePayload();
     const apiToken = req._apiToken;
-    const validator = apiToken ? () => !!validateApiSession(apiToken) : null;
+    // Re-checked on every push: a revoked key or one whose scope no longer covers this stream is disconnected.
+    const validator = apiToken ? () => {
+      const context = validateApiSession(apiToken);
+      return !!context && apiKeyRequestDecision(context.scope, 'GET', '/api/stream').allowed;
+    } : null;
     sse.addClient(res, validator);
     res.write(`event: instance\ndata: ${JSON.stringify(projectEventTimestamps('instance', initialInstance))}\n\n`);
     res.write(`event: groups\ndata: ${JSON.stringify(projectEventTimestamps('groups', initialCounts))}\n\n`);
@@ -1400,7 +1454,9 @@ export function createServer() {
     if (isRetiredApiPath(pathname)) { sendJson(res, 404, { error: 'not_found' }); return; }
     if ((pathname.startsWith('/api/') || pathname.startsWith('/fleet/')) && pathname !== '/api/auth/token' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       const context = auth.resolveAuthContext(req);
-      if (context?.scope !== 'admin') { sendJson(res, 403, { error: 'insufficient_scope', required: 'admin' }); return; }
+      const decision = context?.kind === 'api' ? apiKeyRequestDecision(context.scope, req.method, pathname, url.searchParams)
+        : { allowed: context?.scope === 'admin', required: 'admin' };
+      if (!decision.allowed) { sendJson(res, 403, insufficientScopeBody(decision)); return; }
       if (context?.kind === 'cookie' && !isSameOriginRequest(req)) { sendJson(res, 403, { error: 'same_origin_required' }); return; }
     }
 
@@ -1588,6 +1644,11 @@ export function createServer() {
 
     if (/^\/api\/keys\/[^/]+\/rotate$/.test(pathname)) {
       await handleApiKeyRotate(req, res, pathname);
+      return;
+    }
+
+    if (pathname.startsWith('/api/keys/') && req.method === 'PATCH') {
+      await handleApiKeyScope(req, res, pathname);
       return;
     }
 

@@ -1,5 +1,6 @@
 import { formatZoned } from './instance-zone.js';
 import { element, icon } from './plain-text.js';
+import { customScopeLabels, customScopeSummary } from './api-key-scope-picker.js';
 
 const keyStatus = key => key.status || (key.revoked_at ? 'revoked' : 'active');
 const dateText = (value, t) => value ? formatZoned(value) : t('wb.settings.keys.never');
@@ -11,8 +12,25 @@ export function keyActionConfirmation(action, name, t = key => key) {
   return { title: t(base + '.title', { name }), text: t(base + '.body', { name }), ok: t('wb.settings.keys.' + action), danger: action !== 'rotate' };
 }
 
-/** API keys as a table: name, scope badge, status, created, last used and text actions; each action confirms first. */
-export function renderKeyTable(root, keys = [], { document = root.ownerDocument, t = key => key, confirm = async () => false, onAction = () => {} } = {}) {
+/** The scope cell: a read / admin / custom badge; a custom key also lists its permissions, shortened when long. */
+function scopeCell(document, scope, t) {
+  const cell = element(document, 'td', undefined, 'api-key-scope-cell');
+  if (scope === 'admin' || scope === 'read') {
+    cell.append(element(document, 'span', t(scope === 'admin' ? 'fleet_manage.scope_admin' : 'fleet_manage.scope_read'), 'wb-scope-b' + (scope === 'admin' ? ' admin' : '')));
+    return cell;
+  }
+  cell.append(element(document, 'span', t('wb.settings.keys.scopeCustom'), 'wb-scope-b custom'));
+  const perms = element(document, 'div', customScopeSummary(scope, t), 'api-key-perm-summary');
+  perms.title = customScopeLabels(scope, t).join(t('wb.settings.keys.permSeparator'));
+  cell.append(perms);
+  return cell;
+}
+
+/**
+ * API keys as a table: name, scope badge, status, created, last used and text actions. Rotating, revoking and
+ * deleting confirm first; 「修改权限」 opens `editScope(key)`, which resolves to the new scope or null.
+ */
+export function renderKeyTable(root, keys = [], { document = root.ownerDocument, t = key => key, confirm = async () => false, editScope = async () => null, onAction = () => {} } = {}) {
   // Without a confirmation dialog nothing runs: revoking and deleting cannot be undone.
   if (!keys.length) { root.replaceChildren(element(document, 'p', t('fleet_manage.keys_empty'), 'wb-note')); return; }
   const table = element(document, 'table', undefined, 'wb-ktable');
@@ -25,7 +43,7 @@ export function renderKeyTable(root, keys = [], { document = root.ownerDocument,
     const status = keyStatus(key), row = element(document, 'tr', undefined, 'api-key-row' + (status === 'revoked' ? ' revoked' : ''));
     row.dataset.search = key.name;
     const name = element(document, 'td'), label = element(document, 'b', key.name); label.title = key.name; name.append(label);
-    const scope = element(document, 'td'); scope.append(element(document, 'span', t(key.scope === 'admin' ? 'fleet_manage.scope_admin' : 'fleet_manage.scope_read'), 'wb-scope-b' + (key.scope === 'admin' ? ' admin' : '')));
+    const scope = scopeCell(document, key.scope, t);
     const state = element(document, 'td');
     if (status === 'active') state.append(element(document, 'span', undefined, 'wb-hdot'), element(document, 'span', ' ' + t('fleet_manage.key_active')));
     else state.append(element(document, 'span', t('fleet_manage.key_' + status)));
@@ -39,7 +57,15 @@ export function renderKeyTable(root, keys = [], { document = root.ownerDocument,
       });
       box.append(button);
     };
-    if (status === 'active') { action('rotate', 'wb.settings.keys.rotate'); action('revoke', 'wb.settings.keys.revoke', 'wb-btn-danger-text'); }
+    if (status === 'active') {
+      const edit = element(document, 'button', t('wb.settings.keys.editScope'), 'wb-btn wb-btn-sm api-key-scope'); edit.type = 'button';
+      edit.addEventListener('click', async () => {
+        const next = await editScope(key);
+        if (next && next !== key.scope) onAction('scope', key.name, next);
+      });
+      box.append(edit);
+      action('rotate', 'wb.settings.keys.rotate'); action('revoke', 'wb.settings.keys.revoke', 'wb-btn-danger-text');
+    }
     else action('delete', 'wb.settings.keys.delete', 'wb-btn-danger-text');
     acts.append(box);
     row.append(name, scope, state, element(document, 'td', dateText(key.created_at, t)), element(document, 'td', key.last_used_at ? dateText(key.last_used_at, t) : t('wb.settings.keys.never')), acts);

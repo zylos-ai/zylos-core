@@ -26,7 +26,7 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
     touchSession() {}, deleteSession() {}, cleanupSessions() {}, cleanupExpiredApiSessions() {},
     getApiSession(hash) {
       const scope = Object.keys(tokens).find(scope => hash === digest(tokens[scope]));
-      return scope ? { api_key_id: scope, scope, expires_at: Date.now() + 60_000 } : null;
+      return scope ? { api_key_id: scope, scope, key_scope: scope, expires_at: Date.now() + 60_000 } : null;
     },
   };
   const settings = { auth: { enabled: true, password: 'scrypt:fixture' }, chat: { allowRemote: false }, ...config };

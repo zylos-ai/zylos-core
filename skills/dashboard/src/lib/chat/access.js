@@ -1,3 +1,4 @@
+import { hasPermission, scopeRefusal } from '../api-key-scope.js';
 import { isSameOriginRequest } from '../request-origin.js';
 import { isOriginRecord } from './origin.js';
 
@@ -25,7 +26,9 @@ export function requireChatAccess(req, auth, config, options) {
   if (config.chat?.allowRemote !== true) {
     return { status: 403, error: 'remote_chat_disabled', message: '对方实例未允许远端访问对话和终端' };
   }
-  return context.scope === 'admin' ? null : { status: 403, error: 'insufficient_scope', required: 'admin' };
+  const permission = ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? 'conversations.read' : 'conversations.write';
+  if (hasPermission(context.scope, permission)) return null;
+  return { status: 403, ...scopeRefusal(context.scope, permission) };
 }
 
 /**
@@ -71,6 +74,8 @@ export function requireChatSettingsAccess(req, auth) {
   if (!context) return { status: 401, error: 'authentication_required' };
   if (req.method === 'GET') return null;
   if (context.scope !== 'admin') return { status: 403, error: 'insufficient_scope' };
+  // Only the local password session turns remote access on or off; no API key can, admin included.
+  if (req.method === 'PUT' && context.kind !== 'cookie') return { status: 403, error: 'local_cookie_required' };
   if (context.kind === 'cookie' && !isSameOriginRequest(req)) return { status: 403, error: 'same_origin_required' };
   return null;
 }

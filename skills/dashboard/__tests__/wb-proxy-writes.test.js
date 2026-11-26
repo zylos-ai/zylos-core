@@ -15,7 +15,7 @@ function fixture(t, remoteScope) {
     getSession: hash => hash === digest(cookie) ? { created_at: Date.now(), last_activity_at: Date.now(), remember: 0 } : null,
     touchSession() {}, deleteSession() {}, cleanupSessions() {}, cleanupExpiredApiSessions() {},
     getApiSession: hash => hash === digest(localToken) ? {
-      api_key_id: 1, scope: 'read', expires_at: Date.now() + 60_000, key_revoked_at: null,
+      api_key_id: 1, scope: 'read', key_scope: 'read', expires_at: Date.now() + 60_000, key_revoked_at: null,
     } : null,
   };
   const auth = new AuthGate({ auth: { enabled: true, password: 'scrypt:fixture' } }, store);

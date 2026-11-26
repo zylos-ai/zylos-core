@@ -5,6 +5,7 @@ import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../src/lib/store.js';
 import { inspectDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { generateApiKey, hashApiKey } from '../src/lib/auth.js';
+import { API_KEY_PERMISSIONS, normalizeApiKeyScope } from '../src/lib/api-key-scope.js';
 
 const DATA_DIR = process.env.ZYLOS_DATA_DIR
   || path.join(process.env.HOME, 'zylos/components/dashboard');
@@ -30,24 +31,30 @@ function openStore() {
 const USAGE = `Usage: api-key.js <command> [args]
 
 Commands:
-  generate <name> [read|admin]  Create a new API key
+  generate <name> [scope]       Create a new API key (scope defaults to read)
+  set-scope <name> <scope>      Change an active key's scope; its tokens follow on their next request
   rotate <name>                 Rotate an active key (new secret, sessions invalidated)
   revoke <name>                 Revoke an active key
   delete <name>                 Permanently remove revoked key(s) by name
   purge-revoked                 Remove all revoked keys
-  list                          List all API keys`;
+  list                          List all API keys
+
+Scope: read, admin, or a comma-separated list of permissions:
+  ${API_KEY_PERMISSIONS.join(', ')}`;
+
+const SCOPE_ERROR = `Scope must be "read", "admin" or a comma-separated list of: ${API_KEY_PERMISSIONS.join(', ')}`;
 
 const [,, command, ...args] = process.argv;
 
 if (command === 'generate') {
   const name = args[0];
-  const scope = args[1] || 'read';
+  const scope = normalizeApiKeyScope(args[1] || 'read');
   if (!name) {
-    console.error('Usage: api-key.js generate <name> [read|admin]');
+    console.error('Usage: api-key.js generate <name> [scope]');
     process.exit(1);
   }
-  if (scope !== 'read' && scope !== 'admin') {
-    console.error('Scope must be "read" or "admin"');
+  if (!scope) {
+    console.error(SCOPE_ERROR);
     process.exit(1);
   }
   const store = openStore();
@@ -64,6 +71,25 @@ if (command === 'generate') {
   console.log(`API key created: ${name} (scope: ${scope})`);
   console.log(`Key: ${key}`);
   console.log('Store this key securely — it cannot be retrieved later.');
+
+} else if (command === 'set-scope') {
+  const name = args[0];
+  if (!name || !args[1]) {
+    console.error('Usage: api-key.js set-scope <name> <scope>');
+    process.exit(1);
+  }
+  const scope = normalizeApiKeyScope(args[1]);
+  if (!scope) {
+    console.error(SCOPE_ERROR);
+    process.exit(1);
+  }
+  const store = openStore();
+  const updated = store.setApiKeyScope(name, scope);
+  if (!updated) {
+    console.error(`No active API key found: "${name}"`);
+    process.exit(1);
+  }
+  console.log(`API key scope changed: ${name} (scope: ${updated.scope})`);
 
 } else if (command === 'rotate') {
   const name = args[0];

@@ -9,6 +9,7 @@ import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb
 import { createPricingPanel } from './wb/settings-pricing.js';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js';
 import { renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js';
+import { createScopePicker } from './wb/api-key-scope-picker.js';
 import { runtimeNotFound } from './wb/settings-defaults.js';
 import { keyStillListed, wireSettingsConfirmations } from './wb/settings-wiring.js';
 import { coreVersion, renderBrandVersion, renderCoreUpdate, renderEngineVersion } from './wb/settings-version.js';
@@ -2232,10 +2233,9 @@ function createFleetManageModal() {
         <p class="wb-note wb-card-lead" data-i18n="wb.settings.keys.createNote">${esc(t('wb.settings.keys.createNote'))}</p>
         <div class="wb-set-inline">
           <input class="wb-input wb-input-name" id="api-key-name" type="text" autocomplete="off" placeholder="${esc(t('wb.settings.keys.namePlaceholder'))}" aria-label="${esc(t('fleet_manage.name'))}" />
-          <div class="wb-seg2" id="api-key-scope" role="group" aria-label="${esc(t('wb.settings.keys.scope'))}">
-            <button type="button" data-scope="read" aria-pressed="true" data-i18n="fleet_manage.scope_read">${esc(t('fleet_manage.scope_read'))}</button><button type="button" data-scope="admin" aria-pressed="false" data-i18n="fleet_manage.scope_admin">${esc(t('fleet_manage.scope_admin'))}</button></div>
+          <span id="api-key-scope-slot"></span>
           <button class="wb-btn wb-btn-primary" id="api-key-create" type="button" data-i18n="wb.settings.keys.create">${esc(t('wb.settings.keys.create'))}</button></div>
-        <p class="wb-note wb-txt-err api-key-admin-warning" id="api-key-admin-warning" hidden><i class="wb-ico wb-ico-alert wb-ico-xs" aria-hidden="true"></i> <span data-i18n="fleet_manage.admin_key_warning">${esc(t('fleet_manage.admin_key_warning'))}</span></p>
+        <div id="api-key-scope-extra"></div>
         <div class="wb-once api-key-created" id="api-key-created" hidden></div>
       </div>
       <div class="wb-set-card">
@@ -2258,10 +2258,11 @@ function createFleetManageModal() {
   overlay.querySelector('#fleet-test').addEventListener('click', testFleetAgent);
   overlay.querySelector('#fleet-add-save').addEventListener('click', async () => { if (await saveFleetAgent()) addForm(false); });
   overlay.querySelector('#api-key-create').addEventListener('click', createApiKey);
-  overlay.querySelectorAll('#api-key-scope button').forEach(button => button.addEventListener('click', () => {
-    fleetManageModal.querySelectorAll('#api-key-scope button').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
-    updateApiKeyScopeWarning();
-  }));
+  // Read / admin / custom, with the custom permission checkboxes and the admin warning under the name row.
+  apiKeyScopePicker = createScopePicker(document, { t });
+  apiKeyScopePicker.seg.id = 'api-key-scope';
+  overlay.querySelector('#api-key-scope-slot').replaceWith(apiKeyScopePicker.seg);
+  overlay.querySelector('#api-key-scope-extra').replaceWith(apiKeyScopePicker.panel, apiKeyScopePicker.warning);
   overlay.querySelector('#api-base-url-copy').addEventListener('click', copyDashboardBaseUrl);
   overlay.querySelector('#api-key-purge-revoked').addEventListener('click', purgeRevokedApiKeys);
   return overlay;
@@ -2309,6 +2310,7 @@ function setApiKeyBusy(isBusy) {
   fleetManageModal?.querySelectorAll('.api-key-revoke').forEach(btn => btn.toggleAttribute('disabled', isBusy));
   fleetManageModal?.querySelectorAll('.api-key-rotate').forEach(btn => btn.toggleAttribute('disabled', isBusy));
   fleetManageModal?.querySelectorAll('.api-key-delete').forEach(btn => btn.toggleAttribute('disabled', isBusy));
+  fleetManageModal?.querySelectorAll('.api-key-scope').forEach(btn => btn.toggleAttribute('disabled', isBusy));
 }
 
 function fleetFormValues() {
@@ -2319,8 +2321,11 @@ function fleetFormValues() {
   };
 }
 
+let apiKeyScopePicker = null;
+
+/** The scope to create a key with, or null while custom has no permission ticked. */
 function apiKeyScope() {
-  return fleetManageModal?.querySelector('#api-key-scope [aria-pressed="true"]')?.dataset.scope === 'admin' ? 'admin' : 'read';
+  return apiKeyScopePicker ? apiKeyScopePicker.value() : 'read';
 }
 
 function apiKeyFormValues() {
@@ -2335,11 +2340,6 @@ function fleetManageError(code, fallback) {
   const key = `fleet_manage.${code}`;
   const translated = t(key);
   return translated === key ? (fallback || code) : translated;
-}
-
-function updateApiKeyScopeWarning() {
-  const warning = fleetManageModal?.querySelector('#api-key-admin-warning');
-  if (warning) warning.hidden = apiKeyScope() !== 'admin';
 }
 
 function renderFleetManage(agents, data = null) {
@@ -2380,7 +2380,10 @@ function settingsWiring() {
     recheck: () => requestAgentJson('/api/instance/actions/recheck-runtime-cli', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }),
     setBusy: setModalBodyDisabled, remoteTarget: viewedRemoteTarget,
     keyPage: {
-      request: async (method, path) => { const resp = await fetch(api(path), { method }); return { ok: resp.ok, data: await resp.json() }; },
+      request: async (method, path, body) => {
+        const resp = await fetch(api(path), body === undefined ? { method } : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        return { ok: resp.ok, data: await resp.json() };
+      },
       reload: () => keyList?.refresh(), renderCreated: renderCreatedApiKey, createdKey: () => fleetManageModal?._createdKey ?? null,
       status: (text, kind) => fleetManageStatus(text, kind, '#api-key-list'), busy: setApiKeyBusy, errorText: fleetManageError,
     },
@@ -2492,6 +2495,7 @@ async function createApiKey() {
   const pendingKeyName = fleetManageModal?._createdKey?.name;
   if (pendingKeyName && !(await confirmSetting(t('fleet_manage.replace_created_key_confirm', { name: pendingKeyName }), { title: t('wb.settings.confirm.replaceShownKey'), danger: false }))) return;
   const createRow = fleetManageModal.querySelector('#api-key-create')?.parentElement;
+  if (!body.scope) { fleetManageStatus(t('wb.settings.keys.permsRequired'), 'error', createRow); return; }
   setApiKeyBusy(true);
   fleetManageStatus(t('fleet_manage.creating_key'), 'running', createRow);
   try {
@@ -2503,6 +2507,7 @@ async function createApiKey() {
     const data = await resp.json();
     if (!resp.ok) throw new Error(fleetManageError(data.error?.code, t('fleet_manage.key_save_failed')));
     fleetManageModal.querySelector('#api-key-name').value = '';
+    apiKeyScopePicker?.reset();
     keyList?.refresh();
     renderCreatedApiKey({ name: data.key?.name || body.name, plaintext_key: data.plaintext_key });
     fleetManageStatus(t('fleet_manage.key_created_status'), 'success', createRow);

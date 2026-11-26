@@ -74,6 +74,21 @@ test('API key CLI still writes and lists keys on the current Dashboard schema', 
   result = f.invoke('api-key', ['list']);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /fixture-key.*scope=read.*status=active/);
+
+  // A custom scope is written in its stored form (known names, deduplicated, sorted), and set-scope changes it.
+  result = f.invoke('api-key', ['generate', 'restarter', 'groups.read,groups.control,groups.read']);
+  assert.equal(result.status, 0, result.stderr);
+  result = f.invoke('api-key', ['set-scope', 'fixture-key', 'instance.ops, groups.settings']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /scope: groups\.settings,instance\.ops/);
+  for (const args of [['set-scope', 'fixture-key', 'groups.read,unknown'], ['set-scope', 'missing-key', 'read'], ['generate', 'empty-scope', ',']]) {
+    result = f.invoke('api-key', args);
+    assert.equal(result.status, 1, args.join(' '));
+  }
+  result = f.invoke('api-key', ['list']);
+  assert.match(result.stdout, /restarter.*scope=groups\.control,groups\.read.*status=active/);
+  assert.match(result.stdout, /fixture-key.*scope=groups\.settings,instance\.ops.*status=active/);
+  assert.doesNotMatch(result.stdout, /empty-scope/);
 });
 
 // Current-schema compatibility: name persistence through two actual CLI runs.

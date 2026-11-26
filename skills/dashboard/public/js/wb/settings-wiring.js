@@ -1,5 +1,6 @@
 import { confirmDialog } from './detail.js';
 import { renderKeyTable } from './settings-access.js';
+import { scopeDialog } from './api-key-scope-picker.js';
 import { renderDefaults } from './settings-defaults.js';
 
 /** The executor the default-settings card gets: it runs an action only when the card says it was confirmed. */
@@ -11,8 +12,10 @@ export function confirmedRunner(run) {
  * What each key-table action sends. Revoking keeps the key listed (it can still be deleted later); deleting removes
  * it for good; rotating replaces it with a new key that is shown once. `status` names the messages for the page.
  */
-export function keyActionRequest(action, name) {
+export function keyActionRequest(action, name, scope) {
   const path = `/api/keys/${encodeURIComponent(name)}`;
+  if (action === 'scope') return { method: 'PATCH', path, body: { scope },
+    status: { running: 'fleet_manage.updating_scope', failed: 'fleet_manage.scope_update_failed', done: 'fleet_manage.scope_updated_status' } };
   if (action === 'rotate') return { method: 'POST', path: `${path}/rotate`, showsNewKey: true,
     status: { running: 'fleet_manage.rotating_key', failed: 'fleet_manage.rotate_failed', done: 'fleet_manage.key_rotated_status' } };
   if (action === 'revoke') return { method: 'DELETE', path,
@@ -44,7 +47,7 @@ export async function keyStillListed(readPage, name) {
  * - `runner` is the page's action runner (`createActionRunner`): the default-settings card gets its
  *   `runConfirmed`, and only once the card has confirmed the change, so nothing is asked twice or run unasked.
  * - `engineVersion(root, runtime)` draws the chosen engine's CLI version and upgrade button inside the default engine card.
- * - `keyPage` is how key requests reach the server and the page: `request(method, path)` resolves to
+ * - `keyPage` is how key requests reach the server and the page: `request(method, path, body?)` resolves to
  *   `{ ok, data }`; `reload()` (reads the key page shown again after a change), `renderCreated(key | null)` (the new key shown once), `createdKey()`
  *   (the one shown now, or null), `status(text, kind)`, `busy(on)` and `errorText(code, fallback)`. The page
  *   decides nothing about which request an action makes or what its answer shows.
@@ -67,7 +70,7 @@ export function wireSettingsConfirmations({ document, t, runner, keyPage, remote
     keyPage.busy(true);
     keyPage.status(t(request.status.running), 'running');
     try {
-      const { ok, data } = await keyPage.request(request.method, request.path);
+      const { ok, data } = await keyPage.request(request.method, request.path, request.body);
       if (!ok) throw new Error(keyPage.errorText(data?.error?.code, t(request.status.failed)));
       keyPage.reload();
       if (request.showsNewKey) keyPage.renderCreated({ name: data.key?.name || name, plaintext_key: data.plaintext_key });
@@ -79,15 +82,16 @@ export function wireSettingsConfirmations({ document, t, runner, keyPage, remote
       keyPage.busy(false);
     }
   }
-  const onAction = (action, name) => {
-    const request = keyActionRequest(action, name);
+  const onAction = (action, name, scope) => {
+    const request = keyActionRequest(action, name, scope);
     return request ? sendKeyRequest(request, name) : undefined;
   };
-  const keyTableOptions = () => ({ t, confirm, onAction });
+  const editScope = key => scopeDialog(document, { t, name: key.name, scope: key.scope });
+  const keyTableOptions = () => ({ t, confirm, editScope, onAction });
   const defaultsOptions = (value, read) => ({ ...value, t, read, recheck, writable, onGroup, version: engineVersion, confirm: confirmChange, execute });
   return {
     confirm,
-    /** The key table: rotating, revoking and deleting each ask first. */
+    /** The key table: rotating, revoking and deleting each ask first; changing permissions opens the scope dialog. */
     renderKeyTable: (root, keys) => renderKeyTable(root, keys, keyTableOptions()),
     /** The default-settings card: it confirms all of its changes once, then runs them without asking again. The idle
      *  reclaim field goes in `sessionRoot`, inside the session mode card. */

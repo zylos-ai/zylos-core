@@ -28,7 +28,7 @@ function fixture(t) {
     touchSession(_hash, at) { touches++; session.last_activity_at = at; }, deleteSession() { deletes++; revoked = true; }, cleanupSessions() {}, cleanupExpiredApiSessions() {},
     getApiSession(hash) {
       const scope = Object.keys(tokens).find(key => hash === digest(tokens[key]));
-      return !revoked && scope ? { api_key_id: scope, scope, expires_at: Date.now() + 60000 } : null;
+      return !revoked && scope ? { api_key_id: scope, scope, key_scope: scope, expires_at: Date.now() + 60000 } : null;
     }
   };
   const config = { auth: { enabled: true, password: 'scrypt:fixture' }, chat: { allowRemote: false } };

@@ -1,4 +1,5 @@
-import { isConversationApiPath, isRetiredApiPath } from './api-routes.js';
+import { apiKeyRequestDecision, hasPermission, insufficientScopeBody } from './api-key-scope.js';
+import { isRetiredApiPath } from './api-routes.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { browserBaseFromRequest, browserPath, browserRoot, isPathWithinBase } from './browser-base.js';
@@ -337,21 +338,6 @@ function nextTarget(req, base) {
   return isPathWithinBase(target, base) ? target : browserRoot(base);
 }
 
-function needsAdminApiAccess(pathname, method) {
-  pathname = pathname.replace(/\/{2,}/g, '/');
-  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
-  if (isConversationApiPath(pathname) || pathname.startsWith('/api/observer/history/') ||
-      pathname === '/observer/frame' || pathname === '/observer/stream') return true;
-  if (pathname === '/api/fleet/agents' || pathname.startsWith('/api/fleet/agents/')) return true;
-  if (pathname === '/api/keys' || pathname.startsWith('/api/keys/')) return true;
-  if (pathname === '/api/memory/file' || pathname === '/api/memory/git') return true;
-  const proxied = pathname.match(/^\/fleet\/[^/]+(\/api\/.*)$/);
-  if (!proxied) return false;
-  const remotePath = proxied[1];
-  return remotePath === '/api/memory/file' || remotePath === '/api/memory/git' ||
-    isConversationApiPath(remotePath) || remotePath.startsWith('/api/observer/history/');
-}
-
 export function generateApiKey() {
   return API_KEY_PREFIX + crypto.randomBytes(32).toString('hex');
 }
@@ -390,7 +376,8 @@ export function validateApiSession(token) {
   if (!session) return null;
   if (session.key_revoked_at) return null;
   if (Date.now() > session.expires_at) return null;
-  return authContext('api', String(session.api_key_id), session.scope, hash);
+  // The key's current scope decides, so a permission change applies to the next request on an existing token.
+  return authContext('api', String(session.api_key_id), session.key_scope, hash);
 }
 
 function getBearerToken(req) {
@@ -441,8 +428,13 @@ export class AuthGate {
     return this.getApiAuth(req);
   }
 
-  revalidateAuthContext(context, options) {
-    if (!this.config.auth?.password || !context || context.scope !== 'admin') return null;
+  /**
+   * Re-reads a long-lived principal (stream, lease, binding) with its key's current scope. It must still hold
+   * `permission`; without one, admin is required as before.
+   */
+  revalidateAuthContext(context, { permission = null, ...options } = {}) {
+    const allowed = scope => (permission ? hasPermission(scope, permission) : scope === 'admin');
+    if (!this.config.auth?.password || !context || !allowed(context.scope)) return null;
     if (context.kind === 'cookie') {
       const refreshed = validateSessionHash(context.principalId, options);
       return refreshed?.principalId === context.principalId ? refreshed : null;
@@ -450,8 +442,8 @@ export class AuthGate {
     if (context.kind === 'api' && context.credentialId) {
       const session = _store?.getApiSession(context.credentialId);
       if (!session || session.key_revoked_at || Date.now() > session.expires_at ||
-          String(session.api_key_id) !== context.principalId || session.scope !== 'admin') return null;
-      return authContext('api', context.principalId, session.scope, context.credentialId);
+          String(session.api_key_id) !== context.principalId || !allowed(session.key_scope)) return null;
+      return authContext('api', context.principalId, session.key_scope, context.credentialId);
     }
     return null;
   }
@@ -486,9 +478,9 @@ export class AuthGate {
     const apiAuth = authContext?.kind === 'api' ? authContext : null;
     const observerResource = pathname === '/observer/frame' || pathname === '/observer/stream';
     if (apiAuth && (pathname.startsWith('/api/') || pathname.startsWith('/fleet/') || observerResource)) {
-      const needsAdmin = needsAdminApiAccess(pathname, req.method);
-      if (needsAdmin && apiAuth.scope !== 'admin') {
-        sendJson(res, 403, { error: 'insufficient_scope', required: 'admin' });
+      const decision = apiKeyRequestDecision(apiAuth.scope, req.method, pathname, url.searchParams);
+      if (!decision.allowed) {
+        sendJson(res, 403, insufficientScopeBody(decision));
         return true;
       }
       req._apiScope = apiAuth.scope;

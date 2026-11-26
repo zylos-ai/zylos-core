@@ -17,7 +17,7 @@ function fixture(t) {
   const auth = new AuthGate(config, {
     getSession: hash => hash === sha(cookie) ? { created_at: now, last_activity_at: now } : null,
     touchSession() {}, deleteSession() {}, cleanupSessions() {}, cleanupExpiredApiSessions() {},
-    getApiSession: hash => hash === sha(api) ? { api_key_id: 'private', scope: 'admin', expires_at: now + 60000 } : null,
+    getApiSession: hash => hash === sha(api) ? { api_key_id: 'private', scope: 'admin', key_scope: 'admin', expires_at: now + 60000 } : null,
   });
   t.after(() => clearInterval(auth._cleanupTimer));
   const calls = [];

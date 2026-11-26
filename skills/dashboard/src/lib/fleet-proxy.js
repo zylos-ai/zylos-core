@@ -1,3 +1,4 @@
+import { isCustomScope } from './api-key-scope.js';
 import { isConversationApiPath, isRetiredConversationApiPath } from './api-routes.js';
 import { isSameOriginRequest } from './request-origin.js';
 import { SESSION_HOST_CHANNELS_PATH, SESSION_HOST_PATH } from './session-host-routes.js';
@@ -298,6 +299,11 @@ export class FleetProxy {
   async handle(req, res, url) {
     const match = url.pathname.match(/^\/fleet\/([^/]+)(\/.*)?$/);
     if (!match) return false;
+    // The proxy reaches the other machine with the key saved at registration, possibly admin: custom keys never pass.
+    if (isCustomScope(req._authContext?.scope)) {
+      sendJson(res, 403, { error: 'insufficient_scope', required: 'admin' });
+      return true;
+    }
     const agentName = decodeAgentName(match[1]);
     const suffix = match[2] || '/';
     const agent = this.config.fleet?.agents?.find(a => a.name === agentName);

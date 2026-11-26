@@ -345,6 +345,10 @@ export class Store {
       UPDATE api_keys SET key_hash = ? WHERE id = ? AND revoked_at IS NULL
     `);
 
+    this._setApiKeyScope = this.db.prepare(`
+      UPDATE api_keys SET scope = ? WHERE name = ? AND revoked_at IS NULL
+    `);
+
     this._touchApiKey = this.db.prepare(`
       UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?
     `);
@@ -355,7 +359,7 @@ export class Store {
     `);
 
     this._getApiSession = this.db.prepare(`
-      SELECT s.*, k.revoked_at AS key_revoked_at FROM api_sessions s
+      SELECT s.*, k.revoked_at AS key_revoked_at, k.scope AS key_scope FROM api_sessions s
       JOIN api_keys k ON s.api_key_id = k.id
       WHERE s.token_hash = ?
     `);
@@ -1066,6 +1070,11 @@ export class Store {
 
   revokeApiKey(name) {
     return this._revokeApiKey.run(name);
+  }
+
+  /** Changes an active key's scope; its existing tokens follow on their next request. Returns the updated key or null. */
+  setApiKeyScope(name, scope) {
+    return this._setApiKeyScope.run(scope, name).changes ? this.getApiKeyByName(name) : null;
   }
 
   rotateApiKey(name, keyHash) {

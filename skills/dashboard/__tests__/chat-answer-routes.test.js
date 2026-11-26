@@ -39,7 +39,7 @@ async function fixture(t, { engine, question } = {}) {
     touchSession() {}, deleteSession() {}, cleanupSessions() {}, cleanupExpiredApiSessions() {},
     getApiSession(hash) {
       const scope = Object.keys(tokens).find(key => hash === digest(tokens[key]));
-      return scope ? { api_key_id: scope, scope, expires_at: Date.now() + 60_000 } : null;
+      return scope ? { api_key_id: scope, scope, key_scope: scope, expires_at: Date.now() + 60_000 } : null;
     },
   };
   const config = { auth: { enabled: true, password: 'scrypt:fixture' }, chat: { allowRemote: false } };

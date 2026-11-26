@@ -574,10 +574,9 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
       },
       body: JSON.stringify({ name: 'producer-admin', scope: 'admin' })
     });
-    assert.equal(createAdmin.status, 200);
-    const createAdminBody = await createAdmin.json();
-    assert.equal(createAdminBody.key.scope, 'admin');
-    assert.match(createAdminBody.plaintext_key, /^zylos_ak_/);
+    // An API key, even admin, cannot hand out admin power; only the local password session creates admin keys.
+    assert.equal(createAdmin.status, 403);
+    assert.deepEqual(await createAdmin.json(), { ok: false, error: { code: 'local_cookie_required', message: 'local_cookie_required' } });
 
     const list = await fetch(`${origin}/api/keys`, {
       headers: { Authorization: `Bearer ${adminToken}` }
@@ -586,7 +585,7 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
     const listBody = await list.json();
     assert.equal(listBody.items.some(k => k.name === 'producer-read' && k.status === 'active'), true);
     assert.equal(JSON.stringify(listBody).includes(createBody.plaintext_key), false);
-    assert.equal(JSON.stringify(listBody).includes(createAdminBody.plaintext_key), false);
+    assert.equal(listBody.items.some(k => k.name === 'producer-admin'), false);
     assert.equal(JSON.stringify(listBody).includes('key_hash'), false);
 
     const revoke = await fetch(`${origin}/api/keys/producer-read`, {

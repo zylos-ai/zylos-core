@@ -1,3 +1,4 @@
+import { hasPermission } from './api-key-scope.js';
 import { isSameOriginRequest } from './request-origin.js';
 import { observerFrameDocument } from './observer-frame.js';
 import { readJsonBody, sendJson } from './http.js';
@@ -9,6 +10,8 @@ import {
   acceptObserverWebSocket,
   rejectObserverUpgrade,
 } from './observer-websocket.js';
+
+const TERMINAL_CONTROL = 'terminal.control';
 
 const OBSERVER_PROTOCOL = 'zylos-observer-v1';
 const LEASE_ID_PATTERN = /^[A-Za-z0-9_-]{32}$/;
@@ -122,12 +125,13 @@ export class ObserverService {
     return this._startup;
   }
 
-  _authContext(req, { requireOrigin = false, requireAdmin = true } = {}) {
+  /** `permission` is terminal.control unless named; `readScope` also lets read keys through (the status read). */
+  _authContext(req, { requireOrigin = false, permission = TERMINAL_CONTROL, readScope = false } = {}) {
     const context = req._authContext || this.authGate.resolveAuthContext(req);
     if (!context) throw new ObserverHttpError(401, 'unauthorized');
     // The switch is checked before the key scope, in the same order as conversation access.
     if (context.kind === 'api' && !this.remoteAllowed()) throw new ObserverHttpError(403, 'remote_chat_disabled');
-    if (requireAdmin && context.scope !== 'admin') throw new ObserverHttpError(403, 'insufficient_scope');
+    if (!(readScope && context.scope === 'read') && !hasPermission(context.scope, permission)) throw new ObserverHttpError(403, 'insufficient_scope');
     if (requireOrigin && context.kind === 'cookie' && !isSameOriginRequest(req)) {
       throw new ObserverHttpError(403, 'same_origin_required');
     }
@@ -237,7 +241,9 @@ export class ObserverService {
         return true;
       }
 
-      const context = this._authContext(req, { requireOrigin: req.method !== 'GET' && req.method !== 'HEAD', requireAdmin: !(pathname === '/api/observer/status' && ['GET', 'HEAD'].includes(req.method)) });
+      const statusRead = pathname === '/api/observer/status' && ['GET', 'HEAD'].includes(req.method);
+      const context = this._authContext(req, { requireOrigin: req.method !== 'GET' && req.method !== 'HEAD', readScope: statusRead,
+        permission: statusRead || pathname.startsWith('/api/observer/history/') ? 'terminal.read' : TERMINAL_CONTROL });
       if (pathname.startsWith('/api/observer/history/')) {
         if (!this.historyService) throw new ObserverHttpError(404, 'not_found');
         // File history must never start/reconcile containment or acquire a lease.
@@ -391,7 +397,7 @@ export class ObserverService {
       stream.timer = setInterval(() => {
         try {
           if (stream.downstream && stream.awaitingPong) throw new Error('pong_timeout');
-          const refreshed = this.authGate.revalidateAuthContext(stream.context);
+          const refreshed = this.authGate.revalidateAuthContext(stream.context, { permission: TERMINAL_CONTROL });
           if (!refreshed) throw new Error('auth_expired');
           stream.context = refreshed;
           stream.lease = this.manager.validateLease(stream.leaseId, refreshed);
@@ -438,7 +444,7 @@ export class ObserverService {
       stream.connected = true;
       const size = this.sizeMonitor.size;
       if (size.cols !== initialSize.cols || size.rows !== initialSize.rows) upstream.resize(size);
-      const refreshed = this.authGate.revalidateAuthContext(stream.context);
+      const refreshed = this.authGate.revalidateAuthContext(stream.context, { permission: TERMINAL_CONTROL });
       if (!refreshed) throw new ObserverHttpError(401, 'unauthorized');
       stream.context = refreshed;
       stream.lease = this.manager.validateLease(stream.leaseId, refreshed);

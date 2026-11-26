@@ -1,3 +1,4 @@
+import { hasPermission } from './api-key-scope.js';
 import { sameObserverTarget } from './observer-target.js';
 import crypto from 'node:crypto';
 
@@ -17,9 +18,12 @@ export class ObserverManagerError extends Error {
   }
 }
 
+// Watching the terminal needs terminal.control: admin keys and local sessions hold it, a custom key may.
+const TERMINAL = { permission: 'terminal.control' };
+
 function samePrincipal(left, right) {
   return left?.kind === right?.kind && left?.principalId === right?.principalId &&
-    left?.scope === 'admin' && right?.scope === 'admin';
+    hasPermission(left?.scope, TERMINAL.permission) && hasPermission(right?.scope, TERMINAL.permission);
 }
 
 export class ObserverManager {
@@ -70,7 +74,7 @@ export class ObserverManager {
   }
 
   _requireAdmin(context) {
-    if (!context || context.scope !== 'admin' || !['cookie', 'api'].includes(context.kind)) {
+    if (!context || !hasPermission(context.scope, TERMINAL.permission) || !['cookie', 'api'].includes(context.kind)) {
       throw new ObserverManagerError('admin_required', 'Observer requires a live administrator principal');
     }
   }
@@ -81,7 +85,7 @@ export class ObserverManager {
     if (this._shuttingDown || this._lifecycleTransitions > 0) {
       throw new ObserverManagerError('operation_obsolete', 'Observer lifecycle is changing');
     }
-    context = this.authGate.revalidateAuthContext(context);
+    context = this.authGate.revalidateAuthContext(context, TERMINAL);
     if (!context) throw new ObserverManagerError('auth_required', 'Observer authentication expired');
     if (this._runtimeError) throw new ObserverManagerError('teardown_failed', 'Observer cleanup requires administrator recovery');
     const current = this.containment.active && this.generation !== null ? this.containment.active : null;
@@ -143,7 +147,7 @@ export class ObserverManager {
   async createLease(context, { target = this.target, sessionGroup } = {}) {
     this._requireAdmin(context);
     if (target !== this.target) throw new ObserverManagerError('target_mismatch', 'Observer target is not this producer');
-    context = this.authGate.revalidateAuthContext(context);
+    context = this.authGate.revalidateAuthContext(context, TERMINAL);
     if (!context) throw new ObserverManagerError('auth_required', 'Observer authentication expired');
     let origin = null;
     if (this.resolveTarget) {
@@ -171,10 +175,10 @@ export class ObserverManager {
       if (this.leases.size + this._pendingLeases > this.maxViewers) {
         throw new ObserverManagerError('capacity_exceeded', 'Observer viewer capacity reached');
       }
-      context = this.authGate.revalidateAuthContext(context);
+      context = this.authGate.revalidateAuthContext(context, TERMINAL);
       if (!context) throw new ObserverManagerError('auth_required', 'Observer authentication expired');
       const active = await this._ensureGeneration(context, origin);
-      context = this.authGate.revalidateAuthContext(context);
+      context = this.authGate.revalidateAuthContext(context, TERMINAL);
       if (!context) throw new ObserverManagerError('auth_required', 'Observer authentication expired');
       if (epoch !== this._epoch || active !== this.containment.active || active.generation !== this.generation) {
         throw new ObserverManagerError('operation_obsolete', 'Observer lease start was superseded');
@@ -322,7 +326,7 @@ export class ObserverManager {
     }
     const now = this.now();
     for (const [id, lease] of this.leases) {
-      const refreshed = this.authGate.revalidateAuthContext(lease.principal);
+      const refreshed = this.authGate.revalidateAuthContext(lease.principal, TERMINAL);
       if (lease.expiresAt <= now || !refreshed ||
           lease.generation !== this.generation || lease.generation !== this.containment.active?.generation) {
         this.leases.delete(id);

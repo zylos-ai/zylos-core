@@ -1473,6 +1473,22 @@ html[lang^="zh"] .wb-sent-gap { display: none; }
 .wb-ktable td:nth-child(1) b { display: inline-block; max-width: 14em; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
 .wb-scope-b { padding: 1px 6px; border: 1px solid var(--wb-line-strong); border-radius: 4px; color: var(--text-dim); font-size: var(--fs-caption); font-weight: var(--fw-control); white-space: nowrap; }
 .wb-scope-b.admin { border-color: color-mix(in srgb, var(--wb-err) 40%, transparent); color: var(--wb-err); }
+.wb-scope-b.custom { border-color: var(--wb-accent-line); color: var(--text); }
+/* A custom key: badge, then its permissions on a second line, shortened by the table code when long. */
+.api-key-perm-summary { max-width: 18em; margin-top: 3px; color: var(--text-muted); font-size: var(--fs-caption); line-height: var(--lh-body); }
+/* Custom permissions: one block per asset, wrapping into columns as the card allows. */
+.api-key-perms { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); align-items: start; gap: 10px 16px; margin-top: 10px; }
+.api-key-perms[hidden] { display: none; }
+.api-key-perm-group { display: grid; align-content: start; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.api-key-perm-group legend { margin-bottom: 2px; padding: 0; color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-control); }
+.api-key-perm { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: var(--fs-body-sm); cursor: pointer; }
+.api-key-perm input { flex: none; margin: 0; }
+.api-key-perms-empty { grid-column: 1 / -1; margin: 0; }
+.api-key-perms-empty[hidden], .api-key-admin-warning[hidden] { display: none; }
+.wb-modal.api-key-scope-dialog { display: flex; flex-direction: column; gap: 4px; width: min(620px, 100%); max-height: min(86dvh, 720px); overflow-y: auto; }
+.api-key-scope-dialog .wb-seg2 { align-self: flex-start; }
+.api-key-scope-dialog .api-key-admin-warning { margin: 8px 0 0; }
+.api-key-scope-dialog .wb-modal-acts { margin-top: 14px; }
 .wb-once { margin-top: 12px; padding: 12px; border: 1px solid var(--wb-accent-line); border-radius: var(--wb-r); background: var(--wb-accent-soft); font-size: var(--fs-body-sm); }
 .wb-once[hidden] { display: none; }
 .wb-once p { margin: 0; }

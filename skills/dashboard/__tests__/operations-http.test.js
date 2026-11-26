@@ -287,6 +287,29 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
     }
     scenario = 'normal'; running = true;
   }
+  // Key management with the admin key: a custom key is created and changed, the change reaches its existing token,
+  // and no API key can hand out admin power or switch remote access.
+  const send = async (method, route, token, body) => {
+    requests++;
+    const response = await fetch(base + route, { signal: AbortSignal.timeout(3000), method,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    return { status: response.status, body: await response.json() };
+  };
+  const custom = await send('POST', '/api/keys', tokens.admin, { name: 'fixture-custom', scope: 'groups.read, groups.read' });
+  assert.equal(custom.status, 200); assert.equal(custom.body.key.scope, 'groups.read');
+  const customToken = (await request('/api/auth/token', custom.body.plaintext_key, {})).body.token;
+  const interrupt = () => request('/api/groups/origin/actions/interrupt', customToken, {});
+  const before = await interrupt();
+  assert.equal(before.status, 403); assert.equal(before.body.error.code, 'insufficient_scope'); assert.equal(before.body.required, 'groups.control');
+  const changed = await send('PATCH', '/api/keys/fixture-custom', tokens.admin, { scope: 'groups.read,groups.control' });
+  assert.equal(changed.status, 200); assert.equal(changed.body.key.scope, 'groups.control,groups.read');
+  assert.equal((await interrupt()).body.error.code, 'TARGET_REQUIRED', 'the existing token follows the new scope');
+  for (const [method, route, body] of [['POST', '/api/keys', { name: 'fixture-escalate', scope: 'admin' }],
+    ['PATCH', '/api/keys/fixture-custom', { scope: 'admin' }], ['PATCH', '/api/keys/fixture-admin', { scope: 'read' }],
+    ['POST', '/api/keys/fixture-admin/rotate', {}], ['PUT', '/api/settings/chat', { chat_allow_remote: true }]]) {
+    const refused = await send(method, route, tokens.admin, body);
+    assert.equal(refused.status, 403, `${method} ${route}`); assert.equal(refused.body.error.code, 'local_cookie_required');
+  }
   // A pre-mode instance reports effective single mode with an independent group presence.
   mode = null; running = false;
   const absent = await request('/api/health/ready');

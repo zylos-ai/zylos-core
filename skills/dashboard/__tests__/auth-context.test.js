@@ -13,7 +13,7 @@ test('missing password rejects existing cookie and API principals and their reva
   const gate = new AuthGate(config, {
     getSession: () => ({ created_at: now, last_activity_at: now, remember: 0 }),
     touchSession() {},
-    getApiSession: () => ({ api_key_id: 9, scope: 'admin', expires_at: now + 60_000, key_revoked_at: null }),
+    getApiSession: () => ({ api_key_id: 9, scope: 'admin', key_scope: 'admin', expires_at: now + 60_000, key_revoked_at: null }),
     cleanupSessions() {}, cleanupExpiredApiSessions() {},
   });
   t.after(() => clearInterval(gate._cleanupTimer));
@@ -36,7 +36,7 @@ test('proxied writes and sensitive reads require admin while status reads accept
   const now = Date.now(), token = `zylos_st_${'b'.repeat(64)}`;
   let scope = 'read';
   const gate = new AuthGate({ auth: { password: 'scrypt:fixture' } }, {
-    getApiSession: hash => hash === sha256(token) ? { api_key_id: 7, scope, expires_at: now + 60_000, key_revoked_at: null } : null,
+    getApiSession: hash => hash === sha256(token) ? { api_key_id: 7, scope, key_scope: scope, expires_at: now + 60_000, key_revoked_at: null } : null,
     cleanupSessions() {}, cleanupExpiredApiSessions() {},
   });
   t.after(() => clearInterval(gate._cleanupTimer));
