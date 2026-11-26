@@ -79,12 +79,31 @@ export function annotationStamp(value, timeZone, now = new Date()) {
 // Lines after the first start with 3 spaces, so no excerpt or comment line can start an attachment annotation.
 const indent = value => String(value).split('\n').map((line, index) => index === 0 ? line : line.trim() ? '   ' + line : '').join('\n');
 
+// The English pack's wording, used when the workbench pack has not loaded: the user's excerpts and comments must
+// still go out in full rather than vanish with an untranslated template.
+const FALLBACK = {
+  'chat.annotation.sendIntro': 'Please review the marked text below ({count} total) and respond to each comment.',
+  'chat.annotation.sendHeading': '[Annotations: {count}] The original messages are in this conversation. Use c4_id to identify each message.',
+  'chat.annotation.sendMe': 'Me',
+  'chat.page.ai': 'AI',
+  'chat.annotation.sendOriginal': 'Original: “{excerpt}”',
+  'chat.annotation.sendOriginalTruncated': 'Original (first {limit} of {length} characters, full text available by c4_id): “{excerpt}”',
+  'chat.annotation.sendComment': 'Comment: {comment}'
+};
+
 /**
  * The `content` the browser sends: the user's own words (trimmed) first, then the numbered annotations.
  * An annotation is `{ messageId, direction, timestamp, excerpt, length, comment }`; `excerpt` holds at most
  * MAX_CHARS characters and `length` the selected text's full length.
  */
-export function composeContent({ text = '', annotations = [], timeZone = null, now = new Date(), t } = {}) {
+export function composeContent({ text = '', annotations = [], timeZone = null, now = new Date(), t: translate } = {}) {
+  const t = (key, params = {}) => {
+    const value = translate(key, params);
+    if (value !== key) return value;
+    let fallback = FALLBACK[key];
+    for (const [name, param] of Object.entries(params)) fallback = fallback.replaceAll(`{${name}}`, param ?? '');
+    return fallback;
+  };
   const count = annotations.length;
   // Without annotations the user's text is sent as typed, as before; the server compares a retry's content exactly.
   if (!count) return String(text ?? '');
