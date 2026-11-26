@@ -1,4 +1,5 @@
 import { element } from './plain-text.js';
+import { createFold } from './fold.js';
 
 /** Internal relays are context between sessions, never user/AI replies or interactive content. */
 export function renderInternalMessage({ document, row, t = key => key, onOpenPeer, timeText, timeIso,
@@ -15,6 +16,13 @@ export function renderInternalMessage({ document, row, t = key => key, onOpenPee
   const missing = element(document, 'span', undefined, 'conversation-internal-missing');
   const bubble = element(document, 'div', undefined, 'chat-message-content');
   const content = element(document, 'div', undefined, 'chat-message-text conversation-internal-content');
+  // A long relay shows its first two lines until clicked; a new render (leaving and reopening the
+  // conversation, or leaving the page) folds it again (Howard, Dashboard 2026-11-26).
+  const foldBox = element(document, 'div', undefined, 'conversation-internal-fold');
+  const text = element(document, 'div');
+  foldBox.append(text);
+  const fold = createFold({ document, box: foldBox, t, expandKey: 'chat.internal.expand', collapseKey: 'chat.internal.collapse' });
+  content.append(foldBox, fold.toggle);
   bubble.append(content);
   const raw = element(document, 'details', undefined, 'conversation-internal-raw');
   const summary = element(document, 'summary');
@@ -56,11 +64,13 @@ export function renderInternalMessage({ document, row, t = key => key, onOpenPee
     peer.textContent = isOrigin ? t('wb.term.origin') : info.peerDisplayName || info.peerSessionGroup || t('chat.unnamed');
     missing.textContent = t('chat.internal.unavailable');
     missing.hidden = isOrigin || canNavigate;
-    content.textContent = typeof info.content === 'string' ? info.content : next.content;
+    const shown = typeof info.content === 'string' ? info.content : next.content;
+    if (text.textContent !== shown) text.textContent = shown;
+    fold.update();
     summary.textContent = t('chat.internal.original');
     original.textContent = next.content;
     raw.hidden = next.direction === 'out' || (!externalTab && !technical);
   }
   update(row, { showTechnicalDetails });
-  return { node: article, time, update };
+  return { node: article, time, update, refold: () => fold.reset(), destroy: () => fold.destroy() };
 }
