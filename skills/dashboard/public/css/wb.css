@@ -1332,6 +1332,10 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-set-body :is(.wb-input, .wb-select, .wb-btn) { height: var(--wb-h); }
 .wb-engine-version .wb-btn { max-width: 100%; height: auto; min-height: var(--wb-h); white-space: normal; }
 .wb-engine-version .wb-btn span { overflow-wrap: anywhere; }
+
+/* Give the version and upgrade their own flex items so a result can wrap independently. */
+#settings-engine-actions, #settings-engine-actions > .wb-action-row { display: contents; }
+#action-upgrade-result { flex-basis: 100%; }
 /* Settings action results stay beside their controls and wrap within the card. */
 .wb-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .wb-action-row[hidden], .wb-action-row > button[hidden] { display: none; }
