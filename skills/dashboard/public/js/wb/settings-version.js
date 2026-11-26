@@ -38,9 +38,8 @@ export function coreUpgradePrompt(current, latest, t = key => key) {
   return t('wb.settings.version.prompt', { from: current ? 'v' + current : t('wb.unknown'), to: 'v' + latest });
 }
 
-// The AI engine's CLI version and its upgrade button (the original generated action node), for the engine chosen in
-// the default engine card: each engine shows and upgrades its own CLI.
-export function renderEngineVersion(root, info, { upgrade, document = root.ownerDocument, t = key => key, readOnly = false, runtime = DEFAULT_RUNTIME } = {}) {
+// The chosen AI engine's CLI version, with persistent controls and feedback across card redraws.
+export function renderEngineVersion(root, info, { actions, canUpgrade = true, document = root.ownerDocument, t = key => key, readOnly = false, runtime = DEFAULT_RUNTIME } = {}) {
   const name = runtimeName(runtime);
   const version = info?.[runtime];
   const unsupported = version?.update_check === 'unsupported';
@@ -48,12 +47,21 @@ export function renderEngineVersion(root, info, { upgrade, document = root.owner
   const update = latest ? version.update : null;
   const installed = version?.installed ? 'v' + version.installed : t('wb.unknown');
   const updateNote = unsupported ? ` · ${t('wb.settings.updateCheckUnsupported')}` : '';
-  root.replaceChildren(element(document, 'p', `${name} · ${installed}${updateNote}`, 'wb-version-line'));
-  if (!upgrade || (version?.installed && latest && !update)) return;
+  const versionLabel = `${name} · ${installed}${updateNote}`;
+  const line = root.querySelector('.wb-version-line');
+  if (line) line.textContent = versionLabel;
+  else root.prepend(element(document, 'p', versionLabel, 'wb-version-line'));
+  if (!actions) return;
+  const upgrade = actions.querySelector('[data-action="upgrade-cc"]');
+  const isBusy = button => button.getAttribute('aria-busy') === 'true';
+  const upgradeResult = actions.querySelector('#action-upgrade-result');
+  upgrade.hidden = !isBusy(upgrade) && !upgradeResult.textContent && (!canUpgrade || Boolean(version?.installed && latest && !update));
 
   const label = upgrade.querySelector('#action-cli-label');
   if (label) label.textContent = t('actions.upgrade_runtime', { runtime: name }) + (update ? ' v' + update : '');
-  upgrade.disabled = readOnly;
+  upgrade.disabled = readOnly || isBusy(upgrade);
+  const restart = actions.querySelector('[data-action="restart-session"]');
+  restart.disabled = readOnly || isBusy(restart);
   upgrade.title = readOnly ? t('remote.actions_read_only_tooltip') : '';
-  root.append(upgrade);
+  if (actions.parentElement !== root) root.append(actions);
 }

@@ -21,3 +21,49 @@ export function formatActionResult(result, t) {
   }
   return lines.join('\n') || result?.error?.message || result?.message || null;
 }
+
+// One notice and timeout per control. A retry or machine change invalidates the previous feedback.
+export function createActionFeedback(status, sync, onSuccessExpired = () => {}) {
+  let timer, activeButton, current;
+  function clear() {
+    clearTimeout(timer);
+    status.textContent = '';
+  }
+  function unlock() {
+    activeButton?.removeAttribute('aria-busy');
+    activeButton = null;
+  }
+  return {
+    start(button) {
+      if (activeButton) return null;
+      clear();
+      activeButton = button;
+      button.setAttribute('aria-busy', 'true');
+      sync();
+      const feedback = {
+        isCurrent: () => current === feedback,
+        show(text, success) {
+          if (!feedback.isCurrent()) return;
+          clear();
+          unlock();
+          status.classList.toggle('wb-status-success', success);
+          status.classList.toggle('wb-status-error', !success);
+          status.textContent = text;
+          sync();
+          if (success) timer = setTimeout(() => {
+            clear();
+            onSuccessExpired();
+            sync();
+          }, 5000);
+        },
+      };
+      current = feedback;
+      return feedback;
+    },
+    reset() {
+      current = null;
+      clear();
+      unlock();
+    },
+  };
+}

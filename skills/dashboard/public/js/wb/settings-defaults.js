@@ -1,4 +1,5 @@
 import { SUPPORTED_RUNTIMES, runtimeInstallPolicy, runtimesWith } from '../../runtime-descriptors.js';
+import { createActionFeedback } from '../action-result.js';
 import { countLabel } from '../count-label.js';
 import { effortOptionState, modelOptionState } from '../runtime-ui.js';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js';
@@ -166,8 +167,8 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
   // ─── Default engine ───
   const engine = settingsCard(document, { icon: 'bot', title: t('wb.settings.currentRuntime'), sub: technical() ? 'zylos runtime' : '' });
   engine.card.id = 'settings-current-runtime';
-  let view = baselineRuntime ?? SUPPORTED_RUNTIMES[0], savingRuntime = false, recheckBusy = false;
-  const line = element(document, 'div', undefined, 'wb-set-inline');
+  let view = baselineRuntime ?? SUPPORTED_RUNTIMES[0], savingRuntime = false, savingModels = false, recheckBusy = false;
+  const line = element(document, 'div', undefined, 'wb-set-inline wb-action-row');
   const select = element(document, 'select', undefined, 'wb-input wb-select');
   select.id = 'settings-engine';
   select.setAttribute('aria-label', t('wb.settings.currentRuntime'));
@@ -179,19 +180,26 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
   });
   const selectWrap = wrapSelect(document, select, 'wb-select-wrap wb-engine-select');
   const defaultBadge = element(document, 'span', t('wb.settings.defaultEngineBadge'), 'wb-default-badge');
-  const setDefault = element(document, 'button', t('wb.settings.setDefault'), 'wb-btn wb-btn-primary');
+  const setDefault = element(document, 'button', undefined, 'wb-btn wb-btn-primary');
+  setDefault.append(actionSpinner(document), element(document, 'span', t('wb.settings.setDefault')));
   setDefault.type = 'button';
   setDefault.id = 'settings-set-default';
-  line.append(selectWrap, defaultBadge, setDefault);
+  const engineResult = element(document, 'span', '', 'wb-note wb-action-result');
+  engineResult.id = 'settings-engine-result';
+  engineResult.setAttribute('role', 'status');
+  const engineFeedback = createActionFeedback(engineResult, redrawEngine);
+  let engineResultRuntime;
+  line.append(selectWrap, defaultBadge, setDefault, engineResult);
   const unavailable = () => runtimeHealth(instance, view) === 'unavailable';
   const notFound = () => runtimeNotFound({ instance }, view);
-  lock(select, () => savingRuntime);
-  lock(setDefault, () => savingRuntime || !writable() || unavailable() || notFound());
+  lock(select, () => savingRuntime || savingModels);
+  lock(setDefault, () => savingRuntime || savingModels || view === baselineRuntime || !writable() || unavailable() || notFound());
   setDefault.addEventListener('click', async () => {
     if (setDefault.disabled || view === baselineRuntime) return;
     const runtime = view;
     savingRuntime = true;
     refreshLocks();
+    let feedback;
     try {
       const current = await confirmationPage(runtimeFollowerFilter);
       if (destroyed || !writable()) return;
@@ -199,21 +207,22 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
       if (needsConfirmation &&
           !(await confirm(runtimeSaveConfirmation(runtime, current, t), { title: t('wb.settings.confirm.runtime'), danger: true }))) return;
       if (destroyed || !writable()) return;
+      engineResultRuntime = runtime;
+      feedback = engineFeedback.start(setDefault);
       const result = await execute('switch-runtime', { runtime, ...(needsConfirmation && { confirmed: true }) }, { confirmed: true });
       if (result === false) {
-        engineResult.textContent = t('wb.settings.saveFailed');
+        feedback.show(t('wb.settings.saveFailed'), false);
         return;
       }
       baselineRuntime = result?.data?.baseline ?? runtime;
       const saved = t(result?.messageKey ?? 'result.runtime_saved', {
         ...result?.messageParams, value: runtimeName(baselineRuntime),
       });
-      engineResult.textContent = [saved, ...await restartFailures(result?.data, resultName, t)].join('\n');
-      if (!destroyed) redrawEngine();
-    } catch (error) { engineResult.textContent = error.message; }
+      const failures = await restartFailures(result?.data, resultName, t);
+      feedback.show([saved, ...failures].join('\n'), failures.length === 0);
+    } catch (error) { feedback?.show(error.message, false); }
     finally { savingRuntime = false; refreshLocks(); }
   });
-  const engineResult = element(document, 'p', '', 'wb-note'); engineResult.id = 'settings-engine-result'; engineResult.setAttribute('role', 'status');
   const split = element(document, 'div', undefined, 'wb-set-split');
   // A count of zero tells nothing, so its line is left out.
   function groupColumn(key, total, filter, meta) {
@@ -231,6 +240,8 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
   const loginNote = element(document, 'p', t('wb.settings.runtimeNote'), 'wb-note');
   const installNote = element(document, 'p', undefined, 'wb-note wb-note-act');
   const installText = element(document, 'span');
+  const recheckResult = element(document, 'p', '', 'wb-note wb-action-result');
+  recheckResult.setAttribute('role', 'status');
   const recheckButton = element(document, 'button', t('wb.recheck'), 'wb-btn wb-btn-sm');
   recheckButton.type = 'button';
   installNote.append(installText, recheckButton);
@@ -245,10 +256,10 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
       const current = await read('/api/instance');
       if (destroyed) return;
       instance = { ...instance, versions: current.versions };
-      engineResult.textContent = '';
+      recheckResult.textContent = '';
       redrawEngine();
     } catch (error) {
-      engineResult.textContent = t('status.failed', { error: error.message });
+      recheckResult.textContent = t('status.failed', { error: error.message });
     } finally {
       recheckBusy = false;
       refreshLocks();
@@ -259,7 +270,7 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
   const selectedRuntime = () => view;
   const drawVersion = () => version(engineVersion, selectedRuntime());
   const modelSettings = element(document, 'div', undefined, 'wb-engine-models');
-  engine.card.append(line, loginNote, installNote, engineVersion, engineResult, split, modelSettings);
+  engine.card.append(line, loginNote, installNote, recheckResult, engineVersion, split, modelSettings);
   root.append(engine.card);
   function redrawEngine() {
     for (const option of options) {
@@ -272,7 +283,8 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
     const missing = notFound();
     const signedOut = unavailable();
     defaultBadge.hidden = !isDefault;
-    setDefault.hidden = isDefault;
+    engineResult.hidden = engineResultRuntime !== view;
+    setDefault.hidden = isDefault && (engineResult.hidden || !engineResult.textContent);
     loginNote.hidden = isDefault || !signedOut || missing;
     installNote.hidden = isDefault || !missing;
     if (!installNote.hidden) {
@@ -285,12 +297,15 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
 
   // ─── Default model, effort and rotation threshold per engine ───
   const drafts = {}, rows = {};
-  const result = element(document, 'p', '', 'wb-note'); result.id = 'settings-model-result'; result.setAttribute('role', 'status');
-  let savingModels = false;
+  const result = element(document, 'span', '', 'wb-note wb-action-result');
+  result.id = 'settings-model-result'; result.setAttribute('role', 'status');
+  const modelFeedback = createActionFeedback(result, redrawModels);
+  let modelResultRuntime;
   const undo = element(document, 'button', t('wb.settings.undo'), 'wb-btn'); undo.type = 'button';
-  const save = element(document, 'button', t('btn.save'), 'wb-btn wb-btn-primary'); save.type = 'button'; save.id = 'settings-save-models';
-  const actions = element(document, 'div', undefined, 'wb-engine-model-actions');
-  actions.append(undo, save);
+  const save = element(document, 'button', undefined, 'wb-btn wb-btn-primary'); save.type = 'button'; save.id = 'settings-save-models';
+  save.append(actionSpinner(document), element(document, 'span', t('btn.save')));
+  const actions = element(document, 'div', undefined, 'wb-engine-model-actions wb-action-row');
+  actions.append(undo, save, result);
   const boxes = {};
   const editableRuntimes = runtimesWith('modelOverride');
   function appendModelFollowers(box, runtime) {
@@ -385,12 +400,11 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
     modelSettings.append(box);
   }
   const nextStartNote = element(document, 'p', t('wb.settings.nextStartNote'), 'wb-note');
-  modelSettings.append(nextStartNote, result, actions);
+  modelSettings.append(nextStartNote, actions);
   const changes = () => modelDraftChanges(metadata, drafts).filter(change => change.runtime === view);
   select.addEventListener('change', () => {
     if (select.disabled) return;
     view = select.value;
-    result.textContent = '';
     redrawEngine();
     redrawModels();
   });
@@ -399,12 +413,15 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
     const editing = editableRuntimes.includes(view);
     for (const [runtime, box] of Object.entries(boxes)) box.hidden = runtime !== view;
     for (const [runtime, row] of Object.entries(rows)) row.dirty.hidden = !pending.some(change => change.runtime === runtime);
-    nextStartNote.hidden = result.hidden = !editing;
-    actions.hidden = undo.hidden = save.hidden = !pending.some(change => change.runtime === view);
+    const hasDraft = pending.some(change => change.runtime === view);
+    nextStartNote.hidden = !editing;
+    result.hidden = modelResultRuntime !== view;
+    actions.hidden = !hasDraft && (result.hidden || !result.textContent);
+    undo.hidden = !hasDraft;
     refreshLocks();
   }
   lock(undo, () => savingModels || !writable());
-  lock(save, () => savingModels || !writable() || !changes().length || Boolean(rows[view]?.thresholdInvalid()));
+  lock(save, () => savingModels || savingRuntime || !writable() || !changes().length || Boolean(rows[view]?.thresholdInvalid()));
   undo.addEventListener('click', () => {
     const runtime = view, row = rows[runtime];
     if (undo.disabled || !row) return;
@@ -420,6 +437,7 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
     savingModels = true;
     refreshLocks();
     const applied = [], failures = [];
+    let feedback;
     const report = () => {
       const left = pending.filter(change => !applied.includes(change));
       if (!applied.length) return t('wb.settings.saveFailed');
@@ -441,6 +459,8 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
       const needsConfirmation = danger || modelChanges.length !== pending.length;
       if (needsConfirmation && !(await confirm(modelSaveConfirmation(pending, t, metadata, current), { title: t('wb.settings.confirm.models'), danger }))) return;
       if (destroyed || !writable()) return;
+      modelResultRuntime = pending[0].runtime;
+      feedback = modelFeedback.start(save);
       for (const change of pending) {
         const body = { runtime: change.runtime, [change.key]: change.value,
           ...(affected.includes(change) && { confirmed: true }),
@@ -457,18 +477,25 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
             : { ...row.meta, ['current_' + change.key]: change.value };
         }
       }
-      if (view === pending[0].runtime) result.textContent = [report(), ...failures].join('\n');
+      feedback.show([report(), ...failures].join('\n'), applied.length === pending.length && failures.length === 0);
     } catch (error) {
-      if (view === pending[0].runtime) result.textContent = [...(applied.length ? [report(), ...failures] : []), error.message].join('\n');
+      feedback?.show([...((applied.length || failures.length) ? [report(), ...failures] : []), error.message].join('\n'), false);
     } finally {
-      if (applied.length) metadata = Object.fromEntries(Object.entries(rows).map(([runtime, row]) => [runtime, row.meta]));
+      if (applied.length) {
+        metadata = Object.fromEntries(Object.entries(rows).map(([runtime, row]) => [runtime, row.meta]));
+        // A saved model becomes the threshold's baseline even if another setting failed.
+        rows[pending[0].runtime]?.renderThreshold();
+      }
       savingModels = false;
       redrawModels();
     }
   });
   function refreshLocks() { for (const { node, lock: fn } of controls) node.disabled = fn(); }
   redrawEngine(); redrawModels();
-  return { destroy: () => { destroyed = true; }, refreshLocks, selectedRuntime, refreshVersion: drawVersion };
+  return {
+    destroy() { destroyed = true; engineFeedback.reset(); modelFeedback.reset(); },
+    refreshLocks, selectedRuntime, refreshVersion: drawVersion,
+  };
 }
 
 /** One global value, loaded and saved through the selected instance's normal action path. */
@@ -528,6 +555,12 @@ export function renderHotTtl(root, { metadata = {}, document = root.ownerDocumen
     finally { busy = false; redraw(); refreshLocks(); }
   });
   root.append(label, row, help, range, source, result); redraw();
+}
+
+function actionSpinner(document) {
+  const spinner = icon(document, 'loader', 'xs');
+  spinner.classList.add('wb-action-spinner');
+  return spinner;
 }
 
 function wrapSelect(document, select, className = 'wb-select-wrap') {
