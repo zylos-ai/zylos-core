@@ -1703,8 +1703,10 @@ function applySse(name, data) {
     state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
     workbench?.applyInstance?.(data);
     renderInfoBar(); syncAccessControls(); renderObserverPage();
+    chatPage?.groupsChanged?.();
   } else if (name === 'groups') {
     void workbench?.refresh?.(data);
+    chatPage?.groupsChanged?.();
   } else if (name === 'fleet') {
     latestFleetPush = { summary: data.summary, updated_at: data.updated_at };
     if (state.fleetModeInitialized) syncLiveFleetMode(data.summary);

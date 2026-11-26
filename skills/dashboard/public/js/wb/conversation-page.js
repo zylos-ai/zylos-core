@@ -8,6 +8,7 @@ import { asDate } from './conversation-time.js';
 import { formatZoned } from './instance-zone.js';
 import { channelIcon, channelIcons } from './board.js';
 import { createConversationState, isOriginConversation, isOwnChatMessage } from './conversation-state.js';
+import { createListPresence } from './conversation-presence.js';
 import { messageState, receiptState } from './chat-delivery-state.js';
 import { renderQuestion } from './chat-questions.js';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js';
@@ -159,6 +160,9 @@ export function mountConversationPage({
     }
     return payload;
   };
+  // Each row's icon shows its group's state as the conversation header would.
+  const presence = createListPresence({ read: path => request(path), onChange: () => { if (!destroyed) redraw(); },
+    setTimeout: (fn, ms) => view.setTimeout(fn, ms), clearTimeout: id => view.clearTimeout(id) });
   const state = createConversationState({
     request,
     identity,
@@ -1908,10 +1912,11 @@ export function mountConversationPage({
         const preview = node('span', undefined, 'chat-preview');
         const unreadDot = node('span', undefined, 'conversation-unread-dot');
         unreadDot.setAttribute('aria-hidden', 'true');
+        const presenceLabel = node('span', undefined, 'wb-vh');
         top.append(name, channel, draft, time);
         previewLine.append(preview, unreadDot);
         body.append(top, previewLine);
-        button.append(symbol, body);
+        button.append(symbol, body, presenceLabel);
         bindPinOrder(button, wrapper, item.id);
         button.addEventListener('click', event => {
           // A tap that ends a swipe or puts a revealed delete button back does not open the conversation.
@@ -1942,7 +1947,7 @@ export function mountConversationPage({
         swipe.attach(wrapper);
         row = {
           id: item.id, wrapper, remove, short, notice, pinBadge, unreadDot, menuToggle: rowToggle,
-          button,
+          button, symbol, presenceLabel,
           name,
           channel,
           draft,
@@ -1982,6 +1987,12 @@ export function mountConversationPage({
       if (row.canPin && pinned && !s.search) row.wrapper.dataset.pinId = item.id;
       else delete row.wrapper.dataset.pinId;
       row.unreadDot.hidden = s.tab !== 'mine' || item.unread !== true;
+      // A blank draft has no group yet; in single-session mode only Origin is a group.
+      const group = isOriginConversation(item.id) ? 'origin' : item.sessionGroup ?? item.session_group;
+      const groupState = item.draft || item.state === 'draft' ? null : presence.of(group);
+      if (groupState) row.symbol.dataset.presence = groupState;
+      else delete row.symbol.dataset.presence;
+      text(row.presenceLabel, groupState ? t('chat.page.presence.' + groupState) : '');
       const preview = item.preview || t(item.draft ? 'chat.page.blankPreview' : 'chat.page.noMessages');
       let previewPrefix = '';
       if (item.preview && item.previewDirection === 'in') {
@@ -2206,6 +2217,7 @@ export function mountConversationPage({
     opened = true;
     selectionIdentity = typeof identity === 'function' ? identity() : identity;
     page.hidden = false;
+    presence.refresh();
     await state.open();
     // Origin's conversation is the fixed address `dashboard origin`, listed in "mine".
     const tab = sessionGroup === 'origin' || (channel ?? sessionGroup.split(':')[0]) === 'dashboard' ? 'mine' : 'external';
@@ -2235,10 +2247,13 @@ export function mountConversationPage({
       selectionIdentity = nextIdentity;
       page.hidden = false;
       scheduleFit();
+      presence.refresh();
       await state.open(...args);
       await selectFirstDesktop();
     },
     openGroup,
+    /** A group or the instance changed state (stream `groups` / `instance`). */
+    groupsChanged() { if (opened) presence.refresh(); },
     popstate() {
       if (!selectionEntry) return false;
       const sameConversationPage = view.location.href === selectionEntry.url && !page.hidden;
@@ -2277,6 +2292,7 @@ export function mountConversationPage({
       groupSide?.destroy();
       quickConfig?.destroy();
       destroyed = true;
+      presence.destroy();
       clearSearchTimer();
       cancelReadTimer();
       document.removeEventListener?.('visibilitychange', readVisibilityChanged);
