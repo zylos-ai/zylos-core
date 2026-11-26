@@ -2259,7 +2259,7 @@ function createFleetManageModal() {
   overlay.querySelector('#fleet-add-save').addEventListener('click', async () => { if (await saveFleetAgent()) addForm(false); });
   overlay.querySelector('#api-key-create').addEventListener('click', createApiKey);
   // Read / admin / custom, with the custom permission checkboxes and the admin warning under the name row.
-  apiKeyScopePicker = createScopePicker(document, { t });
+  apiKeyScopePicker = createScopePicker(document, { t, onChange: clearApiKeyScopeHint });
   apiKeyScopePicker.seg.id = 'api-key-scope';
   overlay.querySelector('#api-key-scope-slot').replaceWith(apiKeyScopePicker.seg);
   overlay.querySelector('#api-key-scope-extra').replaceWith(apiKeyScopePicker.panel, apiKeyScopePicker.warning);
@@ -2321,7 +2321,14 @@ function fleetFormValues() {
   };
 }
 
-let apiKeyScopePicker = null;
+let apiKeyScopePicker = null, apiKeyScopeHint = null;
+
+/** A changed scope choice clears the 「至少勾选一项权限」 hint left by a refused create; any other message stays. */
+function clearApiKeyScopeHint() {
+  const status = fleetManageModal?.querySelector('#fleet-manage-status');
+  if (apiKeyScopeHint && status && !status.hidden && status.textContent === apiKeyScopeHint) fleetManageStatus('');
+  apiKeyScopeHint = null;
+}
 
 /** The scope to create a key with, or null while custom has no permission ticked. */
 function apiKeyScope() {
@@ -2495,7 +2502,11 @@ async function createApiKey() {
   const pendingKeyName = fleetManageModal?._createdKey?.name;
   if (pendingKeyName && !(await confirmSetting(t('fleet_manage.replace_created_key_confirm', { name: pendingKeyName }), { title: t('wb.settings.confirm.replaceShownKey'), danger: false }))) return;
   const createRow = fleetManageModal.querySelector('#api-key-create')?.parentElement;
-  if (!body.scope) { fleetManageStatus(t('wb.settings.keys.permsRequired'), 'error', createRow); return; }
+  if (!body.scope) {
+    apiKeyScopeHint = t('wb.settings.keys.permsRequired');
+    fleetManageStatus(apiKeyScopeHint, 'error', createRow);
+    return;
+  }
   setApiKeyBusy(true);
   fleetManageStatus(t('fleet_manage.creating_key'), 'running', createRow);
   try {

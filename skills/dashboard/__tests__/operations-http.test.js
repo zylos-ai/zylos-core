@@ -310,6 +310,93 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
     const refused = await send(method, route, tokens.admin, body);
     assert.equal(refused.status, 403, `${method} ${route}`); assert.equal(refused.body.error.code, 'local_cookie_required');
   }
+  // Every permission a route handler checks itself, after the gateway's route table, works end to end on the real
+  // server when it is the key's only permission for that route, and is refused without it. Covered: conversations,
+  // terminal history and leases, the timezone write and restart, the timezone write flag, the signed-in health details
+  // and the /api/stream re-check. The remote access switch is turned on through the password session, so conversation
+  // and terminal handlers run their own checks.
+  const login = await fetch(base + '/login', { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(3000),
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'password=fixture-password' });
+  assert.equal(login.status, 302);
+  const cookie = login.headers.getSetCookie().map(value => value.split(';')[0]).join('; ');
+  const switchRemote = async on => {
+    requests++;
+    const response = await fetch(base + '/api/settings/chat', { method: 'PUT', signal: AbortSignal.timeout(3000),
+      headers: { Cookie: cookie, 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_allow_remote: on }) });
+    assert.equal(response.status, 200); assert.equal((await response.json()).chat_allow_remote, on);
+  };
+  await switchRemote(true);
+  let keyCount = 0;
+  const keyWith = async scope => {
+    const created = await send('POST', '/api/keys', tokens.admin, { name: `fixture-perm-${++keyCount}`, scope });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    return { name: created.body.key.name, token: (await request('/api/auth/token', created.body.plaintext_key, {})).body.token };
+  };
+  const call = async (token, method, route, body, headers = {}) => {
+    requests++;
+    const response = await fetch(base + route, { method, signal: AbortSignal.timeout(3000),
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...headers }, ...(body === undefined ? {} : { body }) });
+    const json = await response.json();
+    return { status: response.status, code: json?.error?.code ?? null, required: json?.required ?? null, json };
+  };
+  // [permission, the other permission the refused key holds, method, route, body, headers, answer past every check]
+  const handlerChecks = [
+    ['conversations.read', 'conversations.write', 'GET', '/api/conversations', undefined, {}, [503, 'unavailable']],
+    ['conversations.write', 'conversations.read', 'POST', '/api/conversations/drafts', '{', {}, [400, 'invalid_json']],
+    ['terminal.read', 'terminal.control', 'GET', '/api/observer/history/sessions', undefined, {}, [404, 'observer_disabled']],
+    // A well-formed lease id reaches the observer manager's own principal check before the lease lookup.
+    ['terminal.control', 'terminal.read', 'GET', '/observer/frame', undefined, { 'X-Observer-Lease': 'L'.repeat(32) }, [404, 'lease_not_found']],
+    ['instance.settings', 'instance.read', 'PUT', '/api/settings/timezone', '{', {}, [400, 'invalid_timezone']],
+    ['instance.ops', 'instance.settings', 'POST', '/api/settings/timezone/actions/restart-services', '{', {}, [400, 'invalid_json']],
+  ];
+  for (const [permission, other, method, route, body, headers, [status, code]] of handlerChecks) {
+    const holder = await keyWith(permission), lacking = await keyWith(other);
+    const allowed = await call(holder.token, method, route, body, headers);
+    assert.deepEqual([allowed.status, allowed.code], [status, code], `${method} ${route} with only ${permission}`);
+    const refused = await call(lacking.token, method, route, body, headers);
+    assert.deepEqual([refused.status, refused.code, refused.required], [403, 'insufficient_scope', permission], `${method} ${route} without ${permission}`);
+  }
+  const statusOnly = await keyWith('instance.read'), settings = await keyWith('instance.read,instance.settings'), groupsOnly = await keyWith('groups.read');
+  const timezone = async key => (await call(key.token, 'GET', '/api/settings/timezone')).json;
+  const readOnly = await timezone(statusOnly);
+  assert.deepEqual([readOnly.writable, readOnly.read_only_reason], [false, 'read_only_access'], 'instance.read alone cannot write the timezone');
+  assert.equal((await timezone(settings)).writable, true, 'instance.settings makes the timezone writable');
+  assert.equal(typeof (await call(statusOnly.token, 'GET', '/api/health')).json.startedAt, 'string', 'instance.read sees health details');
+  assert.equal('startedAt' in (await call(groupsOnly.token, 'GET', '/api/health')).json, false, 'without instance.read only public health fields');
+  // Pushes: a stream whose key loses instance.read is closed at the next push; one that keeps it receives the push.
+  const openStream = async token => {
+    const controller = new AbortController();
+    const response = await fetch(base + '/api/stream', { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
+    assert.equal(response.status, 200);
+    const reader = response.body.getReader(), decoder = new TextDecoder();
+    const stream = { text: '', ended: false, close: () => controller.abort() };
+    stream.until = async (predicate, ms = 3000) => {
+      const deadline = Date.now() + ms;
+      while (!predicate(stream) && !stream.ended && Date.now() < deadline) {
+        let timer;
+        const chunk = await Promise.race([reader.read(), new Promise(resolve => { timer = setTimeout(resolve, deadline - Date.now(), null); })]);
+        clearTimeout(timer);
+        if (!chunk) break;
+        if (chunk.done) stream.ended = true; else stream.text += decoder.decode(chunk.value, { stream: true });
+      }
+      return predicate(stream);
+    };
+    return stream;
+  };
+  const losing = await keyWith('instance.read'), keeping = await keyWith('instance.read');
+  const dropped = await openStream(losing.token), kept = await openStream(keeping.token);
+  t.after(() => { dropped.close(); kept.close(); });
+  for (const stream of [dropped, kept]) assert.ok(await stream.until(s => s.text.includes('event: groups')), 'initial events');
+  assert.equal((await send('PATCH', `/api/keys/${losing.name}`, tokens.admin, { scope: 'groups.read' })).status, 200);
+  await switchRemote(true); // republishes the instance state: the next push
+  const pushed = s => /id: \d+\nevent: /.test(s.text);
+  assert.ok(await dropped.until(s => s.ended), 'the stream whose key lost instance.read is closed at the next push');
+  assert.match(dropped.text, /event: auth_expired/);
+  assert.equal(pushed(dropped), false);
+  assert.ok(await kept.until(pushed), 'the stream whose key kept instance.read receives the push');
+  assert.equal(kept.ended, false);
+  kept.close();
+  await switchRemote(false);
   // A pre-mode instance reports effective single mode with an independent group presence.
   mode = null; running = false;
   const absent = await request('/api/health/ready');
