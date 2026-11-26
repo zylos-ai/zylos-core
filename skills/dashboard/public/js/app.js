@@ -31,7 +31,7 @@ import { createUsagePage } from './wb/usage.js';
 import { ObserverHistory } from './observer-history.js';
 import { validAgentSize, validObserverSize } from './observer-size.js';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js';
-import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js';
+import { FLEET_PAGE_SIZE, fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js';
 import { createFleetSounds } from './fleet-sounds.js';
 import { refreshDashboardState } from './state-refresh.js';
 import { formatActionResult, actionFailureMessage, createActionFeedback } from './action-result.js';
@@ -337,7 +337,6 @@ function initFleetHoverPause() {
 
 const fleetLayoutStorageKey = 'zylos-dashboard-fleet-view';
 let fleetLayout = 'cards';
-const FLEET_PAGE_SIZE = 12;
 let fleetPage = 1;
 let fleetCursors = [null];
 let fleetRequest = null;
