@@ -170,12 +170,12 @@
 .wb-fold.is-cut { cursor: pointer; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - .75lh), rgb(0 0 0 / .15)); mask-image: linear-gradient(to bottom, #000 calc(100% - .75lh), rgb(0 0 0 / .15)); }
 .wb-fold-end { display: flex; flex-direction: column; justify-content: flex-end; }
 .wb-fold-end.is-cut { -webkit-mask-image: linear-gradient(to bottom, rgb(0 0 0 / .15), #000 25%); mask-image: linear-gradient(to bottom, rgb(0 0 0 / .15), #000 25%); }
-.wb-fold-toggle { align-self: flex-start; min-height: 24px; font-weight: var(--fw-control); }
+/* The worded toggle is muted regular text: a quiet aid, not an accent action. */
+.wb-fold-toggle { align-self: flex-start; min-height: 24px; color: var(--text-muted); font-weight: inherit; }
 .wb-fold-toggle[hidden] { display: none; }
 .wb-fold-toggle > .wb-ico { width: 13px; height: 13px; flex: none; transform: rotate(90deg); }
 .wb-fold-toggle.is-open > .wb-ico { transform: rotate(-90deg); }
-/* Above end-kept content: a muted row naming what is hidden (▸), then 收起 (▾). */
-.wb-fold-toggle.is-top { color: var(--text-muted); font-weight: inherit; }
+/* Above end-kept content: a row naming what is hidden (▸), then 收起 (▾). */
 .wb-fold-toggle.is-top > .wb-ico { transform: none; }
 .wb-fold-toggle.is-top.is-open > .wb-ico { transform: rotate(90deg); }
 /* Pseudo-element icons take their shape from wb-icons.css (same set and stroke as .wb-ico). */
