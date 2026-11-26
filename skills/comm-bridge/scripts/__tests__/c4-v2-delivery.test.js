@@ -74,10 +74,20 @@ test('orphan recovery classifies strict age boundaries, prioritizes age and is r
   });
   const pending = add(s); db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(NOW - 9999, pending.id);
   const beforePending = row(db, pending.id);
-  assert.deepEqual(s.recoverOrphanRunning({ maxAgeSeconds: 1800 }), { requeued: { ids: [entries[0].id, entries[1].id], count: 2 }, ageExpired: { ids: [entries[2].id], count: 1 }, retryExhausted: { ids: [entries[3].id], count: 1 } });
+  assert.deepEqual(s.recoverOrphanRunning({ maxAgeSeconds: 1800 }), {
+    requeued: { ids: [entries[0].id, entries[1].id], count: 2 },
+    ageExpired: { ids: [entries[2].id], count: 1 },
+    retryExhausted: { ids: [entries[3].id], count: 1 },
+    controlsExpired: { ids: [], count: 0 },
+  });
   assert.equal(row(db, entries[2].id).retry_count, MAX_RETRIES - 1); assert.equal(row(db, entries[3].id).retry_count, MAX_RETRIES);
   assert.deepEqual(row(db, pending.id), beforePending);
-  assert.deepEqual(s.recoverOrphanRunning({ maxAgeSeconds: 1800 }), { requeued: { ids: [], count: 0 }, ageExpired: { ids: [], count: 0 }, retryExhausted: { ids: [], count: 0 } });
+  assert.deepEqual(s.recoverOrphanRunning({ maxAgeSeconds: 1800 }), {
+    requeued: { ids: [], count: 0 },
+    ageExpired: { ids: [], count: 0 },
+    retryExhausted: { ids: [], count: 0 },
+    controlsExpired: { ids: [], count: 0 },
+  });
 });
 test('failDelivery is one conditional increment and state change; old split mutation trips oracle', t => {
   const { store: s, db } = fixture(t);
