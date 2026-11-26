@@ -93,7 +93,7 @@ through the [candidate-text budget API](memory-budget.md) before a write.
 Do not copy its estimator or limits. At 80% of either dimension, audit the file on
 the next Memory Sync. Do not send extra owner/system alerts or block writes.
 `reference/projects/INDEX.md` and `reference/decisions/INDEX.md` each have a
-16 KiB warning threshold and 32 KiB budget. These indexes are optional until
+48 KiB warning threshold and 64 KiB budget. These indexes are optional until
 created: `memory-status.js` prints `not created yet` without a missing-file
 health issue. Other reference files, including the read-only old files, have
 no size budget. Budget reporting does not block writes. Do not copy whole

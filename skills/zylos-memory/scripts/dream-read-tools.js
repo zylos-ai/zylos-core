@@ -41,7 +41,9 @@ export function readDreamTool(root, name, input) {
   if (name === 'read_memory') {
     const { path: requested, start_line: start = 1, lines: count = 100 } = input;
     if (![start, count].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error('Invalid line range');
-    const lines = fs.readFileSync(resolve(requested), 'utf8').split(/\r?\n/);
+    const target = resolve(requested);
+    if (!fs.statSync(target).isFile()) throw new Error('Expected a regular memory file');
+    const lines = fs.readFileSync(target, 'utf8').split(/\r?\n/);
     return lines.slice(start - 1, start - 1 + Math.min(count, 200)).map((_, i) => numbered(lines, start - 1 + i)).join('\n');
   }
   if (name === 'glob_memory' && typeof input.pattern !== 'string') throw new Error('A glob pattern is required');
