@@ -584,8 +584,7 @@ async function persistFleetConfig(mutator) {
     };
     const nextAgent = {
       ...(lockedConfig.agent || {}),
-      ...(config.agent || {}),
-      avatar: lockedConfig.agent?.avatar ?? config.agent?.avatar
+      ...(config.agent || {})
     };
     const mutationResult = mutator({ existing: lockedConfig, fleet: nextFleet, agent: nextAgent });
     lockedConfig.fleet = nextFleet;
