@@ -93,8 +93,18 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
 
       assert.ok(out.includes(marker(6)), 'newest message must survive');
       assert.ok(!out.includes(marker(1)), 'oldest message must be dropped whole');
-      assert.doesNotMatch(out, /unsummarized|omitted middle/i);
+      assert.match(out, /omitted from the start of the tail: 4\./);
+      assert.match(out, /--begin 1 --end 4/);
       assert.ok(out.length <= 5000, `packed output must fit the char budget (got ${out.length})`);
+
+      // At one character below the packed size, the retrieval notice takes
+      // priority over the older of the two previously selected messages.
+      const tight = emitConversations(env, { maxChars: out.length + 199, maxTokens: 100000 });
+      assert.ok(tight.includes(marker(6)));
+      assert.ok(!tight.includes(marker(5)));
+      assert.match(tight, /omitted from the start of the tail: 5\./);
+      assert.match(tight, /--begin 1 --end 5/);
+      assert.ok(tight.length <= out.length - 1);
       // Every kept message is complete: its marker implies its full body.
       for (let i = 1; i <= 6; i++) {
         if (out.includes(marker(i))) {

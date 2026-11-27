@@ -186,22 +186,43 @@ export async function emitC4Conversations(payload, budget = null, {
     const shardBudget = budget ?? DEFAULT_SHARD_BUDGET;
     // Leave room for the orchestrator's numbered envelope.
     const packBudget = { maxChars: Math.max(0, shardBudget.maxChars - 200), maxTokens: Math.max(0, shardBudget.maxTokens - 60) };
-    const assemble = history => formatSection('RECENT CONVERSATIONS', instructions.join('\n') + '\n\n' + history);
+    const assemble = (messages, notice) => formatSection('RECENT CONVERSATIONS',
+      [...instructions, ...(notice ? [notice] : [])].join('\n') + '\n\n' + messages.join('\n'));
     // Even empty messages use more than 10 characters for their heading.
     const limit = afterTimestamp ? Math.max(1, Math.floor(packBudget.maxChars / 10)) : 6;
-    const conversations = db.getRecentDeliveredConversations(scope.sessionGroup ?? '*', { afterTimestamp, limit });
-    let history = '';
-    let output = assemble(history);
+    const group = scope.sessionGroup ?? '*';
+    const { rows, older } = db.getRecentDeliveredConversations(group, { afterTimestamp, limit });
+    const messages = [];
+    let i = rows.length - 1;
     // The newest messages get first claim on the budget. Keep the tail contiguous.
-    for (let i = conversations.length - 1; i >= 0; i--) {
-      const message = db.formatConversationsForAgent([conversations[i]], { spill: false });
-      const candidate = history ? `${message}\n${history}` : message;
-      const section = assemble(candidate);
-      if (!withinBudget(section, packBudget)) break;
-      history = candidate;
-      output = section;
+    for (; i >= 0; i--) {
+      const message = db.formatConversationsForAgent([rows[i]], { spill: false });
+      if (!withinBudget(assemble([message, ...messages]), packBudget)) break;
+      messages.unshift(message);
     }
-    return output;
+    if (!afterTimestamp || (i < 0 && !older?.count)) return assemble(messages);
+
+    const { shellQuote } = await import('./c4-query-format.js');
+    const fetchPath = path.join(scope.root, '.claude/skills/comm-bridge/scripts/c4-fetch.js');
+    const filter = 'import { readFileSync } from "node:fs"; const { data } = JSON.parse(readFileSync(0, "utf8")); console.log(JSON.stringify(data.rows.filter(row => row.session_group === process.argv[1]), null, 2));';
+    const scopedOutput = group === '*' ? '' : ` --json | node --input-type=module -e ${shellQuote(filter)} -- ${shellQuote(group)}`;
+    let count = older?.count ?? 0;
+    let firstId = older?.firstId ?? Infinity;
+    let lastId = older?.lastId ?? 0;
+    const includeOmitted = ({ id }) => {
+      count++;
+      firstId = Math.min(firstId, id);
+      lastId = Math.max(lastId, id);
+    };
+    for (let j = 0; j <= i; j++) includeOmitted(rows[j]);
+    // Make room for the notice by removing only the oldest remaining message.
+    while (true) {
+      const notice = `Messages after the handoff omitted from the start of the tail: ${count}. Retrieve them by ID with: node ${shellQuote(fetchPath)} --begin ${firstId} --end ${lastId}${scopedOutput}`;
+      const output = assemble(messages, notice);
+      if (messages.length === 0 || withinBudget(output, packBudget)) return output;
+      messages.shift();
+      includeOmitted(rows[++i]);
+    }
   });
 }
 

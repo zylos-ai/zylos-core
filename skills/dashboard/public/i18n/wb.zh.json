@@ -412,7 +412,7 @@
   "wb.memory.allGroups": "全部组",
   "wb.memory.noGroupFiles": "这个组还没有记忆目录。",
   "wb.memory.invalidGroup": "组名无效的目录列在各组中，标为无效组目录。Core 无法保存其中的文件。",
-  "wb.memory.backlog": "各组待整理",
+  "wb.memory.backlog": "各组待存入",
   "wb.memory.aged": "积压超过 24 小时",
   "wb.memory.backlogSource": "来源：各组检查点覆盖范围 · 最旧 30 秒",
   "wb.memory.startupUsage": "{chars}/{maxChars} 字符 · 约 {estimatedTokens}/{maxTokens} token",

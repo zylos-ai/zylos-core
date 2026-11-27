@@ -7,7 +7,7 @@ function fixture(mode) {
   const scope = { mode, scope: mode === 'multi' ? 'work' : '*', sessionGroup: mode === 'multi' ? 'work' : null,
     root: process.env.ZYLOS_DIR, memoryDir: `${process.env.ZYLOS_DIR}/memory` };
   const rows = [{ id: 42, content: 'OLD-ENTIRE-MESSAGE' }, { id: 43, content: 'LATEST-ENTIRE-MESSAGE' }];
-  const db = { getRecentDeliveredConversations: (...args) => { calls.push(args); return rows; },
+  const db = { getRecentDeliveredConversations: (...args) => { calls.push(args); return { rows, older: null }; },
     formatConversationsForAgent: selected => selected.map(row => row.content).join('\n') };
   return { calls, scope, db, options: { scopeReader: async () => scope, withDb: async (_label, action) => action(db) } };
 }

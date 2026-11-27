@@ -67,9 +67,17 @@ export function progressFunctions({ read, write, snapshot, get, all, run, depend
     // C4 stores UTC text today. Imported history can also contain Unix seconds.
     const clock = "CASE WHEN typeof(timestamp) IN ('integer','real') THEN julianday(timestamp,'unixepoch') ELSE julianday(timestamp) END";
     const after = afterTimestamp === undefined ? [] : [afterTimestamp];
-    return all(c, `SELECT * FROM conversations WHERE ${loadable}${f.sql}
-      ${after.length ? `AND ${clock}>julianday(?)` : ''} ORDER BY ${clock} DESC, id DESC${l.sql}`,
-    ...f.args, ...after, ...l.args).reverse();
+    const filter = `${loadable}${f.sql}${after.length ? ` AND ${clock}>julianday(?)` : ''}`;
+    const rows = all(c, `SELECT * FROM conversations WHERE ${filter} ORDER BY ${clock} DESC, id DESC${l.sql}`,
+      ...f.args, ...after, ...l.args).reverse();
+    // An incomplete tail needs the count and ID bounds of the older rows,
+    // without loading their bodies. Use the same snapshot and timestamp/ID order.
+    const older = after.length && rows.length === limit
+      ? get(c, `SELECT COUNT(*) AS count, MIN(id) AS firstId, MAX(id) AS lastId FROM conversations
+        WHERE ${filter} AND (${clock}, id) < (SELECT ${clock}, id FROM conversations WHERE id=?)`,
+      ...f.args, ...after, rows[0].id)
+      : null;
+    return { rows, older };
   }
   function pendingStartupReply(c, group, { since } = {}) {
     if (typeof since !== 'string' || !Number.isFinite(Date.parse(since))) {

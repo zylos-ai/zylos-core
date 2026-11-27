@@ -24,7 +24,7 @@ mock.module('../c4-db.js', { namedExports: {
   formatConversationsForAgent: (values, options) => actualDb.formatConversationsForAgent(values,
     { ...options, ownerName: () => 'Replay Owner' }),
   close: () => { closeCalls++; },
-  getRecentDeliveredConversations: (group, options) => { queryCalls.push([group, options]); return rows; },
+  getRecentDeliveredConversations: (group, options) => { queryCalls.push([group, options]); return { rows, older: null }; },
 } });
 mock.module('../../../activity-monitor/scripts/bootstrap-scope.js', { namedExports: {
   bootstrapScope: async () => ({ mode: 'multi', scope: 'work',
