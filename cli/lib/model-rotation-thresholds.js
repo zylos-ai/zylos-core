@@ -5,7 +5,7 @@ import { updateConfigWithLock } from './config-lock.js';
 import { getRuntime, SUPPORTED_RUNTIMES } from './runtime/index.js';
 import { UNSUPPORTED } from './runtime/contract.js';
 
-const LEGACY_KEYS = { claude: 'new_session_threshold', codex: 'codex_new_session_threshold' };
+export const LEGACY_KEYS = { claude: 'new_session_threshold', codex: 'codex_new_session_threshold' };
 const object = value => value !== null && !Array.isArray(value) && typeof value === 'object';
 const percent = value => {
   if (typeof value === 'string' && /^\d+$/.test(value.trim())) value = Number(value);
@@ -51,7 +51,12 @@ function candidates(options) {
   const launch = options.launchConfig;
   const startedModel = launch?.runtime === options.runtime ? cleanModel(launch.mode === 'override'
     ? launch.model : launch.mode === 'default' ? options.defaultModel : null) : '';
-  return alias && alias !== key && options.context.thresholdKeys.isAlias(startedModel) && startedModel === alias ? [key, alias] : [key];
+  // Settings store the launch model's own key without the observed window (e.g. `opus` for a session that runs at 1M);
+  // that entry is what settings show, so it comes first. Use it only when the launch model, at the observed window,
+  // is the model this session runs.
+  const sameModel = startedModel && [key, alias].includes(options.context.thresholdKeys.key(startedModel, isLargeWindow(options)));
+  const launchKey = sameModel ? modelThresholdKey({ ...options, model: startedModel, contextWindow: undefined }) : '';
+  return launchKey && launchKey !== key ? [launchKey, key] : [key];
 }
 function defaultMatches(options) {
   const { defaultModel } = options;
