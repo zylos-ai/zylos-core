@@ -124,7 +124,7 @@ test('packed global CLI starts without installed skill dependencies', async t =>
           listPendingContinuations: () => [], listSlotOccupancy: () => [],
           takeSlot: () => ({ taken: true, prior: null }), releaseSlot: () => ({ released: true }),
           getNextPending: filter => filter?.sessionGroups?.includes('probe') ? { id: 1, session_group: 'probe' } : null,
-          expirePending: () => false, getDrainFence: () => null,
+          getDrainFence: () => null,
           getOriginNeed: () => ({ inbound: { count: 0, oldestAt: null }, controls: { count: 0, oldestAt: null } }),
           resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }),
           expireTimedOutControls: empty, cleanupControlQueue: empty,

@@ -37,12 +37,6 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
       if (changed && sessionGroup === 'origin') run(c, "INSERT INTO group_heads(session_group,head_id) VALUES('origin',?) ON CONFLICT(session_group) DO UPDATE SET head_id=max(head_id,excluded.head_id)", id);
       return changed;
     }),
-    expirePending: (id, maxAgeSeconds) => write(c => {
-      if (!Number.isSafeInteger(maxAgeSeconds) || maxAgeSeconds <= 0) throw dataError('INVALID_ARGS', 'maxAgeSeconds must be a positive integer');
-      const changed = run(c, "UPDATE conversations SET status='failed',delivery_action=CASE WHEN delivery_action='failure_receipt' THEN delivery_action ELSE 'pending_expired' END WHERE id=? AND direction='in' AND status='pending' AND ?-unixepoch(timestamp)>?", id, seconds(), maxAgeSeconds).changes > 0;
-      if (changed) enqueueReceipt(c, id, 'pending_expired');
-      return changed;
-    }),
     failDelivery: (id, { maxRetries = MAX_RETRIES, reason = 'delivery_failed' } = {}) => write(c => {
       if (!Number.isSafeInteger(maxRetries) || maxRetries < 1) throw dataError('INVALID_ARGS', 'maxRetries must be positive');
       if (!['delivery_failed', 'launch_failed', 'ready_timeout', 'delivery_unverified'].includes(reason)) throw dataError('INVALID_ARGS', 'Invalid delivery failure reason');

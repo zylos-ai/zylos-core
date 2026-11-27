@@ -1,3 +1,5 @@
+import { PENDING_MAX_AGE_SECONDS } from '../c4-config.js';
+
 /** Read mode exactly once and recover before installing any scheduling work. */
 export async function initializeRouter(context) {
   const { deps, state, options, diagnostic } = context;
@@ -13,7 +15,7 @@ export async function initializeRouter(context) {
     deps.alert?.('config_unreadable', {});
     return;
   }
-  deps.log?.(`C4_PENDING_MAX_AGE_SECONDS=${options.pendingMaxAgeSeconds}`);
+  deps.log?.(`C4_PENDING_MAX_AGE_SECONDS=${PENDING_MAX_AGE_SECONDS}`);
   deps.log?.(`C4_RECOVER_MAX_AGE_SECONDS=${options.recoverMaxAgeSeconds}`);
   const recovered = deps.db.recoverOrphanRunning({ maxAgeSeconds: options.recoverMaxAgeSeconds });
   for (const [kind, reason] of [['ageExpired', 'orphan_expired'], ['retryExhausted', 'orphan_retry_exhausted']]) {

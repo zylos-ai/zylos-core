@@ -6,7 +6,7 @@ import { createContinuationRestarts } from './continuation.js';
 import { createCapacityWaits } from './capacity-wait.js';
 import { initializeRouter } from './startup.js';
 import { tmuxClientArgs, isTmuxDirectoryError } from '../tmux-client-args.js';
-import { PENDING_MAX_AGE_SECONDS, RECOVER_MAX_AGE_SECONDS, MAX_RETRIES,
+import { RECOVER_MAX_AGE_SECONDS, MAX_RETRIES,
   CONTROL_CLEANUP_INTERVAL_MS, CONTROL_RETENTION_DAYS, READY_TIMEOUT_MS } from '../c4-config.js';
 
 /** Shared router entry for the production dispatcher and isolated tests.
@@ -15,15 +15,15 @@ import { PENDING_MAX_AGE_SECONDS, RECOVER_MAX_AGE_SECONDS, MAX_RETRIES,
  * The shared READY default can be overridden by isolated tests. */
 export function createRouter(dependencies, configuration = {}) {
   const required = ['readSessionMode','readLiveIdentities','readLiveIdentity','readCurrentSession','listGroupTmuxSessions','readRuntimeHealth',
-    'submit','deliverControl','deliverConversation','handleExpired','findLegacySessions','advanceLegacy'];
+    'submit','deliverControl','deliverConversation','findLegacySessions','advanceLegacy'];
   for (const name of required) if (typeof dependencies[name] !== 'function') throw new TypeError(`Router dependency ${name} is required`);
   if (!dependencies.session || typeof dependencies.session !== 'object') throw new TypeError('Router dependency session is required');
   if (!dependencies.db) throw new TypeError('Router database is required');
-  const options = { pendingMaxAgeSeconds: PENDING_MAX_AGE_SECONDS, recoverMaxAgeSeconds: RECOVER_MAX_AGE_SECONDS,
+  const options = { recoverMaxAgeSeconds: RECOVER_MAX_AGE_SECONDS,
     maxRetries: MAX_RETRIES, cleanupIntervalMs: CONTROL_CLEANUP_INTERVAL_MS, retentionDays: CONTROL_RETENTION_DAYS,
     readyTimeoutMs: READY_TIMEOUT_MS, diagnosticsIntervalMs: 60000, mismatchIntervalMs: 60000, pollIntervalMs: 1000, ...configuration };
   if (typeof options.poolSize !== 'function') throw new TypeError('poolSize must be a function');
-  for (const name of ['readyTimeoutMs','pendingMaxAgeSeconds','recoverMaxAgeSeconds','diagnosticsIntervalMs']) {
+  for (const name of ['readyTimeoutMs','recoverMaxAgeSeconds','diagnosticsIntervalMs']) {
     if (!Number.isSafeInteger(options[name]) || options[name] <= 0) throw new TypeError(`${name} must be a positive integer`);
   }
   const deps = dependencies;

@@ -1,6 +1,6 @@
 /** One in-memory execution slot per group. No waiting lane owns another lane. */
 export function createLane(context, group) {
-  const { state, deps, options, diagnostic, now, inFlightControls } = context;
+  const { state, deps, diagnostic, now, inFlightControls } = context;
   const filter = { sessionGroups: [group] };
   const modeOptions = { sessionMode: state.mode };
   const conversationFilter = { ...(state.mode === 'multi' ? filter : {}), ...modeOptions };
@@ -10,16 +10,6 @@ export function createLane(context, group) {
   let startupLoaded = false;
   let stopped = false;
 
-  async function nextMessage() {
-    for (;;) {
-      const row = deps.db.getNextPending(conversationFilter);
-      if (!row) return null;
-      if (!deps.db.expirePending(row.id, options.pendingMaxAgeSeconds)) return row;
-      deps.finishDeliveryWait?.(row, 'conversation', 'expired');
-      await deps.handleExpired(row, { sessionMode: state.mode, identity: state.live.get(group) });
-      if (stopped) return null;
-    }
-  }
   function releaseActivation(reason) {
     const activation = state.activations.get(group);
     if (!activation) return;
@@ -69,7 +59,6 @@ export function createLane(context, group) {
     if (control?.bypass_state && !startupIds.includes(control.id)) {
       return (await sendControl(control, live)).delivered;
     }
-    const message = await nextMessage();
     while (startupIds.length) {
       const id = startupIds[0];
       const row = deps.db.getControlById(id);
@@ -90,7 +79,7 @@ export function createLane(context, group) {
       } finally { state.activations.delete(group); }
       return;
     }
-    const row = message;
+    const row = deps.db.getNextPending(conversationFilter);
     if (row && deps.canAttemptDelivery?.(row, 'conversation') !== false && deps.db.claimConversation(row.id, modeOptions)) {
       return (await deps.deliverConversation(row, live))?.delivered === true;
     }
@@ -128,7 +117,7 @@ export function createLane(context, group) {
     if (group === 'origin') {
       state.resident.readySince = null;
       state.resident.absentSince ??= now();
-      const row = await nextMessage();
+      const row = deps.db.getNextPending(conversationFilter);
       if (!row) {
         const need = deps.db.getOriginNeed(Math.floor(now() / 1000), { sessionMode: state.mode });
         if (need.controls.count === 0 && !need.continuation?.pending) return;
@@ -137,7 +126,7 @@ export function createLane(context, group) {
       if (now() - state.resident.absentSince >= delay) await context.activation.begin(group, null);
       return;
     }
-    const row = await nextMessage();
+    const row = deps.db.getNextPending(conversationFilter);
     if (!row) {
       if (state.continuations.has(group)) await context.activation.beginContinuation(group);
       else context.capacityWaits.clear(group);
@@ -161,5 +150,5 @@ export function createLane(context, group) {
     }).finally(() => { working = null; });
     return working;
   }
-  return { kick, get working() { return working; }, stop() { stopped = true; deps.clearPeriodicEnter?.(group); }, nextMessage };
+  return { kick, get working() { return working; }, stop() { stopped = true; deps.clearPeriodicEnter?.(group); } };
 }

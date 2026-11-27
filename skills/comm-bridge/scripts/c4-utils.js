@@ -30,8 +30,8 @@ export function sanitizeMessage(message) {
   return message.replace(/[\x00-\x08\x0B-\x1F]/g, '');
 }
 
-export function truncateForDelivery(content, replyViaSuffix = '', convId, pasteCharThreshold = PASTE_CHAR_THRESHOLD) {
-  const fullMessage = content + replyViaSuffix;
+export function truncateForDelivery(content, replyViaSuffix = '', convId, pasteCharThreshold = PASTE_CHAR_THRESHOLD, prefix = '') {
+  const fullMessage = prefix + content + replyViaSuffix;
   const byteLength = Buffer.byteLength(fullMessage, 'utf8');
   // Measure what actually reaches the input box (the dispatcher sanitizes
   // before pasting) against the runtime's threshold.
@@ -58,5 +58,5 @@ export function truncateForDelivery(content, replyViaSuffix = '', convId, pasteC
   const previewKB = (Buffer.byteLength(preview, 'utf8') / 1024).toFixed(1);
   // The notice must be an instruction, not metadata: weaker models otherwise
   // reply from the preview alone while claiming to have read everything (#748).
-  return `${preview}${ellipsis}\n\n[C4] ⚠️ TRUNCATED — the text above is only a preview (${previewKB}KB of ${sizeKB}KB). Before acting or replying you MUST read the complete message file: ${filePath}${replyViaSuffix}`;
+  return `${prefix}${preview}${ellipsis}\n\n[C4] ⚠️ TRUNCATED — the text above is only a preview (${previewKB}KB of ${sizeKB}KB). Before acting or replying you MUST read the complete message file: ${filePath}${replyViaSuffix}`;
 }

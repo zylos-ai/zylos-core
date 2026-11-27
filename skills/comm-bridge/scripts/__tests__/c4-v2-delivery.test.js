@@ -50,22 +50,6 @@ test('group head scheduling keeps priority and head id paired and excludes nonpe
   s.setDrainFence('a', { reason: 'evict', runId: 'r' }); assert.equal(s.listPendingSessionGroups()[0].sessionGroup, 'b');
   s.clearDrainFence('a'); assert.equal(s.listPendingSessionGroups().length, 2);
 });
-test('pending age uses strict boundary, never retries, never overwrites other states or outbound rows', t => {
-  const { store: s, db } = fixture(t, { now: () => NOW * 1000 });
-  for (const age of [1799, 1800, 1801]) {
-    const item = add(s); db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch'),retry_count=2 WHERE id=?").run(NOW - age, item.id);
-    assert.equal(s.expirePending(item.id, 1800), age === 1801);
-    assert.equal(row(db, item.id).retry_count, 2);
-    assert.equal(row(db, item.id).delivery_action, age === 1801 ? 'pending_expired' : null);
-  }
-  for (const status of ['running', 'delivered', 'failed', 'switch_absorbed']) {
-    const item = add(s); db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch'),status=? WHERE id=?").run(NOW - 1801, status, item.id);
-    const before = row(db, item.id); assert.equal(s.expirePending(item.id, 1800), false); assert.deepEqual(row(db, item.id), before);
-  }
-  const out = s.insertConversation('out', 'a', 'e', 'out');
-  db.prepare("UPDATE conversations SET status='pending',timestamp=datetime(?,'unixepoch') WHERE id=?").run(NOW - 1801, out.id);
-  assert.equal(s.expirePending(out.id, 1800), false); assert.equal(s.expirePending(99999, 1800), false);
-});
 test('orphan recovery classifies strict age boundaries, prioritizes age and is repeat-safe', t => {
   const { store: s, db } = fixture(t, { now: () => NOW * 1000 });
   const entries = [1799, 1800, 1801, 10].map(age => {

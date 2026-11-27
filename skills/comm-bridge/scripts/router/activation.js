@@ -146,10 +146,6 @@ export function createActivationManager(context) {
         if (live.present) return;
         const current = deps.db.getNextPending({ sessionGroups: [group] });
         if (!current || current.id !== candidate.id) return;
-        if (deps.db.expirePending(current.id, options.pendingMaxAgeSeconds)) {
-          await deps.handleExpired(current, { sessionMode: state.mode, identity: live, launchConfig });
-          return;
-        }
         if (!deps.db.claimConversation(current.id)) return;
       } else {
         const live = await deps.readLiveIdentity(group);

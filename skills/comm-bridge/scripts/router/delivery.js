@@ -155,8 +155,7 @@ export function createDelivery(deps, configuration = {}) {
       if (row?.status === 'pending' || row?.status === 'running') continue;
       // Expiration and cancellation can settle a row before its lane sees it
       // again. Diagnostic memory follows the same authoritative row lifetime.
-      const expired = wait.type === 'control' ? row?.status === 'timeout' && row.last_error === 'ACK_DEADLINE_EXCEEDED'
-        : row?.delivery_action === 'pending_expired';
+      const expired = wait.type === 'control' && row?.status === 'timeout' && row.last_error === 'ACK_DEADLINE_EXCEEDED';
       const outcome = wait.type === 'control' ? row?.last_error ?? row?.status : row?.status;
       finishWait(wait.row, wait.type, expired ? 'expired' : outcome ?? 'removed');
     }
@@ -324,7 +323,7 @@ export function createDelivery(deps, configuration = {}) {
           } else {
             if (type === 'control' && content.startsWith('/')) periodic.reset('slash_control');
             const message = type === 'conversation'
-              ? deps.formatConversation(row, { pasteCharThreshold: runtime.input.pasteCharThreshold })
+              ? deps.formatConversation(row, { pasteCharThreshold: runtime.input.pasteCharThreshold, now: now() })
               : content.startsWith('/') || continuation ? content : `Meanwhile, ${content}`;
             const sanitized = sanitizeMessage(message);
             const clearSource = runtime.switch.clearFiresSessionStart === false

@@ -21,7 +21,8 @@ function pageLimit(value, fallback, maximum) {
   if (!Number.isInteger(limit) || limit < 1 || limit > maximum) throw dataError('INVALID_ARGS', `limit must be between 1 and ${maximum}`);
   return limit;
 }
-const time = value => new Date(/[zZ]$|[+-]\d\d:\d\d$/.test(value) ? value : value.replace(' ', 'T') + 'Z').toISOString().replace('.000Z', 'Z');
+export const parseC4Timestamp = value => new Date(/[zZ]$|[+-]\d\d:\d\d$/.test(value) ? value : value.replace(' ', 'T') + 'Z');
+const time = value => parseC4Timestamp(value).toISOString().replace('.000Z', 'Z');
 export const binaryCompare = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
 export const scopeFor = (transition, row) => transition.target_mode === 'single' ? '*' : row.session_group || 'origin';
 export function formatAbsorbedPage({ transition, rows }, { group, after = 0, limit: requested, json = false } = {}) {
