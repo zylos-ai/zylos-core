@@ -37,6 +37,8 @@ test('a threshold set for the launch model applies when the session runs at a la
   assert.equal(modelThreshold(config, { ...session, defaultModel: 'opus', launchConfig: { runtime: 'claude', mode: 'default' } }), 40);
   assert.equal(modelThreshold(config, { ...session, launchConfig: { runtime: 'claude', mode: 'override', model: 'opus' } }), 40);
   assert.equal(modelThreshold(config, session), 20, 'without launch evidence the observed window decides');
+  assert.equal(modelThreshold({ model_rotation_thresholds: { claude: { sonnet: 40 } } }, { ...session,
+    launchConfig: { runtime: 'claude', mode: 'override', model: 'sonnet' } }), 20, 'a different launch model does not apply');
 });
 
 test('migration leaves absent or invalid legacy thresholds implicit instead of storing policy defaults', async t => {

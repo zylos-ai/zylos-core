@@ -53,7 +53,9 @@ function candidates(options) {
     ? launch.model : launch.mode === 'default' ? options.defaultModel : null) : '';
   const keys = alias && alias !== key && options.context.thresholdKeys.isAlias(startedModel) && startedModel === alias ? [key, alias] : [key];
   // Settings store the launch model's own key without the observed window (e.g. `opus` for a session that runs at 1M).
-  const launchKey = startedModel ? modelThresholdKey({ ...options, model: startedModel, contextWindow: undefined }) : '';
+  // Use it only when the launch model, at the observed window, is the model this session runs.
+  const sameModel = startedModel && [key, alias].includes(options.context.thresholdKeys.key(startedModel, isLargeWindow(options)));
+  const launchKey = sameModel ? modelThresholdKey({ ...options, model: startedModel, contextWindow: undefined }) : '';
   return launchKey && !keys.includes(launchKey) ? [...keys, launchKey] : keys;
 }
 function defaultMatches(options) {
