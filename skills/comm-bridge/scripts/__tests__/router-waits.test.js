@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PENDING_MAX_AGE_SECONDS } from '../c4-config.js';
 import { createDelivery } from '../router/delivery.js';
+import { formatConversation } from '../router/format.js';
 import { routerFixture } from './helpers/router-fixture.js';
 
 function setup(t) {
@@ -36,7 +37,7 @@ function setup(t) {
     revalidateSessionTarget: async () => {},
     readSessionState: async group => ({ identity: f.scene.get(group), status: sample }),
     session: { sendText: async ({ text }) => { calls.pastes++; sent.push(text); }, sendKeys: async () => {}, captureScreen: async () => '❯ ' },
-    formatConversation: row => row.content,
+    formatConversation,
     notifyDelivered: () => {},
   }, { periodicEnabled: false, captureEnabled: false });
   Object.assign(f.deps, { deliverConversation: delivery.deliverConversation, deliverControl: delivery.deliverControl,
@@ -94,4 +95,5 @@ test('an inbound message queued behind a fence is delivered after a long wait', 
   await f.rounds(2);
   assert.equal(f.row(message.id).status, 'delivered');
   assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0].split('\n', 1)[0], /^\[C4\] This message waited in the queue for /);
 });
