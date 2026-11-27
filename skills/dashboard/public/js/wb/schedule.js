@@ -291,7 +291,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   let data = null, error = false, selected = null, history = null, historyGen = 0, form = null, confirmFor = null,
     filter = { status: 'all', query: '', target: null }, owner = identity(), stopped = false, notice = null,
     fullPrompt = null, detailTask = null, detailError = false, detailGen = 0, listBusy = false, pageCount = 1;
-  let creationNotice = false;
+  let creation = null, creationNotice = false;
   // The page, the drawer and the dialog layer stay mounted across redraws, so a refresh keeps the drawer's
   // scroll position and an open form keeps its focus and typed text.
   const main = element(document, 'div', undefined, 'wb-sched-main');
@@ -330,6 +330,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     form = null;
     confirmFor = null;
     notice = null;
+    creation = null;
     creationNotice = false;
     root.replaceChildren();
     mounted = false;
@@ -591,6 +592,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     // become edit state, even when the summary happens to fit in 200 characters.
     if (task && (task !== detailTask || task.promptTruncated)) return;
     const creating = !task;
+    if (creating && creation) return;
     if (creating) creationNotice = false;
     const original = initialForm(task, { reenable, tz: tz() });
     const handle = createForm(document, {
@@ -604,20 +606,30 @@ export function mountSchedule({ document = globalThis.document, window = globalT
         redraw();
       },
       onSave: async state => {
+        const machine = owner;
         handle.setBusy(true);
+        if (creating) {
+          creation = handle;
+          redraw();
+        }
         handle.setMessage('');
         const body = formPayload(state, creating ? null : original, { reenable });
         const outcome = creating ? await write('POST', '/api/schedules', body)
           : await write('PUT', `/api/schedules/${encodeURIComponent(task.id)}`, body);
+        if (stopped || machine !== identity() || (creating && creation !== handle)) return;
         await refresh({ force: true });
-        if (form?.handle !== handle || stopped) return;
-        if (creating && outcome.result === 'unknown') {
-          close();
-          creationNotice = true;
-          setMobileTab('tasks');
+        if (stopped || machine !== identity() || (creating && creation !== handle)) return;
+        if (creating) {
+          creation = null;
+          if (outcome.result === 'unknown') {
+            if (form?.handle === handle) close();
+            creationNotice = true;
+            setMobileTab('tasks');
+          }
           redraw();
-          return;
+          if (outcome.result === 'unknown') return;
         }
+        if (form?.handle !== handle) return;
         handle.setBusy(false);
         const message = writeMessage(outcome, t);
         if (message === null) {
@@ -849,6 +861,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   function createTaskButton(className) {
     const label = t('wb.schedule.new');
     const create = button(document, '', () => openForm(null), 'wb-btn wb-btn-primary wb-sched-new ' + className);
+    create.disabled = Boolean(creation);
     create.append(icon(document, 'plus', 'xs'), element(document, 'span', label));
     return create;
   }
