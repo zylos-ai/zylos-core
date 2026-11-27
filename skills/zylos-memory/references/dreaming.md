@@ -23,9 +23,11 @@ The process owns a lease, renews it every 30 seconds and can replace a lease
 whose process has exited or whose heartbeat is more than two minutes old.
 Every model edit checks the current lease and token. Model calls have
 independent wall-clock limits of ten minutes for extraction, thirty minutes for
-merging, sixty minutes per weekly tidy call and ten minutes per header repair.
+merging, sixty minutes for the weekly tidy review, twenty minutes per page condensing
+call and ten minutes per header repair.
 Each call can emit up to 64 MiB on stdout, including streamed tool results.
-Repeatable call failures are retried twice, except header repair makes at most two calls.
+Repeatable call failures are retried twice, except header repair makes at most
+two calls and a failed or timed-out condensing call is not repeated that night.
 A header that could not be repaired is reported once per night and checked again on a later run.
 Writes already published by the models are retained.
 
@@ -39,6 +41,15 @@ Weekly tidy runs after a successful dream. Set the weekday with
 `zylos config set memory_tidy_weekday <0–6>` (default 0, Sunday). It checks for
 duplicate pages and reviews active pages unchanged for over 30 days. After
 that review, the script archives completed and abandoned pages over 30 days
-old. It saves the original of each page over 24 KiB before condensation. One
-call handles up to five large pages, largest first, and each page is included
-at most once per night.
+old. Then each page over 24 KiB, measured after that cleanup and largest first,
+gets its own condensing call. The script saves the original in the archive and
+inlines the page; the model returns a rewritten body (a short `## Current`, an
+overview of older results, the recent results) that fits the limit, whatever
+the page's section layout. A body over 150 KiB, which some runtimes would cut
+in the middle, is split at entry starts into parts of at most 120 KiB; each
+part is first condensed to notes in its own call. Notes have a target size,
+not a limit; when the notes together are still over 150 KiB they are split and
+condensed again, and a round that does not shorten them stops condensing that
+page. The final call rewrites the body from the notes. The script keeps the
+header, writes the body only if the page did not change meanwhile, and reports
+pages it could not condense; they are tried again the next week.

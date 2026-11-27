@@ -3,7 +3,6 @@ import { inspectReferenceHeader, movePage, pagePath, publishReferenceFile, readR
 import { resolveAllowedMemoryPath } from './self-write.js';
 
 export const PAGE_SOFT_LIMIT = 24 * 1024;
-const COMPRESSION_BATCH_SIZE = 5;
 const THIRTY_DAYS = 30 * 86400_000;
 const KINDS = ['projects', 'decisions'];
 const normalize = text => text.normalize('NFKC').toLowerCase().replace(/[\s_-]+/g, ' ').trim();
@@ -143,73 +142,153 @@ function pairsFor(pages) {
   return [...pairs].map(([pair, keys]) => `- ${pair} (shared keys: ${keys.join(', ')})`);
 }
 
-export async function tidyReference({ root, date, call, repair, mutate }) {
-  const starting = pageCatalog(root, indexes(root));
-  const large = starting.map(page => ({ ...page, bytes: Buffer.byteLength(page.text) }))
+function splitHeader(text) {
+  const blank = /\r?\n[ \t]*\r?\n/.exec(text);
+  return blank ? { header: text.slice(0, blank.index), body: text.slice(blank.index + blank[0].length) } : { header: text, body: '' };
+}
+
+function largePages(root) {
+  return pageCatalog(root, indexes(root)).map(page => ({ ...page, bytes: Buffer.byteLength(page.text) }))
     .filter(page => page.bytes > PAGE_SOFT_LIMIT && pagePath(page.relative))
     .sort((a, b) => b.bytes - a.bytes || a.relative.localeCompare(b.relative));
-  const stale = starting.filter(page => page.Status === 'active' && old(page, date));
-  const pairs = pairsFor(starting);
-  const errors = [];
-  for (let offset = 0, first = true; first || offset < large.length; first = false) {
-    const batch = [];
-    while (offset < large.length && batch.length < COMPRESSION_BATCH_SIZE) {
-      const page = large[offset++];
-      if (fs.existsSync(pageFile(root, page.relative))) batch.push(page);
-    }
-    if (!first && !batch.length) break;
-    const input = [
-      ...indexes(root).map(index => index.content),
-      '## Active pages older than 30 days',
-      ...(first ? stale.map(page => `- ${page.relative} (Updated ${page.Updated})`) : []),
-      '## Large pages',
-      ...batch.map(page => `- ${page.relative} (${page.bytes} bytes)`),
-      '## Candidate pairs',
-      ...(first ? pairs : []),
-    ].join('\n');
-    let result;
-    let failed = false;
-    try {
-      await mutate(() => {
-        for (const page of batch) {
-          const archive = pageFile(root, `archive/dreaming/${date}/${page.relative}`);
-          if (!fs.existsSync(archive)) publishReferenceFile(archive, read(root, page.relative), true);
-        }
-      });
-      result = await call(input);
-    } catch (error) {
-      failed = true;
-      errors.push(`Weekly memory tidy failed: ${error.message}`);
-    }
-    errors.push(...(await repair()).map(file => `Unparsable reference header: ${file}`));
-    if (first) await mutate(() => {
-      for (const { keep, archive } of result?.merged ?? []) {
-        if (!pagePath(keep) || !pagePath(archive) || keep === archive || keep.split('/')[1] !== archive.split('/')[1] ||
-            !fs.existsSync(pageFile(root, keep)) || !fs.existsSync(pageFile(root, archive))) {
-          errors.push(`Invalid merged page pair: ${keep} / ${archive}`);
-          continue;
-        }
-        const file = pageFile(root, archive);
-        const pointer = `Merged into: ${keep}`;
-        try {
-          const text = fs.readFileSync(file, 'utf8');
-          if (!text.split('\n').includes(pointer)) publishReferenceFile(file, `${text.trimEnd()}\n\n${pointer}\n`);
-          movePage(root, archive, false, { rebuildIndex: false });
-        } catch (error) {
-          errors.push(`Unable to archive ${archive}: ${error.code ?? error.message}`);
-        }
-      }
-      for (const { kind, pages } of indexes(root)) for (const page of pages) {
-        if (!['completed', 'abandoned'].includes(page.Status) || !old(page, date)) continue;
-        const relative = `reference/${kind}/${page.file}`;
-        if (!pagePath(relative)) continue;
-        try { movePage(root, relative, false, { rebuildIndex: false }); }
-        catch (error) { errors.push(`Unable to archive ${relative}: ${error.code ?? error.message}`); }
-      }
-      rebuild(root);
-    });
-    if (failed) break;
+}
 
+// Bodies over SPLIT_LIMIT are condensed in parts of at most PART_LIMIT: some runtimes cut the middle of a very long input.
+const SPLIT_LIMIT = 150 * 1024;
+const PART_LIMIT = 120 * 1024;
+const ENTRY_START = /^(#{1,6} |[-*+] |\d+[.)] )/;
+
+/** Split a body at entry starts (headings and top-level list items) into parts of similar size, each at most PART_LIMIT where entries allow. */
+export function splitBody(body) {
+  const blocks = [];
+  for (const line of body.split('\n')) {
+    if (!blocks.length || (ENTRY_START.test(line) && blocks.at(-1).length)) blocks.push([]);
+    blocks.at(-1).push(line);
   }
+  const texts = blocks.flatMap(lines => {
+    const text = lines.join('\n');
+    if (Buffer.byteLength(text) <= PART_LIMIT) return [text];
+    // An entry longer than a part is cut at line ends.
+    const pieces = [[]];
+    for (const line of lines) {
+      if (pieces.at(-1).length && Buffer.byteLength([...pieces.at(-1), line].join('\n')) > PART_LIMIT) pieces.push([]);
+      pieces.at(-1).push(line);
+    }
+    return pieces.map(piece => piece.join('\n'));
+  });
+  const total = Buffer.byteLength(body);
+  const target = total / Math.ceil(total / PART_LIMIT);
+  const parts = [''];
+  for (const text of texts) {
+    const current = parts.at(-1);
+    const joined = current ? `${current}\n${text}` : text;
+    if (current && (Buffer.byteLength(joined) > PART_LIMIT || Buffer.byteLength(current) >= target)) parts.push(text);
+    else parts[parts.length - 1] = joined;
+  }
+  return parts;
+}
+
+function bodyCheck(limit) {
+  return text => {
+    const bytes = Buffer.byteLength(text.trim());
+    if (bytes > limit) throw new Error(`body is ${bytes} bytes; it must be at most ${limit} bytes`);
+    if (/<!-- zylos:entry/.test(text)) throw new Error('return only the body, without the page header');
+    if (!text.trim().startsWith('## ')) throw new Error('body must be Markdown itself, starting with a "## " heading');
+    return text.trim();
+  };
+}
+
+/** Condense one page: the model rewrites the body from the inlined text; the script keeps the header and writes it back. */
+async function condensePage({ root, date, page, condense, mutate }) {
+  const { header, body } = splitHeader(page.text);
+  const budget = PAGE_SOFT_LIMIT - Buffer.byteLength(header) - 3;
+  if (budget < 1024) return `Unable to condense ${page.relative}: its header alone is near the size limit`;
+  await mutate(() => {
+    const archive = pageFile(root, `archive/dreaming/${date}/${page.relative}`);
+    if (!fs.existsSync(archive)) publishReferenceFile(archive, page.text, true);
+  });
+  const lead = [`Date: ${date}`, `Page: ${page.relative}`];
+  const pageHeader = ['', '## Header (kept as is by the script)', header, ''];
+  let content = ['## Body', body];
+  let condensed;
+  try {
+    // Each part is condensed to notes, which have only a target size. Notes still too long for one call are
+    // split and condensed again; the final call rewrites the body from the notes in page order.
+    let text = body;
+    while (Buffer.byteLength(text) > SPLIT_LIMIT) {
+      const parts = splitBody(text);
+      const target = Math.floor(SPLIT_LIMIT / parts.length);
+      const notes = [];
+      for (const [index, part] of parts.entries()) {
+        const label = `part ${index + 1} of ${parts.length}`;
+        try {
+          notes.push(await condense([...lead, `Body ${label}; write notes for this part only`,
+            `Notes target: about ${target} bytes in UTF-8 (a Chinese character takes 3 bytes)`,
+            ...pageHeader, `## Body ${label}`, part].join('\n'), bodyCheck(Infinity)));
+        } catch (error) { throw new Error(`${label}: ${error.message}`); }
+      }
+      const joined = notes.map((note, index) => `### Notes on part ${index + 1} of ${parts.length}\n\n${note}`).join('\n\n');
+      if (Buffer.byteLength(joined) >= Buffer.byteLength(text)) throw new Error('notes on the parts were not shorter than the text');
+      text = joined;
+      content = [`## Notes on the body, in page order (the body was ${Buffer.byteLength(body)} bytes)`, text];
+    }
+    condensed = await condense([...lead, `Body size limit: ${budget} bytes in UTF-8 (a Chinese character takes 3 bytes)`,
+      ...pageHeader, ...content].join('\n'), bodyCheck(budget));
+  } catch (error) { return `Unable to condense ${page.relative}: ${error.message}`; }
+  let changed = false;
+  await mutate(() => {
+    if (read(root, page.relative) !== page.text) { changed = true; return; }
+    publishReferenceFile(pageFile(root, page.relative), `${header}\n\n${condensed}\n`);
+  });
+  return changed ? `Unable to condense ${page.relative}: the page changed while it was being condensed` : null;
+}
+
+export async function tidyReference({ root, date, call, condense, repair, mutate }) {
+  const starting = pageCatalog(root, indexes(root));
+  const stale = starting.filter(page => page.Status === 'active' && old(page, date));
+  const errors = [];
+  const input = [
+    ...indexes(root).map(index => index.content),
+    '## Active pages older than 30 days',
+    ...stale.map(page => `- ${page.relative} (Updated ${page.Updated})`),
+    '## Candidate pairs',
+    ...pairsFor(starting),
+  ].join('\n');
+  let result;
+  try { result = await call(input); }
+  catch (error) { errors.push(`Weekly memory tidy failed: ${error.message}`); }
+  errors.push(...(await repair()).map(file => `Unparsable reference header: ${file}`));
+  await mutate(() => {
+    for (const { keep, archive } of result?.merged ?? []) {
+      if (!pagePath(keep) || !pagePath(archive) || keep === archive || keep.split('/')[1] !== archive.split('/')[1] ||
+          !fs.existsSync(pageFile(root, keep)) || !fs.existsSync(pageFile(root, archive))) {
+        errors.push(`Invalid merged page pair: ${keep} / ${archive}`);
+        continue;
+      }
+      const file = pageFile(root, archive);
+      const pointer = `Merged into: ${keep}`;
+      try {
+        const text = fs.readFileSync(file, 'utf8');
+        if (!text.split('\n').includes(pointer)) publishReferenceFile(file, `${text.trimEnd()}\n\n${pointer}\n`);
+        movePage(root, archive, false, { rebuildIndex: false });
+      } catch (error) {
+        errors.push(`Unable to archive ${archive}: ${error.code ?? error.message}`);
+      }
+    }
+    for (const { kind, pages } of indexes(root)) for (const page of pages) {
+      if (!['completed', 'abandoned'].includes(page.Status) || !old(page, date)) continue;
+      const relative = `reference/${kind}/${page.file}`;
+      if (!pagePath(relative)) continue;
+      try { movePage(root, relative, false, { rebuildIndex: false }); }
+      catch (error) { errors.push(`Unable to archive ${relative}: ${error.code ?? error.message}`); }
+    }
+    rebuild(root);
+  });
+  // Pages are measured after merging and archiving, largest first, one call each.
+  for (const page of largePages(root)) {
+    const error = await condensePage({ root, date, page, condense, mutate });
+    if (error) errors.push(error);
+  }
+  await mutate(() => rebuild(root));
   return errors;
 }

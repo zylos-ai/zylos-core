@@ -6,7 +6,7 @@ import path from 'node:path';
 import { runDream } from '../dream.js';
 import { dreamLock } from '../dream-lock.js';
 import { createMemoryEditor } from '../memory-mcp-server.js';
-import { candidatePages, tidyReference } from '../dream-pages.js';
+import { candidatePages, tidyReference, PAGE_SOFT_LIMIT } from '../dream-pages.js';
 import { createPage, rebuild } from '../reference-index.js';
 import { DREAM_BATCH_BYTES, makeDreamBatches } from '../dream-history.js';
 
@@ -25,7 +25,7 @@ const message = (id, content) => ({ id, content, direction: 'out', timestamp: '2
 const raw = (group, rows) => ({ group, rows });
 const responses = groups => JSON.stringify({ groups: groups.map(group => ({ group, summary: `Summary of ${group}`, items: [] })) });
 const empty = { diary: '', rule_candidates: [], pages_changed: [], pages_created: [], skipped: [] };
-const tidy = { merged: [], uncertain: [], read_not_merged: [], status_changes: [], condensed: [] };
+const tidy = { merged: [], uncertain: [], read_not_merged: [], status_changes: [] };
 
 function fakeDatabase(conversations) {
   const coverage = new Map(), checkpoints = [];
@@ -219,32 +219,25 @@ test('candidate search discounts common terms and ranks rare Keys and body ident
     ['page-0.md (topic 9916)', 'page-1.md (#525)']);
 });
 
-test('weekly tidy uses a single review then batches original large pages, and archives using refreshed status', async t => {
+test('weekly tidy reviews once, archives by refreshed status, then condenses each large page in its own call', async t => {
   const { root, read } = fixture(t);
   const ref = name => `reference/projects/${name}.md`;
   const add = (name, status, date, key, text) => createPage(root, ref(name), pageText(name, status, date, key, text));
   add('keep', 'active', '2026-11-01', 'unique pair', 'keep');
-  add('duplicate', 'active', '2026-11-01', 'unique pair', 'duplicate');
+  add('duplicate', 'active', '2026-11-01', 'unique pair', 'x'.repeat(40 * 1024));
   add('stale', 'active', '2026-10-13');
   add('still-active', 'active', '2026-10-13', 'ongoing');
   add('finished', 'completed', '2026-10-22');
   add('recent', 'completed', '2026-10-24');
-  const names = Array.from({ length: 12 }, (_, index) => `large-${index}`);
-  for (const [index, name] of names.entries()) add(name, 'active', '2026-11-20', name, 'x'.repeat(25 * 1024 + index));
+  for (const [index, name] of ['large-0', 'large-1', 'large-2', 'large-3'].entries()) {
+    add(name, 'active', '2026-11-20', name, `## 当前状况\n${'y'.repeat(25 * 1024 + index * 1000)}`);
+  }
   rebuild(root);
-  const batches = [];
+  const reviews = [], condensed = [];
   const errors = await tidyReference({ root, date: '2026-11-22', mutate: action => action(), repair: () => [],
     call: async input => {
-      const first = batches.length === 0;
-      const list = input.match(/## Large pages\n([\s\S]*?)\n## Candidate pairs/)[1];
-      const paths = list.split('\n').filter(Boolean).map(line => line.match(/^- (\S+)/)[1]);
-      batches.push(paths);
-      for (const file of paths) assert.equal(read(`memory/archive/dreaming/2026-11-22/${file}`), read(`memory/${file}`));
-      if (!first) {
-        assert.match(input, /older than 30 days\n## Large pages/);
-        assert.match(input, /## Candidate pairs$/);
-        return tidy;
-      }
+      reviews.push(input);
+      assert.doesNotMatch(input, /## Large pages/);
       assert.match(input, /reference\/projects\/stale\.md \(Updated 2026-10-13\)/);
       assert.match(input, /reference\/projects\/still-active\.md \(Updated 2026-10-13\)/);
       assert.match(input, /duplicate\.md and reference\/projects\/keep\.md/);
@@ -252,12 +245,61 @@ test('weekly tidy uses a single review then batches original large pages, and ar
       fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('** active', '** completed'));
       return { ...tidy, merged: [{ keep: ref('keep'), archive: ref('duplicate'), why: 'Same matter' }] };
     },
+    condense: async (input, check) => {
+      const file = input.match(/^Page: (\S+)$/m)[1];
+      condensed.push(file);
+      assert.equal(read(`memory/archive/dreaming/2026-11-22/${file}`), read(`memory/${file}`));
+      assert.match(input, /## Header \(kept as is by the script\)\n# large-\d\n<!-- zylos:entry/);
+      assert.throws(() => check('z'.repeat(PAGE_SOFT_LIMIT)), /must be at most/);
+      assert.throws(() => check('{"body":"## Current"}'), /starting with a "## " heading/);
+      if (file === ref('large-2')) throw new Error('Dream model call timed out');
+      if (file === ref('large-1')) fs.appendFileSync(path.join(root, 'memory', file), 'live edit\n');
+      return check(`## Current\nCondensed ${file}`);
+    },
   });
-  assert.deepEqual(errors, []);
-  assert.deepEqual(batches.map(batch => batch.length), [5, 5, 2]);
-  assert.deepEqual(batches.flat(), [...names].reverse().map(ref));
+  assert.equal(reviews.length, 1);
+  assert.deepEqual(condensed, ['large-3', 'large-2', 'large-1', 'large-0'].map(ref));
+  assert.deepEqual(errors, [
+    `Unable to condense ${ref('large-2')}: Dream model call timed out`,
+    `Unable to condense ${ref('large-1')}: the page changed while it was being condensed`,
+  ]);
+  for (const name of ['large-3', 'large-0']) {
+    assert.equal(read(`memory/${ref(name)}`), `${pageText(name, 'active', '2026-11-20', name, '').split('\n\n')[0]}\n\n## Current\nCondensed ${ref(name)}\n`);
+  }
+  assert.match(read(`memory/${ref('large-1')}`), /live edit/);
   assert.match(read('memory/reference/projects/archive/duplicate.md'), /Merged into: reference\/projects\/keep\.md/);
   for (const file of ['stale', 'finished']) assert.match(read(`memory/reference/projects/archive/${file}.md`), /Status:\*\* completed/);
   assert.match(read('memory/reference/projects/INDEX.md'), /recent\.md/);
   assert.match(read('memory/reference/projects/still-active.md'), /Status:\*\* active/);
+});
+
+test('a body too long for one call is condensed from notes on parts cut at entry starts, again while the notes are too long', async t => {
+  const { root, read } = fixture(t);
+  const ref = 'reference/projects/huge.md';
+  const entries = Array.from({ length: 300 }, (_, index) => `- 2026-11-${String(index % 28 + 1).padStart(2, '0')} entry ${index}\n  ${'w'.repeat(700)}`);
+  const body = `## 当前状况\nold\n\n## 未完成\n${entries.join('\n')}`;
+  createPage(root, ref, pageText('huge', 'active', '2026-11-20', 'huge', body));
+  rebuild(root);
+  const rounds = [[]];
+  let final;
+  const errors = await tidyReference({ root, date: '2026-11-22', mutate: action => action(), repair: () => [], call: async () => tidy,
+    condense: async (input, check) => {
+      const part = input.match(/^## Body part (\d+) of (\d+)\n([\s\S]*)$/m);
+      if (!part) { final = input; return check('## Current\nFrom notes'); }
+      assert.ok(Buffer.byteLength(part[3]) <= 120 * 1024);
+      if (part[1] === '1' && rounds.at(-1).length) rounds.push([]);
+      rounds.at(-1).push(part[3]);
+      // First-round notes are over their target (the notes together exceed one call's input) and are still accepted.
+      return check(rounds.length === 1 ? `## Notes ${part[1]}\n${'- n\n'.repeat(20000)}` : `## Notes\nround 2 notes ${part[1]}`);
+    },
+  });
+  assert.deepEqual(errors, []);
+  assert.equal(rounds.length, 2);
+  assert.ok(rounds[0].length > 1);
+  assert.equal(rounds[0].join('\n'), read(`memory/archive/dreaming/2026-11-22/${ref}`).split(/\r?\n[ \t]*\r?\n/).slice(1).join('\n\n'));
+  assert.ok(rounds[0].slice(1).every(part => part.startsWith('- 2026-11-')));
+  assert.ok(rounds[1].every(part => part.startsWith('### Notes on part ')));
+  assert.match(final, new RegExp(rounds[1].map((_, index) => `### Notes on part ${index + 1} of ${rounds[1].length}\n\n## Notes\nround 2 notes ${index + 1}`).join('\n\n')));
+  assert.doesNotMatch(final, /entry 0|- n\n/);
+  assert.match(read(`memory/${ref}`), /\n\n## Current\nFrom notes\n$/);
 });

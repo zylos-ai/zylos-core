@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
 
-const TIMEOUTS = { stage1: 10 * 60_000, stage2: 30 * 60_000, tidy: 60 * 60_000, repair: 10 * 60_000 };
+const TIMEOUTS = { stage1: 10 * 60_000, stage2: 30 * 60_000, tidy: 60 * 60_000, condense: 20 * 60_000, repair: 10 * 60_000 };
 const OUTPUT_LIMIT = 64 * 1024 * 1024;
 
 export async function createDreamModel(root, config) {

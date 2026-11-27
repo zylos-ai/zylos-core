@@ -21,8 +21,8 @@ export const DREAM_RESULT_SCHEMAS = {
     uncertain: array(object({ pages: array(string), why: string })),
     read_not_merged: array(object({ pages: array(string), why: string })),
     status_changes: array(object({ page: string, from: oneOf('active'), to: oneOf('active', 'paused', 'completed', 'abandoned'), why: string })),
-    condensed: array(string),
   }),
+  condense: object({ body: { ...string, minLength: 1 } }),
 };
 
 function validate(schema, value, location) {
