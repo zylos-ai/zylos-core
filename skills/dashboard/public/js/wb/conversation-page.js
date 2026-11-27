@@ -1663,6 +1663,7 @@ export function mountConversationPage({
         days.delete(day);
       }
     }
+    if (!ordered.includes(unreadDivider)) unreadDivider.remove();
     positionChildren(messageList, ordered);
     for (const record of messages.values()) record.resource?.mount?.();
     const openedTimeline = s.historyLoaded && s.timelineRevision !== timelineRevision;
