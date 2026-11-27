@@ -12,6 +12,7 @@ export const RUNTIME_CONTRACT = Object.freeze({
     dailyUpgradePrompt: 'optional',
     uninstall: 'optional',
     postUpgradeSync: 'optional',
+    retiredProjectFiles: 'optional',
   }) }),
   auth: Object.freeze({ required: true, members: Object.freeze({
     checkAuth: 'required',

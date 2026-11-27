@@ -4,9 +4,9 @@ import { parseSessionGroup } from '../../skills/comm-bridge/scripts/c4-session-g
 import { withMemoryLock } from '../../skills/zylos-memory/scripts/memory-lock.js';
 import { groupRunDir } from './session-group-paths.js';
 import { maintenance } from './upgrade-protection.js';
+import { getRuntime, SUPPORTED_RUNTIMES } from './runtime/index.js';
 
 const inboxName = /^inbox(?:\.[^.]+)?\.md$/;
-const retiredAgentNames = new Set(['zylos-global-sync.md', 'zylos-group-sync.md', 'zylos-origin-sync.md']);
 
 function statIfPresent(file) {
   try { return fs.lstatSync(file, { bigint: true }); }
@@ -87,15 +87,27 @@ export async function archiveLegacyInbox(zylosDir) {
   return moved ? { message: `Archived ${moved} legacy inbox file(s)` } : { status: 'skipped', message: 'No legacy inbox files' };
 }
 
-/** Retire the three installed definitions while preserving their contents and other agents. */
-export function archiveLegacyClaudeAgents(zylosDir) {
-  const claude = path.join(zylosDir, '.claude');
-  if (!readDirectory(claude).some(entry => entry.name === 'agents')) return { status: 'skipped' };
-  const source = path.join(claude, 'agents');
-  const agents = readDirectory(source).filter(entry => entry.isFile() && retiredAgentNames.has(entry.name));
-  if (!agents.length) return { status: 'skipped' };
-  const metadata = ensureArchiveDirectory(zylosDir, '.zylos');
-  const archive = ensureArchiveDirectory(metadata, 'retired-claude-agents');
-  for (const { name } of agents) moveFileToArchive(source, archive, name);
-  return { message: `Archived ${agents.length} retired Claude agent definition(s)` };
+/** Archive adapter-owned assets without touching other project files. */
+export async function archiveRetiredRuntimeFiles(zylosDir) {
+  let moved = 0;
+  for (const id of SUPPORTED_RUNTIMES) {
+    const { install } = await getRuntime(id);
+    const retired = install.retiredProjectFiles;
+    if (!retired) continue;
+    let source = zylosDir;
+    for (const part of retired.source) {
+      source = path.join(source, part);
+      if (!statIfPresent(source)?.isDirectory()) { source = null; break; }
+    }
+    if (!source) continue;
+    const names = readDirectory(source).filter(entry => entry.isFile() && retired.names.includes(entry.name));
+    if (!names.length) continue;
+    let archive = zylosDir;
+    for (const part of retired.archive) archive = ensureArchiveDirectory(archive, part);
+    for (const { name } of names) {
+      moveFileToArchive(source, archive, name);
+      moved++;
+    }
+  }
+  return moved ? { message: `Archived ${moved} retired runtime file(s)` } : { status: 'skipped' };
 }

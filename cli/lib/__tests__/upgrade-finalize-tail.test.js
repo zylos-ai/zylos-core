@@ -94,7 +94,7 @@ test('tail archives both inbox layouts before starting services and preserves us
   assert.equal(Object.hasOwn(result,'instructionFilesRebuilt'),false);
   assert.deepEqual(calls,['thresholds','ensure','rotate','start','verify','dashboard','restart']);
   assert.equal(result.steps.find(step=>step.name==='archive_legacy_inbox')?.status,'done');
-  assert.equal(result.steps.find(step=>step.name==='archive_legacy_claude_agents')?.status,'done');
+  assert.equal(result.steps.find(step=>step.name==='archive_retired_runtime_files')?.status,'done');
   assert.equal(fs.readFileSync(path.join(memory,'state.md'),'utf8'),state);
   assert.equal(fs.readFileSync(groupState,'utf8'),state);
   assert.equal(fs.readFileSync(groupLog,'utf8'),'old group log');
@@ -103,7 +103,7 @@ test('tail archives both inbox layouts before starting services and preserves us
   const resumed=await completeUpgradeFinalization({...ctx,steps:[]},deps([],{startServices}));
   assert.equal(resumed.success,true);
   assert.equal(resumed.steps.find(step=>step.name==='archive_legacy_inbox')?.status,'skipped');
-  assert.equal(resumed.steps.find(step=>step.name==='archive_legacy_claude_agents')?.status,'skipped');
+  assert.equal(resumed.steps.find(step=>step.name==='archive_retired_runtime_files')?.status,'skipped');
 });
 
 test('an interrupted inbox archive leaves completed moves usable and resumes before starting services',async t=>{

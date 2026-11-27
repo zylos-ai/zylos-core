@@ -25,7 +25,7 @@ import { recovery, protectedDataReady, protectedSuccess, maintenance, maintenanc
 import { loadSnapshotManifest } from './upgrade-snapshot-manifest.js';
 import { updateZylosConfigLocked } from './config.js';
 import { createMigration } from './memory-migration.js';
-import { archiveLegacyClaudeAgents, archiveLegacyInbox } from './archive-legacy-memory.js';
+import { archiveRetiredRuntimeFiles, archiveLegacyInbox } from './archive-legacy-memory.js';
 import { requestRuntimeRestart } from './request-runtime-restart.js';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -1017,7 +1017,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
       zylosDir:root,updateConfig:deps.updateConfig || updateZylosConfigLocked}));
     await run(5,'memory_migration_ensure',()=> (deps.ensureMemoryMigration || (()=>createMigration({env:{...process.env,ZYLOS_DIR:root}}).ensure({createdBy:'upgrade'})))());
     await run(5,'archive_legacy_inbox',()=>archiveLegacyInbox(root));
-    await run(5,'archive_legacy_claude_agents',()=>archiveLegacyClaudeAgents(root));
+    await run(5,'archive_retired_runtime_files',()=>archiveRetiredRuntimeFiles(root));
     await run(5,'rotate_legacy_session',()=>{
       const current=path.join(root,'memory/sessions/current.md');
       if(!fs.existsSync(current))return {status:'skipped',message:'legacy session already absent'};

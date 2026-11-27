@@ -36,6 +36,11 @@ export default Object.freeze({
       npmPackage: '@anthropic-ai/claude-code', dataDir: '.claude',
     }),
     postUpgradeSync: UNSUPPORTED,
+    retiredProjectFiles: Object.freeze({
+      source: Object.freeze(['.claude', 'agents']),
+      archive: Object.freeze(['.zylos', 'retired-claude-agents']),
+      names: Object.freeze(['zylos-global-sync.md', 'zylos-group-sync.md', 'zylos-origin-sync.md']),
+    }),
   }),
   auth,
   dream,
