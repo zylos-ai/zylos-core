@@ -52,6 +52,9 @@ test('models in the runtime window table default to 1M and keep entries stored u
     assert.equal(modelThreshold({ model_rotation_thresholds: { claude: { opus: 45 } } }, options), 45, 'an entry under the plain name applies');
     assert.equal(modelThreshold({ model_rotation_thresholds: { claude: { opus: 45, 'opus[1m]': 50 } } }, options), 50, 'the current key wins');
   }
+  assert.equal(modelThreshold({ model_rotation_thresholds: { claude: { 'claude-opus-4-6': 60 } } }, { runtime: 'claude', context: contexts.claude,
+    model: 'claude-opus-4-6', contextWindow: 1000000, launchConfig: { runtime: 'claude', mode: 'override', model: 'claude-opus-4-6[1m]' } }), 20,
+    'a model outside the table keeps its window variants apart');
 });
 
 test('migration leaves absent or invalid legacy thresholds implicit instead of storing policy defaults', async t => {
