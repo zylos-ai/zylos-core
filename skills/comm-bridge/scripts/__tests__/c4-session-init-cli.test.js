@@ -235,6 +235,7 @@ describe('c4-session-init', () => {
           }
           insert.run(${lastId}, '2026-11-27 02:00:02', 'NEWEST-MESSAGE ' + 'x'.repeat(${oversized ? 12000 : 16}), '${group}');
           c.exec('COMMIT');
+          db.createCheckpoint('*', 1, 'GLOBAL-SUMMARY');
           db.close();
         `], { env: selectedEnv, encoding: 'utf8', timeout: 15000 });
         assert.equal(setup.status, 0, setup.stderr);
@@ -257,7 +258,7 @@ describe('c4-session-init', () => {
           const fetched = spawnSync('/bin/sh', ['-c', command], { env: { ...process.env, ...selectedEnv }, encoding: 'utf8', timeout: 15000 });
           assert.equal(fetched.status, 0, fetched.stderr);
           assert.equal(fetched.stdout.match(/SMALL-MESSAGE-\d+|NEWEST-MESSAGE/g)?.length, olderCount + 1);
-          assert.doesNotMatch(fetched.stdout, /OTHER-GROUP/);
+          assert.doesNotMatch(fetched.stdout, /OTHER-GROUP|GLOBAL-SUMMARY/);
         }
       });
     }
