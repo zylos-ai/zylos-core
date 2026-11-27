@@ -41,8 +41,9 @@ test('cleaned batches preserve message order, split only oversized groups and pa
     raw('origin', [message(1, 'a'.repeat(100 * 1024) + signal), message(2, 'b'.repeat(100 * 1024))]),
     raw('chat:small', [message(3, 'c'.repeat(20 * 1024))]),
     raw('chat:short', [message(4, 'd'.repeat(30 * 1024))]),
+    raw('chat:overflow', [message(5, 'e'.repeat(110 * 1024))]),
   ], '2026-11-23', 'Asia/Singapore');
-  assert.deepEqual(batches.map(batch => batch.groups.map(group => group.end)), [[1], [2], [3, 4]]);
+  assert.deepEqual(batches.map(batch => batch.groups.map(group => group.end)), [[1], [2], [3, 4], [5]]);
   assert.ok(batches.every(batch => Buffer.byteLength(batch.input) <= DREAM_BATCH_BYTES));
   assert.match(batches[0].input, /2026-11-23 08:00 OUT/);
   assert.match(batches[0].input, /<group-context>keep this<\/group-context>/);
@@ -96,9 +97,26 @@ test('failed extraction blocks later coverage in that group, while invalid merge
   assert.equal(inputs.filter(({ stage }) => stage === 'stage2').length, 1);
   assert.deepEqual(db.checkpoints.map(({ group, end }) => [group, end]), [['chat:peer', 3]]);
   assert.deepEqual(db.getDreamConversations().map(group => group.rows.map(row => row.id)), [[1, 2]]);
-  assert.equal(read('activity-monitor/memory-dreaming/2026-11-23/invalid-stage2-response.txt'), 'invalid merge result');
-  assert.equal(fs.existsSync(path.join(root, 'memory/sessions/2026-11-23.md')), false);
+  assert.equal(read('activity-monitor/memory-dreaming/2026-11-22/invalid-stage2-response.txt'), 'invalid merge result');
+  assert.equal(fs.existsSync(path.join(root, 'memory/sessions/2026-11-22.md')), false);
   assert.equal(notices.length, 1);
+});
+
+test('coverage never advances past an oversized message with a failed fragment', async t => {
+  const { root } = fixture(t);
+  const rows = [message(1, 'complete'), message(2, 'x'.repeat(DREAM_BATCH_BYTES) + 'final fragment'), message(3, 'later')];
+  const db = fakeDatabase([raw('origin', rows)]);
+  const result = await runDream({ root, config: {}, date: '2026-11-23', timezone: 'Asia/Singapore',
+    database: () => db, send: () => {},
+    newModel: () => ({ stage, input }) => {
+      if (stage === 'stage2') return JSON.stringify(empty);
+      if (input.includes('final fragment')) throw new Error('failed extraction');
+      return responses(['origin']);
+    },
+  });
+  assert.equal(result.failedBatches.length, 1);
+  assert.equal(db.getCoverageEnd('origin'), 1);
+  assert.deepEqual(db.getDreamConversations()[0].rows.map(row => row.id), [2, 3]);
 });
 
 test('merge process failure keeps all coverage and alerts once during consecutive failures', async t => {
@@ -132,11 +150,15 @@ test('a completed dream publishes the diary, proposes rules, and repairs invalid
   const rule = { text: 'Care for fixtures', source: 'C4 #1', owner_stated: true, destination: 'rules' };
   const notices = [];
   let repaired = 0;
-  const result = await runDream({ root, config: {}, date: '2026-11-23', timezone: 'Asia/Singapore',
+  const result = await runDream({ root, config: {}, date: '2026-12-01', timezone: 'Asia/Singapore',
     database: () => db, send: message => notices.push(message),
     newModel: () => async ({ stage, page, input, token }) => {
-      if (stage === 'stage1') return responses(['origin']);
+      if (stage === 'stage1') {
+        assert.match(input, /^Day: 2026-11-30 \(Asia\/Singapore\)/);
+        return responses(['origin']);
+      }
       if (stage === 'stage2') {
+        assert.match(input, /^Date: 2026-11-30\n/);
         write('memory/' + relative, pageText('Broken', 'done', '2026-11-21'));
         return JSON.stringify({ ...empty, diary, rule_candidates: [rule] });
       }
@@ -153,10 +175,33 @@ test('a completed dream publishes the diary, proposes rules, and repairs invalid
   assert.equal(result.failed, false);
   assert.equal(repaired, 1);
   assert.equal(db.getCoverageEnd('origin'), 1);
-  assert.equal(read('memory/sessions/2026-11-23.md'), diary);
+  assert.equal(read('memory/sessions/2026-11-30.md'), diary);
   assert.equal(notices.length, 1);
   assert.match(notices[0], /Care for fixtures/);
   assert.match(notices[0], /C4 #1/);
+});
+
+test('a second launch for the same date does not rerun models or send rule candidates', async t => {
+  const { root } = fixture(t);
+  const rows = [message(1, 'first')];
+  const db = fakeDatabase([raw('origin', rows)]);
+  const notices = [];
+  let calls = 0;
+  const launch = () => runDream({ root, config: {}, date: '2026-11-23', timezone: 'Asia/Singapore',
+    database: () => db, send: text => notices.push(text),
+    newModel: () => ({ stage }) => {
+      calls++;
+      return stage === 'stage1' ? responses(['origin']) : JSON.stringify({ ...empty,
+        rule_candidates: [{ text: 'Care for fixtures', source: 'C4 #1', owner_stated: true, destination: 'rules' }],
+      });
+    },
+  });
+  assert.equal((await launch()).failed, false);
+  rows.push(message(2, 'later delivery'));
+  assert.equal((await launch()).skipped, 'already attempted');
+  assert.equal(calls, 2);
+  assert.equal(notices.length, 1);
+  assert.equal(db.getCoverageEnd('origin'), 1);
 });
 
 function pageText(title, status, date, key = 'Shared Key', body = 'Body') {
@@ -181,6 +226,7 @@ test('weekly tidy uses a single review then batches original large pages, and ar
   add('keep', 'active', '2026-11-01', 'unique pair', 'keep');
   add('duplicate', 'active', '2026-11-01', 'unique pair', 'duplicate');
   add('stale', 'active', '2026-10-13');
+  add('still-active', 'active', '2026-10-13', 'ongoing');
   add('finished', 'completed', '2026-10-22');
   add('recent', 'completed', '2026-10-24');
   const names = Array.from({ length: 12 }, (_, index) => `large-${index}`);
@@ -200,6 +246,7 @@ test('weekly tidy uses a single review then batches original large pages, and ar
         return tidy;
       }
       assert.match(input, /reference\/projects\/stale\.md \(Updated 2026-10-13\)/);
+      assert.match(input, /reference\/projects\/still-active\.md \(Updated 2026-10-13\)/);
       assert.match(input, /duplicate\.md and reference\/projects\/keep\.md/);
       const file = path.join(root, 'memory', ref('stale'));
       fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('** active', '** completed'));
@@ -212,4 +259,5 @@ test('weekly tidy uses a single review then batches original large pages, and ar
   assert.match(read('memory/reference/projects/archive/duplicate.md'), /Merged into: reference\/projects\/keep\.md/);
   for (const file of ['stale', 'finished']) assert.match(read(`memory/reference/projects/archive/${file}.md`), /Status:\*\* completed/);
   assert.match(read('memory/reference/projects/INDEX.md'), /recent\.md/);
+  assert.match(read('memory/reference/projects/still-active.md'), /Status:\*\* active/);
 });

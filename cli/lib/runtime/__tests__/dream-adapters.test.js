@@ -19,7 +19,8 @@ test('dream runtime adapters select their fixed model and medium effort with an 
     const cwd = path.join(root, id);
     fs.mkdirSync(cwd);
     const prepared = runtime.dream.prepare({ cwd, root, env: {}, server: '/private/memory-mcp-server.js',
-      serverEnv: { ZYLOS_MEMORY_DREAM_ROOT: root }, instructions: 'System prompt', input: 'Dream input', tools: true });
+      serverEnv: { ZYLOS_MEMORY_DREAM_ROOT: root }, instructions: 'System prompt', input: 'Dream input', tools: true,
+      schema: { type: 'object' } });
     assert.equal(prepared.stdin, 'Dream input');
     for (const arg of expected) assert.ok(prepared.args.includes(arg), id);
     switch (id) {
@@ -32,12 +33,17 @@ test('dream runtime adapters select their fixed model and medium effort with an 
         assert.ok(prepared.args.includes('--ignore-user-config'));
         assert.ok(prepared.args.includes('shell_tool'));
         assert.ok(prepared.args.includes('unified_exec'));
+        assert.ok(prepared.args.includes('mcp_servers.dream.default_tools_approval_mode="approve"'));
         break;
       case 'agy': {
         const config = agyConfigurationPaths(prepared.env.HOME);
         const hooks = JSON.parse(fs.readFileSync(config.hooks, 'utf8'));
         assert.equal(hooks.dreaming.PreToolUse[0].matcher, '.*');
         assert.ok(prepared.args.includes('--sandbox'));
+        assert.equal(prepared.args[prepared.args.indexOf('--output-format') + 1], 'json');
+        assert.ok(prepared.args.includes('--json-schema'));
+        assert.equal(runtime.dream.decodeOutput('{"type":"result","structured_output":{"groups":[]}}'), '{"groups":[]}');
+        assert.equal(runtime.dream.decodeOutput('{"type":"result","result":"unparsed answer"}'), 'unparsed answer');
         assert.equal(prepared.env.AGY_CLI_DISABLE_AUTO_UPDATE, 'true');
         break;
       }

@@ -8,13 +8,13 @@ import { enqueueMachineControl } from './machine-control.js';
 import { UsageMonitor } from './usage-monitor.js';
 import { systemSendEnvironment } from '../../comm-bridge/scripts/c4-system-send-env.js';
 import { calendarInTimeZone } from '../../zylos-memory/scripts/shared.js';
-import { loadTimezone } from '../../scheduler/scripts/tz.js';
 
 const { findRuntime, getRuntime, runtimesWith } = await loadCoreModule('runtime/index.js');
 const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
 const { readSessionMode, readZylosConfigOrThrow } = await loadCoreModule('config.js');
 const { readRuntimeHealth, readAccountUsage } = await loadCoreModule('session-state-reader.js');
 const { zylosRoot } = await loadCoreModule('session-group-paths.js');
+const { readWorkspaceTimezone } = await loadCoreModule('env.js');
 const number = (value, fallback) => Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : fallback;
 const enabled = (value, fallback) => value === undefined ? fallback : value === true || value === 'true';
 const MAX_ERROR_LENGTH=500;
@@ -86,7 +86,7 @@ export class SupervisorMachineTasks {
     if(this.stopped||!context)return;
     const config=await this.readConfig();const now=this.now(),seconds=Math.floor(now/1000);
     const date = new Date(now);
-    const timezone = loadTimezone(this.zylosDir);
+    const timezone = readWorkspaceTimezone(this.zylosDir);
     const parts = calendarInTimeZone(date, timezone);
     // Retrying cannot fix what makes a commit fail (a large or unreadable file, a full disk) and each retry repeats the work.
     this.daily('daily-memory-commit-state',3,parts,async()=>{

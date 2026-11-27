@@ -90,12 +90,17 @@ export function stageTwoInput(root, date, batches) {
   return [...lines, ...current.map(index => index.content)].join('\n');
 }
 
-export async function repairPageHeaders(root, invoke, mutate) {
+export async function repairPageHeaders(root, invoke, mutate, failedRepairs) {
   await mutate(() => rebuild(root));
   const remaining = [];
   for (const { kind, malformed } of indexes(root)) for (const file of malformed) {
     const relative = `reference/${kind}/${file}`;
-    if (!pagePath(relative)) { remaining.push(relative); continue; }
+    if (failedRepairs.has(relative)) continue;
+    if (!pagePath(relative)) {
+      failedRepairs.add(relative);
+      remaining.push(relative);
+      continue;
+    }
     for (let attempt = 0; attempt < 2; attempt++) {
       const { error } = inspectReferenceHeader(read(root, relative), kind);
       if (!error) break;
@@ -109,7 +114,10 @@ export async function repairPageHeaders(root, invoke, mutate) {
         // Recheck on-disk state even when a call exits after writing.
       }
     }
-    if (inspectReferenceHeader(read(root, relative), kind).error) remaining.push(relative);
+    if (inspectReferenceHeader(read(root, relative), kind).error) {
+      failedRepairs.add(relative);
+      remaining.push(relative);
+    }
   }
   await mutate(() => rebuild(root));
   return remaining;

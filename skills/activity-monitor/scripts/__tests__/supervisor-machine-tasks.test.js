@@ -19,7 +19,7 @@ test('all machine notices select Origin in multi and NULL single without fallbac
 test('dream uses the configured local calendar, catches up once, and waits through a mode transition', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dream-schedule-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(root, '.env'), 'TZ=Asia/Singapore\n');
+  fs.writeFileSync(path.join(root, '.env'), 'TZ=Asia/Tokyo\n');
   const config = { upgrade_check_enabled: false, daily_upgrade_enabled: false, health_check_enabled: false,
     usage_monitor_enabled: false, usage_alert_enabled: false };
   let now;
@@ -39,23 +39,23 @@ test('dream uses the configured local calendar, catches up once, and waits throu
     await Promise.all([...tasks.pending.values()]);
   };
 
-  await tick('2026-11-09T17:59:00Z');
+  await tick('2026-11-09T16:59:00Z');
   assert.equal(calls.length, 0);
-  await tick('2026-11-09T18:00:00Z');
+  await tick('2026-11-09T17:00:00Z');
   await tick('2026-11-10T02:00:00Z');
   assert.deepEqual(calls, [{ script: 'dream.js', date: '2026-11-10' }]);
 
   config.memory_dream_hour = '4';
-  await tick('2026-11-10T18:00:00Z');
+  await tick('2026-11-10T17:00:00Z');
   assert.equal(calls.length, 1);
+  await tick('2026-11-10T18:00:00Z');
   await tick('2026-11-10T19:00:00Z');
-  await tick('2026-11-10T20:00:00Z');
   assert.deepEqual(calls.slice(1), [{ script: 'daily-commit.js', date: undefined }, { script: 'dream.js', date: '2026-11-11' }]);
 
-  await tick('2026-11-11T20:00:00Z', {});
+  await tick('2026-11-11T19:00:00Z', {});
   assert.equal(calls.length, 3);
+  await tick('2026-11-11T20:00:00Z');
   await tick('2026-11-11T21:00:00Z');
-  await tick('2026-11-11T22:00:00Z');
   assert.equal(calls.length, 4);
   assert.equal(calls.at(-1).date, '2026-11-12');
   assert.equal(tasks.state('daily-memory-dream-state').last_status, 'failed');

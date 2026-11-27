@@ -42,7 +42,7 @@ export const RUNTIME_CONTRACT = Object.freeze({
     preAccept: 'optional',
     modelConfig: 'optional',
   }) }),
-  dream: Object.freeze({ required: true, members: Object.freeze({ prepare: 'required' }) }),
+  dream: Object.freeze({ required: true, members: Object.freeze({ prepare: 'required', decodeOutput: 'optional' }) }),
   instructions: Object.freeze({ required: true, members: Object.freeze({
     template: 'required',
     output: 'required',

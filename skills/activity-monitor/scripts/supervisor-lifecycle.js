@@ -2,7 +2,7 @@ import { SyncAlertEpisodes } from './sync-alert-episodes.js';
 import { loadCoreModule } from './core-modules.js';
 const { modelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
 import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
-import { captureSyncTarget, observeSyncCompletion, latestSyncFailure } from './sync-reclaim.js';
+import { observeSyncCompletion, latestSyncFailure } from './sync-reclaim.js';
 import { CHECKPOINT_THRESHOLD } from '../../comm-bridge/scripts/c4-config.js';
 
 const { findRuntime, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/index.js');
@@ -18,8 +18,6 @@ const groupSyncThreshold = configuration => configuration.syncThreshold ?? CHECK
 const legacy = context => context.configuration.legacy === true;
 const oldUnique = (scene, context) => !legacy(context) && scene.sessionGroup === 'origin' && scene.sourceScope === null;
 const manualTarget = request => request.sessionGroup ?? 'origin';
-// Pre-reclaim Sync covers long-running workers; ordinary check deadlines stay separate.
-export const PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS = 900000;
 // Capacity eviction waits only briefly for its pre-reclaim check.
 export const EVICTION_CHECK_ACK_TIMEOUT_MS = 60000;
 // An upgrade restart also waits only briefly for its check, and restarts even when the session stays active.
@@ -78,7 +76,6 @@ export class SupervisorLifecycle {
     this.ttlPreparation = new Map();
     this.evictionPreparation = new Map();
     this.releasePreparation = new Map();
-    this.reclaimSyncFailures = new Map();
     this.deliveredWork = new Map();
     this.upgradePreparation = new Map();
     this.ttlReset = new Map();
@@ -157,7 +154,6 @@ export class SupervisorLifecycle {
   }
 
   stopped(scene, context) {
-    this.reclaimSyncFailures.delete(scene.sessionGroup);
     const current = context.scenes.find(item => item.runId === scene.runId && item.sessionGroup === scene.sessionGroup);
     if (current) Object.assign(current, { present: false, ready: false, processRunning: false });
   }
@@ -174,10 +170,10 @@ export class SupervisorLifecycle {
     return unheld;
   }
 
-  async idle(scene, context, { ignoreSyncMarker = false } = {}) {
+  async idle(scene, context) {
     if (!scene.present || !scene.ready || scene.processRunning !== true || scene.state !== 'idle' ||
         !finite(scene.idleSince) || this.now() - scene.idleSince < this.idleConfirmMs) return false;
-    return ignoreSyncMarker || this.checkReclaimDependencies(scene, context);
+    return this.checkReclaimDependencies(scene, context);
   }
 
   async alertOnce(key, event) {
@@ -212,7 +208,6 @@ export class SupervisorLifecycle {
   }
 
   async clear(fence, context) {
-    this.reclaimSyncFailures.delete(fence.sessionGroup);
     const current = await this.d.db.getDrainFence(fence.sessionGroup);
     if (!current) {
       context.fences = context.fences.filter(item => item.sessionGroup !== fence.sessionGroup);
@@ -328,9 +323,7 @@ export class SupervisorLifecycle {
         if (preparedTtl && this.activeSubagents(scene, context)) return 'waiting_idle';
         const childBlocked = this.subagentReclaimBlocked(scene, fence.reason, context);
         if (childBlocked ||
-            !await this.reclaimRead(fence, () => this.idle(scene, context, {
-              ignoreSyncMarker: ['ttl', 'release'].includes(fence.reason) && this.reclaimSyncFailures.get(group) === scene.runId,
-            }))) {
+            !await this.reclaimRead(fence, () => this.idle(scene, context))) {
           if (fence.reason === 'delete') return 'waiting_idle';
           await this.clear(fence, context);
           if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
@@ -552,61 +545,9 @@ export class SupervisorLifecycle {
 
   async preparationControlsSettled(preparation) {
     for (const id of preparation.controlIds) {
-      if (preparation.settledSyncIds?.includes(id)) continue;
       const control = await this.d.db.getControlById(id);
       if (control && TERMINAL_CONTROLS.has(control.status)) continue;
-      // Expired Sync controls cannot stall a bounded preparation indefinitely,
-      // including when the dispatcher has not yet marked them timeout.
-      const sync = preparation.syncs?.find(row => row.controlId === id);
-      if (sync && this.now() >= sync.deadline) continue;
       return false;
-    }
-    return true;
-  }
-
-  async advancePreparationSync(scene, context, preparation) {
-    const failures = [];
-    for (const sync of preparation.syncs ?? []) {
-      const proof = await observeSyncCompletion({ db: this.d.db, scene, target: sync.target,
-        readSyncMarker: this.d.readSyncMarker, env: this.d.env });
-      if (proof.ok) continue;
-      if (proof.reason === 'control_timeout' && this.now() < sync.deadline) return false;
-      failures.push({ sync, reason: proof.reason });
-    }
-    if (!failures.length) return this.checkReclaimDependencies(scene, context);
-    if (!preparation.syncRetried) {
-      for (const { sync } of failures) {
-        if (!await this.beforeWrite(scene.sessionGroup, context, scene)) return false;
-        const targetBinding = await this.bindCurrentRun(scene);
-        if (!targetBinding) return false;
-        const at = this.now();
-        const control = await this.d.db.insertControl(this.prompt(sync.prompt), {
-          sessionGroup: scene.sessionGroup, targetBinding, requireIdle: true, appendAckSuffix: true,
-          ackDeadlineAt: Math.floor((at + PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS) / 1000), createdAt: Math.floor(at / 1000),
-        });
-        // Retain every owned ID so late delivery of our own control never
-        // masquerades as new human work and cancels voluntary release.
-        preparation.settledSyncIds ??= [];
-        preparation.settledSyncIds.push(sync.controlId);
-        preparation.controlIds.push(control.id);
-        preparation.syncRetried = true;
-        Object.assign(sync, { controlId: control.id, at, deadline: at + PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS });
-        await this.recordSyncTrigger(scene, sync.target.kind, ['pre_reclaim'], sync.range, control, sync.target.checkpointId ?? null);
-      }
-      return false;
-    }
-    this.reclaimSyncFailures.set(scene.sessionGroup, scene.runId);
-    if (!preparation.syncFailureAlerted) {
-      // One alert per preparation even when both group and Origin repair fail.
-      const { sync, reason } = failures[0];
-      const code = latestSyncFailure({ env: this.d.env, scene, target: sync.target, startedAt: sync.at });
-      const control = await this.d.db.getControlById(sync.controlId);
-      const alert = { type: 'repair_failed', kind: sync.target.kind, scope: scene.sessionGroup, repairAttempt: 'pre_reclaim_retry',
-        reason: code ?? (control?.status === 'timeout' ? 'control_timeout' : reason), controlId: sync.controlId,
-        checkpointId: sync.target.checkpointId, checkpointEnd: sync.target.end,
-        ...(sync.target.kind === 'origin' ? { cursors: sync.target.cursors } : {}) };
-      preparation.syncFailureAlerted = true;
-      await this.sendSyncAlert(alert, context);
     }
     return true;
   }
@@ -625,10 +566,9 @@ export class SupervisorLifecycle {
         return;
       }
       if (!await this.preparationControlsSettled(intent)) return;
-      // An acknowledged check/Sync can still be finishing its turn or holding its
-      // scoped marker; children and activity must drain through normal guards.
+      // The check can still be finishing its turn after acknowledging the control.
       if (scene.turnOpen === true || this.subagentReclaimBlocked(scene, 'release', context) ||
-          !await this.idle(scene, context, { ignoreSyncMarker: Boolean(intent.syncs?.length) })) return;
+          !await this.idle(scene, context)) return;
       if (!intent.prepared) await this.prepareRelease(scene, context, intent);
       if (!intent.prepared || intent.controlIds.length) {
         if (!await this.preparationControlsSettled(intent)) return;
@@ -656,9 +596,7 @@ export class SupervisorLifecycle {
     if (now - last < ttl) return;
     if (preparation) {
       if (!await this.preparationControlsSettled(preparation)) return;
-      if (!preparation.partial && (this.activeSubagents(scene, context) || !await this.idle(scene, context,
-        { ignoreSyncMarker: Boolean(preparation.syncs?.length) }))) return;
-      if (preparation.partial) { this.ttlPreparation.delete(group); return; }
+      if (this.activeSubagents(scene, context) || !await this.idle(scene, context)) return;
       // Keep the preparation cutoff through the fence's final activity recheck.
       await this.beginReclaim(scene, 'ttl', context);
       return;

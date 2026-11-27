@@ -17,7 +17,8 @@ export const dream = Object.freeze({
     }
     if (tools) {
       args.push('-c', `mcp_servers.dream.command=${JSON.stringify(process.execPath)}`,
-        '-c', `mcp_servers.dream.args=${JSON.stringify([server])}`);
+        '-c', `mcp_servers.dream.args=${JSON.stringify([server])}`,
+        '-c', 'mcp_servers.dream.default_tools_approval_mode="approve"');
       for (const [key, value] of Object.entries(serverEnv)) args.push('-c', `mcp_servers.dream.env.${key}=${JSON.stringify(value)}`);
     }
     // Large prompts exceed the OS per-argument limit. Write once and close stdin.

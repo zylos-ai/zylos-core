@@ -7,6 +7,16 @@ const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 const toolGuard = fileURLToPath(new URL('./dream-tool-guard.js', import.meta.url));
 
 export const dream = Object.freeze({
+  decodeOutput(stdout) {
+    let envelope;
+    try { envelope = JSON.parse(stdout); }
+    catch { return stdout; }
+    if (envelope?.type !== 'result') return stdout;
+    if (envelope.is_error) throw new Error('Antigravity reported a failed dream model call');
+    const answer = envelope.structured_output ?? envelope.result;
+    if (answer === undefined) return stdout;
+    return typeof answer === 'string' ? answer : JSON.stringify(answer);
+  },
   prepare({ instructions, input, tools, cwd, env, server, serverEnv, schema }) {
     const home = path.join(cwd, 'home');
     const config = agyConfigurationPaths(home);
@@ -27,7 +37,7 @@ export const dream = Object.freeze({
     if (schema) {
       const file = path.join(cwd, 'output-schema.json');
       write(file, schema);
-      args.push('--json-schema', file);
+      args.push('--output-format', 'json', '--json-schema', file);
     }
     return {
       args: [...args, '-p', '-'],

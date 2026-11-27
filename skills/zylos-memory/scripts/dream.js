@@ -9,7 +9,6 @@ import { DEFAULT_ALERT_DESTINATION } from '../../activity-monitor/scripts/superv
 import { parseServerAlertTarget } from '../../activity-monitor/scripts/supervisor-server-observation.js';
 import { SyncAlertEpisodes } from '../../activity-monitor/scripts/sync-alert-episodes.js';
 import { systemSendEnvironment } from '../../comm-bridge/scripts/c4-system-send-env.js';
-import { loadTimezone } from '../../scheduler/scripts/tz.js';
 import { dreamLock, dreamRunDirectory, DREAM_HEARTBEAT_MS } from './dream-lock.js';
 import { createDreamModel } from './dream-model.js';
 import { runDreamRound } from './dream-round.js';
@@ -38,14 +37,18 @@ function notify(config, message) {
   });
 }
 
-export async function runDream({ root, config, date, timezone, signal: requestedSignal,
+export async function runDream({ root, config, date: runDate, timezone, signal: requestedSignal,
   newModel = createDreamModel, database = () => import('../../comm-bridge/scripts/c4-db.js'),
   send = message => notify(config, message), lock = dreamLock(root),
 }) {
-  const day = new Date(`${date}T00:00:00Z`);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(day.valueOf()) || day.toISOString().slice(0, 10) !== date) {
+  const day = new Date(`${runDate}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(runDate) || !Number.isFinite(day.valueOf()) || day.toISOString().slice(0, 10) !== runDate) {
     throw new Error('Expected the dream calendar date (YYYY-MM-DD)');
   }
+  const weekday = day.getUTCDay();
+  // The supervisor supplies the workspace calendar date. Subtract a day without a local DST shift.
+  day.setUTCDate(day.getUTCDate() - 1);
+  const date = day.toISOString().slice(0, 10);
   if (requestedSignal?.aborted) requestedSignal.throwIfAborted();
   const token = await lock.acquire();
   if (!token) return { skipped: 'already running' };
@@ -71,7 +74,6 @@ export async function runDream({ root, config, date, timezone, signal: requested
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
       durableJson(record, { status: 'started', date });
     });
-    const weekday = day.getUTCDay();
     const tidyWeekday = Number(config.memory_tidy_weekday ?? 0);
     let result;
     try {
@@ -88,8 +90,8 @@ export async function runDream({ root, config, date, timezone, signal: requested
     }
     await lock.guard(token, () => durableJson(record, { status: result.failed ? 'failed' : 'ok', date, ...result }));
     const episodes = new SyncAlertEpisodes({ file: path.join(dreamRunDirectory(root), 'alert-episodes.json') });
-    const yesterday = new Date(day.getTime() - 86400_000).toISOString().slice(0, 10);
-    const previous = readRecord(path.join(dreamRunDirectory(root), yesterday, 'run.json'));
+    day.setUTCDate(day.getUTCDate() - 1);
+    const previous = readRecord(path.join(dreamRunDirectory(root), day.toISOString().slice(0, 10), 'run.json'));
     if (!result.failed || !previous || previous.status === 'ok') episodes.reconcile({ resolved: [ALERT] });
     if (result.failed && previous && previous.status !== 'ok' && episodes.claim(ALERT)) {
       result.warnings.push('Memory dreaming had failures on two consecutive days. Unprocessed conversations remain available for the next run.');
@@ -104,10 +106,11 @@ export async function runDream({ root, config, date, timezone, signal: requested
 
 async function main() {
   const { ZYLOS_DIR, readZylosConfigOrThrow } = await loadCoreModule('config.js');
+  const { readWorkspaceTimezone } = await loadCoreModule('env.js');
   const controller = new AbortController();
   for (const name of ['SIGINT', 'SIGTERM']) process.once(name, () => controller.abort(new Error(`Dream interrupted by ${name}`)));
   const result = await runDream({ root: ZYLOS_DIR, config: readZylosConfigOrThrow(), date: process.argv[2],
-    timezone: loadTimezone(ZYLOS_DIR), signal: controller.signal });
+    timezone: readWorkspaceTimezone(ZYLOS_DIR), signal: controller.signal });
   console.log(result.skipped ? `Dream skipped: ${result.skipped}` : `Dream finished: ${result.failed ? 'failed' : 'ok'}`);
   if (result.failed) process.exitCode = 1;
 }

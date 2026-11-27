@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
 
-const TIMEOUTS = { stage1: 10 * 60_000, stage2: 30 * 60_000, tidy: 10 * 60_000, repair: 10 * 60_000 };
+const TIMEOUTS = { stage1: 10 * 60_000, stage2: 30 * 60_000, tidy: 60 * 60_000, repair: 10 * 60_000 };
 const OUTPUT_LIMIT = 4 * 1024 * 1024;
 
 export async function createDreamModel(root, config) {
@@ -26,7 +26,9 @@ export async function createDreamModel(root, config) {
         serverEnv: { ZYLOS_MEMORY_DREAM_ROOT: root, ...(page ? { ZYLOS_MEMORY_DREAM_PAGE: page } : {}) },
       });
       const stdout = await runModel(command, prepared, cwd, TIMEOUTS[stage], signal);
-      return prepared.answer ? fs.readFileSync(prepared.answer, 'utf8') : stdout;
+      if (prepared.answer) return fs.readFileSync(prepared.answer, 'utf8');
+      const decode = runtime.dream.decodeOutput;
+      return typeof decode === 'function' ? decode(stdout) : stdout;
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
     }

@@ -100,7 +100,8 @@ export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday
   const extracted = results.filter(Boolean);
   if (batches.length && !extracted.length) return { failedBatches, failed: true, warnings };
   let result;
-  const repair = () => repairPageHeaders(root, options => invoke('repair', options), mutate);
+  const failedRepairs = new Set();
+  const repair = () => repairPageHeaders(root, options => invoke('repair', options), mutate, failedRepairs);
   if (extracted.length) {
     const input = stageTwoInput(root, date, extracted);
     let answer;
