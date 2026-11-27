@@ -3189,13 +3189,7 @@ async function sendAction(action, body, followUp) {
       if (operation) { localRuntimeOperation = null; refreshRuntimeOperation(); }
     }
     if (feedback && !feedback.isCurrent()) return false;
-    // A switch or upgrade without an answer may still have run: it is checked, never reported as failed.
-    if (!answered) {
-      if (!feedback) throw Object.assign(new Error(t('wb.settings.runtimeOperation.checking')), { code: 'result_unknown' });
-      await checkRuntimeUpgrade(feedback, actionRuntime, targetKey);
-      return false;
-    }
-    if (operation && result.error?.code === 'operation_in_progress') {
+    if (answered && operation && result.error?.code === 'operation_in_progress') {
       if (result.operation && state.dashboardState) state.dashboardState = { ...state.dashboardState, operation_in_progress: result.operation };
       refreshRuntimeOperation();
       const message = t('result.operation_in_progress');
@@ -3203,10 +3197,15 @@ async function sendAction(action, body, followUp) {
       feedback.show(message, null);
       return false;
     }
-    if (upgrading && r.status >= 500
-      && !['upgrade_failed', 'deadline_exceeded'].includes(result.error?.code ?? result.error)) {
-      result.messageKey = 'result.runtime_upgrade_unknown';
-      result.messageParams = { runtime: runtimeName(actionRuntime) || t('wb.unknown') };
+    // A switch or upgrade may still have run when no answer came back, when the server itself reports the
+    // result unknown, or when an upgrade ends in a server error other than a known failure: it is checked,
+    // never reported as failed.
+    const unclear = !answered || (operation && (result.unknown === true || (upgrading && r.status >= 500
+      && !['upgrade_failed', 'deadline_exceeded'].includes(result.error?.code ?? result.error))));
+    if (unclear) {
+      if (!feedback) throw Object.assign(new Error(t('wb.settings.runtimeOperation.checking')), { code: 'result_unknown' });
+      await checkRuntimeUpgrade(feedback, actionRuntime, targetKey);
+      return false;
     }
     if (action === 'restart-session' && result.requestId) {
       pendingManualRestart = result.submission === 'unknown' ? { requestId: result.requestId, submission: result.submission, runId: body?.runId } : null;
@@ -3249,7 +3248,7 @@ async function sendAction(action, body, followUp) {
   }
 }
 
-// The CLI upgrade got no answer: refresh the installed versions, then show what the server reads now.
+// The CLI upgrade's result is unknown: refresh the installed versions, then show what the server reads now.
 async function checkRuntimeUpgrade(feedback, runtime, targetKey) {
   const name = runtimeName(runtime) || t('wb.unknown');
   feedback.show(t('wb.settings.runtimeOperation.checking'), null);

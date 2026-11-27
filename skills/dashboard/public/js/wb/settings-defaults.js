@@ -238,7 +238,7 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
       else feedback?.show(error.message, false);
     } finally { savingRuntime = false; refreshLocks(); }
   });
-  // No answer came back, so the switch may or may not have happened: read what the server reports now.
+  // The switch's result is unknown (no answer, or the server reports it unknown): read what the server reports now.
   async function checkSwitch(feedback) {
     feedback.show(t('wb.settings.runtimeOperation.checking'), null);
     try {
