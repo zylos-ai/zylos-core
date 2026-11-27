@@ -158,51 +158,43 @@ const SPLIT_LIMIT = 150 * 1024;
 const PART_LIMIT = 120 * 1024;
 const ENTRY_START = /^(#{1,6} |[-*+] |\d+[.)] )/;
 
-/** Split a body at entry starts (headings and top-level list items) into parts of similar size, each at most PART_LIMIT where entries allow. */
-export function splitBody(body) {
+/** Split text at entry starts (headings and top-level list items) into parts of at most PART_LIMIT; an entry longer than a part is cut at line ends. */
+function splitBody(text) {
   const blocks = [];
-  for (const line of body.split('\n')) {
+  for (const line of text.split('\n')) {
     if (!blocks.length || (ENTRY_START.test(line) && blocks.at(-1).length)) blocks.push([]);
     blocks.at(-1).push(line);
   }
-  const texts = blocks.flatMap(lines => {
-    const text = lines.join('\n');
-    if (Buffer.byteLength(text) <= PART_LIMIT) return [text];
-    // An entry longer than a part is cut at line ends.
-    const pieces = [[]];
+  const parts = [[]];
+  for (const lines of blocks) {
+    const whole = Buffer.byteLength([...parts.at(-1), ...lines].join('\n')) <= PART_LIMIT;
+    if (!whole && parts.at(-1).length) parts.push([]);
     for (const line of lines) {
-      if (pieces.at(-1).length && Buffer.byteLength([...pieces.at(-1), line].join('\n')) > PART_LIMIT) pieces.push([]);
-      pieces.at(-1).push(line);
+      if (parts.at(-1).length && Buffer.byteLength([...parts.at(-1), line].join('\n')) > PART_LIMIT) parts.push([]);
+      parts.at(-1).push(line);
     }
-    return pieces.map(piece => piece.join('\n'));
-  });
-  const total = Buffer.byteLength(body);
-  const target = total / Math.ceil(total / PART_LIMIT);
-  const parts = [''];
-  for (const text of texts) {
-    const current = parts.at(-1);
-    const joined = current ? `${current}\n${text}` : text;
-    if (current && (Buffer.byteLength(joined) > PART_LIMIT || Buffer.byteLength(current) >= target)) parts.push(text);
-    else parts[parts.length - 1] = joined;
   }
-  return parts;
+  return parts.map(lines => lines.join('\n'));
 }
 
 function bodyCheck(limit) {
   return text => {
     const bytes = Buffer.byteLength(text.trim());
     if (bytes > limit) throw new Error(`body is ${bytes} bytes; it must be at most ${limit} bytes`);
-    if (/<!-- zylos:entry/.test(text)) throw new Error('return only the body, without the page header');
     if (!text.trim().startsWith('## ')) throw new Error('body must be Markdown itself, starting with a "## " heading');
     return text.trim();
   };
 }
 
 /** Condense one page: the model rewrites the body from the inlined text; the script keeps the header and writes it back. */
-async function condensePage({ root, date, page, condense, mutate }) {
-  const { header, body } = splitHeader(page.text);
+async function condensePage({ root, date, relative, condense, mutate }) {
+  // Read again: a live session may have edited, moved or shortened the page while earlier pages were condensed.
+  let text;
+  try { text = read(root, relative); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  if (Buffer.byteLength(text) <= PAGE_SOFT_LIMIT) return null;
+  const page = { relative, text };
+  const { header, body } = splitHeader(text);
   const budget = PAGE_SOFT_LIMIT - Buffer.byteLength(header) - 3;
-  if (budget < 1024) return `Unable to condense ${page.relative}: its header alone is near the size limit`;
   await mutate(() => {
     const archive = pageFile(root, `archive/dreaming/${date}/${page.relative}`);
     if (!fs.existsSync(archive)) publishReferenceFile(archive, page.text, true);
@@ -214,22 +206,23 @@ async function condensePage({ root, date, page, condense, mutate }) {
   try {
     // Each part is condensed to notes, which have only a target size. Notes still too long for one call are
     // split and condensed again; the final call rewrites the body from the notes in page order.
-    let text = body;
+    let text = body, source = 'Body';
     while (Buffer.byteLength(text) > SPLIT_LIMIT) {
       const parts = splitBody(text);
       const target = Math.floor(SPLIT_LIMIT / parts.length);
       const notes = [];
       for (const [index, part] of parts.entries()) {
-        const label = `part ${index + 1} of ${parts.length}`;
+        const label = `${source} part ${index + 1} of ${parts.length}`;
         try {
-          notes.push(await condense([...lead, `Body ${label}; write notes for this part only`,
+          notes.push(await condense([...lead, `${label}; write notes for this part only`,
             `Notes target: about ${target} bytes in UTF-8 (a Chinese character takes 3 bytes)`,
-            ...pageHeader, `## Body ${label}`, part].join('\n'), bodyCheck(Infinity)));
+            ...pageHeader, `## ${label}`, part].join('\n'), bodyCheck(Infinity)));
         } catch (error) { throw new Error(`${label}: ${error.message}`); }
       }
       const joined = notes.map((note, index) => `### Notes on part ${index + 1} of ${parts.length}\n\n${note}`).join('\n\n');
       if (Buffer.byteLength(joined) >= Buffer.byteLength(text)) throw new Error('notes on the parts were not shorter than the text');
       text = joined;
+      source = 'Notes';
       content = [`## Notes on the body, in page order (the body was ${Buffer.byteLength(body)} bytes)`, text];
     }
     condensed = await condense([...lead, `Body size limit: ${budget} bytes in UTF-8 (a Chinese character takes 3 bytes)`,
@@ -237,7 +230,9 @@ async function condensePage({ root, date, page, condense, mutate }) {
   } catch (error) { return `Unable to condense ${page.relative}: ${error.message}`; }
   let changed = false;
   await mutate(() => {
-    if (read(root, page.relative) !== page.text) { changed = true; return; }
+    let current = null;
+    try { current = read(root, page.relative); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (current !== page.text) { changed = true; return; }
     publishReferenceFile(pageFile(root, page.relative), `${header}\n\n${condensed}\n`);
   });
   return changed ? `Unable to condense ${page.relative}: the page changed while it was being condensed` : null;
@@ -285,10 +280,9 @@ export async function tidyReference({ root, date, call, condense, repair, mutate
     rebuild(root);
   });
   // Pages are measured after merging and archiving, largest first, one call each.
-  for (const page of largePages(root)) {
-    const error = await condensePage({ root, date, page, condense, mutate });
+  for (const { relative } of largePages(root)) {
+    const error = await condensePage({ root, date, relative, condense, mutate });
     if (error) errors.push(error);
   }
-  await mutate(() => rebuild(root));
   return errors;
 }

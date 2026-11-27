@@ -34,16 +34,12 @@ function prompt(stage, variables) {
     .replace(/\{\{(AGENT_NAME|OWNER_NAME|TZ)\}\}/g, (_, key) => variables[key]);
 }
 
-async function retry(call, input, parse = answer => answer, { retryFailedCalls = true } = {}) {
+async function retry(call, input, parse = answer => answer) {
   let lastError, correction = '';
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     let answer;
     try { answer = await call(input + correction); }
-    catch (error) {
-      if (!retryFailedCalls) throw error;
-      lastError = error;
-      continue;
-    }
+    catch (error) { lastError = error; continue; }
     try { return parse(answer); }
     catch (error) { lastError = error; correction = `\n\nValidation error: ${error.message}.\n`; }
   }
@@ -136,9 +132,8 @@ export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday
     try {
       warnings.push(...await tidyReference({ root, date, repair, mutate,
         call: input => retry(input => invoke('tidy', { input }), input, answer => parseDreamResult('tidy', answer)),
-        // A failed or timed-out condensing call is not repeated; the page is tried again next week.
         condense: (input, check) => retry(input => invoke('condense', { input }), input,
-          answer => check(parseDreamResult('condense', answer).body), { retryFailedCalls: false }),
+          answer => check(parseDreamResult('condense', answer).body)),
       }));
     } catch (error) {
       warnings.push(`Weekly memory tidy could not finish: ${error.message}`);

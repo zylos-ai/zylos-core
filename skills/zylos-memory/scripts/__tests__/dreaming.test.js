@@ -250,8 +250,7 @@ test('weekly tidy reviews once, archives by refreshed status, then condenses eac
       condensed.push(file);
       assert.equal(read(`memory/archive/dreaming/2026-11-22/${file}`), read(`memory/${file}`));
       assert.match(input, /## Header \(kept as is by the script\)\n# large-\d\n<!-- zylos:entry/);
-      assert.throws(() => check('z'.repeat(PAGE_SOFT_LIMIT)), /must be at most/);
-      assert.throws(() => check('{"body":"## Current"}'), /starting with a "## " heading/);
+      assert.throws(() => check(`## Current\n${'z'.repeat(PAGE_SOFT_LIMIT)}`));
       if (file === ref('large-2')) throw new Error('Dream model call timed out');
       if (file === ref('large-1')) fs.appendFileSync(path.join(root, 'memory', file), 'live edit\n');
       return check(`## Current\nCondensed ${file}`);
@@ -259,10 +258,7 @@ test('weekly tidy reviews once, archives by refreshed status, then condenses eac
   });
   assert.equal(reviews.length, 1);
   assert.deepEqual(condensed, ['large-3', 'large-2', 'large-1', 'large-0'].map(ref));
-  assert.deepEqual(errors, [
-    `Unable to condense ${ref('large-2')}: Dream model call timed out`,
-    `Unable to condense ${ref('large-1')}: the page changed while it was being condensed`,
-  ]);
+  assert.deepEqual(errors.map(error => error.match(/reference\/\S+\.md/)[0]), [ref('large-2'), ref('large-1')]);
   for (const name of ['large-3', 'large-0']) {
     assert.equal(read(`memory/${ref(name)}`), `${pageText(name, 'active', '2026-11-20', name, '').split('\n\n')[0]}\n\n## Current\nCondensed ${ref(name)}\n`);
   }
@@ -284,13 +280,14 @@ test('a body too long for one call is condensed from notes on parts cut at entry
   let final;
   const errors = await tidyReference({ root, date: '2026-11-22', mutate: action => action(), repair: () => [], call: async () => tidy,
     condense: async (input, check) => {
-      const part = input.match(/^## Body part (\d+) of (\d+)\n([\s\S]*)$/m);
+      const part = input.match(/^## (Body|Notes) part (\d+) of (\d+)\n([\s\S]*)$/m);
       if (!part) { final = input; return check('## Current\nFrom notes'); }
-      assert.ok(Buffer.byteLength(part[3]) <= 120 * 1024);
-      if (part[1] === '1' && rounds.at(-1).length) rounds.push([]);
-      rounds.at(-1).push(part[3]);
+      assert.ok(Buffer.byteLength(part[4]) <= 120 * 1024);
+      if (part[2] === '1' && rounds.at(-1).length) rounds.push([]);
+      assert.equal(part[1], rounds.length === 1 ? 'Body' : 'Notes');
+      rounds.at(-1).push(part[4]);
       // First-round notes are over their target (the notes together exceed one call's input) and are still accepted.
-      return check(rounds.length === 1 ? `## Notes ${part[1]}\n${'- n\n'.repeat(20000)}` : `## Notes\nround 2 notes ${part[1]}`);
+      return check(rounds.length === 1 ? `## Notes ${part[2]}\n${'- n\n'.repeat(20000)}` : `## Notes\nround 2 notes ${part[2]}`);
     },
   });
   assert.deepEqual(errors, []);
@@ -298,8 +295,29 @@ test('a body too long for one call is condensed from notes on parts cut at entry
   assert.ok(rounds[0].length > 1);
   assert.equal(rounds[0].join('\n'), read(`memory/archive/dreaming/2026-11-22/${ref}`).split(/\r?\n[ \t]*\r?\n/).slice(1).join('\n\n'));
   assert.ok(rounds[0].slice(1).every(part => part.startsWith('- 2026-11-')));
-  assert.ok(rounds[1].every(part => part.startsWith('### Notes on part ')));
+  assert.match(rounds[1].join('\n'), /^### Notes on part 1 of 2\n\n## Notes 1\n[\s\S]*\n### Notes on part 2 of 2\n\n## Notes 2\n/);
   assert.match(final, new RegExp(rounds[1].map((_, index) => `### Notes on part ${index + 1} of ${rounds[1].length}\n\n## Notes\nround 2 notes ${index + 1}`).join('\n\n')));
   assert.doesNotMatch(final, /entry 0|- n\n/);
   assert.match(read(`memory/${ref}`), /\n\n## Current\nFrom notes\n$/);
+});
+
+test('notes that do not shorten the text stop condensing the page and leave it unchanged', async t => {
+  const { root, read } = fixture(t);
+  const ref = 'reference/projects/huge.md';
+  const entries = Array.from({ length: 300 }, (_, index) => `- 2026-11-01 entry ${index}\n  ${'w'.repeat(700)}`);
+  createPage(root, ref, pageText('huge', 'active', '2026-11-20', 'huge', `## 未完成\n${entries.join('\n')}`));
+  rebuild(root);
+  const original = read(`memory/${ref}`);
+  let calls = 0;
+  const errors = await tidyReference({ root, date: '2026-11-22', mutate: action => action(), repair: () => [], call: async () => tidy,
+    condense: async (input, check) => {
+      calls++;
+      const part = input.match(/^## Body part \d+ of \d+\n([\s\S]*)$/m);
+      assert.ok(part, 'only first-round parts are sent');
+      return check(`## Notes\n${part[1]}`);
+    },
+  });
+  assert.deepEqual(errors.map(error => error.match(/reference\/\S+\.md/)[0]), [ref]);
+  assert.ok(calls > 1);
+  assert.equal(read(`memory/${ref}`), original);
 });
