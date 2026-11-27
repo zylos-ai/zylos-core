@@ -88,6 +88,8 @@ export function mountConversationPage({
   let liveArea = null, liveItem = null;
   let settleTimer = null;
   let searchTimer = null, readTimer = null, readCandidate = null, reading = false, attemptedRead = 0;
+  // The phone history entry an opened conversation borrows, and the list position to return to.
+  let detailEntry = null, listScroll = null;
   let activityTimer = null,
     followAfterGesture = false,
     growthDuringGesture = 0,
@@ -296,13 +298,28 @@ export function mountConversationPage({
       void state.setSearch(searchInput.value);
     }, 300);
   });
+  // Phones open the search field at the bottom, above the keyboard, from the top bar's search button (proxied).
+  const setMobileSearch = open => {
+    if (open) sidebar.dataset.mobileSearch = 'open'; else delete sidebar.dataset.mobileSearch;
+    searchOpen.hidden = open;
+  };
+  const searchOpen = action('chat.page.search', () => { setMobileSearch(true); searchInput.focus(); }, 'search',
+    'wb-icon-btn conversation-search-open');
+  const searchClose = action('chat.page.closeSearch', () => {
+    clearSearchTimer();
+    setMobileSearch(false);
+    if (searchInput.value || state.snapshot().search) { searchInput.value = ''; list.scrollTop = 0; void state.setSearch(''); }
+  }, 'x', 'wb-icon-btn conversation-search-close');
+  const searchRow = node('div', undefined, 'conversation-search-row');
+  searchRow.append(searchInput, searchClose);
   const newConversations = action('chat.page.newConversations', () => {
     list.scrollTop = 0;
     return state.refreshList();
   }, undefined, 'wb-btn conversation-list-update');
   const list = node('div', undefined, 'conversation-items');
   list.addEventListener('scroll', () => {
-    if (opened && list.clientHeight > 0 && list.scrollHeight - list.scrollTop - list.clientHeight <= 24) {
+    // Phones lay the list out bottom-up (column-reverse), where scrollTop runs negative towards the older rows.
+    if (opened && list.clientHeight > 0 && list.scrollHeight - Math.abs(list.scrollTop) - list.clientHeight <= 24) {
       void state.loadMore();
     }
   }, { passive: true });
@@ -310,11 +327,11 @@ export function mountConversationPage({
   const deletionNotice = node('p', undefined, 'chat-notice conversation-deletion-notice');
   deletionNotice.setAttribute('role', 'status');
   deletionNotice.hidden = true;
-  sidebar.append(listToolbar, create, externalSection, searchInput, newConversations, list, deletionNotice, listNotice);
+  sidebar.append(listToolbar, create, externalSection, searchRow, newConversations, list, deletionNotice, listNotice, searchOpen);
   const detail = node('section', undefined, 'conversation-detail');
   detail.setAttribute('aria-label', t('chat.history'));
   const header = node('header', undefined, 'conversation-header');
-  const back = action('chat.page.back', () => mobileDetail(false), 'back', 'wb-icon-btn conversation-back');
+  const back = action('chat.page.back', () => backToList(), 'back', 'wb-icon-btn conversation-back');
   const headerIcon = node('span', undefined, 'conversation-channel-icon');
   headerIcon.append(icon(document, 'monitor'));
   const heading = node('div', undefined, 'conversation-heading'),
@@ -538,7 +555,7 @@ export function mountConversationPage({
     closeConversationMenu(false);
     if (!item) return;
     // Back on the list, where the row shows how the deletion went.
-    mobileDetail(false);
+    backToList();
     return removeConversation(item);
   }, 'trash', 'conversation-menu-item conversation-menu-delete');
   menuDelete.dataset.action = 'page.menuDelete';
@@ -902,13 +919,34 @@ export function mountConversationPage({
     swipe.close();
     return deletion.remove(item);
   }
+  // On phones an opened conversation borrows one history entry, so the Back gesture returns to the list.
+  const onDetailEntry = () => Boolean(detailEntry && view?.history?.state?.conversationDetail === detailEntry.id);
   function mobileDetail(open) {
+    const wasOpen = page.classList.contains('conversation-detail-open');
+    if (open && !wasOpen && phone() && !page.hidden) {
+      listScroll = list.scrollTop;
+      if (!onDetailEntry()) {
+        detailEntry = { id: view.crypto.getRandomValues(new Uint32Array(1))[0], url: view.location.href };
+        view.history.pushState({ ...view.history.state, conversationDetail: detailEntry.id }, '', detailEntry.url);
+      }
+    }
     closeRowMenu(false);
     page.classList.toggle('conversation-detail-open', open);
     if (!open) quickConfig?.close();
     closeConversationMenu(false);
     syncMobileFocus();
     scheduleFit();
+    // The list comes back where it was left (display:none drops its scroll position); restore it once
+    // the mobile bars are back and the list has its final height.
+    if (!open && wasOpen && listScroll !== null) {
+      const top = listScroll;
+      listScroll = null;
+      view.requestAnimationFrame(() => { list.scrollTop = top; });
+    }
+  }
+  function backToList() {
+    if (onDetailEntry()) view.history.back();
+    else mobileDetail(false);
   }
   function syncMobileFocus() {
     const focus = opened && !page.hidden && !currentSnapshot?.blocked && !!currentSnapshot?.selectedId
@@ -1819,6 +1857,8 @@ export function mountConversationPage({
     searchInput.placeholder = t('chat.page.searchNames');
     searchInput.setAttribute('aria-label', searchInput.placeholder);
     if (searchTimer === null && document.activeElement !== searchInput && searchInput.value !== s.search) searchInput.value = s.search;
+    // A search kept from an earlier visit keeps its field open on phones too.
+    if (s.search && !sidebar.dataset.mobileSearch) setMobileSearch(true);
     text(unreadDivider, t('chat.page.unreadDivider'));
     if (s.blocked) {
       closeCopyMenu();
@@ -2258,10 +2298,17 @@ export function mountConversationPage({
     /** A group or the instance changed state (stream `groups` / `instance`). */
     groupsChanged() { if (opened) presence.refresh(); },
     popstate() {
-      if (!selectionEntry) return false;
-      const sameConversationPage = view.location.href === selectionEntry.url && !page.hidden;
-      leaveTextSelection();
-      return sameConversationPage;
+      if (selectionEntry) {
+        const sameConversationPage = view.location.href === selectionEntry.url && !page.hidden;
+        leaveTextSelection();
+        return sameConversationPage;
+      }
+      if (!detailEntry) return false;
+      // Both edges of the borrowed entry belong to this list; Forward onto it leaves the list open.
+      const samePage = view.location.href === detailEntry.url && !page.hidden;
+      if (!samePage) { detailEntry = null; return false; }
+      if (!onDetailEntry()) mobileDetail(false);
+      return true;
     },
     close() {
       closeCopyMenu();

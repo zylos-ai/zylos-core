@@ -36,11 +36,12 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
     const label = node('span'); el.append(label); labels.push({ el, label, key });
     return el;
   };
-  const listRefresh = button('wb-mobile-icon-button', 'restart', 'chat.refresh');
-  listRefresh.id = 'wb-mobile-list-refresh';
+  // Same as the App's list bar: Search and New at the top right; the list updates itself, so no refresh.
+  const listSearch = button('wb-mobile-icon-button', 'search', 'chat.page.search');
+  listSearch.id = 'wb-mobile-list-search';
   const listCreate = button('wb-mobile-icon-button', 'plus', 'chat.create');
   listCreate.id = 'wb-mobile-list-create';
-  topbar.append(listRefresh, listCreate);
+  topbar.append(listSearch, listCreate);
 
   const nav = node('nav', undefined, 'wb-mobile-tabs'); nav.id = 'wb-mobile-nav';
   const fleetSelector = '#fleet-manage-btn';
@@ -116,7 +117,7 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
       sync();
     });
   };
-  proxyList(listRefresh, '.conversation-reload'); proxyList(listCreate, '.conversation-create');
+  proxyList(listSearch, '.conversation-search-open'); proxyList(listCreate, '.conversation-create');
   const setText = (el, value) => { if (el.textContent !== value) el.textContent = value; };
   function sync() {
     const current = getView(), active = current.fleet ? 'fleet' : current.tab;
@@ -151,7 +152,7 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
       if (row.toggle) row.el.setAttribute('aria-checked', String(row.name === 'detail'
         ? original('#wb-detail-toggle')?.checked === true : document.documentElement.dataset.theme === 'dark'));
     }
-    for (const [proxy, selector] of [[listRefresh, '.conversation-reload'], [listCreate, '.conversation-create']]) {
+    for (const [proxy, selector] of [[listSearch, '.conversation-search-open'], [listCreate, '.conversation-create']]) {
       const target = original(selector);
       watch(target);
       proxy.hidden = active !== 'chat' || !target || target.hidden;
@@ -170,7 +171,7 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
   const controls = [
     ...SECTIONS.map(([name]) => original(`.tab[data-tab="${name}"]`)),
     ...menuRows.map(row => original(row.selector)),
-    original('.conversation-reload'), original('.conversation-create'),
+    original('.conversation-search-open'), original('.conversation-create'),
   ];
   const watched = new Set();
   function watch(control) {
