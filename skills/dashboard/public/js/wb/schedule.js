@@ -283,9 +283,15 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   const root = document.querySelector('#wb-schedule');
   if (!root) return () => {};
   const guard = createFetchGuard();
+  const taskActions = new Map();
+  function clearTaskActions() {
+    for (const action of taskActions.values()) clearTimeout(action.timer);
+    taskActions.clear();
+  }
   let data = null, error = false, selected = null, history = null, historyGen = 0, form = null, confirmFor = null,
     filter = { status: 'all', query: '', target: null }, owner = identity(), stopped = false, notice = null,
     fullPrompt = null, detailTask = null, detailError = false, detailGen = 0, listBusy = false, pageCount = 1;
+  let creationNotice = false;
   // The page, the drawer and the dialog layer stay mounted across redraws, so a refresh keeps the drawer's
   // scroll position and an open form keeps its focus and typed text.
   const main = element(document, 'div', undefined, 'wb-sched-main');
@@ -307,6 +313,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     if (owner === identity()) return false;
     owner = identity();
     guard.invalidate();
+    clearTaskActions();
     data = null;
     error = false;
     selected = null;
@@ -323,6 +330,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     form = null;
     confirmFor = null;
     notice = null;
+    creationNotice = false;
     root.replaceChildren();
     mounted = false;
     return true;
@@ -468,12 +476,12 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     }
     return { value: { ...value, items: [...new Map(items.map(task => [task.id, task])).values()] }, loaded };
   }
-  async function refresh({ force = false, more = false } = {}) {
+  async function refresh({ force = false, more = false, keepPages = false } = {}) {
     if (!force && !visible()) return;
     reset();
     if (listBusy && !force) return;
     if (more && !data?.nextCursor) return;
-    if (force && !more) pageCount = 1;
+    if (force && !more && !keepPages) pageCount = 1;
     const gen = guard.next();
     listBusy = true;
     redraw();
@@ -490,7 +498,8 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       if (guard.current(gen)) listBusy = false;
     }
     redraw();
-    if (selected && !form) loadDetail(selected);
+    if (selected && !form) await loadDetail(selected);
+    return guard.current(gen) && !error;
   }
   function changeList(change) {
     filter = { ...filter, ...change };
@@ -544,6 +553,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     try {
       const response = await fetch(endpoint(path), {
         method,
+        signal: AbortSignal.timeout(30_000),
         headers: body === undefined ? {} : { 'content-type': 'application/json' },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
@@ -552,8 +562,6 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     } catch {
       outcome = { result: 'unknown', reason: 'request_failed' };
     }
-    // The page always re-reads once so the list shows the scheduler's current state.
-    await refresh({ force: true });
     return outcome;
   }
   function select(id) {
@@ -583,6 +591,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     // become edit state, even when the summary happens to fit in 200 characters.
     if (task && (task !== detailTask || task.promptTruncated)) return;
     const creating = !task;
+    if (creating) creationNotice = false;
     const original = initialForm(task, { reenable, tz: tz() });
     const handle = createForm(document, {
       state: original, t, creating, reenable, formatTime: time,
@@ -600,6 +609,15 @@ export function mountSchedule({ document = globalThis.document, window = globalT
         const body = formPayload(state, creating ? null : original, { reenable });
         const outcome = creating ? await write('POST', '/api/schedules', body)
           : await write('PUT', `/api/schedules/${encodeURIComponent(task.id)}`, body);
+        await refresh({ force: true });
+        if (form?.handle !== handle || stopped) return;
+        if (creating && outcome.result === 'unknown') {
+          close();
+          creationNotice = true;
+          setMobileTab('tasks');
+          redraw();
+          return;
+        }
         handle.setBusy(false);
         const message = writeMessage(outcome, t);
         if (message === null) {
@@ -618,13 +636,48 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     if (original.value) previewer.request(previewPath(original, { reenable, locale: locale() }));
     redraw();
   }
+  function actionStatus(task, prefix = '') {
+    const feedback = taskActions.get(task.id);
+    if (!feedback) return null;
+    const status = element(document, 'p', prefix + feedback.text, 'wb-note wb-action-result');
+    status.setAttribute('role', 'status');
+    status.classList.toggle('wb-status-error', feedback.result === 'rejected');
+    status.classList.toggle('wb-status-success', feedback.result === 'done');
+    return status;
+  }
   async function act(task, action) {
-    const outcome = action === 'remove'
-      ? await write('DELETE', `/api/schedules/${encodeURIComponent(task.id)}`)
-      : await write('POST', `/api/schedules/${encodeURIComponent(task.id)}/actions/${action}`);
+    const previous = taskActions.get(task.id);
+    if (!writable() || previous?.busy) return;
+    clearTimeout(previous?.timer);
+    const feedback = { task, busy: true, text: t('wb.schedule.action.' + action + '.pending') };
+    taskActions.set(task.id, feedback);
     confirmFor = null;
-    notice = writeMessage(outcome, t);
-    if (action === 'remove' && outcome.result === 'done') selected = null;
+    redraw();
+    const path = `/api/schedules/${encodeURIComponent(task.id)}`;
+    const outcome = action === 'remove' ? await write('DELETE', path) : await write('POST', `${path}/actions/${action}`);
+    const current = () => !stopped && owner === identity() && taskActions.get(task.id) === feedback;
+    if (!current()) return;
+    if (outcome.result === 'unknown') {
+      feedback.text = t('wb.schedule.checkingResult');
+      redraw();
+    }
+    if (action === 'remove' && outcome.result === 'done' && selected === task.id) close();
+    // A refusal leaves the task unchanged. Refresh in the background so stale-state
+    // refusals still update the available actions without delaying the error.
+    const reloading = refresh({ force: true, keepPages: true });
+    const refreshed = outcome.result === 'rejected' ? false : await reloading;
+    if (!current()) return;
+    feedback.busy = false;
+    feedback.result = outcome.result;
+    feedback.text = outcome.result === 'done' ? t('wb.schedule.action.' + action + '.done')
+      : outcome.result === 'unknown' && !refreshed ? t('wb.schedule.checkUnavailable')
+      : writeMessage(outcome, t);
+    if (outcome.result === 'unknown' && action === 'remove' && refreshed && selected === task.id
+        && !detailTask && !data.items.some(item => item.id === task.id)) close();
+    if (outcome.result === 'done') feedback.timer = setTimeout(() => {
+      taskActions.delete(task.id);
+      redraw();
+    }, 5000);
     redraw();
   }
   function renderKpi() {
@@ -876,6 +929,8 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     if (success) recent.append(element(document, 'small', t('wb.schedule.lastSuccess', { time: day(success.executedAt) })));
     open.append(name, rule, next, recent);
     row.append(open, renderTarget(task), statePill(task));
+    const feedback = task.id === detailTask?.id ? null : actionStatus(task);
+    if (feedback) row.append(feedback);
     return row;
   }
   function renderList() {
@@ -891,6 +946,12 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       if (section.name === 'enabled') block.children[0].append(element(document, 'small', t('wb.schedule.sortedByNext')));
       for (const task of section.tasks) block.append(renderRow(task));
       wrap.append(block);
+    }
+    for (const { task, result } of taskActions.values()) {
+      if (!['done', 'unknown'].includes(result) || data.items.some(item => item.id === task.id) || task.id === detailTask?.id) continue;
+      const row = element(document, 'div', undefined, 'wb-sched-row');
+      row.append(actionStatus(task, task.name + ' · '));
+      wrap.append(row);
     }
     if (data.nextCursor) {
       const more = button(document, t('wb.detail.loadMore'), () => refresh({ more: true }), 'wb-link-btn wb-sched-more');
@@ -996,11 +1057,15 @@ export function mountSchedule({ document = globalThis.document, window = globalT
         redraw();
       }, 'wb-icon-danger'));
     }
+    if (taskActions.get(task.id)?.busy) for (const control of acts.children) control.disabled = true;
     sub.append(acts); top.append(iconButton(document, 'x', t('wb.close'), close, 'wb-sched-close'));
     const meta = element(document, 'p', undefined, 'wb-detail-meta');
     if (level() === 'technical') meta.append(element(document, 'span', `${task.id} · P${task.priority} · `, 'wb-mono wb-sched-tech'));
     meta.append(element(document, 'span', t('wb.schedule.updated', { time: time(task.updatedAt) })));
-    header.append(top, meta);
+    header.append(top);
+    const feedback = actionStatus(task);
+    if (feedback) header.append(feedback);
+    header.append(meta);
     panel.append(header);
     const body = element(document, 'div', undefined, 'wb-detail-body');
     sideBody = body;
@@ -1099,7 +1164,13 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       top.setAttribute('role', 'tabpanel');
       top.setAttribute('aria-labelledby', 'wb-sched-tab-overview');
       top.append(renderKpi(), renderWeek(), renderTimeline());
-      placeChildren(tasksPanel, [renderFilters(), renderList()]);
+      const taskContents = [renderFilters(), renderList()];
+      if (creationNotice) {
+        const status = element(document, 'p', t('wb.schedule.createUnconfirmed'), 'wb-sched-notice');
+        status.setAttribute('role', 'status');
+        taskContents.unshift(status);
+      }
+      placeChildren(tasksPanel, taskContents);
       notes.push(renderMobileBar(), top, tasksPanel);
     }
     placeChildren(main, notes);
@@ -1207,6 +1278,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   return () => {
     stopped = true;
     clearInterval(timer);
+    clearTaskActions();
     clearTimeout(picker.timer);
     guard.invalidate();
     previewer.destroy();

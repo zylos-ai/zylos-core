@@ -44,10 +44,12 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
   const discovery = element(document, 'p', '', 'wb-note');
   const restartButton = element(document, 'button', t('wb.settings.timezone.restart'), 'wb-btn'); restartButton.type = 'button'; restartButton.id = 'settings-timezone-restart';
   const retry = element(document, 'button', t('wb.settings.timezone.retry'), 'wb-btn'); retry.type = 'button'; retry.id = 'settings-timezone-retry';
-  const pendingActions = element(document, 'div', undefined, 'wb-set-inline'); pendingActions.append(restartButton, retry);
-  pending.append(pendingTitle, list, discovery, pendingActions);
+  const restartNotice = element(document, 'p', '', 'wb-note wb-action-result');
+  restartNotice.setAttribute('role', 'status');
+  const pendingActions = element(document, 'div', undefined, 'wb-set-inline'); pendingActions.append(restartButton, retry, restartNotice);
+  pending.append(pendingTitle, list, discovery);
   const notes = element(document, 'p', t('wb.settings.timezone.notes'), 'wb-note');
-  card.card.append(label, row, help, policy, notice, pending, notes); root.append(card.card);
+  card.card.append(label, row, help, policy, notice, pending, pendingActions, notes); root.append(card.card);
   let generation = 0, owner = null, loaded = false, busy = false, saved = false, model = null, restartAttempted = false;
   const current = (token, machine) => generation === token && owner === machine && identity() === machine;
   const editable = () => loaded && owner === identity() && model?.writable === true && writable() && available();
@@ -64,13 +66,14 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
       : !model.writable ? t('wb.settings.timezone.readOnly')
       : model.tz == null ? t('wb.settings.timezone.unknown') : '';
     pending.hidden = !saved;
+    pendingActions.hidden = !saved && !restartNotice.textContent;
+    restartButton.hidden = !saved || (model?.restart_status === 'known' && !services().length);
+    retry.hidden = !saved || model?.restart_status === 'known';
     pendingTitle.textContent = t('wb.settings.timezone.restartNeeded');
     list.replaceChildren(...services().map(service => element(document, 'li', serviceName(service.name))));
     const known = model?.restart_status === 'known';
     discovery.textContent = t(!known ? 'wb.settings.timezone.discoveryUnknown' : services().length ? 'wb.settings.timezone.restartExplain' : 'wb.settings.timezone.noRestart');
-    retry.hidden = known;
     retry.disabled = busy || !editable();
-    restartButton.hidden = known && !services().length;
     restartButton.disabled = busy || !editable() || !known || !services().length || input.value.trim() !== model?.tz;
   }
   function errorText(error, fallback) {
@@ -80,8 +83,9 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
     return t('wb.settings.timezone.' + (keys[error?.code || error?.message] ?? fallback));
   }
   function invalidate() {
+    restartButton.removeAttribute('aria-busy');
     generation++; owner = null; loaded = false; busy = false; saved = false; model = null; restartAttempted = false;
-    setValue(''); notice.textContent = ''; render();
+    setValue(''); notice.textContent = ''; showRestart(''); render();
   }
   async function refresh() {
     invalidate(); const token = generation, machine = owner = identity();
@@ -105,6 +109,7 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
       if (!current(token, machine) || !editable()) return;
       const value = await write({ tz });
       if (!current(token, machine)) return;
+      showRestart('');
       model = value; restartAttempted = false; setValue(value.tz ?? tz); saved = true; notice.textContent = t('wb.settings.timezone.saved');
       onSaved(value.tz);
     } catch (error) { if (current(token, machine)) notice.textContent = errorText(error, 'saveFailed'); }
@@ -113,6 +118,34 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
   function applyRestartProgress(value) {
     restartAttempted = true;
     model = { ...model, restart_services: value.restart_services ?? model.restart_services, restart_status: value.restart_status ?? model.restart_status };
+  }
+  function showRestart(text, failure = false) {
+    restartNotice.textContent = text;
+    restartNotice.classList.toggle('wb-status-error', failure);
+  }
+  async function reconcileRestart(tz, token, machine, confirmedServices) {
+    showRestart(t('wb.settings.timezone.restartChecking'));
+    try {
+      const value = await read();
+      if (!current(token, machine)) return;
+      if (!value || typeof value.writable !== 'boolean') throw Error('invalid_timezone_settings');
+      model = value; setValue(value.tz ?? '');
+      if (value.tz !== tz) {
+        saved = false;
+        showRestart(t('wb.settings.timezone.changed'));
+      } else if (value.restart_status !== 'known') {
+        showRestart(t('wb.settings.timezone.restartUnverified'));
+      } else {
+        // Discovery reports online candidates. An absent process does not prove a restart.
+        const remaining = services().filter(service => confirmedServices.includes(service.name));
+        model = { ...value, restart_services: remaining };
+        showRestart(remaining.length
+          ? t('wb.settings.timezone.restartCandidates', { services: remaining.map(service => serviceName(service.name)).join(', ') })
+          : t('wb.settings.timezone.restartNoCandidates'));
+      }
+    } catch {
+      if (current(token, machine)) showRestart(t('wb.settings.timezone.restartUnverified'));
+    }
   }
   restartButton.addEventListener('click', async () => {
     if (restartButton.disabled || !saved || !editable()) return;
@@ -123,23 +156,37 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
       const body = t('wb.settings.timezone.restartConfirm', { tz, services: confirmedServices.map(serviceName).join('\n') });
       if (!(await confirm(confirmation(body), { title: t('wb.settings.confirm.timezoneRestart'), danger: false }))) return;
       if (!current(token, machine) || !editable() || input.value.trim() !== tz) return;
-      const value = await restart({ tz, confirm: true, services: confirmedServices });
+      showRestart(t('wb.settings.timezone.restarting'));
+      restartButton.setAttribute('aria-busy', 'true');
+      let value;
+      try {
+        value = await restart({ tz, confirm: true, services: confirmedServices });
+      } catch (error) {
+        if (!current(token, machine)) return;
+        if (Array.isArray(error?.result?.failed) || (error?.status >= 400 && error.status < 500)) {
+          value = { ...error.result, error: error.result?.error ?? { code: error.code } };
+        } else {
+          await reconcileRestart(tz, token, machine, confirmedServices);
+          return;
+        }
+      }
       if (!current(token, machine)) return;
-      applyRestartProgress(value);
-      if (value.error) notice.textContent = errorText({ code: value.error.code }, 'restartError');
-      else if (value.failed?.length) notice.textContent = t('wb.settings.timezone.restartFailed', { services: value.failed.map(service => serviceName(service.name)).join(', ') });
-      else if (value.ok === false) notice.textContent = t('wb.settings.timezone.restartError');
-      else { saved = false; notice.textContent = t('wb.settings.timezone.restarted'); }
-    } catch (error) {
+      if (!value || (typeof value.ok !== 'boolean' && !value.error && !value.failed?.length)) {
+        await reconcileRestart(tz, token, machine, confirmedServices);
+        return;
+      }
+      if (Array.isArray(value.restart_services)) applyRestartProgress(value);
+      if (value.failed?.length) showRestart(t('wb.settings.timezone.restartFailed', { services: value.failed.map(service => serviceName(service.name)).join(', ') }), true);
+      else if (value.error || value.ok === false) showRestart(errorText({ code: value.error?.code ?? value.error }, 'restartError'), true);
+      else { saved = false; showRestart(t('wb.settings.timezone.restarted')); }
+      render();
+    } finally {
       if (current(token, machine)) {
-        const progress = error?.result;
-        if (Array.isArray(progress?.restarted) && Array.isArray(progress?.failed) && Array.isArray(progress?.restart_services)) applyRestartProgress(progress);
-        notice.textContent = progress?.failed?.length
-          ? t('wb.settings.timezone.restartFailed', { services: progress.failed.map(service => serviceName(service.name)).join(', ') })
-          : errorText(error, 'restartError');
+        restartButton.removeAttribute('aria-busy');
+        busy = false;
+        render();
       }
     }
-    finally { if (current(token, machine)) { busy = false; render(); } }
   });
   retry.addEventListener('click', async () => {
     if (busy || !saved || !editable()) return;

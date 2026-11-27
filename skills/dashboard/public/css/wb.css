@@ -763,6 +763,8 @@ main:has(> #tab-schedule.active) { padding: 0 0 var(--space-xl); }
 .wb-sched-section > h3 { margin: 0; padding: 14px 16px 8px; border-bottom: 1px solid var(--wb-line); color: var(--text-dim); font-size: var(--fs-small); font-weight: var(--fw-strong); }
 .wb-sched-section > h3 small { color: var(--text-muted); font-size: var(--fs-small); font-weight: var(--fw-body); }
 .wb-sched-row { position: relative; padding: 0 16px; border-bottom: 1px solid var(--wb-line); }
+.wb-sched-row > .wb-action-result { grid-column: 1 / -1; padding: 0 12px 8px; }
+.wb-sched-row > .wb-action-result:only-child { padding-top: 8px; }
 .wb-sched-row:hover { background: var(--wb-hover); }
 .wb-sched-row.active { background: var(--wb-accent-soft); }
 .wb-sched-row.active::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }

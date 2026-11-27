@@ -197,10 +197,11 @@ export function createForm(document, { state: initial, t = key => key, creating 
   // Rules and intervals are typed; a one-time run picks a date in the same styled field as the usage page.
   const time = input(document, 'text', state.kind === 'at' ? '' : state.value, set('value', true));
   const at = input(document, 'datetime-local', state.kind === 'at' ? state.value : '', set('value', true));
-  time.required = at.required = creating || reenable;
   const atField = dateField(document, at, () => t('wb.schedule.form.pickTime'));
   const tzNote = element(document, 'small', '', 'wb-sched-hint');
   const placeholder = () => {
+    time.required = (creating || reenable) && state.kind !== 'at';
+    at.required = (creating || reenable) && state.kind === 'at';
     time.placeholder = state.kind === 'cron' ? PLACEHOLDER.cron : state.kind === 'every' ? t(PLACEHOLDER.every) : '';
     time.hidden = state.kind === 'at';
     atField.field.hidden = state.kind !== 'at';
