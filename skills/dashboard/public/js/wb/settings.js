@@ -27,7 +27,8 @@ export function settingsCard(document, { icon: name, title = '', sub = '', id } 
 }
 
 // Both views: reuse the actual control nodes so their original listeners survive.
-export function composeSettings(root, { settings, fleet, actions, controls = [], document = root.ownerDocument, t = key => key }) {
+// `remote`: the page shows another machine opened through this one; its identity page is titled without "this machine".
+export function composeSettings(root, { settings, fleet, actions, controls = [], remote = false, document = root.ownerDocument, t = key => key }) {
   root.replaceChildren();
   const layout = element(document, 'div', undefined, 'wb-set');
   const nav = element(document, 'nav', undefined, 'wb-set-nav'); nav.setAttribute('aria-label', t('wb.settings'));
@@ -47,12 +48,13 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
     back.append(icon(document, 'back', 'xs'));
     back.addEventListener('click', () => navigation.backToList());
     backButtons[name] = back;
-    const heading = element(document, 'h2', t('wb.settings.section.' + name), 'wb-set-h');
+    const title = 'wb.settings.section.' + (name === 'identity' && remote ? 'identityRemote' : name);
+    const heading = element(document, 'h2', t(title), 'wb-set-h');
     header.append(back, heading);
     const lead = element(document, 'p', t('wb.settings.lead.' + name), 'wb-set-lead');
     section.append(header, lead); sections[name] = section; wrap.append(section);
     relabels.push(() => {
-      heading.textContent = t('wb.settings.section.' + name);
+      heading.textContent = t(title);
       lead.textContent = t('wb.settings.lead.' + name);
       back.setAttribute('aria-label', t('wb.settings.backToSections'));
     });

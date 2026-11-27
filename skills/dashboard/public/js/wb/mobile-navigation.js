@@ -122,8 +122,9 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
   function sync() {
     const current = getView(), active = current.fleet ? 'fleet' : current.tab;
     setText(title, t(PAGE_TITLES[active] ?? PAGE_TITLES.settings));
+    // A machine opened from the fleet puts its avatar before its name; a letter avatar's text is not part of the name.
     const instance = ['#tab-bar-agent-name', '#tab-bar-core-version'].map(selector => original(selector))
-      .filter(el => el && !el.hidden && el.textContent.trim()).map(el => el.textContent.trim());
+      .filter(el => el && !el.hidden).map(el => (el.querySelector('.wb-brand-name') ?? el).textContent.trim()).filter(Boolean);
     setText(brand, instance.join(' · '));
     for (const record of labels) {
       setText(record.label, t(record.key)); record.el.setAttribute('aria-label', t(record.key));

@@ -1567,6 +1567,8 @@ html[lang^="zh"] .wb-sent-gap { display: none; }
 .wb-self-name { color: var(--text); font-size: var(--fs-body); }
 .wb-self-machine { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
 .wb-self-machine[hidden] { display: none; }
+/* A card another machine opened here cannot change: the lock line sits between its header and its content. */
+.wb-set-locked { margin: 0 0 10px; }
 /* Machine avatar: uploaded picture or the name's first letter on the machine's fleet colour, with an optional status dot on its corner. */
 .wb-av { --wb-av-size: 24px; position: relative; display: inline-flex; flex: none; align-items: center; justify-content: center; width: var(--wb-av-size); height: var(--wb-av-size); border-radius: 50%; background: var(--wb-av-c, var(--text-muted)); color: #fff; font-size: calc(var(--wb-av-size) * .45); font-weight: var(--fw-strong); line-height: 1; vertical-align: middle; }
 .wb-av-xs { --wb-av-size: 20px; }
