@@ -211,9 +211,11 @@ The activity monitor writes `~/zylos/activity-monitor/agent-status.json` which i
 Accepted inbound conversations remain eligible for delivery regardless of
 queue age. After more than 30 minutes in the queue (or the existing
 `C4_PENDING_MAX_AGE_SECONDS` threshold), live delivery starts with a note showing
-the wait and when the message was received in the instance time zone. On
-dispatcher restart, interrupted deliveries return to the queue if they have
-retry attempts remaining, regardless of when the message was received.
+the wait and when the message was received in the instance time zone.
+After submitting a message with this note, the dispatcher holds the same
+session's queue for five seconds. On dispatcher restart, interrupted
+deliveries return to the queue if they have retry attempts remaining,
+regardless of when the message was received.
 
 ## Keystroke Delivery
 
