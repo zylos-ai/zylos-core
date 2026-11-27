@@ -104,6 +104,11 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
     getGlobalUnsummarizedRange: () => snapshot(c => range(c, '*')),
     getUnsummarizedConversations: (group, options) => groupRead(group, c => unsummarized(c, group, options)),
     getGlobalUnsummarizedConversations: options => snapshot(c => unsummarized(c, '*', options)),
+    getDreamConversations: () => snapshot(c => all(c, 'SELECT session_group FROM group_heads ORDER BY session_group')
+      .map(({ session_group: group }) => {
+        const after = coverage(c, group);
+        return { group, rows: originRows(c, group, after, frontier(c, group, after)) };
+      }).filter(({ rows }) => rows.length)),
     getContentCheckpointsSince: (group, afterEnd) => { requireGroup(group, { global: true }); return snapshot(c => all(c, 'SELECT * FROM checkpoints WHERE session_group=? AND end_conversation_id>? AND no_content=0 ORDER BY id', group, Math.max(afterEnd, group === '*' ? 0 : baseline(c)))); },
     getOriginSyncConversations: (group, { afterConversationId, rawAfter, upToConversationId, limit }) => groupRead(group, c => {
       if (![afterConversationId, rawAfter].every(n => Number.isSafeInteger(n) && n >= 0)) throw dataError('INVALID_ARGS', 'Both fixed read boundaries are required');

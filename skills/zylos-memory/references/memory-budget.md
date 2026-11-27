@@ -54,6 +54,6 @@ showing the retained amount and the path of the full copy to read first.
 ## Reference indexes
 
 `reference/projects/INDEX.md` and `reference/decisions/INDEX.md` retain byte
-budgets: `sizeBytes`, `budgetBytes` (32 KiB), `warnBytes` (16 KiB), `status`, and
-`budgetUsagePct`. Their existing warning comparison is strictly above 16 KiB.
+budgets: `sizeBytes`, `budgetBytes` (64 KiB), `warnBytes` (48 KiB), `status`, and
+`budgetUsagePct`. Their existing warning comparison is strictly above 48 KiB.
 Other memory files have no budget from this API.

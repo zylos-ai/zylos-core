@@ -19,14 +19,14 @@ export const STARTUP_MEMORY_LIMIT = Object.freeze({
 export const BUDGETS = Object.freeze({
   'identity.md': STARTUP_MEMORY_LIMIT,
   'references.md': STARTUP_MEMORY_LIMIT,
-  'reference/projects/INDEX.md': 32 * 1024,
-  'reference/decisions/INDEX.md': 32 * 1024,
+  'reference/projects/INDEX.md': 64 * 1024,
+  'reference/decisions/INDEX.md': 64 * 1024,
 });
 export const WARN_THRESHOLDS = Object.freeze({
   'identity.md': Object.freeze({ chars: STARTUP_MEMORY_LIMIT.maxChars * WARN_RATIO, estimatedTokens: STARTUP_MEMORY_LIMIT.maxTokens * WARN_RATIO }),
   'references.md': Object.freeze({ chars: STARTUP_MEMORY_LIMIT.maxChars * WARN_RATIO, estimatedTokens: STARTUP_MEMORY_LIMIT.maxTokens * WARN_RATIO }),
-  'reference/projects/INDEX.md': 16 * 1024,
-  'reference/decisions/INDEX.md': 16 * 1024,
+  'reference/projects/INDEX.md': 48 * 1024,
+  'reference/decisions/INDEX.md': 48 * 1024,
 });
 
 /** Measure raw candidate text without reading or writing any file. Unknown files throw. */

@@ -234,7 +234,7 @@ export function createSupervisor(deps) {
     legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),lifecycle,serialize:operation=>admission.serialize(operation),
     globalMemoryPending:()=>globalMemoryHandover.pending(),
     writeMode:deps.writeMode ?? writeSessionModeAtCutover,restart:deps.restartDispatcherConfirmation,diagnostic,now});
-  const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','advanceReleases','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
+  const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','advanceReleases','advanceReclaim','checkRotation','checkTtl','checkEviction'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
   loop=new SupervisorLoop({
     beginRound:()=>lifecycle.beginRound(),
     readConfiguration:async transition=>{

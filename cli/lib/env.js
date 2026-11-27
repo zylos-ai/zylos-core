@@ -37,14 +37,26 @@ export function writeEnvFile(file, content) {
  * Parse the .env file into a Map of key → value.
  * Ignores comments and blank lines.
  *
+ * @param {string} [file]
  * @returns {Map<string, string>}
  */
-export function readEnvFile() {
-  const env = new Map();
-  if (!fs.existsSync(ENV_FILE)) return env;
+export function readEnvFile(file = ENV_FILE) {
+  try {
+    return new Map(Object.entries(parseDotenv(fs.readFileSync(file, 'utf8'))));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return new Map();
+  }
+}
 
-  const content = fs.readFileSync(ENV_FILE, 'utf8');
-  return new Map(Object.entries(parseDotenv(content)));
+export function readWorkspaceTimezone(root) {
+  const timezone = readEnvFile(path.join(root, '.env')).get('TZ') ?? (process.env.TZ || 'UTC');
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: timezone });
+  } catch {
+    throw Object.assign(new Error('Expected a valid workspace TZ in .env or the process environment'), { code: 'INVALID_TZ' });
+  }
+  return timezone;
 }
 
 /**

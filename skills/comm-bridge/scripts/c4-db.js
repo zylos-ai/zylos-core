@@ -484,6 +484,7 @@ export const getGlobalDeliveredSince = (...args) => store.getGlobalDeliveredSinc
 export const getUnsummarizedRange = (...args) => store.getUnsummarizedRange(...args);
 export const getGlobalUnsummarizedRange = (...args) => store.getGlobalUnsummarizedRange(...args);
 export const getUnsummarizedConversations = (...args) => store.getUnsummarizedConversations(...args);
+export const getDreamConversations = () => store.getDreamConversations();
 export const getGlobalUnsummarizedConversations = (...args) => store.getGlobalUnsummarizedConversations(...args);
 export const getContentCheckpointsSince = (...args) => store.getContentCheckpointsSince(...args);
 export const getOriginSyncConversations = (...args) => store.getOriginSyncConversations(...args);

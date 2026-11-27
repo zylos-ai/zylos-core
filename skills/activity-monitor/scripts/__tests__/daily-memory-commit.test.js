@@ -72,7 +72,7 @@ function machine(t, day) {
     zylosDir,
     readMode: () => ({ mode: 'single' }),
     readConfig: () => ({ upgrade_check_enabled: false, daily_upgrade_enabled: false, health_check_enabled: false,
-      usage_monitor_enabled: false, usage_alert_enabled: false }),
+      usage_monitor_enabled: false, usage_alert_enabled: false, memory_dream_hour: 23 }),
     resolveTargetRuntime: () => { throw new Error('nothing else is due'); },
     readHealth: () => { throw new Error('nothing else is due'); },
     now: () => new Date(2026, 10, clock.day, 3, 5).getTime(),

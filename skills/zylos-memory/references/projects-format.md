@@ -60,7 +60,7 @@ Rows sort by active, planning, paused, completed, abandoned, then by Updated
 descending within a status. Titles are copied from pages with `|` replaced by
 `／`. Unreadable headers are excluded from the main table and listed under
 `Unparsable page headers`. Missing indexes are treated as empty directories
-until rebuild creates them. INDEX warns above 16 KiB and has a 32 KiB budget;
+until rebuild creates them. INDEX warns above 48 KiB and has a 64 KiB budget;
 page files have no hard size cap.
 
 ## Lifecycle rules

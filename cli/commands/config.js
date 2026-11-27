@@ -110,6 +110,10 @@ async function setConfig(key, value) {
     invalid.code = 'CONFIG_VALUE_INVALID';
     throw invalid;
   }
+  const calendarLimit = { memory_dream_hour: 23, memory_tidy_weekday: 6 };
+  if (Object.hasOwn(calendarLimit, key) && (!/^\d+$/.test(value) || Number(value) > calendarLimit[key])) {
+    throw Object.assign(new Error(`${key} must be an integer from 0 to ${calendarLimit[key]}`), { code: 'CONFIG_VALUE_INVALID' });
+  }
   // Validate allowed values
   if (ALLOWED_VALUES[key] && !ALLOWED_VALUES[key].includes(value)) {
     console.error(red(`Invalid value for "${bold(key)}": ${value}`));
