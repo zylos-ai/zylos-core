@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-const names = new Set(['edit_memory', 'read_memory', 'grep_memory', 'glob_memory']
-  .flatMap(name => [name, `mcp__dream__${name}`]));
+import path from 'node:path';
+
+const names = new Set(['edit_memory', 'read_memory', 'grep_memory', 'glob_memory']);
 let payload = '';
 let replied = false;
 const reject = () => {
@@ -15,7 +16,14 @@ try {
     payload += chunk;
     if (payload.length > 256 * 1024) throw new Error('Tool input is too large');
   }
-  if (process.argv[2] === 'memory' && names.has(JSON.parse(payload)?.toolCall?.name)) {
+  const tool = JSON.parse(payload)?.toolCall;
+  const memoryMode = process.argv[2] === 'memory';
+  const descriptions = process.argv[3];
+  const usesMemory = tool?.name === 'call_mcp_tool'
+    && tool.args?.ServerName === 'dream' && names.has(tool.args.ToolName);
+  const readsDescription = tool?.name === 'read_file' && descriptions
+    && [...names].some(name => tool.args?.Path === path.join(descriptions, `${name}.json`));
+  if (tool?.name === 'finish' || (memoryMode && (usesMemory || readsDescription))) {
     process.stdout.write('{"decision":"allow"}\n');
   } else reject();
 } catch {

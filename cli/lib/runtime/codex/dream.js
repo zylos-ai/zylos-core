@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { UNSUPPORTED } from '../contract.js';
 
 export const dream = Object.freeze({
+  decodeOutput: UNSUPPORTED,
   prepare({ instructions, input, tools, cwd, env, server, serverEnv, schema }) {
     const answer = path.join(cwd, 'answer.json');
     const args = ['-a', 'never', 'exec', '-m', 'gpt-6.1-terra', '-c', 'model_reasoning_effort="medium"',

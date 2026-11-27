@@ -1,4 +1,7 @@
+import { UNSUPPORTED } from '../contract.js';
+
 export const dream = Object.freeze({
+  decodeOutput: UNSUPPORTED,
   prepare({ instructions, input, tools, env, server, serverEnv }) {
     const childEnv = { ...env, DISABLE_AUTOUPDATER: '1', FORCE_PROMPT_CACHING_5M: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
     const args = ['--print', '--model', 'claude-sonnet-5-5', '--effort', 'medium',

@@ -8,14 +8,14 @@ const toolGuard = fileURLToPath(new URL('./dream-tool-guard.js', import.meta.url
 
 export const dream = Object.freeze({
   decodeOutput(stdout) {
-    let envelope;
-    try { envelope = JSON.parse(stdout); }
-    catch { return stdout; }
-    if (envelope?.type !== 'result') return stdout;
-    if (envelope.is_error) throw new Error('Antigravity reported a failed dream model call');
-    const answer = envelope.structured_output ?? envelope.result;
-    if (answer === undefined) return stdout;
-    return typeof answer === 'string' ? answer : JSON.stringify(answer);
+    // A single input turn produces one terminal result after the step updates.
+    const output = stdout.trimEnd();
+    const terminal = JSON.parse(output.slice(output.lastIndexOf('\n') + 1));
+    if (terminal?.event !== 'result' || terminal.result?.status !== 'SUCCESS') {
+      throw new Error('Antigravity did not return a successful dream model result');
+    }
+    const answer = terminal.result.structured_output ?? terminal.result.response;
+    return typeof answer === 'string' ? answer : JSON.stringify(answer ?? null);
   },
   prepare({ instructions, input, tools, cwd, env, server, serverEnv, schema }) {
     const home = path.join(cwd, 'home');
@@ -25,24 +25,26 @@ export const dream = Object.freeze({
       fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value), { mode: 0o600 });
     }
     write(path.join(cwd, 'AGENTS.md'), instructions);
-    const settings = { modelProvider: 'gemini', trustedWorkspaces: [cwd], userDataCollectionForceDisabled: true };
-    write(config.settings, settings);
+    const settings = { modelProvider: 'gemini', trustedWorkspaces: [cwd] };
+    if (tools) settings.permissions = { allow: ['mcp(dream/*)'] };
+    const descriptions = path.join(path.dirname(config.settings), 'mcp', 'dream');
+    write(config.settings, { ...settings, userDataCollectionForceDisabled: true });
     write(config.onboarding, { consumerOnboardingComplete: true, onboardingComplete: true });
     write(config.hooks, { dreaming: { PreToolUse: [{ matcher: '.*', hooks: [{
-      type: 'command', command: [process.execPath, toolGuard, ...(tools ? ['memory'] : [])].map(quote).join(' '), timeout: 5,
+      type: 'command', command: [process.execPath, toolGuard, ...(tools ? ['memory', descriptions] : [])].map(quote).join(' '), timeout: 5,
     }] }] } });
     write(config.mcp, { mcpServers: tools ? { dream: { command: process.execPath, args: [server], env: serverEnv } } : {} });
     const args = ['--settings', JSON.stringify(settings), '--model', 'Gemini 4 Hydrogen (Medium)',
-      '--disable-slash-commands', '--sandbox'];
+      '--disable-slash-commands', '--sandbox', '--output-format', 'stream-json'];
     if (schema) {
       const file = path.join(cwd, 'output-schema.json');
       write(file, schema);
-      args.push('--output-format', 'json', '--json-schema', file);
+      args.push('--json-schema', file);
     }
     return {
-      args: [...args, '-p', '-'],
+      args: [...args, '--input-format', 'stream-json', '-p', ''],
       env: { ...env, HOME: home, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
-      stdin: input,
+      stdin: JSON.stringify({ event: 'user', message: { role: 'user', content: input } }) + '\n',
     };
   },
 });
