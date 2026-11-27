@@ -60,8 +60,9 @@ export function createActionFeedback(status, sync) {
           clear();
           if (awaitingConfirmation) setBusy(false);
           else unlock();
-          status.classList.toggle('wb-status-success', success);
-          status.classList.toggle('wb-status-error', !success);
+          // `success` null is a neutral notice: neither a success nor a failure.
+          status.classList.toggle('wb-status-success', success === true);
+          status.classList.toggle('wb-status-error', success === false);
           status.textContent = text;
           sync();
           if (success && !awaitingConfirmation) timer = setTimeout(() => { clear(); sync(); }, 5000);

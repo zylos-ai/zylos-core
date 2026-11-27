@@ -47,12 +47,14 @@ export async function keyStillListed(readPage, name) {
  * - `runner` is the page's action runner (`createActionRunner`): the default-settings card gets its
  *   `runConfirmed`, and only once the card has confirmed the change, so nothing is asked twice or run unasked.
  * - `engineVersion(root, runtime)` draws the chosen engine's CLI version and upgrade button inside the default engine card.
+ * - `operation()` is the default-runtime switch or CLI upgrade in progress (or null); `onInstance(instance)` applies an
+ *   instance read the card made itself to the page.
  * - `keyPage` is how key requests reach the server and the page: `request(method, path, body?)` resolves to
  *   `{ ok, data }`; `reload()` (reads the key page shown again after a change), `renderCreated(key | null)` (the new key shown once), `createdKey()`
  *   (the one shown now, or null), `status(text, kind)`, `busy(on)` and `errorText(code, fallback)`. The page
  *   decides nothing about which request an action makes or what its answer shows.
  */
-export function wireSettingsConfirmations({ document, t, runner, keyPage, remoteTarget = () => null, setBusy = () => {}, writable, onGroup, engineVersion, recheck }) {
+export function wireSettingsConfirmations({ document, t, runner, keyPage, remoteTarget = () => null, setBusy = () => {}, writable, onGroup, engineVersion, recheck, operation, onInstance }) {
   const confirm = (body, { title = t('wb.settings.confirmTitle'), ok = t('btn.confirm'), danger = true } = {}) =>
     confirmDialog(document, { title, body, ok, cancel: t('btn.cancel'), danger });
   // Default-setting changes name the remote machine they act on and keep the page locked while asking.
@@ -88,7 +90,7 @@ export function wireSettingsConfirmations({ document, t, runner, keyPage, remote
   };
   const editScope = key => scopeDialog(document, { t, name: key.name, scope: key.scope });
   const keyTableOptions = () => ({ t, confirm, editScope, onAction });
-  const defaultsOptions = (value, read) => ({ ...value, t, read, recheck, writable, onGroup, version: engineVersion, confirm: confirmChange, execute });
+  const defaultsOptions = (value, read) => ({ ...value, t, read, recheck, writable, onGroup, version: engineVersion, confirm: confirmChange, execute, operation, onInstance });
   return {
     confirm,
     /** The key table: rotating, revoking and deleting each ask first; changing permissions opens the scope dialog. */
