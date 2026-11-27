@@ -45,16 +45,15 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
       if (row) return { changed: true, ...row };
       return { changed: false, status: null, retryCount: null, ...get(c, 'SELECT status,retry_count AS retryCount FROM conversations WHERE id=?', id) };
     }),
-    recoverOrphanRunning: ({ maxAgeSeconds }) => write(c => {
-      if (!Number.isSafeInteger(maxAgeSeconds) || maxAgeSeconds < 1) throw dataError('INVALID_ARGS', 'maxAgeSeconds must be positive');
-      const result = { requeued: { ids: [], count: 0 }, ageExpired: { ids: [], count: 0 }, retryExhausted: { ids: [], count: 0 } };
+    recoverOrphanRunning: () => write(c => {
+      const result = { requeued: { ids: [], count: 0 }, retryExhausted: { ids: [], count: 0 } };
       const rows = all(c, `UPDATE conversations SET
-        status=CASE WHEN ?-unixepoch(timestamp)>? OR retry_count+1>=? THEN 'failed' ELSE 'pending' END,
-        delivery_action=CASE WHEN delivery_action='failure_receipt' THEN delivery_action WHEN ?-unixepoch(timestamp)>? THEN 'orphan_expired' WHEN retry_count+1>=? THEN 'orphan_retry_exhausted' ELSE delivery_action END,
-        retry_count=CASE WHEN ?-unixepoch(timestamp)>? THEN retry_count ELSE retry_count+1 END
-        WHERE direction='in' AND status='running' RETURNING id,status,delivery_action,?-unixepoch(timestamp)>? AS expired`, seconds(), maxAgeSeconds, MAX_RETRIES, seconds(), maxAgeSeconds, MAX_RETRIES, seconds(), maxAgeSeconds, seconds(), maxAgeSeconds);
+        status=CASE WHEN retry_count+1>=? THEN 'failed' ELSE 'pending' END,
+        delivery_action=CASE WHEN delivery_action='failure_receipt' THEN delivery_action WHEN retry_count+1>=? THEN 'orphan_retry_exhausted' ELSE delivery_action END,
+        retry_count=retry_count+1
+        WHERE direction='in' AND status='running' RETURNING id,status,delivery_action`, MAX_RETRIES, MAX_RETRIES);
       for (const row of rows.sort((a,b) => a.id-b.id)) {
-        const key = row.status === 'pending' ? 'requeued' : row.expired ? 'ageExpired' : 'retryExhausted';
+        const key = row.status === 'pending' ? 'requeued' : 'retryExhausted';
         result[key].ids.push(row.id); result[key].count++;
         if (row.status === 'failed') enqueueReceipt(c, row.id, row.delivery_action);
       }

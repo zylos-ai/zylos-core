@@ -119,7 +119,7 @@ test('packed global CLI starts without installed skill dependencies', async t =>
       const empty = () => [];
       const dispatcher = createDispatcher({
         db: {
-          recoverOrphanRunning: () => ({ requeued: { ids: [] }, ageExpired: { ids: [] }, retryExhausted: { ids: [] } }),
+          recoverOrphanRunning: () => ({ requeued: { ids: [] }, retryExhausted: { ids: [] } }),
           listPendingSessionGroups: () => [{ sessionGroup: 'probe', headPriority: 0, headId: 1 }],
           listPendingContinuations: () => [], listSlotOccupancy: () => [],
           takeSlot: () => ({ taken: true, prior: null }), releaseSlot: () => ({ released: true }),

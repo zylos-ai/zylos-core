@@ -36,7 +36,7 @@ const db = { ...store,
   getControlById: id => database.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
   expireTimedOutControls: seconds => database.prepare("UPDATE control_queue SET status='timeout' WHERE status IN ('pending','running') AND ack_deadline_at<?").run(seconds).changes,
   cleanupControlQueue: () => {},
-  recoverOrphanRunning: options => { record('recover'); return store.recoverOrphanRunning(options); },
+  recoverOrphanRunning: () => { record('recover'); return store.recoverOrphanRunning(); },
   claimConversation: id => { const result = store.claimConversation(id); if (result) barrier('claimed'); return result; },
   expirePendingControls: options => { barrier('reserved'); const result = store.expirePendingControls(options); barrier('old-controls-expired'); return result; },
 };

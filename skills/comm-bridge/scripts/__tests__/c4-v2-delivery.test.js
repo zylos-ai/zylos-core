@@ -50,25 +50,31 @@ test('group head scheduling keeps priority and head id paired and excludes nonpe
   s.setDrainFence('a', { reason: 'evict', runId: 'r' }); assert.equal(s.listPendingSessionGroups()[0].sessionGroup, 'b');
   s.clearDrainFence('a'); assert.equal(s.listPendingSessionGroups().length, 2);
 });
-test('orphan recovery classifies strict age boundaries, prioritizes age and is repeat-safe', t => {
+test('restart recovery requeues old running messages within the retry budget and is repeat-safe', t => {
   const { store: s, db } = fixture(t, { now: () => NOW * 1000 });
-  const entries = [1799, 1800, 1801, 10].map(age => {
-    const item = add(s); s.claimConversation(item.id);
-    db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch'),retry_count=? WHERE id=?").run(NOW - age, age === 1801 || age === 10 ? MAX_RETRIES - 1 : 0, item.id); return item;
-  });
-  const pending = add(s); db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(NOW - 9999, pending.id);
+  const old = add(s);
+  const exhausted = add(s);
+  for (const [item, retries] of [[old, 0], [exhausted, MAX_RETRIES - 1]]) {
+    s.claimConversation(item.id);
+    db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch'),retry_count=? WHERE id=?").run(NOW - 7200, retries, item.id);
+  }
+  const pending = add(s);
+  db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(NOW - 9999, pending.id);
   const beforePending = row(db, pending.id);
-  assert.deepEqual(s.recoverOrphanRunning({ maxAgeSeconds: 1800 }), {
-    requeued: { ids: [entries[0].id, entries[1].id], count: 2 },
-    ageExpired: { ids: [entries[2].id], count: 1 },
-    retryExhausted: { ids: [entries[3].id], count: 1 },
+
+  assert.deepEqual(s.recoverOrphanRunning(), {
+    requeued: { ids: [old.id], count: 1 },
+    retryExhausted: { ids: [exhausted.id], count: 1 },
     controlsExpired: { ids: [], count: 0 },
   });
-  assert.equal(row(db, entries[2].id).retry_count, MAX_RETRIES - 1); assert.equal(row(db, entries[3].id).retry_count, MAX_RETRIES);
+  assert.equal(row(db, old.id).status, 'pending');
+  assert.equal(row(db, old.id).retry_count, 1);
+  assert.equal(row(db, exhausted.id).status, 'failed');
+  assert.equal(row(db, exhausted.id).delivery_action, 'orphan_retry_exhausted');
+  assert.equal(row(db, exhausted.id).retry_count, MAX_RETRIES);
   assert.deepEqual(row(db, pending.id), beforePending);
-  assert.deepEqual(s.recoverOrphanRunning({ maxAgeSeconds: 1800 }), {
+  assert.deepEqual(s.recoverOrphanRunning(), {
     requeued: { ids: [], count: 0 },
-    ageExpired: { ids: [], count: 0 },
     retryExhausted: { ids: [], count: 0 },
     controlsExpired: { ids: [], count: 0 },
   });

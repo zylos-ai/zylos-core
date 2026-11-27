@@ -451,7 +451,7 @@ export const claimConversation = (...args) => store.claimConversation(...args);
 export const requeueConversation = (...args) => store.requeueConversation(...args);
 export const markDelivered = (...args) => store.markDelivered(...args);
 export const failDelivery = (...args) => store.failDelivery(...args);
-export const recoverOrphanRunning = (...args) => store.recoverOrphanRunning(...args);
+export const recoverOrphanRunning = () => store.recoverOrphanRunning();
 export const expireOrphanGroupControls = (...args) => store.expireOrphanGroupControls(...args);
 export const listGroupQueues = (...args) => store.listGroupQueues(...args);
 export const listPendingSessionGroups = (...args) => store.listPendingSessionGroups(...args);

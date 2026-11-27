@@ -35,7 +35,7 @@ export function routerFixture(t, { mode = 'multi', keyPresent = true, poolSize =
   };
   deps.readLiveIdentities = async groups => new Map(groups.map(group => [group, scene.get(group) ?? { present: false, ready: false, tmuxName: tmuxNameForGroup(group ?? 'origin') }]));
   const recover = db.recoverOrphanRunning;
-  db.recoverOrphanRunning = options => { calls.push(['recover']); return recover(options); };
+  db.recoverOrphanRunning = () => { calls.push(['recover']); return recover(); };
   const options = { poolSize: typeof poolSize === 'function' ? poolSize : () => poolSize, readyTimeoutMs };
   let router;
   const create = () => router = createRouter(deps, options);
