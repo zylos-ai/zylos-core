@@ -818,6 +818,8 @@
   "chat.page.groupSummary": "Runtime status, timeline and usage",
   "chat.page.historyGap": "More new messages are missing in between.",
   "chat.page.loadGap": "Load missing messages",
+  "chat.page.search": "Search conversations",
+  "chat.page.closeSearch": "Close search",
   "chat.page.searchNames": "Search conversation names",
   "chat.page.newConversationsOne": "{count} conversation has new messages",
   "chat.page.newConversations": "{count} conversations have new messages",

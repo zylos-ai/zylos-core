@@ -2229,3 +2229,22 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 @media (max-width:760px) {
   .conversation-page .conversation-search { font-size:var(--fs-input-mobile); }
 }
+
+/* The search field and its phone-only close button share one row; the phone search opener is only reached through the top bar. */
+.conversation-page .conversation-search-row { display:flex; flex:none; align-items:center; gap:6px; margin:0 4px; }
+.conversation-page .conversation-search-row .conversation-search { flex:1; margin:0; }
+.conversation-page :is(.conversation-search-open,.conversation-search-close) { display:none; }
+/* Phones: the list reads bottom-up (Origin and pins nearest the thumb), the Mine / External switch sits above the
+   bottom navigation, and search opens there too, above the keyboard. Same layout as the App. */
+@media (max-width:760px) {
+  .conversation-page .conversation-items { display:flex; flex-direction:column-reverse; }
+  .conversation-page :is(.conversation-list-update,.conversation-deletion-notice,.conversation-list-notice) { order:1; }
+  .conversation-page .conversation-search-row { order:2; display:none; margin:0; padding:8px 4px; }
+  .conversation-page .conversation-list-toolbar { order:3; padding:8px 4px; }
+  .conversation-page .conversation-sidebar[data-mobile-search="open"] .conversation-search-row { display:flex; }
+  .conversation-page .conversation-sidebar[data-mobile-search="open"] .conversation-list-toolbar { display:none; }
+  .conversation-page .conversation-search-close { display:inline-flex; flex:none; width:var(--wb-control-touch); height:var(--wb-control-touch); }
+  .conversation-page .conversation-search-row .conversation-search { height:var(--wb-control-touch); }
+  /* The close button already clears the search; the browser's own clear mark would be a second ✕ beside it. */
+  .conversation-page .conversation-search-row .conversation-search::-webkit-search-cancel-button { -webkit-appearance:none; appearance:none; display:none; }
+}
