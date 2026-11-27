@@ -37,12 +37,6 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
       if (changed && sessionGroup === 'origin') run(c, "INSERT INTO group_heads(session_group,head_id) VALUES('origin',?) ON CONFLICT(session_group) DO UPDATE SET head_id=max(head_id,excluded.head_id)", id);
       return changed;
     }),
-    expirePending: (id, maxAgeSeconds) => write(c => {
-      if (!Number.isSafeInteger(maxAgeSeconds) || maxAgeSeconds <= 0) throw dataError('INVALID_ARGS', 'maxAgeSeconds must be a positive integer');
-      const changed = run(c, "UPDATE conversations SET status='failed',delivery_action=CASE WHEN delivery_action='failure_receipt' THEN delivery_action ELSE 'pending_expired' END WHERE id=? AND direction='in' AND status='pending' AND ?-unixepoch(timestamp)>?", id, seconds(), maxAgeSeconds).changes > 0;
-      if (changed) enqueueReceipt(c, id, 'pending_expired');
-      return changed;
-    }),
     failDelivery: (id, { maxRetries = MAX_RETRIES, reason = 'delivery_failed' } = {}) => write(c => {
       if (!Number.isSafeInteger(maxRetries) || maxRetries < 1) throw dataError('INVALID_ARGS', 'maxRetries must be positive');
       if (!['delivery_failed', 'launch_failed', 'ready_timeout', 'delivery_unverified'].includes(reason)) throw dataError('INVALID_ARGS', 'Invalid delivery failure reason');
@@ -51,16 +45,15 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
       if (row) return { changed: true, ...row };
       return { changed: false, status: null, retryCount: null, ...get(c, 'SELECT status,retry_count AS retryCount FROM conversations WHERE id=?', id) };
     }),
-    recoverOrphanRunning: ({ maxAgeSeconds }) => write(c => {
-      if (!Number.isSafeInteger(maxAgeSeconds) || maxAgeSeconds < 1) throw dataError('INVALID_ARGS', 'maxAgeSeconds must be positive');
-      const result = { requeued: { ids: [], count: 0 }, ageExpired: { ids: [], count: 0 }, retryExhausted: { ids: [], count: 0 } };
+    recoverOrphanRunning: () => write(c => {
+      const result = { requeued: { ids: [], count: 0 }, retryExhausted: { ids: [], count: 0 } };
       const rows = all(c, `UPDATE conversations SET
-        status=CASE WHEN ?-unixepoch(timestamp)>? OR retry_count+1>=? THEN 'failed' ELSE 'pending' END,
-        delivery_action=CASE WHEN delivery_action='failure_receipt' THEN delivery_action WHEN ?-unixepoch(timestamp)>? THEN 'orphan_expired' WHEN retry_count+1>=? THEN 'orphan_retry_exhausted' ELSE delivery_action END,
-        retry_count=CASE WHEN ?-unixepoch(timestamp)>? THEN retry_count ELSE retry_count+1 END
-        WHERE direction='in' AND status='running' RETURNING id,status,delivery_action,?-unixepoch(timestamp)>? AS expired`, seconds(), maxAgeSeconds, MAX_RETRIES, seconds(), maxAgeSeconds, MAX_RETRIES, seconds(), maxAgeSeconds, seconds(), maxAgeSeconds);
+        status=CASE WHEN retry_count+1>=? THEN 'failed' ELSE 'pending' END,
+        delivery_action=CASE WHEN delivery_action='failure_receipt' THEN delivery_action WHEN retry_count+1>=? THEN 'orphan_retry_exhausted' ELSE delivery_action END,
+        retry_count=retry_count+1
+        WHERE direction='in' AND status='running' RETURNING id,status,delivery_action`, MAX_RETRIES, MAX_RETRIES);
       for (const row of rows.sort((a,b) => a.id-b.id)) {
-        const key = row.status === 'pending' ? 'requeued' : row.expired ? 'ageExpired' : 'retryExhausted';
+        const key = row.status === 'pending' ? 'requeued' : 'retryExhausted';
         result[key].ids.push(row.id); result[key].count++;
         if (row.status === 'failed') enqueueReceipt(c, row.id, row.delivery_action);
       }

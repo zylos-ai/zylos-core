@@ -2,7 +2,17 @@
 
 Receives messages from external channels and queues them for delivery to Claude.
 
-Accepted work is written with `status='pending'`. Rejected work is recorded with `status='failed'`; a status reply does not deliver that work to the runtime.
+Accepted work is written with `status='pending'`.
+Queue age alone does not change that status. Live delivery after
+`C4_PENDING_MAX_AGE_SECONDS` (default 1800) prepends the elapsed wait and the
+receipt time in the dispatcher time zone. The same rule applies to scheduled
+and inter-session messages. After a message with this note is submitted, the
+same session waits five seconds before receiving another item. On dispatcher
+restart, interrupted deliveries return to the queue if they have retry
+attempts remaining, regardless of their age.
+
+Rejected work is recorded with `status='failed'`; a status reply does not
+deliver that work to the runtime.
 
 ## Usage
 

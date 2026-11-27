@@ -114,7 +114,6 @@ setInterval(()=>{},1000);
       delivered.push({ id: message.id, runId: identity.runId });
       return db.markDelivered(message.id, { sessionId: identity.sessionId });
     },
-    handleExpired: async () => assert.fail('fresh fixture must not expire'),
     findLegacySessions: async () => assert.fail('configured Origin must not discover baseline sessions'),
     advanceLegacy: async () => assert.fail('configured Origin must not advance baseline sessions'),
     diagnostic() {},

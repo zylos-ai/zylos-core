@@ -36,7 +36,7 @@ const db = { ...store,
   getControlById: id => database.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
   expireTimedOutControls: seconds => database.prepare("UPDATE control_queue SET status='timeout' WHERE status IN ('pending','running') AND ack_deadline_at<?").run(seconds).changes,
   cleanupControlQueue: () => {},
-  recoverOrphanRunning: options => { record('recover'); return store.recoverOrphanRunning(options); },
+  recoverOrphanRunning: () => { record('recover'); return store.recoverOrphanRunning(); },
   claimConversation: id => { const result = store.claimConversation(id); if (result) barrier('claimed'); return result; },
   expirePendingControls: options => { barrier('reserved'); const result = store.expirePendingControls(options); barrier('old-controls-expired'); return result; },
 };
@@ -70,7 +70,7 @@ router = createRouter({ db, now: () => now,
       setImmediate(async () => { await router.stop(); database.close(); process.disconnect(); });
     }
   },
-  handleExpired: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
+  findLegacySessions: async () => [], advanceLegacy: async () => {},
   diagnostic: (event, fields) => record(event, fields), alert: (event, fields) => record('alert', { alert: event, ...fields }),
 }, { poolSize: () => 1, readyTimeoutMs: 1000, pollIntervalMs: 5 });
 await router.initialize();

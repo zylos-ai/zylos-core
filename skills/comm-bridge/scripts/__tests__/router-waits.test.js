@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { PENDING_MAX_AGE_SECONDS } from '../c4-config.js';
 import { createDelivery } from '../router/delivery.js';
+import { formatConversation } from '../router/format.js';
 import { routerFixture } from './helpers/router-fixture.js';
 
 function setup(t) {
@@ -35,7 +37,7 @@ function setup(t) {
     revalidateSessionTarget: async () => {},
     readSessionState: async group => ({ identity: f.scene.get(group), status: sample }),
     session: { sendText: async ({ text }) => { calls.pastes++; sent.push(text); }, sendKeys: async () => {}, captureScreen: async () => '❯ ' },
-    formatConversation: row => row.content,
+    formatConversation,
     notifyDelivered: () => {},
   }, { periodicEnabled: false, captureEnabled: false });
   Object.assign(f.deps, { deliverConversation: delivery.deliverConversation, deliverControl: delivery.deliverControl,
@@ -77,4 +79,21 @@ test('a blocked Sync control backs off before claiming and stops retrying after 
   assert.equal(f.counts.controlRequeues, 14);
   assert.equal(f.counts.opens, 14);
   assert.equal(transitions(f).length, 2);
+});
+
+test('an inbound message queued behind a fence is delivered after a long wait', async t => {
+  const f = setup(t);
+  f.db.setDrainFence('chat', { reason: 'evict', runId: f.scene.get('chat').runId });
+  const message = f.add('chat');
+  await f.create().initialize();
+  f.advance((PENDING_MAX_AGE_SECONDS + 60) * 1000);
+  await f.rounds();
+  assert.equal(f.row(message.id).status, 'pending');
+  assert.equal(f.sent.length, 0);
+
+  f.db.clearDrainFence('chat');
+  await f.rounds(2);
+  assert.equal(f.row(message.id).status, 'delivered');
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0].split('\n', 1)[0], /^\[C4\] This message waited in the queue for /);
 });

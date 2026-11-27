@@ -75,7 +75,6 @@ setInterval(()=>{},1000);
     submit: async () => assert.fail('healthy launch must not submit start_attempt'),
     deliverControl: async () => assert.fail('fixture has no controls'),
     deliverConversation: async (message, identity) => db.markDelivered(message.id, { sessionId: identity.sessionId }),
-    handleExpired: async () => assert.fail('fresh fixture must not expire'),
     findLegacySessions: async () => [], advanceLegacy: async () => {},
     diagnostic: (event, fields) => events.push({ event, ...fields }),
   };

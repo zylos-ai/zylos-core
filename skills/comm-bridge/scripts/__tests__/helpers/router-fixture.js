@@ -30,13 +30,12 @@ export function routerFixture(t, { mode = 'multi', keyPresent = true, poolSize =
     submit: async request => { calls.push(['submit', request]); return { kind: 'accepted', sent: true, reply: { ...request, ok: true, result: 'registered', reason: 'recovery_due' } }; },
     deliverControl: async row => { calls.push(['control', row.id]); f.db.prepare("UPDATE control_queue SET status='done' WHERE id=? AND status='running'").run(row.id); },
     deliverConversation: async (row, live) => { calls.push(['conversation', row.id]); db.markDelivered(row.id, { sessionId: live.sessionId }); },
-    handleExpired: async row => calls.push(['expired', row.id]),
     findLegacySessions: async () => [], advanceLegacy: async () => {}, diagnostic: (event, fields) => events.push({ event, ...fields }),
     alert: (event, fields) => calls.push(['alert', event, fields]), log: line => calls.push(['log', line]),
   };
   deps.readLiveIdentities = async groups => new Map(groups.map(group => [group, scene.get(group) ?? { present: false, ready: false, tmuxName: tmuxNameForGroup(group ?? 'origin') }]));
   const recover = db.recoverOrphanRunning;
-  db.recoverOrphanRunning = options => { calls.push(['recover']); return recover(options); };
+  db.recoverOrphanRunning = () => { calls.push(['recover']); return recover(); };
   const options = { poolSize: typeof poolSize === 'function' ? poolSize : () => poolSize, readyTimeoutMs };
   let router;
   const create = () => router = createRouter(deps, options);

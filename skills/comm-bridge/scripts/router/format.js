@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { SKILLS_DIR } from '../c4-config.js';
-import { replyVia, shellQuote } from '../c4-query-format.js';
+import { PENDING_MAX_AGE_SECONDS, SKILLS_DIR } from '../c4-config.js';
+import { parseC4Timestamp, replyVia, shellQuote } from '../c4-query-format.js';
 import { truncateForDelivery } from '../c4-utils.js';
 import { projectC4Content } from '../c4-content-projection.js';
 import { splitContentAndAttachments } from '../attachment-annotations.js';
@@ -23,7 +23,35 @@ function withoutLegacyRoute(content, row) {
   return content.slice(0, offset).trimEnd();
 }
 
-export function formatConversation(row, { scriptPath = sendPath, ownerName = readOwnerName, lookupQuote, pasteCharThreshold } = {}) {
+export function queueNotice(row, now) {
+  if (row.direction !== 'in' || typeof row.timestamp !== 'string') return '';
+  const received = parseC4Timestamp(row.timestamp);
+  const elapsed = now - received.getTime();
+  if (!Number.isFinite(elapsed) || elapsed <= PENDING_MAX_AGE_SECONDS * 1000) return '';
+
+  let minutes = Math.floor(elapsed / 60000);
+  const duration = [];
+  for (const [size, unit] of [[1440, 'd'], [60, 'h'], [1, 'm']]) {
+    const count = Math.floor(minutes / size);
+    if (count > 0) duration.push(`${count}${unit}`);
+    if (duration.length === 2) break;
+    minutes %= size;
+  }
+
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  });
+  const { timeZone } = formatter.resolvedOptions();
+  const { year, month, day, hour, minute } = Object.fromEntries(
+    formatter.formatToParts(received).map(({ type, value }) => [type, value]),
+  );
+  return `[C4] This message waited in the queue for ${duration.join(' ') || '<1m'} (received ${year}-${month}-${day} ${hour}:${minute} ${timeZone}). Check whether it still applies before acting on it.\n`;
+}
+
+export function formatConversation(row, {
+  scriptPath = sendPath, ownerName = readOwnerName, lookupQuote, pasteCharThreshold,
+  now = Date.now(), notice = queueNotice(row, now),
+} = {}) {
   const projected = withoutLegacyRoute(projectC4Content(row.content || '', { c4Id: row.id }), row);
   const content = row.channel === 'dashboard' && row.direction === 'in' ? dashboardSource(projected, ownerName(), { row, lookupQuote }) : projected;
   const attachmentHint = row.channel === 'dashboard' && row.direction === 'in'
@@ -34,5 +62,5 @@ export function formatConversation(row, { scriptPath = sendPath, ownerName = rea
     ? `\nCharts/choices/forms when useful: node ${shellQuote(path.join(SKILLS_DIR, 'dashboard', 'scripts', 'components.js'))} list --json\n`
     : '';
   const suffix = componentHint + (row.endpoint_id ? `${attachmentHint} ${replyVia(row, scriptPath)}` : '');
-  return truncateForDelivery(content, suffix, row.id, pasteCharThreshold);
+  return truncateForDelivery(content, suffix, row.id, pasteCharThreshold, notice);
 }

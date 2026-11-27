@@ -16,7 +16,6 @@ import { resolveDashboardQuote } from '../dashboard-source.js';
 import { notifyDelivered, notifyDeliveryFailed } from './notify.js';
 import { createStatusNoticeSender } from '../c4-status-notice.js';
 import { createFailureAlertSender } from '../failure-alert.js';
-import { createPendingExpiryHandler } from './expiry.js';
 import { createRouterDiagnostics } from './diagnostics.js';
 import { createLifecycleProviders } from './lifecycle.js';
 import { messageForStatus } from '../status-notice-templates.js';
@@ -79,7 +78,6 @@ export function createDispatcher(overrides = {}, options = {}) {
     ...overrides,
   };
   const sendStatusNotice = overrides.sendStatusNotice ?? createStatusNoticeSender({ db, log });
-  const handleExpired = overrides.handleExpired ?? createPendingExpiryHandler({ sendFailureAlert });
   let router;
   const delivery = createDelivery({ ...providers, getSessionMode: () => router.state.mode,
     findRuntime: overrides.findRuntime ?? findRuntime,
@@ -90,7 +88,7 @@ export function createDispatcher(overrides = {}, options = {}) {
     notifyDelivered: overrides.notifyDelivered ?? notifyDelivered,
     notifyDeliveryFailed: overrides.notifyDeliveryFailed ?? notifyDeliveryFailed,
   }, { ...options.delivery, tmux });
-  router = createRouter({ ...providers, handleExpired, sendStatusNotice,
+  router = createRouter({ ...providers, sendStatusNotice,
     canAttemptDelivery: delivery.canAttempt, finishDeliveryWait: delivery.finishWait, sweepDeliveryWaits: delivery.sweepWaits,
     maybePeriodicEnter: delivery.maybePeriodicEnter, clearPeriodicEnter: delivery.clearPeriodicEnter,
     deliverControl: overrides.deliverControl ?? delivery.deliverControl,

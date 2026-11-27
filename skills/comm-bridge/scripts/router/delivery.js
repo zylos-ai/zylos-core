@@ -9,6 +9,7 @@ const { buildKickPrompt } = await loadCoreModule('runtime/kick-prompt.js');
 const { resolveSessionTarget, revalidateSessionTarget } = await loadCoreModule('runtime/session-target.js');
 import { PeriodicEnter } from '../periodic-enter.js';
 import { sanitizeMessage } from '../c4-utils.js';
+import { queueNotice } from './format.js';
 import { saveEnterCapture } from '../c4-diagnostic.js';
 import { DELIVERY_DELAY_BASE, DELIVERY_DELAY_PER_KB, DELIVERY_DELAY_MAX, MAX_RETRIES, RETRY_BASE_MS,
   CONTROL_MAX_RETRIES, ENTER_VERIFY_MAX_RETRIES, ENTER_VERIFY_WAIT_MS, PERIODIC_ENTER_ENABLED,
@@ -155,8 +156,7 @@ export function createDelivery(deps, configuration = {}) {
       if (row?.status === 'pending' || row?.status === 'running') continue;
       // Expiration and cancellation can settle a row before its lane sees it
       // again. Diagnostic memory follows the same authoritative row lifetime.
-      const expired = wait.type === 'control' ? row?.status === 'timeout' && row.last_error === 'ACK_DEADLINE_EXCEEDED'
-        : row?.delivery_action === 'pending_expired';
+      const expired = wait.type === 'control' && row?.status === 'timeout' && row.last_error === 'ACK_DEADLINE_EXCEEDED';
       const outcome = wait.type === 'control' ? row?.last_error ?? row?.status : row?.status;
       finishWait(wait.row, wait.type, expired ? 'expired' : outcome ?? 'removed');
     }
@@ -323,8 +323,9 @@ export function createDelivery(deps, configuration = {}) {
             result = 'ack';
           } else {
             if (type === 'control' && content.startsWith('/')) periodic.reset('slash_control');
+            const notice = type === 'conversation' ? queueNotice(row, now()) : '';
             const message = type === 'conversation'
-              ? deps.formatConversation(row, { pasteCharThreshold: runtime.input.pasteCharThreshold })
+              ? deps.formatConversation(row, { pasteCharThreshold: runtime.input.pasteCharThreshold, notice })
               : content.startsWith('/') || continuation ? content : `Meanwhile, ${content}`;
             const sanitized = sanitizeMessage(message);
             const clearSource = runtime.switch.clearFiresSessionStart === false
@@ -373,6 +374,7 @@ export function createDelivery(deps, configuration = {}) {
             result = type === 'conversation' ? 'delivered' : content.includes('---- ack via:') ? 'submitted' : 'ack';
             typed = type === 'control' && !content.startsWith('/');
             if (row.require_idle === 1) await idleSettlement();
+            else if (notice) await waitForIdle(options.idleHoldMs);
           }
         }
         }

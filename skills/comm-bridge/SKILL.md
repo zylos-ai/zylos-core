@@ -208,6 +208,15 @@ The activity monitor writes `~/zylos/activity-monitor/agent-status.json` which i
 
 `c4-receive.js` asks the activity monitor for a route before committing inbound work. An explicit pending decision queues the message. Authentication rejection and unavailable routes create terminal failed rows, including when replies are suppressed or disabled. Status replies do not mean the inbound work was delivered. If IPC is unavailable, the entry reads only the target runtime's health record; a missing or unreadable record leaves work pending.
 
+Accepted inbound conversations remain eligible for delivery regardless of
+queue age. After more than 30 minutes in the queue (or the existing
+`C4_PENDING_MAX_AGE_SECONDS` threshold), live delivery starts with a note showing
+the wait and when the message was received in the instance time zone.
+After submitting a message with this note, the dispatcher holds the same
+session's queue for five seconds. On dispatcher restart, interrupted
+deliveries return to the queue if they have retry attempts remaining,
+regardless of when the message was received.
+
 ## Keystroke Delivery
 
 The dispatcher supports `[KEYSTROKE]` control messages for sending raw keystrokes to the tmux session. This is an **ops-level capability** — no source gating is applied.
