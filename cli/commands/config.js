@@ -1,4 +1,4 @@
-import { loadRuntimeContexts, readDefaultModels, setModelThreshold } from '../lib/model-rotation-thresholds.js';
+import { loadRuntimeContexts, modelThreshold, readDefaultModels, readModelWindows, setModelThreshold } from '../lib/model-rotation-thresholds.js';
 /**
  * zylos config - View and update Zylos configuration
  *
@@ -67,21 +67,46 @@ export async function configCommand(args) {
   process.exit(1);
 }
 
-function showConfig() {
+/** Legacy threshold keys: `set` writes the engine default model's entry, so show that effective value. */
+const THRESHOLD_RUNTIME = { new_session_threshold: 'claude', codex_new_session_threshold: 'codex' };
+
+async function displayValues(config, keys = Object.keys(config)) {
+  const effective = {};
+  const thresholdKeys = keys.filter(key => Object.hasOwn(THRESHOLD_RUNTIME, key));
+  if (thresholdKeys.length) {
+    const contexts = await loadRuntimeContexts();
+    const defaultModels = readDefaultModels({ contexts });
+    const modelWindows = readModelWindows({ contexts });
+    for (const key of thresholdKeys) {
+      const runtime = THRESHOLD_RUNTIME[key];
+      const model = defaultModels[runtime];
+      if (model) effective[key] = modelThreshold(config, { runtime, context: contexts[runtime], model, defaultModel: model, modelWindows });
+    }
+  }
+  const values = {};
+  for (const key of keys) {
+    if (Object.hasOwn(effective, key)) values[key] = effective[key];
+    else if (key in config) values[key] = config[key] !== null && typeof config[key] === 'object' ? JSON.stringify(config[key]) : config[key];
+  }
+  return values;
+}
+
+async function showConfig() {
   const config = readZylosConfigOrThrow();
   if (Object.keys(config).length === 0) {
     console.log(dim('No configuration found. Run "zylos init" first.'));
     return;
   }
-  for (const [key, value] of Object.entries(config)) {
+  for (const [key, value] of Object.entries(await displayValues(config))) {
     console.log(`${bold(key)} = ${cyan(value)}`);
   }
 }
 
-function getConfig(key) {
+async function getConfig(key) {
   const config = readZylosConfigOrThrow();
-  if (key in config) {
-    console.log(config[key]);
+  const values = await displayValues(config, [key]);
+  if (Object.hasOwn(values, key)) {
+    console.log(values[key]);
   } else {
     console.error(red(`Key not found: ${bold(key)}`));
     process.exit(1);
