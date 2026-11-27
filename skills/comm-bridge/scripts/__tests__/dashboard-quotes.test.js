@@ -43,8 +43,9 @@ test('Existing channel rows retain exact live and replay formatting without refe
   }));
   const scripts = fileURLToPath(new URL('../', import.meta.url)).replace(/\/$/, '');
   const normalize = text => text.replaceAll(SKILLS_DIR, '$SKILLS').replaceAll(scripts, '$CORE_SCRIPTS');
+  const now = Date.parse('2026-11-11T11:00:00Z');
   const outputs = rows.map(row => ({
-    live: normalize(formatConversation(row, { ownerName: () => 'Owner', lookupQuote })),
+    live: normalize(formatConversation(row, { ownerName: () => 'Owner', lookupQuote, now })),
     replay: normalize(formatConversationsForAgent([row], { spill: false, ownerName: () => 'Owner', lookupQuote })),
   }));
   assert.equal(reads, 0);

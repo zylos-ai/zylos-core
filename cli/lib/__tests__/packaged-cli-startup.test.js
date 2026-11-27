@@ -127,7 +127,7 @@ test('packed global CLI starts without installed skill dependencies', async t =>
           getDrainFence: () => null,
           getOriginNeed: () => ({ inbound: { count: 0, oldestAt: null }, controls: { count: 0, oldestAt: null } }),
           resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }),
-          expireTimedOutControls: empty, cleanupControlQueue: empty,
+          expireTimedOutControls: empty, expireOrphanGroupControls: empty, cleanupControlQueue: empty,
           countNonTerminalControls: () => ({ pending: 0 }),
         },
         readSessionMode: () => ({ mode: 'multi' }),
