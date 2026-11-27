@@ -1,6 +1,6 @@
 /** One in-memory execution slot per group. No waiting lane owns another lane. */
 export function createLane(context, group) {
-  const { state, deps, options, diagnostic, now } = context;
+  const { state, deps, options, diagnostic, now, inFlightControls } = context;
   const filter = { sessionGroups: [group] };
   const modeOptions = { sessionMode: state.mode };
   const conversationFilter = { ...(state.mode === 'multi' ? filter : {}), ...modeOptions };
@@ -35,7 +35,14 @@ export function createLane(context, group) {
       if (startup && deps.db.getControlById(row.id)?.status === 'pending') releaseActivation('fenced_during_launch');
       return { claimed: false, blocked: true };
     }
-    const result = await deps.deliverControl(row, live);
+    // Publish the claim before yielding so the scheduler cannot expire a live delivery.
+    inFlightControls.add(row.id);
+    let result;
+    try {
+      result = await deps.deliverControl(row, live);
+    } finally {
+      inFlightControls.delete(row.id);
+    }
     if (startup && result?.blocked) releaseActivation('activation_released');
     return { claimed: true, blocked: result?.blocked ?? false, delivered: result?.delivered === true };
   }

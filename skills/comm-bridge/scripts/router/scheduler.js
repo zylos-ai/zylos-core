@@ -56,7 +56,8 @@ export function createRouter(dependencies, configuration = {}) {
     catch (error) { deps.log?.(`Router diagnostic: ${error.message}`); }
   };
   function track(promise) { tasks.add(promise); promise.finally(() => tasks.delete(promise)).catch(() => {}); return promise; }
-  const context = { deps, options, state, diagnostic, now, tmuxName: group => tmuxNameForGroup(group ?? 'origin') };
+  const inFlightControls = new Set();
+  const context = { deps, options, state, diagnostic, now, inFlightControls, tmuxName: group => tmuxNameForGroup(group ?? 'origin') };
   context.capacityWaits = createCapacityWaits({ ...context, track });
   context.continuationRestarts = createContinuationRestarts({ now, deps, diagnostic });
   context.refreshSlots = () => { state.slots = new Map(deps.db.listSlotOccupancy().map(row => [row.sessionGroup, row])); };
@@ -226,6 +227,11 @@ export function createRouter(dependencies, configuration = {}) {
     state.round++;
     const seconds = Math.floor(now() / 1000);
     deps.db.expireTimedOutControls(seconds);
+    if (state.mode === 'multi' || state.keyPresent) {
+      for (const row of deps.db.expireOrphanGroupControls(inFlightControls)) {
+        diagnostic('control_expired', { session_group: row.session_group, control_id: row.id });
+      }
+    }
     deps.sweepDeliveryWaits?.();
     if (now() - lastCleanup >= options.cleanupIntervalMs) {
       deps.db.cleanupControlQueue(seconds - options.retentionDays * 86400); lastCleanup = now();

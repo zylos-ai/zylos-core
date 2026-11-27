@@ -110,6 +110,15 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
         runtime: runtimeDisplayName(event.runtime),
         oldestAt: event.oldest_at * 1000,
       }, statusNotices);
+    } else if (event.event === 'group_fence_backlog') {
+      message = messageForStatus({
+        context: 'repeated_failure',
+        noticeCode: 'group_fence_backlog',
+        group: event.sessionGroup,
+        reason: event.reason,
+        count: event.count,
+        oldestAt: event.oldestAt,
+      }, statusNotices);
     } else {
       const details=[event.requestId && `requestId=${event.requestId}`,event.reason && `reason=${event.reason}`,
         event.message].filter(Boolean).join(' ');

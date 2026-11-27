@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createSupervisor } from '../supervisor.js';
+import { PENDING_MAX_AGE_SECONDS } from '../../../comm-bridge/scripts/c4-config.js';
 import { RestartRequestStore } from '../restart-request-store.js';
 function fixture(t,{batchIdentities,badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert,now=Date.now,database={},readSyncMarker,prepareReferenceReorg,prompts,resolveTargetRuntime=async()=> 'claude'}={}) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-assembly-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -92,3 +93,30 @@ for(const outcome of ['pending','done','unknown'])test(`quiet-turn ${outcome} ad
  assert.equal(await restarted.interruptQuietTurn(scene),true);assert.equal(attempts,2);
 });
 
+
+test('supervisor alerts once per group fence when pending inbound work reaches the age threshold', async t => {
+  const oldestAt = 1_800_000_000_000;
+  const fence = { sessionGroup: 'chat:blocked', runId: 'run-blocked', reason: 'auth', createdAt: oldestAt / 1000 };
+  let now = oldestAt + (PENDING_MAX_AGE_SECONDS - 360) * 1000;
+  const alerts = [];
+  const { supervisor } = fixture(t, {
+    now: () => now,
+    alert: async event => { alerts.push(event); },
+    database: {
+      listGroupQueues: () => ({
+        groups: [{ sessionGroup: fence.sessionGroup, fence, pending: { oldestAt, count: 2 } }],
+      }),
+    },
+  });
+  const context = { scenes: [], fences: [fence] };
+  await supervisor.loop.deps.readConfiguration();
+  await supervisor.loop.deps.writeMetricsAndMaintain(context);
+  assert.equal(alerts.length, 0);
+
+  now += 60_000;
+  await supervisor.loop.deps.writeMetricsAndMaintain(context);
+  await supervisor.loop.deps.writeMetricsAndMaintain(context);
+  assert.deepEqual(alerts, [{
+    event: 'group_fence_backlog', sessionGroup: fence.sessionGroup, reason: fence.reason, count: 2, oldestAt,
+  }]);
+});

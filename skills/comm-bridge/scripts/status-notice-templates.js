@@ -37,6 +37,10 @@ const REPEATED_FAILURE_TEMPLATES = {
     zh: '对话「{group}」连续 {count} 次启动后不到 10 分钟就意外结束。系统会继续重起；如果一直这样，请检查这个对话正在做的任务或运行环境。',
     en: 'Conversation "{group}" ended unexpectedly {count} times in a row, each within 10 minutes of starting. It keeps restarting. If this continues, check the task it is working on or its runtime environment.',
   },
+  group_fence_backlog: {
+    zh: '会话组 {group} 正被挡住（原因 {reason}），从 {oldestAt} 起有 {count} 条消息还没处理，请检查这个组。',
+    en: 'Session group {group} is blocked (reason {reason}) and has had {count} unprocessed messages since {oldestAt}. Please check this group.',
+  },
   origin_auth_blocked: {
     zh: '{runtime} 登录失效，Origin 从 {oldestAt} 起有消息还没处理。系统在自动重试，登录恢复后会接着处理；如果一直不恢复，请检查 {runtime} 的登录。',
     en: '{runtime} sign-in has failed, and Origin has had unprocessed messages since {oldestAt}. The system keeps retrying and will continue once sign-in is restored. If it does not recover, check the {runtime} login.',
@@ -97,7 +101,7 @@ export function messageForStatus({ health, reason, noticeCode, resetAt, group, c
   let code = ['capacity', 'repeated_failure'].includes(mode) ? noticeCode : Object.hasOwn(NOTICE_TEMPLATES,noticeCode) ? noticeCode : null;
   if (code === 'quota_exhausted_reset' && !resetText) code = 'quota_exhausted';
   // Codes and times come from structured, trusted classification. Free-form
-  // reason text is never used as content or interpreted as a template ID.
+  // Health reason text is never used as content or interpreted as a template ID.
   return ['zh','en'].map(locale => {
     if (mode === 'repeated_failure') {
       const render = (id, values) => {
@@ -106,6 +110,7 @@ export function messageForStatus({ health, reason, noticeCode, resetAt, group, c
         return text.replace(/\{(group|count|reason|others|code|seconds|runtime|oldestAt)\}/g, (token, key) => values[key] === undefined ? token : String(values[key]));
       };
       const values = { group, count, others, runtime, oldestAt: oldestText };
+      if (noticeCode === 'group_fence_backlog') values.reason = reason;
       if (noticeCode === 'could_not_restart') {
         values.reason = reason?.kind === 'timeout'
           ? render('could_not_restart_timeout', { seconds: reason.seconds })

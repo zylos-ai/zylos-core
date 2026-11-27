@@ -217,7 +217,7 @@ for (const runtime of ['claude', 'codex']) test(`${runtime} queued inactivity Es
   f.advance(1000); f.output(); f.read();
   const message = f.store.insertConversation('in', 'telegram', 'isolated', 'keep this message');
   const state = { mode: 'single', stopped: false, live: new Map([[f.scene.sessionGroup, { present: true, ready: true, runId: f.scene.runId, sessionId: f.scene.sessionId }]]), activations: new Map() };
-  const lane = createLane({ state, now: f.now, options: { pendingMaxAgeSeconds: 3600 }, diagnostic() {}, capacityWaits: { clear() {} }, deps: {
+  const lane = createLane({ state, inFlightControls: new Set(), now: f.now, options: { pendingMaxAgeSeconds: 3600 }, diagnostic() {}, capacityWaits: { clear() {} }, deps: {
     db: f.store, readCurrentSession: async () => ({ runId: f.scene.runId, sessionId: f.scene.sessionId, startupControlIds: [] }),
     deliverConversation: f.delivery.deliverConversation, deliverControl: f.delivery.deliverControl,
   } }, f.scene.sessionGroup);
