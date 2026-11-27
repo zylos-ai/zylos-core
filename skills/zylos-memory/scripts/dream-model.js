@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
 
 const TIMEOUTS = { stage1: 10 * 60_000, stage2: 30 * 60_000, tidy: 60 * 60_000, repair: 10 * 60_000 };
-const OUTPUT_LIMIT = 4 * 1024 * 1024;
+const OUTPUT_LIMIT = 64 * 1024 * 1024;
 
 export async function createDreamModel(root, config) {
   const { DEFAULT_RUNTIME, getRuntime } = await loadCoreModule('runtime/index.js');

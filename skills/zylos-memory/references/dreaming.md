@@ -23,8 +23,9 @@ The process owns a lease, renews it every 30 seconds and can replace a lease
 whose process has exited or whose heartbeat is more than two minutes old.
 Every model edit checks the current lease and token. Model calls have
 independent wall-clock limits of ten minutes for extraction, thirty minutes for
-merging, sixty minutes per weekly tidy call and ten minutes per header repair. Repeatable call
-failures are retried twice, except header repair makes at most two calls.
+merging, sixty minutes per weekly tidy call and ten minutes per header repair.
+Each call can emit up to 64 MiB on stdout, including streamed tool results.
+Repeatable call failures are retried twice, except header repair makes at most two calls.
 A header that could not be repaired is reported once per night and checked again on a later run.
 Writes already published by the models are retained.
 
