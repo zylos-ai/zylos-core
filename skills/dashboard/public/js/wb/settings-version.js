@@ -39,7 +39,8 @@ export function coreUpgradePrompt(current, latest, t = key => key) {
 }
 
 // The chosen AI engine's CLI version, with persistent controls and feedback across card redraws.
-export function renderEngineVersion(root, info, { actions, feedbackRuntime, pending = false, busy = false, canUpgrade = true, document = root.ownerDocument, t = key => key, readOnly = false, runtime = DEFAULT_RUNTIME } = {}) {
+// `blocked`: a runtime switch or upgrade is in progress, so no other upgrade may start.
+export function renderEngineVersion(root, info, { actions, feedbackRuntime, pending = false, busy = false, blocked = false, canUpgrade = true, document = root.ownerDocument, t = key => key, readOnly = false, runtime = DEFAULT_RUNTIME } = {}) {
   const name = runtimeName(runtime);
   const version = info?.[runtime];
   const unsupported = version?.update_check === 'unsupported';
@@ -64,7 +65,7 @@ export function renderEngineVersion(root, info, { actions, feedbackRuntime, pend
 
   const label = upgrade.querySelector('#action-cli-label');
   if (label) label.textContent = t('actions.upgrade_runtime', { runtime: name }) + (update ? ' v' + update : '');
-  upgrade.disabled = readOnly || pending || !canUpgrade || Boolean(version?.installed && latest && !update);
+  upgrade.disabled = readOnly || pending || blocked || !canUpgrade || Boolean(version?.installed && latest && !update);
   upgrade.title = readOnly ? t('remote.actions_read_only_tooltip') : '';
   if (actions.parentElement !== root) root.append(actions);
 }

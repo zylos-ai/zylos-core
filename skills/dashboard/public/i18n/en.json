@@ -190,6 +190,7 @@
   "agent_fleet.sound_off": "Sound cues muted — click to enable",
   "trends.tool_calls": "Tool Calls",
   "result.duplicate_request": "Duplicate request ignored",
+  "result.operation_in_progress": "Another runtime switch or upgrade is in progress. Try again when it finishes.",
   "result.interrupt_submitted": "Interrupt submitted; delivery is pending.",
   "result.controls_submitted": "Both controls submitted; delivery and recovery are not confirmed.",
   "result.control_unknown": "Submission result unknown. Check the current state before retrying.",

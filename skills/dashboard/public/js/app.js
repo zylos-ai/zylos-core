@@ -1702,6 +1702,7 @@ function applySse(name, data) {
     if (!data.agent && prevAgent) state.dashboardState.agent = prevAgent;
     state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
     workbench?.applyInstance?.(data);
+    settingsDefaults?.applyInstance(state.dashboardState);
     renderInfoBar(); syncAccessControls(); renderObserverPage();
     chatPage?.groupsChanged?.();
   } else if (name === 'groups') {
@@ -2394,9 +2395,10 @@ function settingsWiring() {
       status: (text, kind) => fleetManageStatus(text, kind, '#api-key-list'), busy: setApiKeyBusy, errorText: fleetManageError,
     },
     writable: () => !remoteIsReadOnly(), onGroup: openWorkbenchGroup,
+    operation: runtimeOperation, onInstance: current => applySse('instance', current),
     engineVersion: (root, runtime) => renderEngineVersion(root, state.dashboardState?.versions, {
       runtime, actions: engineActions, feedbackRuntime: upgradeRuntime,
-      pending: inlineActions['upgrade-cc']?.pending, busy: inlineActions['upgrade-cc']?.busy,
+      pending: inlineActions['upgrade-cc']?.pending, busy: inlineActions['upgrade-cc']?.busy, blocked: Boolean(runtimeOperation()),
       canUpgrade: !runtimeNotFound({ instance: state.dashboardState }, runtime),
       t, readOnly: remoteIsReadOnly(),
     }),
@@ -2863,6 +2865,11 @@ let settingsPricing = null;
 let settingsDefaults = null;
 let engineActions = null;
 let upgradeRuntime = null;
+// The runtime switch or CLI upgrade this page has sent and not yet had an answer for. Otherwise the
+// server's report (instance operation_in_progress) says which one is running, wherever it was started.
+let localRuntimeOperation = null;
+const runtimeOperation = () => localRuntimeOperation ?? state.dashboardState?.operation_in_progress ?? null;
+function refreshRuntimeOperation() { settingsDefaults?.refreshLocks(); settingsDefaults?.refreshVersion(); }
 let settingsVersionRoot = null;
 let settingsChat = null;
 let settingsHosts = null;
@@ -2922,6 +2929,7 @@ function initSettingsPage() {
   });
   const read = async path => { const target = observerTargetKey(); const value = await requestAgentJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
   settingsLoader = createSettingsLoader({ read, onLoad(value) {
+    if (value.instance && state.dashboardState) state.dashboardState = { ...state.dashboardState, operation_in_progress: value.instance.operation_in_progress ?? null };
     settingsDefaults?.destroy();
     settingsDefaults = settingsWiring().renderDefaults(defaults, value, read, settingsPage.slots.idleReclaim);
     settingsPricing?.destroy(); settingsPricing = null;
@@ -3139,6 +3147,7 @@ function pageActions() {
 async function sendAction(action, body, followUp) {
   const targetKey = observerTargetKey();
   const upgrading = action === 'upgrade-cc';
+  const operation = { 'switch-runtime': 'switch-runtime', 'upgrade-cc': 'upgrade-runtime' }[action];
   const actionRuntime = body?.runtime ?? state.dashboardState?.default_runtime;
   const inline = inlineActions[action];
   let feedback = followUp?.feedback;
@@ -3164,13 +3173,36 @@ async function sendAction(action, body, followUp) {
     }
     const request = instanceActionRequest(action, body);
     const actionPath = agentPath(request.path);
-    const r = await fetch(api(actionPath), {
-      method: request.method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request.body)
-    });
-    const result = await r.json();
+    let r, result, answered = true;
+    if (operation) { localRuntimeOperation = { action: operation, runtime: actionRuntime }; refreshRuntimeOperation(); }
+    try {
+      r = await fetch(api(actionPath), {
+        method: request.method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request.body)
+      });
+      result = await r.json();
+    } catch (error) {
+      if (!operation) throw error;
+      answered = false;
+    } finally {
+      if (operation) { localRuntimeOperation = null; refreshRuntimeOperation(); }
+    }
     if (feedback && !feedback.isCurrent()) return false;
+    // A switch or upgrade without an answer may still have run: it is checked, never reported as failed.
+    if (!answered) {
+      if (!feedback) throw Object.assign(new Error(t('wb.settings.runtimeOperation.checking')), { code: 'result_unknown' });
+      await checkRuntimeUpgrade(feedback, actionRuntime, targetKey);
+      return false;
+    }
+    if (operation && result.error?.code === 'operation_in_progress') {
+      if (result.operation && state.dashboardState) state.dashboardState = { ...state.dashboardState, operation_in_progress: result.operation };
+      refreshRuntimeOperation();
+      const message = t('result.operation_in_progress');
+      if (!feedback) throw Object.assign(new Error(message), { code: 'operation_in_progress' });
+      feedback.show(message, null);
+      return false;
+    }
     if (upgrading && r.status >= 500
       && !['upgrade_failed', 'deadline_exceeded'].includes(result.error?.code ?? result.error)) {
       result.messageKey = 'result.runtime_upgrade_unknown';
@@ -3214,6 +3246,22 @@ async function sendAction(action, body, followUp) {
     return false;
   } finally {
     if (upgradeMessage && inline.pending && feedback.isCurrent()) feedback.show(upgradeMessage, true);
+  }
+}
+
+// The CLI upgrade got no answer: refresh the installed versions, then show what the server reads now.
+async function checkRuntimeUpgrade(feedback, runtime, targetKey) {
+  const name = runtimeName(runtime) || t('wb.unknown');
+  feedback.show(t('wb.settings.runtimeOperation.checking'), null);
+  try {
+    await requestAgentJson('/api/instance/actions/recheck-runtime-cli', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const current = await fetchJson('/api/instance');
+    if (observerTargetKey() !== targetKey || !feedback.isCurrent()) return;
+    applySse('instance', current);
+    const installed = current.versions?.[runtime]?.installed;
+    feedback.show(t('wb.settings.runtimeOperation.checkedVersion', { runtime: name, version: installed ? 'v' + installed : t('wb.unknown') }), null);
+  } catch {
+    if (observerTargetKey() === targetKey && feedback.isCurrent()) feedback.show(t('result.runtime_upgrade_unknown', { runtime: name }), null);
   }
 }
 

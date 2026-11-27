@@ -403,6 +403,20 @@ const scheduleReader = createScheduleRead({ zylosDir: config.zylosDir, scheduleT
   getSnapshot: () => workbench.getSnapshot() });
 const scheduleWriter = createScheduleWrite({ zylosDir: config.zylosDir, scheduleTz });
 
+// A default runtime switch and a runtime CLI upgrade both act on the runtimes, so this
+// process runs at most one of them; others are refused until it settles, whatever the outcome.
+// Commands started outside Dashboard are not seen. The record is lost when Dashboard restarts.
+let runtimeOperation = null;
+async function runRuntimeOperation(record, task) {
+  runtimeOperation = record;
+  scheduleFleetStateBroadcast();
+  try { return await task(); }
+  finally {
+    runtimeOperation = null;
+    scheduleFleetStateBroadcast();
+  }
+}
+
 function buildInstancePayload() {
   const snapshot = workbench.getCachedSnapshot();
   const observed = snapshot?.instance ?? {};
@@ -413,6 +427,7 @@ function buildInstancePayload() {
   return { agent: { ...identity, ...agentColor(identity.name), avatar_version: avatarFileInfo(avatar)?.version ?? null },
     tz: instanceTz(),
     session_mode: observed.sessionModeStatus ?? { sessionMode: readFleetSessionMode(), transition: null, globalGate: null, blocked: null, supervisor: 'unknown', lastCompleted: null, lastEvents: [] }, default_runtime: defaultRuntime(zylosConfig), defaults,
+    operation_in_progress: runtimeOperation,
     versions: Object.fromEntries(['zylos', ...DASHBOARD_RUNTIMES].map(runtime => [runtime, runtimeVersionRecord(runtime)])),
     runtimeHealth: observed.runtimeHealth ?? null, accounts: observed.accounts ?? null,
     supervisorPaused: observed.supervisorPaused ?? null, autoRestarts: observed.autoRestarts ?? null,
@@ -1530,8 +1545,17 @@ export function createServer() {
         const action = instanceAction ? (instanceAction[1] === 'upgrade-runtime' ? 'upgrade-cc' : instanceAction[1])
           : ({ model: 'switch-model', effort: 'switch-effort', threshold: 'set-threshold', 'session-hot-ttl': 'set-session-hot-ttl' }[body?.kind]);
         if (!action) { sendJson(res, 400, { ok: false, error: { code: 'INVALID_DEFAULT', message: 'Choose model, effort, threshold or session-hot-ttl' } }); return; }
+        const operation = ['switch-runtime', 'upgrade-runtime'].includes(instanceAction?.[1]) ? instanceAction[1] : null;
+        if (operation && runtimeOperation) {
+          sendCommandJson(res, 409, { ok: false, error: 'operation_in_progress', messageKey: 'result.operation_in_progress', operation: runtimeOperation });
+          return;
+        }
         const actionConfig = action === 'upgrade-cc' ? {} : loadZylosConfig(config.zylosDir);
-        const result = await handleAction(action, body, { ...actionConfig, zylosDir: config.zylosDir });
+        const run = () => handleAction(action, body, { ...actionConfig, zylosDir: config.zylosDir });
+        // Requests naming no supported runtime are refused at once and never hold the slot.
+        const result = operation && SUPPORTED_RUNTIMES.includes(body?.runtime)
+          ? await runRuntimeOperation({ action: operation, runtime: body.runtime, started_at: new Date().toISOString() }, run)
+          : await run();
         if (result.ok && action === 'upgrade-cc') eventLoopMonitor.runTask('installed-versions.refresh', refreshInstalledVersions);
         sendCommandJson(res, result.status ?? 200, result);
         if (result.ok) scheduleFleetStateBroadcast();

@@ -190,6 +190,7 @@
   "agent_fleet.sound_off": "提示音已静音 — 点击开启",
   "trends.tool_calls": "工具调用",
   "result.duplicate_request": "重复请求已忽略",
+  "result.operation_in_progress": "已有一个切换或升级正在进行，等它完成后再试",
   "result.interrupt_submitted": "中断控制已提交，送达仍待确认。",
   "result.controls_submitted": "两段控制均已提交，送达与恢复仍待确认。",
   "result.control_unknown": "提交结果未知，请先查看当前状态再决定是否重试。",

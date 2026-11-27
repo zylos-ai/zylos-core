@@ -41,6 +41,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   const isOrigin = key => key === null || key === 'origin';
   const actionCalls = [], cliCalls = [], runtimeCalls = [], records = [];
   let checker, installedCore = '1.4.0', tags = ['v1.5.2', 'v2.0.0', 'v1.6.0-beta.1'];
+  let runtimeHold = null; // while set, the next `zylos runtime` answers only when this promise settles
   const savedRoot = process.env.ZYLOS_DIR;
   const savedCodexBin = process.env.CODEX_BIN;
   const codexBin = path.join(root, 'codex-fixture');
@@ -115,6 +116,12 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     }
     if (file === 'zylos' && args[0] === 'group' && args[1] === 'overrides') data = { baseline: { runtime: 'claude' }, runtime: [], model: [], runtimeTotal: 0, nextAfter: null };
     else if (file === 'zylos' && args[0] === 'group') data = { resolved: args[1] === 'runtime' ? { runtime: 'claude' } : { runtime: 'claude', mode: 'default' } };
+    else if (file === 'zylos' && args[0] === 'runtime' && runtimeHold) {
+      const hold = runtimeHold;
+      runtimeHold = null;
+      hold.then(() => fakeExecute(file, args, options, callback));
+      return new EventEmitter();
+    }
     else if (file === 'zylos' && args[0] === 'runtime') {
       runtimeCalls.push(args);
       const requested = args[1];
@@ -703,6 +710,65 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       originRun = 'fixture-run';
       originReady = true;
       pinWorking = false;
+    }
+  });
+  // One Dashboard slot holds a default runtime switch or a CLI upgrade on the real server. Run when either
+  // route or the instance payload changes. The held `zylos runtime` answer is released by the test.
+  await t.test('a running runtime switch refuses another switch or upgrade and is reported until it ends', async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    const response = await fetch(`${origin}/api/stream`, { headers: { Authorization: `Bearer ${tokens.read}` }, signal: controller.signal });
+    const reader = response.body.getReader(), decoder = new TextDecoder();
+    let buffer = '';
+    const nextOperation = async matches => {
+      while (!controller.signal.aborted) {
+        const { done, value } = await reader.read();
+        assert.equal(done, false, 'the instance stream stays open');
+        buffer += decoder.decode(value, { stream: true });
+        for (let split; (split = buffer.indexOf('\n\n')) >= 0;) {
+          const lines = buffer.slice(0, split).split('\n');
+          buffer = buffer.slice(split + 2);
+          if (!lines.includes('event: instance')) continue;
+          const operation = JSON.parse(lines.find(line => line.startsWith('data: ')).slice(6)).operation_in_progress;
+          if (matches(operation)) return operation;
+        }
+      }
+      assert.fail('Missing instance update');
+    };
+    const switchRoute = '/api/instance/actions/switch-runtime';
+    let release;
+    runtimeHold = new Promise(resolve => { release = resolve; });
+    try {
+      assert.equal((await request('/api/instance')).operation_in_progress, null);
+      const calls = runtimeCalls.length, updates = cliCalls.filter(([file, arg]) => file === codexBin && arg === 'update').length;
+      const first = request(switchRoute, { method: 'POST', body: { runtime: 'codex' }, identity: 'admin' });
+      const pushed = await nextOperation(operation => operation !== null);
+      const running = (await request('/api/instance')).operation_in_progress;
+      assert.deepEqual(running, pushed);
+      assert.deepEqual(Object.keys(running), ['action', 'runtime', 'started_at']);
+      assert.equal(running.action, 'switch-runtime');
+      assert.equal(running.runtime, 'codex');
+      assert.equal(new Date(running.started_at).toISOString(), running.started_at);
+      for (const [route, body] of [[switchRoute, { runtime: 'claude', confirmed: true }], ['/api/instance/actions/upgrade-runtime', { runtime: 'codex' }]]) {
+        const refused = await request(route, { method: 'POST', body, identity: 'admin', expected: 409 });
+        assert.equal(refused.error.code, 'operation_in_progress');
+        assert.equal(refused.messageKey, 'result.operation_in_progress');
+        assert.deepEqual(refused.operation, running);
+      }
+      release();
+      assert.equal((await first).data.result, 'saved');
+      assert.equal(await nextOperation(operation => operation === null), null);
+      assert.equal((await request('/api/instance')).operation_in_progress, null);
+      assert.equal(runtimeCalls.length, calls + 1, 'refused requests run no command');
+      assert.equal(cliCalls.filter(([file, arg]) => file === codexBin && arg === 'update').length, updates);
+      assert.equal((await request(switchRoute, { method: 'POST', body: { runtime: 'claude', confirmed: true }, identity: 'admin' })).data.result, 'saved');
+    } finally {
+      release();
+      runtimeHold = null;
+      clearTimeout(timeout);
+      await reader.cancel().catch(() => {});
+      controller.abort();
+      writeMode(mode);
     }
   });
   await t.test('real HTTP and SSE clocks have plausible years in both session modes', () => {

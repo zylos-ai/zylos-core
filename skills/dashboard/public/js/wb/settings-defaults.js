@@ -72,13 +72,21 @@ async function restartFailures(data, getName, t) {
   if (data?.groupsComplete === false) messages.push(t('wb.settings.restartListIncomplete'));
   return messages;
 }
+/** The words for the default-runtime switch or CLI upgrade the server reports in progress, or '' when there is none. */
+export function runtimeOperationText(operation, t = key => key) {
+  if (!operation) return '';
+  return t(operation.action === 'upgrade-runtime' ? 'wb.settings.runtimeOperation.upgrading' : 'wb.settings.runtimeOperation.switching',
+    { runtime: runtimeName(operation.runtime) || operation.runtime });
+}
+
 /** The engine switch confirmation: what happens, then which groups restart with it. */
 export function runtimeSaveConfirmation(runtime, page, t = key => key) {
   return [t('confirm.switch_runtime', { value: runtimeName(runtime) }), interruptFollowers(page, t)].join('\n');
 }
 
 export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}, sessionRoot, document = root.ownerDocument,
-  t = key => key, read, recheck, execute, confirm = async () => false, writable = () => true, onGroup = () => {}, version = () => {} } = {}) {
+  t = key => key, read, recheck, execute, confirm = async () => false, writable = () => true, onGroup = () => {}, version = () => {},
+  operation = () => instance?.operation_in_progress ?? null, onInstance = () => {} } = {}) {
   root.replaceChildren();
   let baselineRuntime = instance?.default_runtime ?? null, destroyed = false;
   const loadedNames = new Map();
@@ -190,10 +198,14 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
   const engineFeedback = createActionFeedback(engineResult, redrawEngine);
   let engineResultRuntime;
   line.append(selectWrap, defaultBadge, setDefault, engineResult);
+  // A switch or upgrade in progress, from this page or any other; its end restores the buttons.
+  const operationNote = element(document, 'p', '', 'wb-note');
+  operationNote.id = 'settings-runtime-operation';
+  operationNote.setAttribute('role', 'status');
   const unavailable = () => runtimeHealth(instance, view) === 'unavailable';
   const notFound = () => runtimeNotFound({ instance }, view);
   lock(select, () => savingRuntime || savingModels);
-  lock(setDefault, () => savingRuntime || savingModels || view === baselineRuntime || !writable() || unavailable() || notFound());
+  lock(setDefault, () => savingRuntime || savingModels || Boolean(operation()) || view === baselineRuntime || !writable() || unavailable() || notFound());
   setDefault.addEventListener('click', async () => {
     if (setDefault.disabled || view === baselineRuntime) return;
     const runtime = view;
@@ -220,9 +232,23 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
       });
       const failures = await restartFailures(result?.data, resultName, t);
       feedback.show([saved, ...failures].join('\n'), failures.length === 0);
-    } catch (error) { feedback?.show(error.message, false); }
-    finally { savingRuntime = false; refreshLocks(); }
+    } catch (error) {
+      if (error.code === 'operation_in_progress') feedback?.show(error.message, null);
+      else if (error.code === 'result_unknown' && feedback) await checkSwitch(feedback);
+      else feedback?.show(error.message, false);
+    } finally { savingRuntime = false; refreshLocks(); }
   });
+  // No answer came back, so the switch may or may not have happened: read what the server reports now.
+  async function checkSwitch(feedback) {
+    feedback.show(t('wb.settings.runtimeOperation.checking'), null);
+    try {
+      const current = await read('/api/instance');
+      if (destroyed) return;
+      onInstance(current);
+      applyInstance(current);
+      feedback.show(t('wb.settings.runtimeOperation.checkedDefault', { runtime: runtimeName(current.default_runtime) || t('wb.unknown') }), null);
+    } catch { feedback.show(t('result.runtime_unknown'), null); }
+  }
   const split = element(document, 'div', undefined, 'wb-set-split');
   // A count of zero tells nothing, so its line is left out.
   function groupColumn(key, total, filter, meta) {
@@ -270,7 +296,7 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
   const selectedRuntime = () => view;
   const drawVersion = () => version(engineVersion, selectedRuntime());
   const modelSettings = element(document, 'div', undefined, 'wb-engine-models');
-  engine.card.append(line, loginNote, installNote, recheckResult, engineVersion, split, modelSettings);
+  engine.card.append(line, operationNote, loginNote, installNote, recheckResult, engineVersion, split, modelSettings);
   root.append(engine.card);
   function redrawEngine() {
     for (const option of options) {
@@ -490,11 +516,23 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
       redrawModels();
     }
   });
-  function refreshLocks() { for (const { node, lock: fn } of controls) node.disabled = fn(); }
+  function refreshLocks() {
+    const current = operation();
+    operationNote.hidden = !current;
+    operationNote.textContent = runtimeOperationText(current, t);
+    for (const { node, lock: fn } of controls) node.disabled = fn();
+  }
+  // The server's newest instance data. With nothing in progress, its default runtime is the current one.
+  function applyInstance(next) {
+    if (!next || destroyed) return;
+    instance = next;
+    if (!operation() && typeof next.default_runtime === 'string') baselineRuntime = next.default_runtime;
+    redrawEngine();
+  }
   redrawEngine(); redrawModels();
   return {
     destroy() { destroyed = true; engineFeedback.reset(); modelFeedback.reset(); },
-    refreshLocks, selectedRuntime, refreshVersion: drawVersion,
+    refreshLocks, selectedRuntime, refreshVersion: drawVersion, applyInstance,
   };
 }
 
