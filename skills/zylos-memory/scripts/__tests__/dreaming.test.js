@@ -308,16 +308,18 @@ test('notes that do not shorten the text stop condensing the page and leave it u
   createPage(root, ref, pageText('huge', 'active', '2026-11-20', 'huge', `## 未完成\n${entries.join('\n')}`));
   rebuild(root);
   const original = read(`memory/${ref}`);
-  let calls = 0;
+  const labels = [];
   const errors = await tidyReference({ root, date: '2026-11-22', mutate: action => action(), repair: () => [], call: async () => tidy,
     condense: async (input, check) => {
-      calls++;
-      const part = input.match(/^## Body part \d+ of \d+\n([\s\S]*)$/m);
-      assert.ok(part, 'only first-round parts are sent');
-      return check(`## Notes\n${part[1]}`);
+      const part = input.match(/^## (Body|Notes|Notes on the body)\b.*\n([\s\S]*)$/m);
+      labels.push(part[1]);
+      // Bounds the run if a second round were wrongly started; the assertion below then fails.
+      if (part[1] !== 'Body') throw new Error('unexpected call');
+      return check(`## Notes\n${part[2]}`);
     },
   });
   assert.deepEqual(errors.map(error => error.match(/reference\/\S+\.md/)[0]), [ref]);
-  assert.ok(calls > 1);
+  assert.ok(labels.length > 1);
+  assert.ok(labels.every(label => label === 'Body'));
   assert.equal(read(`memory/${ref}`), original);
 });

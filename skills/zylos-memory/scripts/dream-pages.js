@@ -165,16 +165,18 @@ function splitBody(text) {
     if (!blocks.length || (ENTRY_START.test(line) && blocks.at(-1).length)) blocks.push([]);
     blocks.at(-1).push(line);
   }
-  const parts = [[]];
+  // Running byte counts: each line costs its bytes plus one for the joining newline.
+  const parts = [{ lines: [], bytes: -1 }];
+  const add = line => { parts.at(-1).lines.push(line); parts.at(-1).bytes += Buffer.byteLength(line) + 1; };
   for (const lines of blocks) {
-    const whole = Buffer.byteLength([...parts.at(-1), ...lines].join('\n')) <= PART_LIMIT;
-    if (!whole && parts.at(-1).length) parts.push([]);
+    const bytes = lines.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
+    if (parts.at(-1).lines.length && parts.at(-1).bytes + bytes > PART_LIMIT) parts.push({ lines: [], bytes: -1 });
     for (const line of lines) {
-      if (parts.at(-1).length && Buffer.byteLength([...parts.at(-1), line].join('\n')) > PART_LIMIT) parts.push([]);
-      parts.at(-1).push(line);
+      if (parts.at(-1).lines.length && parts.at(-1).bytes + Buffer.byteLength(line) + 1 > PART_LIMIT) parts.push({ lines: [], bytes: -1 });
+      add(line);
     }
   }
-  return parts.map(lines => lines.join('\n'));
+  return parts.map(part => part.lines.join('\n'));
 }
 
 function bodyCheck(limit) {
