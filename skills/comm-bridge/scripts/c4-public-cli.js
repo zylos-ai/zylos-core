@@ -249,8 +249,8 @@ export function fetchCli(args) {
   }
   const begin = number(o.begin, 'begin'), end = number(o.end, 'end');
   if (begin > end) invalid('begin must not exceed end');
-  const checkpoint = db.getLatestContentCheckpoint('*');
   const scope = o.group === undefined ? null : requireGroup(o.group);
+  const checkpoint = db.getLatestContentCheckpoint(scope ?? '*');
   const rows = db.getConversationsByRange(begin, end).filter(row => !scope || row.session_group === scope).map(projectConversation);
   return o.json ? json({ checkpoint, rows }) : `${checkpoint?.summary ? '[Last Checkpoint Summary] ' + checkpoint.summary + '\n\n' : ''}[Conversations] (id ${begin} ~ ${end})\n${conversations(rows) || 'No conversations in this range.\n'}${historyNotes(rows)}`;
 }
