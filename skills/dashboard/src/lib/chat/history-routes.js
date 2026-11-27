@@ -56,7 +56,7 @@ export async function handleChatHistory(req, res, url, { auth, config, history, 
     const result = kind === 'activity' ? await activity.activity(id, options)
       : kind ? history[kind](id, options) : history.list(options);
     if (!kind || kind === 'messages') result.tz = await readInstanceTz(instanceTz);
-    if (!kind) result.deletionAllowed = canDeleteConversations(req, auth);
+    if (!kind) result.deletionAllowed = canDeleteConversations(req, auth, config);
     sendJson(res, 200, result);
   } catch (error) {
     const failure = historyFailure(error, kind);

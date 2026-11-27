@@ -7,7 +7,6 @@ export function permissionErrorKey(code) {
     admin_required: 'wb.error.adminRequired',
     same_origin_required: 'wb.error.sameOriginRequired',
     local_cookie_required: 'wb.error.localCookieRequired',
-    remote_deletion_forbidden: 'wb.error.remoteDeletionForbidden',
     origin_deletion_forbidden: 'wb.error.originDeletionForbidden',
   };
   return Object.hasOwn(keys, code) ? keys[code] : null;

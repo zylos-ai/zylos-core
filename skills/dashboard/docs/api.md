@@ -25,7 +25,7 @@ Fleet views load the local module through `/fleet/:name/_assets/runtime-descript
 - **Public**: no login required.
 - **Read**: an authenticated browser session or an API session with `read` or `admin` scope. An API key must first be exchanged for an API session through the existing authentication API.
 - **Admin**: an authenticated administrator. Browser-cookie writes also require a same-origin request. Read-scope API sessions cannot write or read conversation content, attachments or full terminal history.
-- **Local owner**: an administrator logged in with the local password cookie. API keys do not grant deletion or deletion-preview access, even with admin scope.
+- **Local owner**: an administrator logged in with the local password cookie.
 - **Local only**: answered only by the instance's own Dashboard, never through the Fleet proxy. A request to `/fleet/:name/...` for one of these routes returns 403 `local_endpoint_not_proxyable`. This covers `/api/keys` and everything under it, `/api/fleet/agents` and everything under it, `/api/session-hosts` and its channel options, `/api/instance/name`, and writes to `/api/settings/chat`. Local only says nothing about the credential: called directly on the instance, these routes keep their own access level (for example admin for `/api/keys`, local owner for `/api/session-hosts`).
 
 ### API key scopes
@@ -573,21 +573,21 @@ Example: `GET /api/groups/origin/restarts/00000000-0000-4000-8000-000000000001`.
 
 ### GET /api/groups/:id/deletion-preview
 
-**Access:** Local owner. Fleet refuses group and draft deletion previews and deletes with 403 `remote_deletion_forbidden` before obtaining upstream credentials or making a request. **Parameters:** encoded ID; no body.
+**Access:** Admin: the local owner, or an admin API key while remote conversation access (`chat_allow_remote`) is on. Read and custom keys are refused with 403; an admin key gets 403 `remote_chat_disabled` while the switch is off. Fleet relays previews and deletes only for administrators of this machine (403 `admin_required` otherwise); the other machine then applies this rule to the key saved at registration (Howard Dashboard 2026-11-27). **Parameters:** encoded ID; no body.
 
 Returns Core's deletion preview: `ok:boolean`, `sessionGroup:string`, `draft:boolean`, `cutoffId:number` (message boundary), `operationId:string`, `pending:boolean`, `messages:number`, `attachments:number`, `files:number`, and target/boundary metadata. HTTP 200 has `pending:false`; when a deletion is already in flight, HTTP 202 has `pending:true` and the existing operation's ID and cutoff. Preserve the operation ID and cutoff for the confirmed delete.
 
-**Errors:** 403 `local_cookie_required`, `origin_deletion_forbidden`; 400 `invalid_deletion_target`; 502 `deletion_result_unknown` / `deletion_unavailable`; Core target/preview errors.
+**Errors:** 403 `admin_required`, `remote_chat_disabled`, `origin_deletion_forbidden`; 400 `invalid_deletion_target`; 502 `deletion_result_unknown` / `deletion_unavailable`; Core target/preview errors.
 
 Example: `GET /api/groups/telegram%3Aexample/deletion-preview`.
 
 ### DELETE /api/groups/:id
 
-**Access:** Local owner, same origin. **Parameters:** encoded ID; JSON `{confirmed:true,operationId:string,cutoffId:integer}` from a fresh preview. Operation IDs are nonempty and at most 128 characters; cutoff is a nonnegative safe integer. Origin cannot be deleted.
+**Access:** As the preview; a browser-cookie request must also be same origin. **Parameters:** encoded ID; JSON `{confirmed:true,operationId:string,cutoffId:integer}` from a fresh preview. Operation IDs are nonempty and at most 128 characters; cutoff is a nonnegative safe integer. Origin cannot be deleted.
 
 HTTP 202 means deletion remains pending: draining returns `{ok:true,pending:true,operationId:string,reason:"draining"}`; waiting for usage finalization uses `reason:"usage_pending"`. These pending results contain neither `counts` nor `countsEstimated`. Retrying the same confirmed operation after it finishes returns HTTP 200 with `ok:true`, `pending:false`, `operationId:string`, `counts:object`, `countsEstimated:boolean`, `retainedMessages:number` and `groupDataRetained:boolean`. Counts and retained-target metadata appear only in the completed result.
 
-**Errors:** 400 `deletion_confirmation_required`, `invalid_deletion_target`; 403 `local_cookie_required`, `same_origin_required`, `origin_deletion_forbidden`; 409 for transition/ownership/fence conflicts and `DELETION_PREVIEW_STALE`; 502 `deletion_result_unknown` / `deletion_unavailable`; Core deletion errors.
+**Errors:** 400 `deletion_confirmation_required`, `invalid_deletion_target`; 403 `admin_required`, `remote_chat_disabled`, `same_origin_required`, `origin_deletion_forbidden`; 409 for transition/ownership/fence conflicts and `DELETION_PREVIEW_STALE`; 502 `deletion_result_unknown` / `deletion_unavailable`; Core deletion errors.
 
 Example: `DELETE /api/groups/telegram%3Aexample` with `{"confirmed":true,"operationId":"from-preview","cutoffId":100}`.
 
@@ -782,8 +782,8 @@ Missing/disabled observer history returns 404. Rejected `/observer/stream` upgra
 | `POST /api/fleet/agents` | JSON `{name,base_url,read_api_key}` → `{ok:true,agent:{name,base_url,key_masked,access}}` (200). Input is validated, then the destination is probed before saving; a failed probe does not reject the addition. `access` is `"admin"` or `"read"` when the probe established that API-session scope, or `"unknown"` when the probe failed (including invalid credentials or an unreachable destination). Validation returns 400 `invalid_name`, `reserved_name`, `duplicate_name`, `invalid_url` or `missing_read_api_key`; save failure returns 500 `failed_to_save_config`. Example body: `{"name":"worker","base_url":"https://worker.example/dashboard","read_api_key":"<key>"}`. |
 | `POST /api/fleet/agents/test` | JSON `{base_url,read_api_key}` → `{ok:true,reachable:true,scope,version}`. Validation returns 400 `invalid_url` or `missing_read_api_key`. A failed destination probe returns HTTP 502 with `{ok:false,reachable:false,error:{code,message}}`; the code is `auth_failed`, `version_unsupported` or `unreachable`. Example: same destination/key as an add request. |
 | `DELETE /api/fleet/agents/:name` | Removes the configured remote → `{ok:true}`. Returns 400 `invalid_name` for an undecodable name, 404 `unknown_agent` when no remote has that name, and 500 `failed_to_save_config` when saving fails. For example, `DELETE /api/fleet/agents/worker`. |
-| `GET /fleet/:name/*` | Proxies allowed read routes/assets using configured credentials. Reads of local-only routes return 403 `local_endpoint_not_proxyable`, and deletion previews return 403 `remote_deletion_forbidden` (see the write row). Example: `GET /fleet/worker/api/settings/chat`. |
-| `PUT`, `PATCH`, `POST`, `DELETE /fleet/:name/*` | Only explicit object-write allowlist entries are proxyable, with admin and browser same origin. Allowed writes include group display names, the machine avatar and marking a Mine conversation read. Three refusals apply: a local-only route (see Access; reads and writes alike) returns 403 `local_endpoint_not_proxyable`; group and draft deletion and deletion previews (`/api/groups/:id`, `/api/groups/:id/deletion-preview`, `/api/conversations/drafts/:id`, `/api/conversations/drafts/:id/deletion`; any `DELETE`, and any method on the preview/deletion paths) return 403 `remote_deletion_forbidden`; any other write outside the allowlist returns 403 `not_allowed_via_fleet`. Example: `POST /fleet/worker/api/schedules/report/actions/pause`. |
+| `GET /fleet/:name/*` | Proxies allowed read routes/assets using configured credentials. Reads of local-only routes return 403 `local_endpoint_not_proxyable`; deletion previews need an administrator (403 `admin_required`). Example: `GET /fleet/worker/api/settings/chat`. |
+| `PUT`, `PATCH`, `POST`, `DELETE /fleet/:name/*` | Only explicit object-write allowlist entries are proxyable, with admin and browser same origin. Allowed writes include group display names, the machine avatar, marking a Mine conversation read, and deleting a group or draft (`DELETE /api/groups/:id`, `DELETE /api/conversations/drafts/:id`). Two refusals apply: a local-only route (see Access; reads and writes alike) returns 403 `local_endpoint_not_proxyable`; any other write outside the allowlist returns 403 `not_allowed_via_fleet`. Example: `POST /fleet/worker/api/schedules/report/actions/pause`. |
 
 Both Fleet lists accept `limit` (1–100, default 50), `cursor`, `q` (trimmed, case-insensitive name substring, up to 64 characters), and `include=total` (matching row count). A bad parameter returns 400 `invalid_parameter` with `error.param`. An invalid cursor returns 400 `invalid_cursor`. An unavailable source returns 503 `unavailable`. The client starts from page one if a cursor expires after a restart.
 

@@ -2,7 +2,6 @@
   "wb.error.adminRequired": "Administrator access is required for this change.",
   "wb.error.sameOriginRequired": "The request origin failed the security check. Open this agent’s console to make the change.",
   "wb.error.localCookieRequired": "Sign in to the local console to perform this action.",
-  "wb.error.remoteDeletionForbidden": "Conversations cannot be deleted through Fleet. Open the target agent’s local console.",
   "wb.error.originDeletionForbidden": "The Origin conversation cannot be deleted.",
   "wb.name.rejected": "The naming request was rejected and was not sent. Check the request or your access.",
   "chat.delete.previewDenied": "Access to the deletion safety check was denied. Deletion has not started.",

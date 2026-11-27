@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { loadCoreModule as defaultLoadCoreModule } from '../core-modules.js';
 import { readJsonBody, sendJson, sendCommandJson } from '../http.js';
 import { isSameOriginRequest } from '../request-origin.js';
+import { requireChatAccess } from '../chat/access.js';
 import { parseSessionGroup } from '../../../../comm-bridge/scripts/c4-session-group.js';
 
 const invalid = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
@@ -37,12 +38,16 @@ export function isGroupDeletionRoute(pathname) {
     /^\/api\/conversations\/drafts\/[^/]+(?:\/deletion)?$/.test(pathname);
 }
 
-export function canDeleteConversations(req, auth) {
-  const context = auth.resolveAuthContext(req);
-  return context?.kind === 'cookie' && context.scope === 'admin';
+/** Admins only: the local password owner, or an admin key while remote conversation access is on. */
+function deletionRefusal(req, auth, config) {
+  if (auth.resolveAuthContext(req)?.scope !== 'admin') return { status: 403, error: 'admin_required' };
+  return requireChatAccess(req, auth, config);
 }
 
-/** Only the local password owner may preview or delete; API keys never grant this operation. */
+export function canDeleteConversations(req, auth, config) {
+  return !deletionRefusal(req, auth, config);
+}
+
 export function createGroupDeletionRoutes({ auth, config, conversations,
   core = createGroupDeletionBridge({ zylosDir: config.zylosDir }) } = {}) {
   return async (req, res, url) => {
@@ -54,10 +59,11 @@ export function createGroupDeletionRoutes({ auth, config, conversations,
     if (req.method !== (preview ? 'GET' : 'DELETE')) {
       sendJson(res, 404, { error: 'not_found' }); return true;
     }
-    if (!canDeleteConversations(req, auth)) {
-      sendJson(res, 403, { error: 'local_cookie_required' }); return true;
+    const refusal = deletionRefusal(req, auth, config);
+    if (refusal) {
+      sendJson(res, refusal.status, { error: refusal.error }); return true;
     }
-    if (!preview && !isSameOriginRequest(req)) {
+    if (!preview && auth.resolveAuthContext(req).kind === 'cookie' && !isSameOriginRequest(req)) {
       sendJson(res, 403, { error: 'same_origin_required' }); return true;
     }
     try {

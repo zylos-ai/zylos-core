@@ -66,7 +66,6 @@ export function mountConversationPage({
   composeDrafts = null,
   groupLinks = null,
   technicalDetails = () => false,
-  local = () => false,
   confirm = async () => false,
   onStreamSubscription = () => {},
   // The viewed instance refused remote access (its switch is off); the host hides this page's tab.
@@ -176,7 +175,7 @@ export function mountConversationPage({
   });
   let deletionResult = null;
   const deletion = createConversationDeletion({ request, confirm, t, identity,
-    available: item => !destroyed && !page.hidden && local() && state.snapshot().canDelete &&
+    available: item => !destroyed && !page.hidden && state.snapshot().canDelete &&
       state.snapshot().items.some(row => row.id === item.id),
     onChange: () => redraw(), onDeleted: (id, result) => {
       deletionResult = { ...result, identity: typeof identity === 'function' ? identity() : identity };
@@ -910,7 +909,7 @@ export function mountConversationPage({
     const focusFree = !document.activeElement || document.activeElement === document.body || document.activeElement === input;
     if (refocus && focusFree && !destroyed && selectedKey === selected && !input.disabled) input.focus();
   }
-  const canDeleteItem = (s, item) => s?.canDelete && s.tab === 'mine' && local() && !!deletionPath(item);
+  const canDeleteItem = (s, item) => s?.canDelete && s.tab === 'mine' && !!deletionPath(item);
   function deletableItem(s, id) {
     const item = s?.items.find(row => row.id === id);
     return canDeleteItem(s, item) ? item : null;
@@ -2078,7 +2077,7 @@ export function mountConversationPage({
       completionText.push(countLabel(t, 'chat.delete.retained', deletionResult.retainedMessages));
     }
     if (deletionResult?.countsEstimated === true) completionText.push(t('chat.delete.estimated'));
-    deletionNotice.hidden = !local() || !completionText.length || deletionResult.identity !== (typeof identity === 'function' ? identity() : identity);
+    deletionNotice.hidden = !completionText.length || deletionResult.identity !== (typeof identity === 'function' ? identity() : identity);
     text(deletionNotice, deletionNotice.hidden ? '' : completionText.join(document.documentElement?.lang?.startsWith('zh') ? '' : ' '));
     const origin = s.tab === 'mine' && isOriginConversation(s.selectedId);
     accessNotice.hidden = s.mode !== 'single' || s.tab !== 'mine' || origin;

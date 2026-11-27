@@ -94,7 +94,8 @@ function isAllowedProxyWrite(method, suffix) {
       /^\/api\/observer\/(?:install|enable|disable|leases|agent-size)$/.test(suffix) ||
       /^\/api\/observer\/leases\/[A-Za-z0-9_-]{32}\/(?:renew|release)$/.test(suffix)
     ) ||
-    method === 'DELETE' && suffix === '/api/observer/install';
+    method === 'DELETE' && (suffix === '/api/observer/install' ||
+      /^\/api\/groups\/[^/]+$/.test(suffix) || /^\/api\/conversations\/drafts\/[^/]+$/.test(suffix));
 }
 
 function isObserverProxyRoute(method, suffix) {
@@ -378,8 +379,9 @@ export class FleetProxy {
   }
 
   async proxyApi(req, res, agent, suffix, search, normalizedSuffix = suffix) {
-    if (isGroupDeletionRoute(suffix) && (req.method === 'DELETE' || suffix.endsWith('/deletion-preview') || suffix.endsWith('/deletion'))) {
-      sendJson(res, 403, { error: 'remote_deletion_forbidden' }); return;
+    // Deletion previews are reads, but only admins may start a deletion.
+    if (isGroupDeletionRoute(suffix) && req._authContext?.scope !== 'admin') {
+      sendJson(res, 403, { error: 'admin_required' }); return;
     }
     if (!['GET', 'HEAD'].includes(req.method)) {
       const context = req._authContext;
