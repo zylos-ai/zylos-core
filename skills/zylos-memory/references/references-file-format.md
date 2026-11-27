@@ -15,7 +15,7 @@ Use the [startup display budget](memory-budget.md): both character and estimated
 
 ## Update Frequency
 
-When services or paths change. Not every sync cycle.
+Update the index when services or paths change.
 
 ## Sections
 
@@ -58,4 +58,4 @@ See `examples/references.md` for a full example.
    no narrative sentences attached to identifiers.
 4. Active IDs section is for IDs needed in current context only.
 5. When updating references, check this file against these rules
-   (see SKILL.md Sync Flow): violations are relocated, not left in place.
+   and move detail to its appropriate topic page.

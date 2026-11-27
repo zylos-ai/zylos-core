@@ -614,7 +614,7 @@
   "wb.board.groups": "{count} 个组",
   "wb.board.noPool": "不占池",
   "wb.board.originTech": "常驻 · 系统事务",
-  "wb.board.originPlain": "负责记忆整理、健康检查等后台事务",
+  "wb.board.originPlain": "负责健康检查等后台事务",
   "wb.board.webConsole": "网页控制台（已停用）",
   "wb.board.lastIn": "最近收到「{text}」",
   "wb.board.lastReceived": "最近收到：{text}",

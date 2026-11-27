@@ -1016,8 +1016,12 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     await run(4,'session_threshold_defaults',()=> migrateModelThresholds({
       zylosDir:root,updateConfig:deps.updateConfig || updateZylosConfigLocked}));
     await run(5,'memory_migration_ensure',()=> (deps.ensureMemoryMigration || (()=>createMigration({env:{...process.env,ZYLOS_DIR:root}}).ensure({createdBy:'upgrade'})))());
-    await run(5,'archive_legacy_inbox',()=>archiveLegacyInbox(root));
-    await run(5,'archive_retired_runtime_files',()=>archiveRetiredRuntimeFiles(root));
+    const inboxArchive=await run(5,'archive_legacy_inbox',()=>archiveLegacyInbox(root));
+    const runtimeArchive=await run(5,'archive_retired_runtime_files',()=>archiveRetiredRuntimeFiles(root));
+    const archiveFailures=[...inboxArchive.failures,...runtimeArchive.failures];
+    if (archiveFailures.length) {
+      (ctx.runtimeWarnings ||= []).push(`Upgrade archival is incomplete. Remaining files will be retried on the next upgrade (${archiveFailures.join(', ')}).`);
+    }
     await run(5,'rotate_legacy_session',()=>{
       const current=path.join(root,'memory/sessions/current.md');
       if(!fs.existsSync(current))return {status:'skipped',message:'legacy session already absent'};

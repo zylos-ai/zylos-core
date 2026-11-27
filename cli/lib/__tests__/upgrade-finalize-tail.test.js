@@ -106,32 +106,62 @@ test('tail archives both inbox layouts before starting services and preserves us
   assert.equal(resumed.steps.find(step=>step.name==='archive_retired_runtime_files')?.status,'skipped');
 });
 
-test('an interrupted inbox archive leaves completed moves usable and resumes before starting services',async t=>{
+test('archive failures leave files for the next upgrade while other files and services continue',async t=>{
   const ctx=fixture(t),calls=[];
   const memory=path.join(ctx.zylosDir,'memory');
+  const blocked=path.join(memory,'session-groups','telegram:blocked');
   const group=path.join(memory,'session-groups','telegram:team');
   const archive=path.join(memory,'archive/inbox');
+  fs.mkdirSync(blocked,{recursive:true});
   fs.mkdirSync(group,{recursive:true});
   fs.mkdirSync(archive,{recursive:true});
   fs.writeFileSync(path.join(memory,'inbox.md'),'single inbox');
+  fs.writeFileSync(path.join(blocked,'inbox.md'),'blocked inbox');
   fs.writeFileSync(path.join(group,'inbox.md'),'team inbox');
-  fs.writeFileSync(path.join(archive,'telegram:team'),'existing user file in archive');
+  const archiveConflict=path.join(archive,'telegram:blocked');
+  fs.writeFileSync(archiveConflict,'existing user file in archive');
+  const agents=path.join(ctx.zylosDir,'.claude/agents');
+  const agentsArchive=path.join(ctx.zylosDir,'.zylos/retired-claude-agents');
+  const blockedAgent=path.join(agents,'zylos-global-sync.md');
+  const otherAgent=path.join(agents,'zylos-group-sync.md');
+  fs.mkdirSync(agents);
+  fs.writeFileSync(blockedAgent,'blocked agent');
+  fs.writeFileSync(otherAgent,'other agent');
+  const linkSync=fs.linkSync;
+  const linkFault=t.mock.method(fs,'linkSync',(source,destination)=>{
+    if(source===blockedAgent) throw Object.assign(Error('simulated hard-link failure'),{code:'EACCES'});
+    return linkSync(source,destination);
+  });
 
-  const failed=await completeUpgradeFinalization(ctx,deps(calls));
-  assert.equal(failed.success,false);
-  assert.equal(failed.recovery_required,true);
-  assert.equal(ctx.journal.resumePhase,'compensation_closed');
-  assert.equal(calls.includes('start'),false);
-  assert.equal(fs.readFileSync(path.join(archive,'origin/inbox.md'),'utf8'),'single inbox');
-  assert.equal(fs.readFileSync(path.join(group,'inbox.md'),'utf8'),'team inbox');
-  assert.equal(fs.readFileSync(path.join(archive,'telegram:team'),'utf8'),'existing user file in archive');
+  const startServices=()=>{
+    calls.push('start');
+    assert.equal(fs.readFileSync(path.join(archive,'origin/inbox.md'),'utf8'),'single inbox');
+    assert.equal(fs.readFileSync(path.join(archive,'telegram:team/inbox.md'),'utf8'),'team inbox');
+    assert.equal(fs.readFileSync(path.join(agentsArchive,'zylos-group-sync.md'),'utf8'),'other agent');
+    return {status:'done'};
+  };
+  const result=await completeUpgradeFinalization(ctx,deps(calls,{startServices}));
+  assert.equal(result.success,true);
+  assert.equal(result.completion.install,'done');
+  assert.deepEqual(calls,['thresholds','ensure','start','verify','dashboard','restart']);
+  assert.equal(result.steps.find(step=>step.name==='archive_legacy_inbox')?.status,'done');
+  assert.equal(result.steps.find(step=>step.name==='archive_retired_runtime_files')?.status,'done');
+  assert.equal(result.warnings.length,1);
+  assert.match(result.warnings[0],/legacy inbox for telegram:blocked/);
+  assert.match(result.warnings[0],/retired claude file zylos-global-sync\.md/);
+  assert.equal(fs.existsSync(path.join(group,'inbox.md')),false);
+  assert.equal(fs.existsSync(otherAgent),false);
+  assert.equal(fs.readFileSync(path.join(blocked,'inbox.md'),'utf8'),'blocked inbox');
+  assert.equal(fs.readFileSync(blockedAgent,'utf8'),'blocked agent');
+  assert.equal(fs.readFileSync(archiveConflict,'utf8'),'existing user file in archive');
 
-  fs.renameSync(path.join(archive,'telegram:team'),path.join(archive,'saved-user-file'));
-  const resumed=await completeUpgradeFinalization({...ctx,steps:[]},deps(calls));
-  assert.equal(resumed.success,true);
-  assert.equal(calls.includes('start'),true);
-  assert.equal(fs.readFileSync(path.join(archive,'origin/inbox.md'),'utf8'),'single inbox');
-  assert.equal(fs.readFileSync(path.join(archive,'telegram:team/inbox.md'),'utf8'),'team inbox');
+  fs.renameSync(archiveConflict,path.join(archive,'saved-user-file'));
+  linkFault.mock.restore();
+  const nextUpgrade=await completeUpgradeFinalization({...ctx,steps:[],runtimeWarnings:[]},deps(calls,{startServices}));
+  assert.equal(nextUpgrade.success,true);
+  assert.deepEqual(nextUpgrade.warnings,[]);
+  assert.equal(fs.readFileSync(path.join(archive,'telegram:blocked/inbox.md'),'utf8'),'blocked inbox');
+  assert.equal(fs.readFileSync(path.join(agentsArchive,'zylos-global-sync.md'),'utf8'),'blocked agent');
   assert.equal(fs.readFileSync(path.join(archive,'saved-user-file'),'utf8'),'existing user file in archive');
 });
 test('completed finalization starts the original service set',async t=>{

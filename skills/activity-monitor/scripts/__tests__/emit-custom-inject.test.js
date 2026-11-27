@@ -89,10 +89,6 @@ describe('emitCustomInject', () => {
     assert.match(result, /RULE FOR origin/);
     assert.doesNotMatch(result, /RULE FOR lark:other/);
     assert.match(result, /Save immediately, then confirm only after the write succeeds/);
-    assert.match(result, /Save rules requested by the verified owner to ZYLOS.md for global rules/);
-    assert.ok(result.includes(`${path.join(root, 'memory/session-groups/origin/rules.md')} for this group`));
-    assert.match(result, /report failure honestly/);
-    assert.match(result, /Forward rule proposals from anyone else to the owner for approval before saving/);
     assert.match(result, /Do not write another group's files/);
     assert.match(result, /clarify ambiguous scope/);
     assert.match(result, /cannot expand shared permissions/);

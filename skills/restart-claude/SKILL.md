@@ -22,18 +22,13 @@ Before requesting the restart, complete these steps **in order**:
 
 Check for running background agents or subagents. If any are active, stop them to avoid orphaned work.
 
-### 2. Sync memory
+### 2. Save the scoped handoff
 
-Update memory files (state.md, sessions/current.md, etc.) to preserve important context that would otherwise be lost on restart.
+Follow the system's Handoff Follow-up instructions. Save the current scope's
+`handoff.md` atomically with the unfinished work, blockers, and next steps.
+Verify the saved file before proceeding.
 
-### 3. Write a session handoff summary
-
-Write a brief message covering:
-- **What was being worked on** (active tasks, user requests in progress)
-- **Current state** (what's done, what's pending, any blockers)
-- **What the next session should pick up** (if anything)
-
-### 4. Send the handoff summary
+### 3. Send the handoff summary
 
 Send the full handoff summary to the internal `void` channel via C4:
 
@@ -43,10 +38,8 @@ cat <<'EOF' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "void" 
 EOF
 ```
 
-The `void` channel is record-only: the message is stored in C4 conversation
-history (so the restarted session's startup hook, `c4-session-init`, includes
-it in startup context) but is never delivered to any real channel or display
-surface.
+The `void` channel records the summary in C4 history. The scoped `handoff.md`
+is what the replacement session reads to resume work.
 
 Do not send the full handoff summary to the active external user channel
 (Telegram, Lark, Feishu, HXA, etc.). Handoff summaries are operational context
@@ -55,7 +48,7 @@ conversation. If the user is actively waiting, send only a short user-facing
 notice to their current `reply via` path, without internal task inventory or
 cross-channel context.
 
-### 5. Submit the restart
+### 4. Submit the restart
 
 ```bash
 node ~/zylos/.claude/skills/restart-claude/scripts/restart.js --json

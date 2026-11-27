@@ -4,6 +4,7 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
+import { removeOwnedTree } from '../../comm-bridge/scripts/remove-owned-tree.js';
 
 const TIMEOUTS = { stage1: 10 * 60_000, stage2: 30 * 60_000, tidy: 60 * 60_000, condense: 20 * 60_000, repair: 10 * 60_000 };
 const OUTPUT_LIMIT = 64 * 1024 * 1024;
@@ -18,7 +19,8 @@ export async function createDreamModel(root, config) {
 
   return async ({ stage, instructions, input, tools = false, page, schema, signal }) => {
     signal?.throwIfAborted();
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dream-'));
+    const temporaryRoot = fs.realpathSync(os.tmpdir());
+    const cwd = fs.mkdtempSync(path.join(temporaryRoot, 'zylos-dream-'));
     try {
       const prepared = runtime.dream.prepare({
         instructions, input, tools, cwd, schema, root, env,
@@ -30,7 +32,7 @@ export async function createDreamModel(root, config) {
       const decode = runtime.dream.decodeOutput;
       return typeof decode === 'function' ? decode(stdout) : stdout;
     } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
+      removeOwnedTree(temporaryRoot, cwd);
     }
   };
 }

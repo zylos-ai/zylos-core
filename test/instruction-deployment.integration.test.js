@@ -69,7 +69,6 @@ for (const mode of ['fresh', 'refresh']) test(`${mode} instruction deployment pr
       const instructions = fs.readFileSync(path.join(env.ZYLOS_DIR, output), 'utf8');
       assert.match(instructions, /send a one-line transition notice via C4 before running `zylos runtime <target> --yes`/);
       assert.match(instructions, /Follow `~\/zylos\/\.claude\/skills\/comm-bridge\/references\/handoff-follow-up\.md` when a handoff exists, retired state lists Mode-switch messages, or an internal notice concerns absorbed messages/);
-      assert.match(instructions, /Verify the handoff write before moving that state file to `memory\/archive\/state\/<scope>\/state\.md`/);
     }
     const authRelay = fs.readFileSync(path.join(env.ZYLOS_DIR,
       '.claude/skills/component-management/references/runtime-switch.md'), 'utf8');

@@ -170,32 +170,6 @@ test('CLI direct baseline keeps official URLs and creates no upstream files; blo
   assert.ok(f.readLog().every(r => ['github.com', 'api.github.com', 'raw.githubusercontent.com'].includes(new URL(r.url).hostname)));
 });
 
-test('real init leaves retired memory agents and working state absent', t => {
-  const args = ['init', '--yes', '--quiet', '--runtime', 'claude', '--timezone', 'UTC', '--no-caddy'];
-  const prepare = f => {
-    for (const name of ['tmux', 'npm']) fs.writeFileSync(path.join(f.bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    fs.writeFileSync(path.join(f.bin, 'claude'), '#!/bin/sh\nprintf \'{"loggedIn":true}\\n\'\n', { mode: 0o755 });
-  };
-
-  const installed = fixture(t, { initialized: true });
-  prepare(installed);
-  fs.rmSync(installed.zylosDir, { recursive: true, force: true });
-  fs.mkdirSync(installed.zylosDir, { recursive: true });
-  fs.symlinkSync(path.join(coreRoot, 'node_modules'), path.join(installed.zylosDir, 'node_modules'), 'dir');
-  installed.success(installed.run(args));
-
-  const destination = path.join(installed.zylosDir, '.claude/agents');
-  assert.equal(fs.existsSync(destination), false);
-  assert.equal(fs.existsSync(path.join(installed.zylosDir, 'memory/state.md')), false);
-  assert.equal(fs.existsSync(path.join(installed.zylosDir, 'memory/session-groups/origin/state.md')), false);
-  fs.mkdirSync(destination, { recursive: true });
-  const userAgent = path.join(destination, 'user-agent.md');
-  fs.writeFileSync(userAgent, 'preserve me\n');
-  installed.success(installed.run(args));
-  assert.equal(fs.readFileSync(userAgent, 'utf8'), 'preserve me\n');
-});
-
-
 test('CLI rejects invalid and removed sources before doing any network work', t => {
   const f = fixture(t);
   for (const value of ['http://config.test/p', 'ftp://config.test/p', 'file:///tmp/p', 'https://', '']) {

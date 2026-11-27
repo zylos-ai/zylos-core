@@ -52,7 +52,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   };
   const readMode=()=>{const result=readModeSource();return result?.then?result.then(normalizeMode):normalizeMode(result);};
   let supervisor,events,configuration,machineTasks,legacy,lifecycleConfiguration,stopping;
-  let poolReader,capacityController;
+  let poolReader,capacityController,poolDependencyLogged=false;
   const capacityWork=new Set(),clock=overrides.now ?? Date.now;
   const applyPublishedCapacity=()=>{
     const result=poolReader.readPoolCapacity({env,record:capacityController.lastPublished,
@@ -163,7 +163,15 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
           resolveBaseline:()=>poolReader.resolveSessionPoolBaseline({env,config:configuration}),
           notify:capacityAlert,reclaim:reclaimCapacity});
         applyPublishedCapacity();
-      }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;delete configuration.capacity;configuration.capacityUnavailable=true;dependencyMissing('Session pool configuration reader','eviction');}
+      } catch (error) {
+        if (!['ERR_MODULE_NOT_FOUND', 'DEPENDENCY_UNAVAILABLE'].includes(error.code)) throw error;
+        delete configuration.capacity;
+        configuration.capacityUnavailable = true;
+        if (!poolDependencyLogged) {
+          poolDependencyLogged = true;
+          log({ error: 'DEPENDENCY_UNAVAILABLE', dependency: 'Session pool configuration reader', affected: 'eviction' });
+        }
+      }
       return configuration;
     },
     legacyPresent:async()=>{

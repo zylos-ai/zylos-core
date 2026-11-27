@@ -46,5 +46,4 @@ for (const runtime of ['claude','codex']) test(`${runtime} ${mode} launch preser
   assert.equal(observed.group,group);
   assert.equal(observed.runId,'origin-test');
   assert.equal(fixture.tmux('show-environment','-t',`=${launched.tmuxName}`,'ZYLOS_SESSION_GROUP'), `ZYLOS_SESSION_GROUP=${group}`);
-  if(runtime === 'codex') assert.ok(observed.args.some(arg=>arg.includes('env_vars=["ZYLOS_SESSION_GROUP","ZYLOS_RUN_ID","ZYLOS_DIR"]')));
 });

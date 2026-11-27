@@ -62,7 +62,7 @@ test('old configuration upgrade exposes the same model threshold in settings, mo
     readConfig:()=>JSON.parse(fs.readFileSync(file,'utf8')),readMode:()=>({mode:'single',keyPresent:true}),
     scenes:{observe:async()=>[],observeGroup:async()=>scene,readIdentity:async()=>scene,listRuns:async()=>[],readRun:async()=>null,
       bindTarget:()=>({expectedRunId:scene.runId})},
-    legacyStatus:{tick(){},close(){}},machineTasks:{tick(){},stop(){}},readSyncMarker:()=>({held:false,stale:false}),
+    legacyStatus:{tick(){},close(){}},machineTasks:{tick(){},stop(){}},
     loopOptions:{schedule:()=>1,cancel(){}},log(){},sendAlert(){throw Error('External send forbidden');},
   });
   try{

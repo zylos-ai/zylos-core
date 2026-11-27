@@ -614,7 +614,7 @@
   "wb.board.groups": "{count} groups",
   "wb.board.noPool": "No pool slot",
   "wb.board.originTech": "Resident · system work",
-  "wb.board.originPlain": "Handles memory sync, health checks and other background work",
+  "wb.board.originPlain": "Handles health checks and other background work",
   "wb.board.webConsole": "Web console (disabled)",
   "wb.board.lastIn": "last received “{text}”",
   "wb.board.lastReceived": "Last received: {text}",
