@@ -284,6 +284,8 @@ function renderIdentityChrome() {
   }
   // dashboardState is the viewed instance's own state (cleared while switching), like the name above.
   renderBrandVersion($('#tab-bar-core-version'), state.dashboardState?.versions);
+  if (!state.remoteAgent && !REMOTE_AGENT) localCoreVersion = coreVersion(state.dashboardState?.versions) ?? localCoreVersion;
+  renderSettingsIdentity();
   mobileNavigation?.sync();
 }
 
@@ -2213,18 +2215,21 @@ function createFleetManageModal() {
   const head = (iconName, key, extra = '') => `<div class="wb-set-card-h"><h4><i class="wb-ico wb-ico-${iconName} wb-ico-xs" aria-hidden="true"></i><span data-i18n="${key}">${esc(t(key))}</span></h4>${extra}</div>`;
   overlay.innerHTML = `
     <div class="manage-panel" data-panel="fleet">
-      <div class="wb-set-card">
-        ${head('server', 'wb.settings.fleet.localName')}
-        <div class="wb-self-machine" id="fleet-self-view"><span id="fleet-self-avatar"></span>
-          <div class="wb-self-text"><b class="wb-self-name" id="fleet-self-label"></b><small class="wb-note" id="fleet-self-avatar-none" data-i18n="wb.settings.fleet.avatarNone" hidden>${esc(t('wb.settings.fleet.avatarNone'))}</small></div>
-          <div class="wb-self-acts"><button class="wb-btn" id="fleet-rename-open" type="button"><i class="wb-ico wb-ico-edit wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.settings.fleet.rename">${esc(t('wb.settings.fleet.rename'))}</span></button>
-          <button class="wb-btn" id="fleet-avatar-open" type="button"><i class="wb-ico wb-ico-user wb-ico-xs" aria-hidden="true"></i><span></span></button></div>
-          <input id="fleet-avatar-file" type="file" accept="image/*" hidden /></div>
+      <div class="wb-set-card" id="settings-machine-name">
+        ${head('server', 'wb.settings.fleet.name', `<span class="wb-set-card-acts"><button class="wb-btn" id="fleet-rename-open" type="button"><i class="wb-ico wb-ico-edit wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.settings.fleet.rename">${esc(t('wb.settings.fleet.rename'))}</span></button></span>`)}
+        <div class="wb-self-machine" id="fleet-self-view"><b class="wb-self-name" id="fleet-self-label"></b></div>
         <div class="wb-set-inline fleet-self-row" id="fleet-self-edit" hidden>
           <input class="wb-input" id="fleet-self-name" type="text" autocomplete="off" maxlength="32" />
           <button class="wb-btn wb-btn-primary" id="fleet-rename-save" type="button" data-i18n="btn.save">${esc(t('btn.save'))}</button>
           <button class="wb-btn" id="fleet-rename-cancel" type="button" data-i18n="btn.cancel">${esc(t('btn.cancel'))}</button></div>
-        <p class="wb-note"><span data-i18n="wb.settings.fleetNameNote">${esc(t('wb.settings.fleetNameNote'))}</span><span class="wb-sent-gap"> </span><span data-i18n="fleet_manage.rename_hint">${esc(t('fleet_manage.rename_hint'))}</span><span class="wb-sent-gap"> </span><span data-i18n="wb.settings.fleet.avatarNote">${esc(t('wb.settings.fleet.avatarNote'))}</span></p>
+        <p class="wb-note"><span data-i18n="wb.settings.fleetNameNote">${esc(t('wb.settings.fleetNameNote'))}</span><span class="wb-sent-gap"> </span><span data-i18n="fleet_manage.rename_hint">${esc(t('fleet_manage.rename_hint'))}</span></p>
+      </div>
+      <div class="wb-set-card" id="settings-machine-avatar">
+        ${head('user', 'wb.settings.fleet.avatarTitle', `<span class="wb-set-card-acts"><button class="wb-btn" id="fleet-avatar-open" type="button"><i class="wb-ico wb-ico-user wb-ico-xs" aria-hidden="true"></i><span></span></button></span>`)}
+        <div class="wb-self-machine" id="fleet-avatar-view"><span id="fleet-self-avatar"></span>
+          <small class="wb-note" id="fleet-self-avatar-none" data-i18n="wb.settings.fleet.avatarNone" hidden>${esc(t('wb.settings.fleet.avatarNone'))}</small>
+          <input id="fleet-avatar-file" type="file" accept="image/*" hidden /></div>
+        <p class="wb-note" data-i18n="wb.settings.fleet.avatarNote">${esc(t('wb.settings.fleet.avatarNote'))}</p>
       </div>
       <div class="wb-set-card">
         ${head('fleet', 'wb.settings.fleet.remotes', `<span class="wb-set-card-sub" id="fleet-agent-count"></span><span class="wb-set-card-acts"><button class="wb-btn" id="fleet-add-open" type="button"><i class="wb-ico wb-ico-plus wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.settings.fleet.add">${esc(t('wb.settings.fleet.add'))}</span></button></span>`)}
@@ -2268,7 +2273,7 @@ function createFleetManageModal() {
   fleetManageModal = overlay;
   // Handlers look nodes up through fleetManageModal: the settings page moves them out of this overlay.
   const $m = selector => fleetManageModal.querySelector(selector);
-  const selfEdit = editing => { $m('#fleet-self-view').hidden = editing; $m('#fleet-self-edit').hidden = !editing; if (editing) $m('#fleet-self-name').focus(); };
+  const selfEdit = editing => { $m('#fleet-self-view').hidden = editing; $m('#fleet-rename-open').hidden = editing; $m('#fleet-self-edit').hidden = !editing; if (editing) $m('#fleet-self-name').focus(); };
   overlay.querySelector('#fleet-rename-open').addEventListener('click', () => selfEdit(true));
   overlay.querySelector('#fleet-rename-cancel').addEventListener('click', () => { $m('#fleet-self-name').value = $m('#fleet-self-label').textContent; selfEdit(false); });
   overlay.querySelector('#fleet-rename-save').addEventListener('click', async () => { if (await saveFleetSelfName()) selfEdit(false); });
@@ -2383,6 +2388,22 @@ function localMachine() {
   return { color: row?.color ?? own?.color, version: row ? row.avatar_version ?? null : own ? own.avatar_version ?? null : undefined };
 }
 
+// The settings list's identity entry describes this machine, also while another machine is open in the page: its
+// zylos version is the one last read while this machine was the one viewed.
+let localCoreVersion = null;
+function renderSettingsIdentity() {
+  if (!settingsPage) return;
+  const own = !state.remoteAgent && !REMOTE_AGENT ? state.dashboardState?.agent : null;
+  const label = fleetManageModal.querySelector('#fleet-self-label').textContent;
+  const name = label || state.fleet?.items?.find(agent => agent.self === true)?.name || own?.name || '';
+  const address = dashboardBaseUrl().replace(/^https?:\/\//, '');
+  const { color, version } = localMachine();
+  settingsPage.identity.render({
+    avatar: avatarNode(document, { name: name || address, color, src: avatars.src(api('/api/instance/avatar'), version), size: 'md' }),
+    name: name || address, address: name ? address : '', version: localCoreVersion ? 'zylos v' + localCoreVersion : '',
+  });
+}
+
 function renderLocalAvatar() {
   const name = fleetManageModal.querySelector('#fleet-self-label').textContent;
   const { color, version } = localMachine();
@@ -2393,6 +2414,7 @@ function renderLocalAvatar() {
   const label = fleetManageModal.querySelector('#fleet-avatar-open span');
   label.dataset.i18n = has ? 'wb.settings.fleet.avatarChange' : 'wb.settings.fleet.avatarUpload';
   label.textContent = t(label.dataset.i18n);
+  renderSettingsIdentity();
 }
 
 // Crop in the browser, then upload straight to this machine (the server refuses avatar writes through the fleet).
@@ -2400,7 +2422,7 @@ async function changeLocalAvatar(file) {
   const has = typeof localMachine().version === 'string';
   const blob = await cropAvatarDialog(document, { t, file, title: t(has ? 'wb.settings.fleet.avatarChangeTitle' : 'wb.settings.fleet.avatarUploadTitle') });
   if (!blob) return;
-  fleetManageStatus(t('fleet_manage.saving'), 'running', '#fleet-self-view');
+  fleetManageStatus(t('fleet_manage.saving'), 'running', '#fleet-avatar-view');
   try {
     const resp = await fetch(api('/api/instance/avatar'), { method: 'PUT', headers: { 'Content-Type': blob.type }, body: blob });
     const data = await resp.json().catch(() => ({}));
@@ -2409,10 +2431,10 @@ async function changeLocalAvatar(file) {
     if (self) self.avatar_version = data.avatar_version;
     if (!state.remoteAgent && !REMOTE_AGENT && state.dashboardState?.agent) state.dashboardState.agent.avatar_version = data.avatar_version;
     avatars.put(api('/api/instance/avatar'), data.avatar_version, blob);
-    fleetManageStatus(t('fleet_manage.saved'), 'success', '#fleet-self-view');
+    fleetManageStatus(t('fleet_manage.saved'), 'success', '#fleet-avatar-view');
     refreshFleet().catch(() => {});
   } catch (err) {
-    fleetManageStatus(err.message, 'error', '#fleet-self-view');
+    fleetManageStatus(err.message, 'error', '#fleet-avatar-view');
   }
 }
 
@@ -2642,6 +2664,7 @@ async function saveFleetSelfName() {
     await refreshState();
     await refreshFleet();
     fleetManageModal.querySelector('#fleet-self-label').textContent = name;
+    renderLocalAvatar();
     return true;
   } catch (err) {
     fleetManageStatus(err.message, 'error', '#fleet-self-edit');
@@ -3070,8 +3093,9 @@ function refreshSettingsPage() {
     keyList?.refresh({ first: true });
   }
   // Another machine opened through this one: its keys and its own list of machines stay on that machine.
-  const remote = Boolean(REMOTE_AGENT), fleetButton = document.querySelector('[data-settings-section="fleet"]');
-  if (fleetButton) fleetButton.hidden = remote;
+  // So do its name and avatar: the server takes them only on that machine itself.
+  const remote = Boolean(REMOTE_AGENT);
+  for (const section of ['identity', 'fleet']) { const button = document.querySelector(`[data-settings-section="${section}"]`); if (button) button.hidden = remote; }
   const keysPanel = settingsPage.sections.account.querySelector('.manage-panel[data-panel="keys"]'); if (keysPanel) keysPanel.hidden = remote;
 }
 function openSettingsModal(section = null) {

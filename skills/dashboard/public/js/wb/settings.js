@@ -2,9 +2,9 @@ import { SUPPORTED_RUNTIMES, runtimesWith } from '../../runtime-descriptors.js';
 import { element, icon } from './plain-text.js';
 import { createSettingsNavigation } from './settings-navigation.js';
 
-// Grouped by who a setting affects: who may enter this machine, this browser only, the whole machine, other
-// machines, the defaults for groups without their own choice, and model prices.
-export const settingsSections = ['account', 'general', 'machine', 'fleet', 'defaults', 'pricing'];
+// Grouped by who a setting affects: this machine's name and avatar, who may enter this machine, this browser only,
+// the whole machine, other machines, the defaults for groups without their own choice, and model prices.
+export const settingsSections = ['identity', 'account', 'general', 'machine', 'fleet', 'defaults', 'pricing'];
 const sectionIcons = { account: 'user', general: 'sliders', machine: 'cpu', fleet: 'server', defaults: 'bot', pricing: 'dollar' };
 // This browser's rows, top to bottom; each holds one control and an optional grey note.
 export const prefRows = ['detail', 'lang', 'theme', 'sound'];
@@ -35,6 +35,10 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   const wrap = element(document, 'div', undefined, 'wb-set-wrap'); body.append(wrap);
   const status = element(document, 'div', undefined, 'wb-set-status'); wrap.append(status);
   const sections = {}, buttons = {}, backButtons = {}, badges = {}, relabels = [];
+  // This machine's avatar and name head the list, the way a phone's settings show the owner; it opens their page.
+  const identity = identityEntry(document);
+  identity.button.addEventListener('click', () => navigation.pick('identity'));
+  nav.append(identity.button);
   for (const name of settingsSections) {
     const section = element(document, 'section', undefined, 'wb-set-sec'); section.id = 'settings-section-' + name;
     const header = element(document, 'div', undefined, 'wb-set-section-head');
@@ -47,6 +51,12 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
     header.append(back, heading);
     const lead = element(document, 'p', t('wb.settings.lead.' + name), 'wb-set-lead');
     section.append(header, lead); sections[name] = section; wrap.append(section);
+    relabels.push(() => {
+      heading.textContent = t('wb.settings.section.' + name);
+      lead.textContent = t('wb.settings.lead.' + name);
+      back.setAttribute('aria-label', t('wb.settings.backToSections'));
+    });
+    if (name === 'identity') { buttons[name] = identity.button; continue; }
     const button = element(document, 'button', undefined, 'wb-set-nav-btn'); button.type = 'button'; button.dataset.settingsSection = name;
     const copy = element(document, 'span', undefined, 'wb-set-nav-copy');
     const label = element(document, 'span', t('wb.settings.section.' + name));
@@ -56,10 +66,8 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
     button.append(icon(document, sectionIcons[name]), copy, badge, icon(document, 'chev', 'xs'));
     button.addEventListener('click', () => navigation.pick(name)); nav.append(button); buttons[name] = button;
     relabels.push(() => {
-      heading.textContent = label.textContent = t('wb.settings.section.' + name);
-      lead.textContent = t('wb.settings.lead.' + name);
+      label.textContent = t('wb.settings.section.' + name);
       description.textContent = t('wb.settings.summary.' + name);
-      back.setAttribute('aria-label', t('wb.settings.backToSections'));
     });
   }
   const move = (source, selector, destination) => { const node = source.querySelector(selector); if (node) destination.append(node); return node; };
@@ -123,10 +131,13 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   const hosts = slot('settings-machine-hosts');
   sections.machine.append(version.card, timezone, ...(observer ? [observer] : []), session.card, hosts);
 
-  // Other machines: this machine's name and address, and the machines added here.
+  // This machine's name and avatar.
+  for (const selector of ['#settings-machine-name', '#settings-machine-avatar']) move(fleet, selector, sections.identity);
+
+  // Other machines: this machine's address, and the machines added here.
   const fleetPanel = move(fleet, '.manage-panel[data-panel="fleet"]', sections.fleet);
-  // The address other machines use to add this one moves here from the keys panel, under this machine's name.
-  if (fleetPanel) { fleetPanel.hidden = false; const address = sections.account.querySelector('#settings-address-card'); if (address) fleetPanel.children[0]?.after(address); }
+  // The address other machines use to add this one moves here from the keys panel.
+  if (fleetPanel) { fleetPanel.hidden = false; const address = sections.account.querySelector('#settings-address-card'); if (address) fleetPanel.prepend(address); }
 
   // AI defaults and prices.
   const defaults = slot('settings-defaults'); sections.defaults.append(defaults);
@@ -162,7 +173,27 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   function badge(name, count) { badges[name].textContent = count ? String(count) : ''; badges[name].hidden = !count; badges[name].title = count ? t('wb.settings.unsaved') : ''; }
   const navigation = createSettingsNavigation({ layout, select, showList });
   select('account');
-  return { sections, prefs, slots: { chat, version: versionBody, timezone, idleReclaim, hosts }, select, relabel, badge, navigation, actionsScope: root };
+  return { sections, prefs, identity, slots: { chat, version: versionBody, timezone, idleReclaim, hosts }, select, relabel, badge, navigation, actionsScope: root };
+}
+
+/** The list's identity entry: this machine's avatar, its name, and its address and zylos version under them. */
+function identityEntry(document) {
+  const button = element(document, 'button', undefined, 'wb-set-nav-btn wb-set-id'); button.type = 'button'; button.dataset.settingsSection = 'identity';
+  const avatar = element(document, 'span', undefined, 'wb-set-id-av');
+  const copy = element(document, 'span', undefined, 'wb-set-nav-copy');
+  const name = element(document, 'b', '', 'wb-set-id-name');
+  const line = element(document, 'span', undefined, 'wb-set-id-line');
+  const address = element(document, 'span', '', 'wb-set-id-addr'), version = element(document, 'span', '', 'wb-set-id-ver');
+  line.append(address, version); copy.append(name, line);
+  button.append(avatar, copy, icon(document, 'chev', 'xs'));
+  /** `avatar` is a ready avatar node; an empty `version` leaves the address alone on its line. */
+  function render({ avatar: face, name: text, address: where, version: core }) {
+    avatar.replaceChildren(face);
+    name.textContent = text; address.textContent = where; version.textContent = core;
+    version.hidden = !core;
+    button.title = [text, where, core].filter(Boolean).join(' · ');
+  }
+  return { button, render };
 }
 
 export const runtimeFollowerFilter = { side: 'running', runtimeOverridden: false };
