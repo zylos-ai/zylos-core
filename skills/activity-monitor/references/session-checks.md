@@ -19,8 +19,7 @@ they inherit this session's group and run identity.
 - **Idle reclaim check:** Only one thing can hold the reclaim: work this
   session itself started that is still running and whose result it is waiting
   for — a background command, a Monitor watcher, a background subagent or
-  workflow. A Memory Sync is not such work: the supervisor already waits for it
-  before reclaiming, so do not defer for it. If there is such work, run
+  workflow. If there is such work, run
   `node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js defer-reclaim --reason "<what is still running>"`,
   confirm it reports ok:true, then acknowledge this control.
 - **Upgrade restart check:** If work
@@ -35,6 +34,9 @@ Otherwise write the session handoff: list open business items as they stand
 now, checking each against its current record and leaving out any that have
 finished. Replies, reviews or decisions you are waiting for from people or
 other sessions need nothing more: an incoming reply wakes this group again.
+When legacy working state is present, follow the startup instructions for
+reading it, carrying open items into this handoff and archiving the old file
+after verifying the handoff.
 
 ## 3. Wake-ups
 

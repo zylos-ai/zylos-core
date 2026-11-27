@@ -13,7 +13,7 @@ await main({ start: () => startSupervisor({ scenes,
   checkAuth: async () => ({ status: 'success' }),
   // The fixture supplies activity facts; process identity, native transport,
   // lifecycle, stop and ending persistence remain production code.
-  readSyncMarker: () => ({ held: false, stale: false }),
+
   machineTasks: { tick: async () => {}, stop: async () => {} },
   legacyStatus: { tick: async () => {}, close() {} },
   async afterRound() { fs.writeFileSync(path.join(root, 'monitor-round.json'), JSON.stringify({ pid: process.pid, rounds: ++rounds })); },

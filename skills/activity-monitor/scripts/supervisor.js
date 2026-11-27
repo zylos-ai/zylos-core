@@ -1,4 +1,3 @@
-import { SyncObserver } from './sync-observer.js';
 import { loadCoreModule } from './core-modules.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
@@ -28,7 +27,7 @@ export const AUTH_DEMAND_RETRY_MS = 60000;
 
 /** Compose observation, runtime health and the single lifecycle queue. */
 export function createSupervisor(deps) {
-  const { db, scenes, readConfiguration, readMode, readSyncMarker, prepareReferenceReorg, prompts, now=Date.now, log=()=>{} }=deps;
+  const { db, scenes, readConfiguration, readMode, prepareReferenceReorg, prompts, now=Date.now, log=()=>{} }=deps;
   const activities=new Map();let configuration;let lastMetrics=null;let lastMaintenance=0;
   let observer,router,admission,lifecycle,modeSwitch,globalMemoryHandover,loop,stopping=false,stopPromise,roundContext;
   const authChecks=new Set(),authFlights=new Map(),authRetryAt=new Map();
@@ -222,9 +221,8 @@ export function createSupervisor(deps) {
     modeSwitch:request=>modeSwitch.handle(request),startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
   const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),diagnostic,reportError,env:deps.env});
   const endings=new SupervisorRunEndings({db,readIdentity:group=>scenes.readIdentity(group),isObservable:()=>!scenes.guard?.episodes.has(scenes.socketKey),env:deps.env,alert:deps.alert,diagnostic,reportError,now});
-  const syncObserver = new SyncObserver({ env: deps.env, now, warn: log });
-  lifecycle=new SupervisorLifecycle({syncObserver,env:deps.env,db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:stopScene,readSyncMarker,prepareReferenceReorg,prompts,
-    requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),groupRunDir:group=>groupRunDir(group,deps.env),diagnostic,reportError,
+  lifecycle=new SupervisorLifecycle({db,observeGroup:group=>scenes.observeGroup(group),stop:stopScene,prepareReferenceReorg,prompts,
+    requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),diagnostic,reportError,
     readCurrentSession:async group=>{try{return await endings.currentSession(group);}catch{return null;}},
     intentionalStop:(group,runId)=>exits.forget(group,runId)},{now});
   globalMemoryHandover=new GlobalMemoryHandoverCoordinator({db,zylosDir:deps.zylosDir,readMode,readConfiguration,
@@ -234,7 +232,7 @@ export function createSupervisor(deps) {
     legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),lifecycle,serialize:operation=>admission.serialize(operation),
     globalMemoryPending:()=>globalMemoryHandover.pending(),
     writeMode:deps.writeMode ?? writeSessionModeAtCutover,restart:deps.restartDispatcherConfirmation,diagnostic,now});
-  const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','advanceReleases','advanceReclaim','checkRotation','checkTtl','checkEviction'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
+  const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','advanceReleases','advanceReclaim','checkRotation','checkTtl','checkEviction','checkReferenceReorg'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
   loop=new SupervisorLoop({
     beginRound:()=>lifecycle.beginRound(),
     readConfiguration:async transition=>{
@@ -435,7 +433,6 @@ export function createSupervisor(deps) {
         await Promise.allSettled([...authChecks]);
         await connectionHandler.drain?.();await admission.tail;await drainHealthWrites();
         for(const activity of activities.values())activity.close();
-        syncObserver.close();
       })();
       return stopPromise;
     }};

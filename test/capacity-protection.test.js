@@ -26,7 +26,7 @@ function fixture(options = {}) {
     getControlById: id => controls.find(row => row.id === id) };
   const lifecycle = new SupervisorLifecycle({ db, requests: { read: () => [] },
     observeGroup: group => current.scenes.find(s => s.sessionGroup === group) ?? { present: false },
-    readSyncMarker: () => ({ held: false, stale: false }), bindTarget: s => ({ expectedRunId: s.runId }),
+    bindTarget: s => ({ expectedRunId: s.runId }),
     prompts: { PRE_RECLAIM_CHECK_PROMPT: 'check' } }, { now: () => now });
   const context = () => ({ configuration: { mode: 'multi', capacity: 1, evictMinIdleSeconds: current.evictMinIdleSeconds ?? 300 }, scenes: current.scenes.map(s => ({ ...s })),
     transition: current.transition, fences: [...fences.values()], restartRequests: [] });

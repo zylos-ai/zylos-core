@@ -4,7 +4,8 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { resolveCoreConfigModule } from '../../comm-bridge/scripts/core-config-loader.js';
-import { withMemoryLock, readCurrentRunId, readSyncMarker } from './sync-lock.js';
+import { withMemoryLock } from './memory-lock.js';
+import { dreamRunDirectory } from './dream-lock.js';
 import { memoryError, options, exitCode, isMain } from './sync-cli.js';
 
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -39,24 +40,18 @@ function resolveFile(root, rel, io) {
   }
 }
 
-async function writeScope(rel, env) {
-  const configUrl = pathToFileURL(resolveCoreConfigModule());
-  const [config, paths] = await Promise.all([
-    import(configUrl.href),
-    import(new URL('./session-group-paths.js', configUrl).href),
-  ]);
+async function writerRunDirectory(rel, root, env) {
   const parts = rel.split('/');
-  let group = 'origin';
-  if (parts[0] === 'session-groups') {
-    if (parts.length < 3) throw memoryError('INVALID_INPUT', 'Expected a group key and memory file');
-    group = paths.assertSessionGroup(parts[1]);
-  }
-  return { runDir: paths.groupRunDir(group, env), group, readSessionMode: config.readSessionMode };
+  if (parts[0] !== 'session-groups') return dreamRunDirectory(root);
+  if (parts.length < 3) throw memoryError('INVALID_INPUT', 'Expected a group key and memory file');
+  const configUrl = pathToFileURL(resolveCoreConfigModule());
+  const { groupRunDir } = await import(new URL('./session-group-paths.js', configUrl).href);
+  return groupRunDir(parts[1], env);
 }
 
-/** Save an existing memory file; Sync admission and publication share its lock. */
+/** Replace an existing file only when its bytes still match the reader's hash. */
 export async function writeMemory({ path: inputPath, sha256: expected, content, env = process.env, waitMs } = {},
-  { currentRunId = readCurrentRunId, io = fs } = {}) {
+  { io = fs } = {}) {
   const rel = relativePath(inputPath);
   if (typeof expected !== 'string' || !/^[a-f0-9]{64}$/.test(expected) ||
       !(typeof content === 'string' || Buffer.isBuffer(content))) {
@@ -65,15 +60,8 @@ export async function writeMemory({ path: inputPath, sha256: expected, content, 
   if (content.length === 0) throw memoryError('INVALID_INPUT', 'New content must not be empty');
   const root = env.ZYLOS_DIR || path.join(env.HOME || process.env.HOME, 'zylos');
   resolveFile(root, rel, io);
-  const scope = await writeScope(rel, env);
-  return withMemoryLock(scope.runDir, async () => {
-    const sessionGroup = scope.group === 'origin' && !scope.readSessionMode().keyPresent ? null : scope.group;
-    const liveRun = await currentRunId({ runDir: scope.runDir, sessionGroup });
-    const kinds = scope.group === 'origin' ? [sessionGroup ? 'group' : 'global', 'origin'] : ['group'];
-    if (kinds.some(kind => readSyncMarker({ runDir: scope.runDir, kind, currentRunId: liveRun }).held)) {
-      throw memoryError('SYNC_BUSY', 'Memory Sync is running; retry after it finishes');
-    }
-    // The target may have changed while waiting for the lock or observing tmux.
+  const runDir = await writerRunDirectory(rel, root, env);
+  return withMemoryLock(runDir, () => {
     const { real, stat } = resolveFile(root, rel, io);
     const currentBytes = io.readFileSync(real);
     const currentHash = sha256(currentBytes);
@@ -126,7 +114,7 @@ function mergeAppendHeaders(bytes, fields) {
 
 /** Merge permitted header values and append bytes while holding the writer lock. */
 export async function appendMemory({ path: inputPath, keys, movedFrom, content, env = process.env, waitMs } = {},
-  { currentRunId = readCurrentRunId, io = fs } = {}) {
+  { io = fs } = {}) {
   const rel = relativePath(inputPath);
   if (!(typeof content === 'string' || Buffer.isBuffer(content)) || content.length === 0 ||
       [keys, movedFrom].some(value => value !== undefined && (typeof value !== 'string' || /[\r\n]/.test(value)))) {
@@ -134,14 +122,8 @@ export async function appendMemory({ path: inputPath, keys, movedFrom, content, 
   }
   const root = env.ZYLOS_DIR || path.join(env.HOME || process.env.HOME, 'zylos');
   resolveFile(root, rel, io);
-  const scope = await writeScope(rel, env);
-  return withMemoryLock(scope.runDir, async () => {
-    const sessionGroup = scope.group === 'origin' && !scope.readSessionMode().keyPresent ? null : scope.group;
-    const liveRun = await currentRunId({ runDir: scope.runDir, sessionGroup });
-    const kinds = scope.group === 'origin' ? [sessionGroup ? 'group' : 'global', 'origin'] : ['group'];
-    if (kinds.some(kind => readSyncMarker({ runDir: scope.runDir, kind, currentRunId: liveRun }).held)) {
-      throw memoryError('SYNC_BUSY', 'Memory Sync is running; retry after it finishes');
-    }
+  const runDir = await writerRunDirectory(rel, root, env);
+  return withMemoryLock(runDir, () => {
     const { real, stat } = resolveFile(root, rel, io);
     const currentBytes = io.readFileSync(real);
     const paragraph = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
@@ -168,7 +150,7 @@ export async function appendMemory({ path: inputPath, keys, movedFrom, content, 
 
 /** JSON entry point for component callers; content arrives as raw stdin bytes. */
 export async function runMemoryWriteCli(argv = process.argv.slice(2), {
-  env = process.env, currentRunId = readCurrentRunId, waitMs,
+  env = process.env, waitMs,
   input = () => fs.readFileSync(0), output = text => process.stdout.write(text),
 } = {}) {
   try {
@@ -179,8 +161,8 @@ export async function runMemoryWriteCli(argv = process.argv.slice(2), {
       throw memoryError('INVALID_INPUT', 'Usage: memory-write.js --append --path PATH [--keys VALUES] [--moved-from VALUES] < paragraph | --path PATH --sha256 HASH < content');
     }
     const data = args.append ?
-      await appendMemory({ path: args.path, keys: args.keys, movedFrom: args['moved-from'], content: input(), env, waitMs }, { currentRunId }) :
-      await writeMemory({ path: args.path, sha256: args.sha256, content: input(), env, waitMs }, { currentRunId });
+      await appendMemory({ path: args.path, keys: args.keys, movedFrom: args['moved-from'], content: input(), env, waitMs }) :
+      await writeMemory({ path: args.path, sha256: args.sha256, content: input(), env, waitMs });
     output(JSON.stringify({ ok: true, data }) + '\n');
     return 0;
   } catch (cause) {

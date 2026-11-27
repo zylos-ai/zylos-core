@@ -52,7 +52,7 @@ async function fixture(t, statusNotices) {
     scenes: { observe: async () => [], readIdentity: async () => ({ present: false }),
       observeGroup: async () => ({ present: false }), listRuns: async () => [], readRun: async () => null },
     legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
-    readSyncMarker: () => ({ held: false, stale: false }),
+
     sendAlert: async (target, message) => { sends.push({ target, message }); return true; },
     log: value => logs.push(value), loopOptions: { schedule: () => 1, cancel() {} },
   });

@@ -57,7 +57,7 @@ test('saving idle reclamation takes effect in the same Supervisor and stops only
       readConfig: () => JSON.parse(fs.readFileSync(configFile, 'utf8')),
       readMode: () => ({ mode: 'multi', keyPresent: true }),
       legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
-      readSyncMarker: () => ({ held: false, stale: false }), loopOptions: { schedule: () => 1, cancel() {} },
+      loopOptions: { schedule: () => 1, cancel() {} },
       log() {}, sendAlert() { throw Error('External send forbidden'); } });
     assert.equal(service.supervisor.loop.configurationError, null);
     const supervisor = service.supervisor, pid = process.pid;

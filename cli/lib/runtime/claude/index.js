@@ -6,7 +6,6 @@ import { usage } from './usage.js';
 import { busy } from './busy.js';
 import { hooks } from './hooks.js';
 import { instructions } from './instructions.js';
-import { GROUP_SYNC_RESULT_INSTRUCTION } from '../shared/group-sync-prompts.js';
 import { input } from './input.js';
 import { sessionSwitch } from './switch.js';
 import { modelConfig, prepare, preAccept, checkAutonomous, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags } from './launch.js';
@@ -37,17 +36,17 @@ export default Object.freeze({
       npmPackage: '@anthropic-ai/claude-code', dataDir: '.claude',
     }),
     postUpgradeSync: UNSUPPORTED,
+    retiredProjectFiles: Object.freeze({
+      source: Object.freeze(['.claude', 'agents']),
+      archive: Object.freeze(['.zylos', 'retired-claude-agents']),
+      names: Object.freeze(['zylos-global-sync.md', 'zylos-group-sync.md', 'zylos-origin-sync.md']),
+    }),
   }),
   auth,
   dream,
   health,
   launch: Object.freeze({ modelConfig, prepare, preAccept, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags, checkAutonomous }),
-  instructions: Object.freeze({
-    ...instructions,
-    groupSyncPrompt: 'Immediately call Agent once with subagent_type: "zylos-group-sync", run_in_background: true, and prompt: "group Sync". ' +
-      'Start without reading skills or adding to the prompt. Continue working. ' +
-      GROUP_SYNC_RESULT_INSTRUCTION,
-  }),
+  instructions,
   input,
   busy,
   context,

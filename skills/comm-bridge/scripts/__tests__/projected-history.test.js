@@ -71,15 +71,13 @@ test('CLI fetch branches project full rows once in both JSON and default output'
   const branches = [
     ['range', ['--begin', begin, '--end', end]], ['since', ['--since', '2000-01-01']],
     ['unsummarized', ['--unsummarized', '--group', 'dashboard:alpha']],
-    ['combined', ['--origin-sync', '--group', 'dashboard:alpha']],
-    ['raw', ['--origin-sync', '--group', 'dashboard:alpha', '--raw-only', '--after', '0']],
   ];
   for (const [name, args] of branches) for (const json of [false, true]) await t.test(`${name} ${json ? 'JSON' : 'default'}`, () => {
     const output = f.invoke('../c4-fetch.js', [...args, ...(json ? ['--json'] : [])]);
     assert.equal(output.includes(hidden), false);
-    if (json || name === 'combined') {
+    if (json) {
       const value = JSON.parse(output), data = json ? value.data : value;
-      assertProjected(name === 'raw' ? data : data.rows, originals);
+      assertProjected(data.rows, originals);
     } else {
       for (const row of originals) assert.ok(output.includes(projectC4Content(row.content, { c4Id: row.id })));
     }
@@ -91,5 +89,4 @@ test('CLI fetch branches project full rows once in both JSON and default output'
   const originalRows = JSON.parse(f.invoke('./fixtures/read-original-history.js', [begin, end]));
   assert.deepEqual(originalRows.map(row => row.content), contents);
   assert.deepEqual(f.store.getUnsummarizedConversations('dashboard:alpha', { upToConversationId: Number(end) }).map(row => row.content), contents);
-  assert.deepEqual(f.store.queries.originCombined('dashboard:alpha').rows.map(row => row.content), contents);
 });

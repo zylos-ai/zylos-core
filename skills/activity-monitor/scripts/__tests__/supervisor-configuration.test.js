@@ -12,10 +12,9 @@ const worker = fileURLToPath(new URL('./fixtures/supervisor-configuration-worker
 const repository = fileURLToPath(new URL('../../../../', import.meta.url));
 const config = { session_mode: 'multi', runtime: 'claude', model: 'opus[1m]',
   new_session_threshold: 30, codex_new_session_threshold: 45, session_hot_ttl_seconds: 60, session_evict_min_idle_seconds: 90,
-  session_reclaim_defer_alert_count: 3,
-  sync_min_interval_seconds: 12, sync_max_interval_seconds: 1000, origin_sync_threshold: 20, sync_batch_limit: 40, sync_threshold: 7 };
-const envKeys = ['ZYLOS_SESSION_RECLAIM_DEFER_ALERT_COUNT', 'ZYLOS_SESSION_HOT_TTL_SECONDS', 'ZYLOS_SESSION_EVICT_MIN_IDLE_SECONDS', 'ZYLOS_SYNC_MIN_INTERVAL_SECONDS',
-  'ZYLOS_SYNC_MAX_INTERVAL_SECONDS', 'ZYLOS_ORIGIN_SYNC_THRESHOLD', 'ZYLOS_SYNC_BATCH_LIMIT', 'ZYLOS_SYNC_THRESHOLD'];
+  session_reclaim_defer_alert_count: 3 };
+const fields = ['session_reclaim_defer_alert_count', 'session_hot_ttl_seconds', 'session_evict_min_idle_seconds'];
+const envKeys = fields.map(key => `ZYLOS_${key.toUpperCase()}`);
 function fromFile(t, environment = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-config-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -53,11 +52,6 @@ test('entry honors the 1M Claude 30% threshold and configured 60s TTL from confi
   assert.equal(resolved.hotTtlSeconds, 60);
   assert.equal(resolved.reclaimDeferAlertCount, 3);
   assert.equal(resolved.evictMinIdleSeconds, 90);
-  assert.equal(resolved.syncMinIntervalSeconds, 12);
-  assert.equal(resolved.syncMaxIntervalSeconds, 1000);
-  assert.equal(resolved.originSyncThreshold, 20);
-  assert.equal(resolved.syncBatchLimit, 40);
-  assert.equal(resolved.syncThreshold, 7);
   const rotations = result.controls.filter(control => control.content.startsWith('Context usage has reached the session threshold.'));
   const reclaimChecks = result.controls.filter(control => control.content === PRE_RECLAIM_CHECK_PROMPT);
   assert.equal(rotations.length, 1, '50% usage must rotate with the configured 30% threshold');
@@ -76,16 +70,13 @@ test('entry honors the 1M Claude 30% threshold and configured 60s TTL from confi
   assert.equal(result.refreshed.mode, 'single');
   assert.deepEqual(result.requestAlertCounts, [3, 5], 'each request reads the latest alert count');
   assert.equal(result.refreshed.hotTtlSeconds, 999, 'hot TTL refreshes with the next configuration read');
-  for (const key of ['evictMinIdleSeconds', 'syncMinIntervalSeconds', 'syncThreshold'])
-    assert.deepEqual(result.refreshed[key], resolved[key], 'startup settings change only after restart');
+  assert.equal(result.refreshed.evictMinIdleSeconds, resolved.evictMinIdleSeconds, 'startup settings change only after restart');
   assert.equal(result.refreshed.rotationPolicy.new_session_threshold,99,'threshold policy refreshes each round');
 });
 
 test('invalid optional values fall through environment, config and defaults without losing thresholds', () => {
   const defaults = parseSupervisorConfiguration({}, {});
-  assert.deepEqual(defaults, { hotTtlSeconds: 3300, reclaimDeferAlertCount: 4, evictMinIdleSeconds: 300, syncMinIntervalSeconds: 600, syncMaxIntervalSeconds: 21600,
-    originSyncThreshold: 50, syncBatchLimit: 200, syncThreshold: 15 });
-  const fields = ['session_reclaim_defer_alert_count', 'session_hot_ttl_seconds', 'session_evict_min_idle_seconds', 'sync_min_interval_seconds', 'sync_max_interval_seconds', 'origin_sync_threshold', 'sync_batch_limit', 'sync_threshold'];
+  assert.deepEqual(defaults, { hotTtlSeconds: 3300, reclaimDeferAlertCount: 4, evictMinIdleSeconds: 300 });
   for (const invalid of ['', '0', '-1', '1.5', 'NaN', '12x', '9007199254740992']) {
     const env = Object.fromEntries(envKeys.map(key => [key, invalid]));
     assert.deepEqual(parseSupervisorConfiguration(config, env), parseSupervisorConfiguration(config, {}));

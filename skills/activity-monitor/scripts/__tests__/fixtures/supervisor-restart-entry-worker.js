@@ -20,7 +20,7 @@ const observeGroup=scenes.observeGroup.bind(scenes);scenes.observeGroup=async gr
 const service=await startSupervisor({env:process.env,now:()=>now,db:{...db,getDb:()=>database,...(authMode?{listPendingSessionGroups:()=>pending?[{sessionGroup:'origin'}]:[],countRunningConversations:()=>running}:{}),getModeTransition:()=>holding?{phase:'fixture_hold'}:db.getModeTransition()},scenes,requestStore:requests,
  readMode:()=>({mode:'multi'}),readConfiguration:()=>({mode:'multi',runtime:'claude',capacity:2}),resolveTargetRuntime:()=> 'claude',
  // Successful reclaim scenarios explicitly provide the reader contract.
- readSyncMarker:()=>({held:false,stale:false}),
+
  ...(authMode?{checkAuth:async()=>{checks++;return {status:'success'};}}:{}),
  machineTasks:{tick(){},stop(){}},legacyStatus:{tick(){},close(){}},sendAlert:()=>{throw new Error('No external send');},log:()=>{},loopOptions:{schedule:()=>1,cancel:()=>{}}});
 process.send({ready:true});

@@ -6,13 +6,13 @@ import path from 'node:path';
 import { createSupervisor } from '../supervisor.js';
 import { PENDING_MAX_AGE_SECONDS } from '../../../comm-bridge/scripts/c4-config.js';
 import { RestartRequestStore } from '../restart-request-store.js';
-function fixture(t,{batchIdentities,badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert,now=Date.now,database={},readSyncMarker,prepareReferenceReorg,prompts,resolveTargetRuntime=async()=> 'claude'}={}) {
+function fixture(t,{batchIdentities,badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert,now=Date.now,database={},prepareReferenceReorg,prompts,resolveTargetRuntime=async()=> 'claude'}={}) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-assembly-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const file=path.join(root,'requests.json');if(badRequests)fs.writeFileSync(file,'broken');
  const calls=[],db={getOriginNeed:()=>({controls:{count:0},inbound:{oldestAt:null}}),getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:[]}),listPendingContinuations:()=>[],listRunEndings:()=>[],getLastCompletedModeTransition:()=>null,listPendingSessionGroups:()=>[],getLatestContentCheckpoint:()=>null,getControlById:()=>null,resolveSessionLaunchConfig:resolveLaunchConfig,...database};
  const scenes={observe:async()=>[],readIdentity(group) { return this.observeGroup(group); }, observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
  if(batchIdentities)scenes.readIdentities=batchIdentities;
- const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime,requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,alert,now,readSyncMarker,prepareReferenceReorg,prompts,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
+ const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime,requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,alert,now,prepareReferenceReorg,prompts,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
  t.after(()=>supervisor.stop());return {supervisor,calls,file,root,scenes,db};
 }
 

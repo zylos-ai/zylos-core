@@ -10,7 +10,6 @@ import { createQueryHandlers } from './c4-v2-cli.js';
 import { dataError, requireGroup } from './c4-session-group.js';
 import { formatQueryError, projectConversation, shellQuote } from './c4-query-format.js';
 import { queryRejection } from './c4-entry-events.js';
-import { createBatchReceipt, createOriginRawReceipt, createOriginSummaryReceipt } from './c4-sync-batch.js';
 
 const query = createQueryHandlers(createStore(db.getDb, { readConfig: readZylosConfigStrict }));
 const sendPath = path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-send.js');
@@ -114,7 +113,7 @@ function checkpoint(args, positionalSummary = false) {
   return o.json ? json(row) : 'Checkpoint created: ' + JSON.stringify(row) + '\n';
 }
 export function databaseCli(args) {
-  if (['unsummarized', 'groups', 'group-queues', 'origin-sync'].includes(args[0]) &&
+  if (['unsummarized', 'groups', 'group-queues'].includes(args[0]) &&
       helpRequested(args.slice(1), ['group', 'match', 'limit', 'active-since', 'key-match'])) return databaseCli(['--help']);
   const [command, ...rest] = args;
   if (command === 'rejection') {
@@ -157,9 +156,6 @@ export function databaseCli(args) {
     const o = options(rest, ['match', 'limit', 'active-since', 'key-match'], ['json', 'raw']); noPositionals(o);
     return display(query.groups({ match: o.match, activeSince: o['active-since'] === undefined ? undefined : number(o['active-since'], 'active-since'), keyMatch: o['key-match'], limit: o.limit === undefined ? undefined : number(o.limit, 'limit', 1), ...(o.raw ? { raw: true } : {}) }), o);
   }
-  if (command === 'origin-sync' && rest[0] === 'backlog') {
-    const o = options(rest.slice(1), [], ['json']); noPositionals(o); return display(query.originBacklog(), o);
-  }
   if (command === 'mode-transition' && rest[0] === 'show') {
     const o = options(rest.slice(1), ['run-id'], ['json']); noPositionals(o);
     if (o['run-id'] !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(o['run-id'])) invalid('run-id must be a UUID');
@@ -171,7 +167,7 @@ export function databaseCli(args) {
   }
   if (command === 'checkpoints') { const o = options(rest, [], ['json']); noPositionals(o); return display(db.getCheckpoints(), o); }
   if (command === 'init') { const o = options(rest); noPositionals(o); db.getDb(); return 'Database initialized\n'; }
-  if (!command || ['--help','-h'].includes(command)) return 'c4-db.js: init | insert <in|out> <channel> <endpoint> <content> [--session-group G] | checkpoint <end> (--summary TEXT|--no-content) | unsummarized [--group G] | groups [--match TEXT|--active-since MS|--key-match TEXT] [--limit N] [--raw] | group-queues [--json] | origin-sync backlog | mode-transition show | rejection --id ID [--json] | recent | checkpoints\n';
+  if (!command || ['--help','-h'].includes(command)) return 'c4-db.js: init | insert <in|out> <channel> <endpoint> <content> [--session-group G] | checkpoint <end> (--summary TEXT|--no-content) | unsummarized [--group G] | groups [--match TEXT|--active-since MS|--key-match TEXT] [--limit N] [--raw] | group-queues [--json] | mode-transition show | rejection --id ID [--json] | recent | checkpoints\n';
   invalid(`Unknown command ${command}`);
 }
 export function checkpointCli(args) {
@@ -205,20 +201,19 @@ function writeExport(out, output) {
   }
   return { path: file, bytes: Buffer.byteLength(output), sha256: createHash('sha256').update(output).digest('hex') };
 }
-const exported = (file, rows, receiptKey, receipt) => ({ path: file.path, count: rows.length, firstId: rows[0]?.id ?? null, lastId: rows.at(-1)?.id ?? null,
-  bytes: file.bytes, sha256: file.sha256, [receiptKey]: receipt });
+const exported = (file, rows) => ({ path: file.path, count: rows.length, firstId: rows[0]?.id ?? null, lastId: rows.at(-1)?.id ?? null,
+  bytes: file.bytes, sha256: file.sha256 });
 
 export function fetchCli(args) {
   if (!args.length) invalid('Usage: c4-fetch.js requires a query');
-  if (helpRequested(args, ['group', 'after', 'up-to', 'limit', 'begin', 'end', 'since', 'run-id', 'scope-after', 'id', 'field', 'out'])) return 'c4-fetch.js --unsummarized [--group G] [--after ID] [--up-to ID] [--limit N] [--out FILE] | --begin ID --end ID | --since DURATION|DATETIME | --checkpoints --after ID | --origin-sync --group G (--summaries-only|--raw-only --after ID [--limit N]) [--out FILE] | --absorbed --run-id UUID [--summary [--scope-after G]|--id ID [--field text|endpoint] [--out FILE]|--after ID] [--limit N]\n';
-  const modes = ['unsummarized','since','checkpoints','origin-sync','absorbed'];
+  if (helpRequested(args, ['group', 'after', 'up-to', 'limit', 'begin', 'end', 'since', 'run-id', 'scope-after', 'id', 'field', 'out'])) return 'c4-fetch.js --unsummarized [--group G] [--after ID] [--up-to ID] [--limit N] [--out FILE] | --begin ID --end ID | --since DURATION|DATETIME | --checkpoints --after ID | --absorbed --run-id UUID [--summary [--scope-after G]|--id ID [--field text|endpoint] [--out FILE]|--after ID] [--limit N]\n';
+  const modes = ['unsummarized','since','checkpoints','absorbed'];
   const selected = modes.filter(key => args.includes('--' + key));
   if (selected.length > 1) invalid('Fetch modes are mutually exclusive');
   const mode = selected[0] ?? 'range';
   const allowed = {
     unsummarized: [['group','after','up-to','limit','out'], ['unsummarized','json']],
     checkpoints: [['group','after'], ['checkpoints','json']],
-    'origin-sync': [['group','after','limit','out'], ['origin-sync','summaries-only','raw-only','json']],
     absorbed: [['run-id','group','scope-after','after','limit','id','field','out'], ['absorbed','summary','json']],
     since: [['since'], ['json']],
     range: [['begin','end'], ['json']],
@@ -237,33 +232,9 @@ export function fetchCli(args) {
     const result = query.unsummarized({ group: o.group, upToConversationId: o['up-to'] === undefined ? undefined : number(o['up-to'], 'up-to'), limit: o.limit === undefined ? undefined : number(o.limit, 'limit', 1), afterConversationId: o.after === undefined ? undefined : number(o.after, 'after') });
     const output = o.json ? json(result) : formatUnsummarized(result, { scope: group(o), getDatabase: db.getDb, sendPath });
     if (o.out === undefined) return output;
-    if (!o.out || o.out.includes('\0')) invalid('Invalid output path');
-    const scope = group(o);
-    const coverage = scope === '*' ? db.getGlobalCoverageEnd() : db.getCoverageEnd(scope);
-    const batch = createBatchReceipt(result.rows, { scope, after: Math.max(coverage, o.after === undefined ? 0 : number(o.after, 'after')), end: result.rows.at(-1)?.id ?? result.upTo });
-    return display(exported(writeExport(o.out, output), result.rows, 'batch', batch), o);
+    return display(exported(writeExport(o.out, output), result.rows), o);
   }
   if (mode === 'checkpoints') return display(query.checkpoints({ group: o.group, after: number(o.after, 'after') }), o);
-  if (mode === 'origin-sync') {
-    if (o['summaries-only'] && o['raw-only']) invalid('Summary and raw modes are mutually exclusive');
-    if (!o['summaries-only'] && !o['raw-only']) {
-      if (o.after !== undefined) invalid('after requires --raw-only');
-      if (o.out !== undefined) invalid('out requires --summaries-only or --raw-only');
-      return display(query.originCombined({ group: o.group, limit: o.limit === undefined ? undefined : number(o.limit, 'limit', 1) }), o);
-    }
-    if (o['summaries-only']) {
-      if (o.after !== undefined || o.limit !== undefined) invalid('Summary read does not accept after or limit');
-      const result = query.originSummaries({ group: o.group }), output = display(result, o);
-      if (o.out === undefined) return output;
-      const receipt = createOriginSummaryReceipt(result.rows, { scope: o.group, after: result.afterCheckpointId, end: result.checkpointId, coverageEnd: result.coverageEnd });
-      return display(exported(writeExport(o.out, output), result.rows, 'receipt', receipt), o);
-    }
-    const result = query.originRaw({ group: o.group, after: number(o.after, 'after'), limit: o.limit === undefined ? undefined : number(o.limit, 'limit', 1) });
-    const output = o.json ? json(result.rows) : conversations(result.rows) + '\n';
-    if (o.out === undefined) return output;
-    const receipt = createOriginRawReceipt(result.rows, { scope: o.group, after: result.after, end: result.end });
-    return display(exported(writeExport(o.out, output), result.rows, 'receipt', receipt), o);
-  }
   if (mode === 'since') {
     const since = parseSince(o.since);
     if (since === null) invalid('since must be a duration (30m, 6h, 1d) or a datetime (YYYY-MM-DD[ HH:MM[:SS]][Z|±HH:MM])');

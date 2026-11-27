@@ -61,12 +61,5 @@ export const PENDING_CHANNELS_FILE = path.join(ACTIVITY_MONITOR_DIR, 'pending-ch
 export const ATTACHMENTS_DIR = path.join(DATA_DIR, 'attachments');
 export const SKILLS_DIR = path.join(ZYLOS_DIR, '.claude', 'skills');
 
-// Default Memory Sync threshold (unsummarized conversation count above which a
-// group Sync is due). ZYLOS_SYNC_THRESHOLD / `sync_threshold` in .zylos/config.json
-// override it; read the resolved value through parseSupervisorConfiguration
-// (activity-monitor supervisor-configuration.js), never re-declare the literal.
-export const CHECKPOINT_THRESHOLD = 15;
-export const SESSION_INIT_RECENT_COUNT = 6;  // max conversations returned by session-init when above threshold
-
 export const STALE_STATUS_THRESHOLD = 5000; // ms
 export const TMUX_MISSING_WARN_THRESHOLD = 30;

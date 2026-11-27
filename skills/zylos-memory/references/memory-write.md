@@ -1,7 +1,7 @@
 # Locked memory file writes and appends
 
 Component callers can replace an existing regular file under `$ZYLOS_DIR/memory`
-without racing a Memory Sync that has already read it. Read the complete file
+without overwriting changes made since their read. Read the complete file
 (for example with the Read tool) and retain its raw-byte hash. After
 `MEMORY_CONFLICT`, read the file again, merge the current content with your
 changes, and rewrite with the new hash. One-time reference reorganization uses
@@ -18,13 +18,10 @@ are rejected. The expected lowercase hex SHA-256
 digest is computed over the original raw bytes. Stdin supplies the new bytes;
 callers retain responsibility for any text-type or size policy.
 
-`session-groups/<group>/...` takes that group's existing `memory.lock`; all other
-files take Origin's existing lock in both single and multi mode. Lock acquisition
-uses the shared ten-second default timeout. Under that lock, the command refuses
-a valid Sync marker immediately with `SYNC_BUSY`, checks the content hash, then
-publishes a same-directory temporary file using rename, preserving permissions.
-It checks both `sync.lock` and `origin-sync.lock` for Origin. Expired or old-run
-markers follow the existing Sync status rules. It never waits for Sync to finish.
+`session-groups/<group>/...` takes that group's file lock. Shared paths take
+the dream writer's lock. The writer checks the current content hash under the
+lock and uses a same-directory rename to publish the replacement while
+preserving permissions. The default lock acquisition timeout is ten seconds.
 
 Stdout is one JSON object, following the memory reader's JSON envelope:
 
@@ -32,10 +29,8 @@ Stdout is one JSON object, following the memory reader's JSON envelope:
 - Failure: `{ "ok": false, "error": { "code": "...", "message": "..." } }`.
 - `MEMORY_CONFLICT` also returns `error.current` with `text` and `sha256`.
 
-Exit codes reuse `sync-cli.js`: success is 0, `LOCK_TIMEOUT`/`SYNC_BUSY` are 2,
-other writer failures are 1. A conflict or busy error leaves the file unchanged.
-There is no new-file/delete operation, Sync token, new persistent state or new
-locking protocol. Dashboard integration is a separate caller change.
+Exit codes are 0 for success, 2 for `LOCK_TIMEOUT`, and 1 for other writer
+failures. A conflict or timeout leaves the file unchanged.
 
 ## Append a supplement and merge permitted header values
 
@@ -49,7 +44,7 @@ EOF
 ```
 
 Append mode neither needs nor accepts `--sha256`. It takes the same memory lock
-and checks the same Sync markers as replacement mode. Inside that lock it reads
+as replacement mode. Inside that lock it reads
 the latest file, merges only `Keys` and `Moved from` in the header (before the
 first blank line), then appends stdin bytes verbatim. Values are comma-separated:
 trim and deduplicate them while retaining existing order, then add new values in
@@ -60,9 +55,6 @@ unchanged. Include any required paragraph separation and `整理补充（日期�
 in stdin. Empty stdin is `INVALID_INPUT`; missing files are
 `MEMORY_FILE_NOT_FOUND`; path restrictions are the same as replacement mode.
 
-A live Sync marker returns `SYNC_BUSY`; retry the same append after Sync finishes.
-A separately held memory lock uses the existing wait/`LOCK_TIMEOUT` behavior.
-After the lock is available, active Sync markers are still checked before any
-file mutation. Success returns the same path and new sha256 JSON as replacement.
-There is no stale whole-page draft or caller-supplied hash to overwrite a
-concurrent supplement: each append merges with the current file under the lock.
+A held file lock uses the same timeout as replacement mode. Success returns
+the path and new SHA-256 digest. Each append merges with the file under the
+lock, preserving changes from earlier writers.

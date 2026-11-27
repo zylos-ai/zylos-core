@@ -5,9 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { createMemoryWriter } from './workbench/memory-write.js';
 
-// Core stages in-flight memory writes beside the target under three names:
-// Memory Sync state drafts (zylos-memory/scripts/sync-files.js),
-// memory-write.js saves (24 hex) and self-write.js writes (32 hex).
+// Hide temporary writes from the file browser, including legacy state drafts.
 const MEMORY_WRITE_TEMP = [/^state\.md\.[^.]+\.tmp$/, /^\..+\.[0-9a-f]{24}\.tmp$/, /^\..+\.[0-9a-f]{32}\.tmp$/];
 export const isMemoryWriteTemp = name => MEMORY_WRITE_TEMP.some(pattern => pattern.test(name));
 

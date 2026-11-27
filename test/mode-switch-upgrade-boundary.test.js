@@ -67,7 +67,7 @@ function upgradeFixture(t, { initialMode = null, origin = null } = {}) {
     service = await startSupervisor({ env, db: database,
       scenes, readMode: mode, readConfig: () => ({ runtime: 'claude' }), legacyPresent: () => legacyPresent,
       legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
-      loopOptions: { schedule: () => 1, cancel() {} }, readSyncMarker: () => ({ held: false, stale: false }),
+      loopOptions: { schedule: () => 1, cancel() {} },
       writeMode: value => { modeKey = value; },
       restartDispatcherConfirmation: { advance: () => ({ confirmed, pending: false }) },
       sendAlert: async (_target, message) => { alerts.push(message); return true; }, log() {},

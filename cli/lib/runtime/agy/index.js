@@ -5,7 +5,6 @@ import { context } from './context.js';
 import { busy } from './busy.js';
 import { hooks } from './hooks.js';
 import { instructions } from './instructions.js';
-import { GROUP_SYNC_WORKER_PROMPT, GROUP_SYNC_RESULT_INSTRUCTION } from '../shared/group-sync-prompts.js';
 import { input } from './input.js';
 import { sessionSwitch } from './switch.js';
 import { prepare, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags } from './launch.js';
@@ -33,17 +32,13 @@ export default Object.freeze({
     dailyUpgradePrompt: UNSUPPORTED,
     uninstall: UNSUPPORTED,
     postUpgradeSync: UNSUPPORTED,
+    retiredProjectFiles: UNSUPPORTED,
   }),
   auth,
   dream,
   health,
   launch: Object.freeze({ modelConfig: UNSUPPORTED, prepare, preAccept: UNSUPPORTED, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags, checkAutonomous: UNSUPPORTED }),
-  instructions: Object.freeze({
-    ...instructions,
-    groupSyncPrompt: 'Without reading skills, call invoke_subagent once with Model: "flash". ' +
-      `Send: "${GROUP_SYNC_WORKER_PROMPT}" Continue working. The result arrives automatically. ` +
-      GROUP_SYNC_RESULT_INSTRUCTION,
-  }),
+  instructions,
   input,
   busy,
   context,

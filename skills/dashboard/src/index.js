@@ -84,7 +84,6 @@ import { createGroupConfig } from './lib/workbench/group-config.js';
 import { createGroupBacklog } from './lib/workbench/group-backlog.js';
 import { createMemoryBacklog, readBacklogPage, groupBadges } from './lib/workbench/memory-backlog.js';
 import { parseEntriesQuery, readEntriesPage } from './lib/memory-entries.js';
-import { createOriginBacklog } from './lib/workbench/origin-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
 import { createSessionHostRoutes } from './lib/session-host-routes.js';
 import { createGroupDeletionRoutes } from './lib/workbench/group-deletion.js';
@@ -367,10 +366,9 @@ const instanceTimezone = createInstanceTimezone({ zylosDir: config.zylosDir,
 const getDetailSnapshot = () => workbench.getCachedSnapshot() ?? workbench.getSnapshot();
 const groupRuns = createRuns({ store, getSnapshot: getDetailSnapshot });
 const groupConfig = createGroupConfig({ zylosDir: config.zylosDir });
-const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, c4Reader, getSnapshot: getDetailSnapshot,
+const groupBacklog = createGroupBacklog({ c4Reader,
   readConfig: () => readConfigStrict(path.join(config.zylosDir, '.zylos', 'config.json')) });
-const memoryBacklog = createMemoryBacklog({ zylosDir: config.zylosDir, getSnapshot: at => workbench.getSnapshot(at), groupBacklog,
-  originBacklog: createOriginBacklog({ zylosDir: config.zylosDir, readLastSync: () => c4Reader.getLastOriginSyncAt() }) });
+const memoryBacklog = createMemoryBacklog({ zylosDir: config.zylosDir, getSnapshot: at => workbench.getSnapshot(at), groupBacklog });
 function recordDashboardInterrupt(record) {
   recordGroupInterrupt(store, record);
 }

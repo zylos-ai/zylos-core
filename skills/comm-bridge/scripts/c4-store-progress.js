@@ -1,15 +1,9 @@
 import { dataError, requireGroup } from './c4-session-group.js';
-export function progressFunctions({ read, write, snapshot, get, all, run, seconds, dependencies }) {
+export function progressFunctions({ read, write, snapshot, get, all, run, dependencies }) {
   const loadable = "((direction='in' AND status='delivered') OR direction='out')";
   const scope = group => group === '*' ? { sql: '', args: [] } : { sql: ' AND session_group=?', args: [requireGroup(group)] };
   const baseline = c => get(c, "SELECT COALESCE(end_conversation_id,0) AS n FROM checkpoints WHERE session_group='*' ORDER BY id DESC LIMIT 1")?.n ?? 0;
   const coverage = (c, group) => Math.max(group === '*' ? 0 : baseline(c), get(c, 'SELECT COALESCE(MAX(end_conversation_id),0) AS n FROM checkpoints WHERE session_group=?', group).n);
-  // The one Origin raw-row selection; reads, exports and receipt checks share it.
-  const originRows = (c, group, after, upTo, limit) => {
-    const l = limitClause(limit);
-    return all(c, `SELECT * FROM conversations WHERE session_group=? AND id>? AND id<=? AND ${loadable} ORDER BY id${l.sql}`, group, after, upTo, ...l.args);
-  };
-  const originCursor = (c, group) => get(c, 'SELECT synced_id,checkpoint_id,updated_at FROM origin_sync_cursors WHERE session_group=?', group);
   function originSingle(c, group) {
     if (group !== 'origin') return false;
     if (typeof dependencies.readConfig !== 'function') throw new TypeError('Origin progress requires readConfig');
@@ -65,6 +59,26 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
     const f = scope(group), l = limitClause(limit, true);
     return all(c, `SELECT * FROM conversations WHERE id>?${f.sql} AND ${loadable} ORDER BY id DESC${l.sql}`, after, ...f.args, ...l.args).reverse();
   }
+  function recentDelivered(c, group, { afterTimestamp, limit } = {}) {
+    const f = scope(group), l = limitClause(limit, true);
+    if (afterTimestamp !== undefined && (typeof afterTimestamp !== 'string' || !Number.isFinite(Date.parse(afterTimestamp)))) {
+      throw dataError('INVALID_ARGS', 'afterTimestamp must be a timestamp');
+    }
+    // C4 stores UTC text today. Imported history can also contain Unix seconds.
+    const clock = "CASE WHEN typeof(timestamp) IN ('integer','real') THEN julianday(timestamp,'unixepoch') ELSE julianday(timestamp) END";
+    const after = afterTimestamp === undefined ? [] : [afterTimestamp];
+    const filter = `${loadable}${f.sql}${after.length ? ` AND ${clock}>julianday(?)` : ''}`;
+    const rows = all(c, `SELECT * FROM conversations WHERE ${filter} ORDER BY ${clock} DESC, id DESC${l.sql}`,
+      ...f.args, ...after, ...l.args).reverse();
+    // An incomplete tail needs the count and ID bounds of the older rows,
+    // without loading their bodies. Use the same snapshot and timestamp/ID order.
+    const older = after.length && rows.length === limit
+      ? get(c, `SELECT COUNT(*) AS count, MIN(id) AS firstId, MAX(id) AS lastId FROM conversations
+        WHERE ${filter} AND (${clock}, id) < (SELECT ${clock}, id FROM conversations WHERE id=?)`,
+      ...f.args, ...after, rows[0].id)
+      : null;
+    return { rows, older };
+  }
   function pendingStartupReply(c, group, { since } = {}) {
     if (typeof since !== 'string' || !Number.isFinite(Date.parse(since))) {
       throw dataError('INVALID_ARGS', 'since must be a timestamp');
@@ -98,6 +112,10 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
       requireGroup(group, { global: true });
       return read(c => pendingStartupReply(c, group, options));
     },
+    getRecentDeliveredConversations: (group, options) => {
+      requireGroup(group, { global: true });
+      return snapshot(c => recentDelivered(c, group, options));
+    },
     getDeliveredSince: (group, after, options) => groupRead(group, c => tail(c, group, after, options)),
     getGlobalDeliveredSince: (after, options) => read(c => tail(c, '*', after, options)),
     getUnsummarizedRange: group => groupRead(group, range),
@@ -107,98 +125,11 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
     getDreamConversations: () => snapshot(c => all(c, 'SELECT session_group FROM group_heads ORDER BY session_group')
       .map(({ session_group: group }) => {
         const after = coverage(c, group);
-        return { group, rows: originRows(c, group, after, frontier(c, group, after)) };
+        const upTo = frontier(c, group, after);
+        return { group, rows: all(c, `SELECT * FROM conversations WHERE session_group=? AND id>? AND id<=? AND ${loadable} ORDER BY id`, group, after, upTo) };
       }).filter(({ rows }) => rows.length)),
     getContentCheckpointsSince: (group, afterEnd) => { requireGroup(group, { global: true }); return snapshot(c => all(c, 'SELECT * FROM checkpoints WHERE session_group=? AND end_conversation_id>? AND no_content=0 ORDER BY id', group, Math.max(afterEnd, group === '*' ? 0 : baseline(c)))); },
-    getOriginSyncConversations: (group, { afterConversationId, rawAfter, upToConversationId, limit }) => groupRead(group, c => {
-      if (![afterConversationId, rawAfter].every(n => Number.isSafeInteger(n) && n >= 0)) throw dataError('INVALID_ARGS', 'Both fixed read boundaries are required');
-      upper(c, group, upToConversationId); limitClause(limit, true);
-      return originRows(c, group, Math.max(afterConversationId, rawAfter), upToConversationId, limit);
-    }),
-    getOriginSyncCursor: group => groupRead(group, c => {
-      const row = originCursor(c, group);
-      return row ? { syncedId: row.synced_id, checkpointId: row.checkpoint_id, updatedAt: row.updated_at } : null;
-    }),
-    // One snapshot of everything an Origin receipt check recomputes.
-    getOriginSyncReceiptInputs: (group, { summaryAfter, summaryEnd, rawAfter, rawEnd }) => groupRead(group, c => {
-      const bounds = [summaryAfter, summaryEnd, ...(rawAfter === undefined && rawEnd === undefined ? [] : [rawAfter, rawEnd])];
-      if (!bounds.every(n => Number.isSafeInteger(n) && n >= 0)) throw dataError('INVALID_ARGS', 'Receipt boundaries must be nonnegative integers');
-      const cursor = originCursor(c, group), summaries = originSummarySnapshot(c, group, summaryAfter), base = baseline(c);
-      // Coverage is monotonic in checkpoint id, so a read's coverage is the
-      // coverage through summaryEnd or through one later checkpoint.
-      const through = get(c, 'SELECT MAX(end_conversation_id) AS n FROM checkpoints WHERE session_group=? AND id<=?', group, summaryEnd).n;
-      const later = all(c, 'SELECT end_conversation_id AS n FROM checkpoints WHERE session_group=? AND id>? ORDER BY id', group, summaryEnd).map(row => Math.max(base, row.n));
-      return {
-        checkpointId: cursor?.checkpoint_id ?? 0,
-        cursorFrom: Math.max(cursor?.synced_id ?? 0, base), coverageEnds: [Math.max(base, through ?? 0), ...later], frontier: frontier(c, group),
-        summaries: summaries.rows.filter(row => row.id <= summaryEnd),
-        rows: rawAfter === undefined ? null : originRows(c, group, rawAfter, rawEnd),
-      };
-    }),
-    // updatedAt: the caller's own reading of now (Unix seconds) when it judged
-    // the cursor against that time; otherwise the store reads the clock.
-    advanceOriginSyncCursor: (group, { syncedId, checkpointId, updatedAt }) => write(c => {
-      requireGroup(group);
-      const at = updatedAt ?? seconds();
-      if (!Number.isSafeInteger(at) || at <= 0) throw dataError('INVALID_ARGS', 'updatedAt must be a positive integer');
-      const old = get(c, 'SELECT * FROM origin_sync_cursors WHERE session_group=?', group);
-      const maxCheckpoint = get(c, 'SELECT COALESCE(MAX(id),0) AS n FROM checkpoints WHERE session_group=?', group).n;
-      if (![syncedId, checkpointId].every(n => Number.isSafeInteger(n) && n >= 0) || syncedId < (old?.synced_id ?? 0) || syncedId > frontier(c, group) || checkpointId < (old?.checkpoint_id ?? 0) || checkpointId > maxCheckpoint) throw dataError('CURSOR_INVALID', 'Cursor would regress or exceed its source');
-      run(c, 'INSERT INTO origin_sync_cursors(session_group,synced_id,checkpoint_id,updated_at) VALUES(?,?,?,?) ON CONFLICT(session_group) DO UPDATE SET synced_id=excluded.synced_id,checkpoint_id=excluded.checkpoint_id,updated_at=excluded.updated_at', group, syncedId, checkpointId, at);
-    }),
-    getOriginSyncBacklog: () => snapshot(c => {
-      const base = baseline(c), groups = [];
-      for (const head of all(c, `SELECT h.*,s.synced_id,s.checkpoint_id,s.updated_at
-        FROM group_heads h LEFT JOIN origin_sync_cursors s USING(session_group)
-        WHERE h.head_id > MAX(COALESCE(s.synced_id,0),?) OR EXISTS(
-          SELECT 1 FROM checkpoints p WHERE p.session_group=h.session_group
-          AND p.id>COALESCE(s.checkpoint_id,0) AND p.end_conversation_id>? AND p.no_content=0)
-        ORDER BY h.session_group COLLATE BINARY`, base, base)) {
-        const group = head.session_group, cursorFrom = Math.max(head.synced_id ?? 0, base), checkpointFrom = head.checkpoint_id ?? 0;
-        const summaries = get(c, 'SELECT COUNT(*) AS n,MIN(id) AS first FROM checkpoints WHERE session_group=? AND id>? AND end_conversation_id>? AND no_content=0', group, checkpointFrom, base);
-        if (head.head_id <= cursorFrom && !summaries.n) continue;
-        const upTo = frontier(c, group);
-        if (upTo <= cursorFrom && !summaries.n) continue;
-        const rows = get(c, `SELECT COUNT(*) AS n,MIN(id) AS first FROM conversations WHERE session_group=? AND id>? AND id<=? AND ${loadable}`, group, cursorFrom, upTo);
-        groups.push({ sessionGroup: group, cursorFrom, checkpointFrom, rawFrom: Math.max(cursorFrom, coverage(c, group)), upTo, count: rows.n, firstAt: rows.n ? get(c, 'SELECT timestamp FROM conversations WHERE id=?', rows.first).timestamp : null, pendingCheckpoints: summaries.n, firstCheckpointAt: summaries.n ? get(c, 'SELECT timestamp FROM checkpoints WHERE id=?', summaries.first).timestamp : null, cursorUpdatedAt: head.updated_at ?? null });
-      }
-      return { total: groups.reduce((n, g) => n + g.count, 0), groups };
-    }),
   };
-  function originSummarySnapshot(c, group, afterCheckpointId) {
-    const cursor = afterCheckpointId ?? originCursor(c, group)?.checkpoint_id ?? 0;
-    const rows = all(c, 'SELECT * FROM checkpoints WHERE session_group=? AND id>? AND end_conversation_id>? AND no_content=0 ORDER BY id', group, cursor, baseline(c));
-    return { rows, coverageEnd: coverage(c, group), afterCheckpointId: cursor, checkpointId: rows.at(-1)?.id ?? cursor };
-  }
-  function originSummaries(group, afterCheckpointId) {
-    requireGroup(group);
-    return snapshot(c => originSummarySnapshot(c, group, afterCheckpointId));
-  }
-  function originCombined(group, { limit } = {}) {
-    requireGroup(group);
-    limitClause(limit);
-    return snapshot(c => {
-      const summaries = originSummarySnapshot(c, group);
-      const cursor = originCursor(c, group)?.synced_id ?? 0;
-      const after = Math.max(cursor, baseline(c), summaries.coverageEnd), upTo = frontier(c, group);
-      const rows = originRows(c, group, after, upTo, limit);
-      const more = rows.length && get(c, `SELECT 1 FROM conversations WHERE session_group=? AND id>? AND id<=? AND ${loadable} LIMIT 1`, group, rows.at(-1).id, upTo);
-      return { summaries: summaries.rows, coverageEnd: summaries.coverageEnd, checkpointId: summaries.checkpointId, rows, safeEnd: upTo, upTo: more ? rows.at(-1).id : upTo };
-    });
-  }
-  // Raw Origin read: the lower bound honors the cursor, and end is the last
-  // returned id when limited, otherwise this snapshot's upper bound.
-  function originRaw(group, { after, limit } = {}) {
-    requireGroup(group);
-    if (!Number.isSafeInteger(after) || after < 0) throw dataError('INVALID_ARGS', 'after must be a nonnegative integer');
-    limitClause(limit);
-    return snapshot(c => {
-      const lower = Math.max(originCursor(c, group)?.synced_id ?? 0, baseline(c), after), upTo = frontier(c, group);
-      const rows = upTo > lower ? originRows(c, group, lower, upTo, limit) : [];
-      const more = rows.length && get(c, `SELECT 1 FROM conversations WHERE session_group=? AND id>? AND id<=? AND ${loadable} LIMIT 1`, group, rows.at(-1).id, upTo);
-      return { rows, after: lower, end: more ? rows.at(-1).id : Math.max(lower, upTo) };
-    });
-  }
   function unsummarizedQuery({ group = '*', upToConversationId, limit, afterConversationId } = {}) {
     requireGroup(group, { global: true });
     return snapshot(c => {
@@ -210,5 +141,5 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
       return { rows, checkpointEnd: latest?.end_conversation_id ?? 0, checkpointSummary: latest?.summary ?? null, safeEnd, upTo: more ? rows.at(-1).id : requested };
     });
   }
-  return { api, coverage, frontier, checkpoint, originSummaries, originCombined, originRaw, unsummarizedQuery };
+  return { api, coverage, frontier, checkpoint, unsummarizedQuery };
 }

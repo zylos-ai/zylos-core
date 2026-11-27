@@ -4,28 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import { writeMemory, appendMemory } from '../memory-write.js';
+import { dreamRunDirectory } from '../dream-lock.js';
+import { withMemoryLock } from '../memory-lock.js';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
-const liveRun = async () => 'live-run';
-const runDir = (f, group) => path.join(f.env.ZYLOS_DIR, 'activity-monitor/session-groups', group);
-function marker(f, group, kind, changes = {}) {
-  const dir = runDir(f, group);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, kind === 'origin' ? 'origin-sync.lock' : 'sync.lock'), JSON.stringify({
-    runId: 'live-run', kind, token: 'a'.repeat(32), expiresAt: Date.now() + 60000, ...changes,
-  }));
-}
-
-function groupFile(f, group) {
-  const rel = `session-groups/${group}/state.md`;
-  const file = path.join(f.memory, rel);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, 'original\n');
-  return { ...f.settings, path: rel };
-}
-
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-write-'));
   const env = { ...process.env, HOME: path.join(root, 'home'), ZYLOS_DIR: path.join(root, 'home/zylos'),
@@ -42,7 +25,7 @@ function fixture(t) {
 test('conflict returns the current raw-byte hash and text without changing the file', async t => {
   const f = fixture(t);
   fs.writeFileSync(f.file, 'newer é\r\n');
-  await assert.rejects(writeMemory(f.settings, { currentRunId: liveRun }), error => {
+  await assert.rejects(writeMemory(f.settings), error => {
     assert.equal(error.code, 'MEMORY_CONFLICT');
     assert.deepEqual(error.current, { text: 'newer é\r\n', sha256: digest(fs.readFileSync(f.file)) });
     return true;
@@ -51,7 +34,7 @@ test('conflict returns the current raw-byte hash and text without changing the f
   assert.deepEqual(fs.readdirSync(f.memory), ['identity.md']);
 });
 
-test('invalid paths and non-files are rejected before any runtime observation', async t => {
+test('invalid paths and non-files are rejected before locking', async t => {
   const f = fixture(t);
   const outside = path.join(f.root, 'outside');
   fs.mkdirSync(outside);
@@ -63,9 +46,7 @@ test('invalid paths and non-files are rejected before any runtime observation', 
     'C:/outside', 'C:', 'a\\identity.md', 'a//identity.md', './identity.md', 'identity.md\0',
     'linked-dir/note.md', 'linked-file.md', 'missing.md', 'directory'];
   for (const value of cases) {
-    await assert.rejects(writeMemory({ ...f.settings, path: value }, {
-      currentRunId: async () => assert.fail('invalid path reached runtime observation'),
-    }), error => ['INVALID_MEMORY_PATH', 'MEMORY_FILE_NOT_FOUND'].includes(error.code), value);
+    await assert.rejects(writeMemory({ ...f.settings, path: value }), error => ['INVALID_MEMORY_PATH', 'MEMORY_FILE_NOT_FOUND'].includes(error.code), value);
   }
   assert.equal(fs.readFileSync(path.join(outside, 'note.md'), 'utf8'), 'outside');
   assert.equal(fs.existsSync(path.join(f.env.ZYLOS_DIR, 'activity-monitor')), false);
@@ -75,71 +56,20 @@ test('write and rename failures leave the original and remove temporary files', 
   const f = fixture(t);
   for (const method of ['writeFileSync', 'renameSync']) {
     const io = { ...fs, [method]() { throw Object.assign(new Error('injected I/O failure'), { code: 'EIO' }); } };
-    await assert.rejects(writeMemory(f.settings, { currentRunId: liveRun, io }), { code: 'EIO' });
+    await assert.rejects(writeMemory(f.settings, { io }), { code: 'EIO' });
     assert.equal(fs.readFileSync(f.file, 'utf8'), 'original\n');
     assert.deepEqual(fs.readdirSync(f.memory), ['identity.md']);
   }
 });
 
-test('shared memory refuses either Origin marker and ignores another group', async t => {
-  for (const kind of ['global', 'origin']) await t.test(kind, async t => {
-    const f = fixture(t);
-    marker(f, 'origin', kind);
-    await assert.rejects(writeMemory(f.settings, { currentRunId: liveRun }), { code: 'SYNC_BUSY', exitCode: 2 });
+test('shared file edits serialize with the dream writer under its existing lock', async t => {
+  const f = fixture(t);
+  await withMemoryLock(dreamRunDirectory(f.env.ZYLOS_DIR), async () => {
+    await assert.rejects(writeMemory({ ...f.settings, waitMs: 80 }), { code: 'LOCK_TIMEOUT' });
     assert.equal(fs.readFileSync(f.file, 'utf8'), 'original\n');
   });
-  await t.test('another group does not block shared memory', async t => {
-    const f = fixture(t);
-    marker(f, 'lark:other', 'group');
-    const env = { ...f.env, ZYLOS_SESSION_GROUP: 'lark:other', ZYLOS_RUN_ID: 'caller-run' };
-    await writeMemory({ ...f.settings, env }, { currentRunId: async scope => {
-      assert.equal(scope.runDir, runDir(f, 'origin'));
-      return 'live-run';
-    } });
-    assert.equal(fs.readFileSync(f.file, 'utf8'), 'updated\n');
-  });
-});
-
-function cli(f, { args = ['--path', 'identity.md', '--sha256', digest('original\n')],
-  content = 'CLI content\r\n', ids = {}, waitMs } = {}) {
-  const result = spawnSync(process.execPath, [new URL('./helpers/memory-write-cli.js', import.meta.url).pathname, ...args], {
-    env: { ...f.env, MEMORY_WRITE_TEST_RUN_IDS: JSON.stringify(ids),
-      ...(waitMs === undefined ? {} : { MEMORY_WRITE_TEST_WAIT_MS: String(waitMs) }) },
-    input: content, encoding: 'utf8',
-  });
-  return { ...result, json: JSON.parse(result.stdout) };
-}
-
-test('CLI observes the actual single or multi runtime for both Origin marker files', async t => {
-  for (const mode of ['legacy', 'single', 'multi']) for (const kind of ['sync', 'origin']) {
-    await t.test(`${mode} ${kind}`, t => {
-      const f = fixture(t);
-      fs.mkdirSync(path.join(f.env.ZYLOS_DIR, '.zylos'));
-      fs.writeFileSync(path.join(f.env.ZYLOS_DIR, '.zylos/config.json'), JSON.stringify(mode === 'legacy' ? {} : { session_mode: mode }));
-      marker(f, 'origin', kind === 'origin' ? 'origin' : mode === 'legacy' ? 'global' : 'group', {
-        runId: mode === 'legacy' ? 'single-live' : 'origin-live',
-      });
-      for (const args of [undefined, ['--append', '--path', 'identity.md']]) {
-        const result = cli(f, { args, ids: { '*': 'single-live', origin: 'origin-live' } });
-        assert.equal(result.status, 2, result.stderr);
-        assert.equal(result.json.error.code, 'SYNC_BUSY');
-        assert.equal(fs.readFileSync(f.file, 'utf8'), 'original\n');
-      }
-    });
-  }
-});
-
-test('CLI group path uses its live identity, not the caller group or run', t => {
-  const f = fixture(t);
-  const settings = groupFile(f, 'lark:room');
-  marker(f, 'lark:room', 'group', { runId: 'group-live' });
-  f.env.ZYLOS_SESSION_GROUP = 'lark:other';
-  f.env.ZYLOS_RUN_ID = 'caller-run';
-  const result = cli(f, { args: ['--path', settings.path, '--sha256', settings.sha256],
-    ids: { 'lark:room': 'group-live', 'lark:other': 'caller-run' } });
-  assert.equal(result.status, 2, result.stderr);
-  assert.equal(result.json.error.code, 'SYNC_BUSY');
-  assert.equal(fs.readFileSync(path.join(f.memory, settings.path), 'utf8'), 'original\n');
+  await writeMemory(f.settings);
+  assert.equal(fs.readFileSync(f.file, 'utf8'), 'updated\n');
 });
 
 const projectHeader = [
@@ -162,7 +92,7 @@ test('append merges existing Keys and Moved from in order without changing other
   fs.writeFileSync(f.file, original);
   fs.chmodSync(f.file, 0o640);
   const result = await appendMemory({ path: 'identity.md', keys: 'beta, gamma, gamma',
-    movedFrom: 'old B, old C, old C', content: paragraph, env: f.env }, { currentRunId: liveRun });
+    movedFrom: 'old B, old C, old C', content: paragraph, env: f.env });
   const expected = [...projectHeader,
     '- **Keys:** alpha, beta, gamma',
     '- **Moved from:** old A, old B, old C',
@@ -180,10 +110,8 @@ test('concurrent append and hash-checked write preserve both contributions with 
   const original = [...projectHeader, '', 'Original body.', ''].join('\n');
   fs.writeFileSync(f.file, original);
   const [append, write] = await Promise.allSettled([
-    appendMemory({ path: 'identity.md', content: 'worker supplement\n', env: f.env }, { currentRunId: liveRun }),
-    writeMemory({ path: 'identity.md', sha256: digest(original), content: original + 'Sync contribution\n', env: f.env }, {
-      currentRunId: liveRun,
-    }),
+    appendMemory({ path: 'identity.md', content: 'worker supplement\n', env: f.env }),
+    writeMemory({ path: 'identity.md', sha256: digest(original), content: original + 'editor contribution\n', env: f.env }),
   ]);
   assert.equal(append.status, 'fulfilled', append.reason?.message);
   if (write.status === 'rejected') {
@@ -191,9 +119,9 @@ test('concurrent append and hash-checked write preserve both contributions with 
     const bytes = fs.readFileSync(f.file);
     const current = { text: bytes.toString('utf8'), sha256: digest(bytes) };
     await writeMemory({ path: 'identity.md', sha256: current.sha256,
-      content: current.text + 'Sync contribution\n', env: f.env }, { currentRunId: liveRun });
+      content: current.text + 'editor contribution\n', env: f.env });
   }
   const actual = fs.readFileSync(f.file, 'utf8');
-  assert.ok(actual === original + 'worker supplement\nSync contribution\n' ||
-    actual === original + 'Sync contribution\nworker supplement\n', actual);
+  assert.ok(actual === original + 'worker supplement\neditor contribution\n' ||
+    actual === original + 'editor contribution\nworker supplement\n', actual);
 });

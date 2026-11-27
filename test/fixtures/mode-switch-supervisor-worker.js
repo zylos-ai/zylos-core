@@ -31,7 +31,7 @@ try {
       readIdentity: async () => ({ present: false }), listRuns: async () => [], readRun: async () => null,
       stop: forbidden, bindTarget: forbidden },
     resolveTargetRuntime: () => 'claude', checkAuth: async () => ({ status: 'authenticated' }),
-    readSyncMarker: () => ({ held: false, stale: false }),
+
     legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
     loopOptions: { schedule: () => 1, cancel() {} },
     writeMode: forbidden, restartDispatcherConfirmation: { advance: forbidden },

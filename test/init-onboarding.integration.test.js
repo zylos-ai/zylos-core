@@ -39,11 +39,10 @@ function fixture(t) {
 // Run for init/onboarding/template/shard membership changes; unrelated changes
 // may skip. Official runner and each case isolate all paths before children;
 // no tmux/PM2/network/model launches. Children are bounded and joined before cleanup.
-test('fresh init seeds Origin and pending marker; every group receives the fifth shard', t => {
+test('fresh init marks onboarding pending and every group receives the fifth shard', t => {
   const f = fixture(t); f.child('fresh');
   assert.ok(fs.existsSync(f.marker));
-  const state = fs.readFileSync(path.join(f.env.ZYLOS_DIR,'memory/session-groups/origin/state.md'),'utf8');
-  assert.match(state,/scope=origin/); assert.doesNotMatch(state,/onboarding|Status: pending/i);
+  assert.equal(fs.existsSync(path.join(f.env.ZYLOS_DIR, 'memory/session-groups/origin/state.md')), false);
   assert.equal(fs.existsSync(path.join(f.env.ZYLOS_DIR,'memory/state.md')),false);
   assert.equal(fs.existsSync(path.join(f.env.ZYLOS_DIR,'.zylos/instructions/onboarding.md')),false);
   for (const group of [undefined,'origin','telegram:other']) {

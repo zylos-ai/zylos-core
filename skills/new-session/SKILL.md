@@ -45,7 +45,7 @@ Read the existing file completely, using successive ranges for long files.
 An absent file means there is no prior handoff. An unreadable or incomplete file
 is a failure: report it, recover the full read, and do not submit exit or ready.
 Check real progress and history, then retain every unfinished or unverified item.
-Reading never clears the file; Memory Sync must never clear it. Clear it only
+Reading never clears the file. Clear it only
 when all its work has completed or been cancelled.
 
 Write a brief message covering:
@@ -96,7 +96,7 @@ in, reply before triggering the immediate restart so the requester receives it.
 
 ## How It Works
 
-1. **Memory Sync** follows its own schedule; rotation and Bootstrap do not force it.
+1. **Memory dreaming** runs on its own nightly schedule.
 2. **Pre-switch checks**: Inventory background tasks, read and atomically merge W4.
 3. **Enqueue switch command**: Puts the runtime-specific command into the control queue (`/clear` for Claude and Antigravity, `/exit` for Codex)
 4. **Deliver when idle**: Dispatcher delivers the command when idle

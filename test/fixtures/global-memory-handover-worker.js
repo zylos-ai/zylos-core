@@ -2,7 +2,6 @@
 import fs from 'node:fs';
 import Database from 'better-sqlite3';
 import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
-import { appendInbox } from '../../skills/zylos-memory/scripts/memory-append.js';
 import { GlobalMemoryHandoverCoordinator } from '../../skills/activity-monitor/scripts/global-memory-handover.js';
 
 const [root, filename, point] = process.argv.slice(2);
@@ -22,7 +21,6 @@ const owner = new GlobalMemoryHandoverCoordinator({
     insertControl: (...args) => { const result = store.insertControl(...args); if (point === 'enqueue') kill(); return result; } },
   readMode: () => ({ keyPresent: true, mode: 'multi' }), readRequests: () => [],
   legacyPresent: () => false, observe: () => [], fsImpl: io,
-  append: async settings => { const result = await appendInbox(settings); if (point === 'append') kill(); return result; },
 });
 const result = await owner.advance();
 database.close();

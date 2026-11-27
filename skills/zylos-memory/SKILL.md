@@ -1,141 +1,42 @@
 ---
 name: zylos-memory
 description: >-
-  Maintain scoped working memory and shared self knowledge. Run group, Origin,
-  or single global Memory Sync when requested by the supervisor. Launch through
-  the current runtime's background subagent mechanism, not the Skill tool.
-disable-model-invocation: true
-user-invocable: false
+  Read and maintain Zylos memory. The supervisor runs nightly memory dreaming
+  in an independent process. Use the scoped handoff to continue unfinished work.
 ---
 
 # Memory System
 
-Memory Sync is maintenance. Do not perform business tasks, send user replies,
-change project code, install components, or restart services during Sync.
-The supervisor decides when to request Sync; do not add startup or periodic
-triggers here. Start a background subagent when requested and continue the
-current work, following the runtime-specific result handling below. For a
-pre-reclaim request, wait for its result before acknowledging that control as
-instructed.
+The supervisor runs [memory dreaming](references/dreaming.md) independently of
+live sessions. It reads delivered C4 conversations, updates shared project and
+decision pages, and writes the dated diary. Rule proposals go to the owner for
+approval. Live sessions keep working while this process runs.
 
-## Start the correct background worker
+## Continue unfinished work
 
-Use the runtime in the current running session's immutable launch snapshot.
-If the snapshot cannot be read, use the runtime identity observed from that
-session's live process. Do not choose from machine defaults or a newer desired
-configuration. Origin Sync uses Origin's actual runtime.
+Use the current scope's `handoff.md` and recent conversations. Read the handoff
+completely before relying on it. For cross-group work, ask the owning thread
+via the internal channel. Do not change another group's files.
 
-An ordinary group Sync control from the runtime adapter contains the complete
-launch instruction. Follow it immediately with one background tool call.
-The worker finds its own procedure and restricted memory tool.
-Record relevant facts in the inbox as they arise using `memory-append.js`.
-A successful Sync or `SYNC_BUSY` requires no action after the final result.
-For other outcomes, follow Parent result handling below.
+During the first handoff after an upgrade, use `read-work-memory.js --json` to
+read any historical state for the current scope. Merge unresolved items into
+its handoff, save it atomically, verify the contents, and then archive the old
+state. The system instructions describe the scope-specific paths. Existing
+session logs remain accessible and historical inboxes are under
+`memory/archive/inbox/`.
 
-Use the following launch guidance for Origin, pre-reclaim, global, and manual
-Sync, and for a generic control that asks you to read this skill.
+## Shared memory
 
-- Claude: launch `zylos-group-sync`, `zylos-origin-sync`, or `zylos-global-sync`
-  with `run_in_background: true`. These definitions use `sonnet`. Never use a
-  `fork` type or inherit the parent conversation for Sync.
-- Codex: use this session's native `spawn_agent` with `fork_turns: "none"`.
-  Before launch, inspect the current `spawn_agent` tool's exposed model list.
-  If it lists a Terra-tier model, pass that exact ID in `model`; do not omit
-  the field and inherit instead. Only if no Terra-tier model is listed, omit
-  `model` and record that fallback reason in the worker message. Do not guess
-  a model ID or change runtime/model configuration to make one available.
-  Do not pass `reasoning_effort`. In the Sync result, distinguish the requested
-  model (or inheritance) from the actual model verified by runtime evidence;
-  if the actual model cannot be verified, report it as unverified.
-  Start the worker message with this exact sentence:
-  > You are this session's already-launched Memory Sync subagent; do not read the zylos-memory SKILL.md or launch another subagent.
+Consult the [project format](references/projects-format.md),
+[decision format](references/decisions-format.md), and
+[reference index format](references/references-file-format.md) for durable
+knowledge. Search current and archived pages before creating a duplicate. For
+older subjects missing from those indexes, search `memory/reference/legacy/`
+for relevant headings or keywords and read only the matching sections. The
+one-time [reference reorganization](references/reference-reorg.md) archives the
+original aggregate files.
 
-  Then give the worker self-contained instructions to read
-  only the files listed for that job under Worker procedures. Include their
-  paths, the requested job, and all facts it needs; it cannot see the parent
-  conversation.
-- Antigravity: use `invoke_subagent` with `Model` set to `flash`. It runs in the
-  background and its result returns to this conversation automatically; do not
-  poll it and do not use `swarm`. Start the worker prompt with this exact sentence:
-  > You are this session's already-launched Memory Sync subagent; do not read the zylos-memory SKILL.md or launch another subagent.
-
-  Then give the worker self-contained instructions to read
-  only the files listed for that job under Worker procedures. Include their
-  paths, the requested job, and all facts it needs; it cannot see the parent
-  conversation.
-- Never use a new `codex exec`, PM2 service, or detached shell as a substitute.
-  If background tools or the restricted memory tool are unavailable, report
-  `TOOL_UNAVAILABLE` and stop; do not silently run an unrestricted writer.
-
-Before these launches, the parent discovers the exposed restricted memory
-tool and passes its exact name in the worker message. Claude normally exposes
-`mcp__zylos-memory__edit_memory`; Codex normally exposes
-`mcp__zylos_memory__edit_memory`. If that name is absent, discover an exposed
-tool ending in `edit_memory` before declaring `TOOL_UNAVAILABLE`. Never select
-an unrestricted writer as a substitute.
-
-Pass the exact restricted tool name, the selected procedure's installed absolute
-path, and relevant facts absent from C4/inbox (code findings, unmentioned
-actions and pitfalls). Capture these as they arise using
-`memory-append.js`. The worker cannot see the parent conversation.
-
-Run the job named in the control prompt:
-
-- `group Sync` uses `zylos-group-sync`, including for Origin's own working state.
-- `Origin Sync` uses `zylos-origin-sync` and runs only in the `origin` group.
-- `global Sync` uses `zylos-global-sync`.
-
-If the request does not name a job, use group Sync when the session has a group and global Sync otherwise.
-
-The parent reads only this skill; the worker reads only the files listed under Worker procedures for its selected procedure: [group](references/group-sync.md), [Origin](references/origin-sync.md), or [global](references/global-sync.md), with the exact common-file list below. Include these installed absolute paths when the launch requires a worker message.
-
-## Parent result handling
-
-These rules apply to group, Origin, and global Sync; the parent owns owner notification.
-
-- Claude: continue current work without waiting for an ordinary background
-  Sync. Handle its completion notification and report failure to the owner.
-- Codex: continue useful current work after launching, but **before ending the parent turn**, use native agent wait/result tools to read this worker's terminal result. A timeout or an empty wait is not a terminal result; wait again while keeping the input channel responsive. If the worker no longer exists, has been closed, or its result can no longer be retrieved, stop waiting and treat it as a result that cannot be retrieved. `Completed` describes worker execution, not successful Sync: inspect checkpoint, state commit and release outcomes. Idle notifications may not trigger another turn; retrieve the result now.
-- Antigravity: continue current work without waiting for an ordinary background
-  Sync; its result returns automatically. Do not enqueue `/clear` while the
-  worker is running: its result would go to the cleared conversation and never
-  be seen. Handle the returned result and report failure to the owner.
-- Only the worker's final result decides whether Sync succeeded or failed.
-  Messages the worker sends while it is still running are not a Sync outcome;
-  do not report success or failure from them.
-- Report a failed Sync to the owner once, before finishing the parent turn in
-  Codex. Send directly only to addresses your own thread handles; to reach any
-  other owner address, send an internal message to the owning thread asking it
-  to deliver the report (One thread per address). Include partial commits and
-  cleanup/release warnings; do not repeat a report already sent for this run.
-  If the result cannot be retrieved, report that failure without claiming Sync
-  succeeded. Successful Sync and the documented `SYNC_BUSY` no-op need no extra
-  owner message. Do not restart Sync to obtain a successful result.
-
-## Ordinary running-thread memory
-
-Record a commitment, decision, or learned fact immediately using
-`memory-append.js inbox --kind commitment|decision|fact`, one body line via stdin.
-Record work history using `memory-append.js session`, which chooses the dated
-session file using configured TZ. Do not create `sessions/current.md`.
-Do not directly edit state; Sync consolidates inbox into it.
-
-An explicit user request to edit shared self knowledge may be fulfilled by the
-running thread's normal Edit tool. This exception does not authorize Sync to
-bypass its restricted tool. After an actual identity change, request rotation
-with `request-rotation.js --reason identity` and report any rejection. Direct
-thread editing does not share Sync's lock, so do not claim all writers are
-mutually protected. Cross-group requests are sent through the normal internal
-channel; do not write another group's files.
-
-## Worker procedures
-
-Pass only these installed files to the worker; read them completely before taking a token:
-
-- Group: [group-sync.md](references/group-sync.md), [sync-common.md](references/sync-common.md), [state-format.md](references/state-format.md).
-- Origin: [origin-sync.md](references/origin-sync.md), [sync-common.md](references/sync-common.md), [sync-writing.md](references/sync-writing.md).
-- Global: [global-sync.md](references/global-sync.md), [sync-common.md](references/sync-common.md), [sync-writing.md](references/sync-writing.md), [state-format.md](references/state-format.md).
-
-Do not send sync-writing.md to group workers. [Common rules](references/sync-common.md) cover full byte reads and failures; [writing and content](references/sync-writing.md) covers restricted edits and shared-knowledge classification. The parent does not read these worker files to launch Sync.
-
-Component memory writers use the [memory-write API](references/memory-write.md). For unmatched legacy topics, follow [old-file lookup](references/sync-writing.md#moving-from-old-files).
+Fulfill an explicitly authorized edit to shared self knowledge in the running
+session. After an actual identity change, run `request-rotation.js --reason
+identity` and report any rejection. Component callers use the
+[locked memory writer](references/memory-write.md).

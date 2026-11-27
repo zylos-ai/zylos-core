@@ -40,7 +40,7 @@ Each shard has a per-shard budget (default 10,000 chars / ~2,200 estimated token
 | Cross-deployment behavior shipped to every install | `ZYLOS.md` core template |
 | Complex reusable task-triggered workflows | a skill |
 
-Ownership boundary: `memory/` is agent-written and audited/trimmed/archived by Memory Sync. `custom-hooks/` is operator-placed configuration — the agent does not manage it, and writes here only when explicitly asked to make a rule permanent for every session.
+Ownership boundary: `memory/` is maintained by nightly memory dreaming and explicit memory edits. `custom-hooks/` is operator-placed configuration — the agent does not manage it, and writes here only when explicitly asked to make a rule permanent for every session.
 
 ## Pitfalls
 

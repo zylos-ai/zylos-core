@@ -7,7 +7,7 @@ import { detectConfigLockCapability, configLockArgs } from '../../config-lock.js
 import { ZYLOS_DIR } from '../../config.js';
 import { buildKickPrompt } from '../kick-prompt.js';
 import { context, projectModelConfigPath, rootModelEntry } from './context.js';
-import { adapterError, launchEnvironment, memoryMcpServerPath, runtimeExecutable } from '../session-command.js';
+import { adapterError, launchEnvironment, runtimeExecutable } from '../session-command.js';
 
 export const env = Object.freeze({
   fromDotenv: Object.freeze([]),
@@ -19,20 +19,13 @@ export const promptPlacement = 'kick';
 export const efforts = Object.freeze(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 export const overrideHelpFlags = Object.freeze(['--model']);
 
-export function buildArgs(config, { root, help = '', bypassPermissions = true }) {
+export function buildArgs(config, { help = '', bypassPermissions = true }) {
   const args = ['-c', 'tools.experimental_request_user_input.enabled=false',
     '-c', 'features.goals=false', '-c', 'features.apps=false'];
   if (/(?:^|\s)--no-daemon(?:\s|$)/m.test(help)) args.push('--no-daemon');
   if (bypassPermissions) args.push('--dangerously-bypass-approvals-and-sandbox');
   if (config.mode === 'override') {
     args.push('--model', config.model, '-c', `model_reasoning_effort=${JSON.stringify(config.effort)}`);
-  }
-  const memoryServer = {
-    command: 'node', args: [memoryMcpServerPath(root)],
-    env_vars: ['ZYLOS_SESSION_GROUP', 'ZYLOS_RUN_ID', 'ZYLOS_DIR'],
-  };
-  for (const [key, value] of Object.entries(memoryServer)) {
-    args.push('-c', `mcp_servers.zylos-memory.${key}=${JSON.stringify(value)}`);
   }
   args.push(buildKickPrompt());
   return args;

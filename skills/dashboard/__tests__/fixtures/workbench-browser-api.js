@@ -10,8 +10,8 @@ import { memoryEntriesPage } from './memory-entries-api.js';
 import { memoryBacklogPage, parseBacklogQuery } from '../../src/lib/workbench/memory-backlog.js';
 
 /** Answers GET /api/memory/backlog from every group of a case, through the server's own order, search and paging. */
-export function backlogAnswer({ groups = [], originSync, budgets = null }, url) {
-  return memoryBacklogPage({ groups, ...(originSync ? { originSync } : {}), budgets }, parseBacklogQuery(url.searchParams));
+export function backlogAnswer({ groups = [], budgets = null }, url) {
+  return memoryBacklogPage({ groups, budgets }, parseBacklogQuery(url.searchParams));
 }
 
 const iso = ms => new Date(ms).toISOString();
@@ -124,7 +124,7 @@ function memoryFiles(now) {
   return [file('identity.md', 9000), file(LONG_FILE, 12100), file('references.md', 7800), ...reference,
     file(GROUP_FILE, 2150), file(`session-groups/${GROUP}/handoff.md`, 820), file('session-groups/lark:oc_product/state.md', 1430)];
 }
-const MEMORY_GROUPS = { names: { [GROUP]: 'Telegram direct chat', 'lark:oc_product': 'Product weekly' }, badges: { [GROUP]: { count: 12, syncing: false } } };
+const MEMORY_GROUPS = { names: { [GROUP]: 'Telegram direct chat', 'lark:oc_product': 'Product weekly' }, badges: { [GROUP]: { count: 12 } } };
 
 // Longer than a phone screen, so the share of the first screen the open file takes is measured on real text.
 const longText = '# Current state\n\n## Doing now\n- Second prototype round, settings and memory pages\n- Re-review after the next round\n'
@@ -221,8 +221,8 @@ function workbenchAnswerData(url, now) {
   }
   if (p === '/api/memory/git') return { commit: null };
   if (p === '/api/memory/backlog') return backlogAnswer({ groups: [{ sessionGroup: GROUP, displayName: 'Telegram direct chat', c4: { componentName: 'telegram' },
-    count: 12, firstAt: null, aged: false, syncing: false, threshold: 15 }], budgets: { limits: {}, warnings: {} } }, url);
-  if (p.endsWith('/backlog')) return { count: 12, firstAt: null, syncing: false };
+    count: 12, firstAt: null, aged: false }], budgets: { limits: {}, warnings: {} } }, url);
+  if (p.endsWith('/backlog')) return { count: 12, firstAt: null };
   if (p.endsWith('/runs')) return runs(url, now);
   if (p.endsWith('/messages')) return { items: [], nextCursor: null, afterCursor: '0' };
   if (p.endsWith('/config')) {

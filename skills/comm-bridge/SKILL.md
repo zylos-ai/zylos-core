@@ -4,9 +4,9 @@ description: >-
   C4 communication bridge — central gateway for ALL external communication (Telegram, Lark, etc.).
   Use when replying to users via the "reply via" path, sending proactive messages to external channels,
   querying recent conversations or checkpoint status (prefer c4-db.js CLI; direct SQL text reads require the projection rules below),
-  fetching conversation history for Memory Sync, or creating checkpoints after sync.
+  fetching projected conversation history or looking up coverage checkpoints.
   Incoming messages are queued by channel bots and delivered to Claude via a PM2 dispatcher daemon.
-  Session-start hooks automatically provide conversation context, including the whole unsummarized backlog when it is at or below the Sync threshold.
+  Session-start hooks show delivered messages after the current handoff, or a short recent tail when there is no handoff.
 ---
 
 # Communication Bridge (C4)
@@ -32,7 +32,7 @@ Lark        ───┘
 | `c4-session-init.js` | Hook (session start): conversation context | [hooks](references/hooks.md) |
 | `c4-fetch.js` | Fetch conversations by id range or time | [c4-fetch](references/c4-fetch.md) |
 | `c4-db.js` | Database module and CLI for querying conversations and checkpoints | [c4-db](references/c4-db.md) |
-| `c4-checkpoint.js` | Create/query checkpoints (sync boundaries) | [c4-checkpoint](references/c4-checkpoint.md) |
+| `c4-checkpoint.js` | Inspect conversation coverage checkpoints | [c4-checkpoint](references/c4-checkpoint.md) |
 
 ## Sending Messages
 
@@ -90,8 +90,7 @@ node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized --gro
 Outbound system alerts are stored in the chat's `session_group`. Match the
 reply to the alert's offer to investigate, keeping the lookup within this chat.
 If it matches, follow [Investigating an alert](references/delivery-failure-receipts.md#investigating-an-alert).
-If the alert has already been memory-synced and is no longer visible, or the
-reply remains unclear, ask a brief clarifying question.
+If the alert is outside the visible history or the reply remains unclear, ask a brief clarifying question.
 
 ## Messages Between Session Threads
 
@@ -143,14 +142,13 @@ A relay request is an internal message asking you to deliver something to an add
 
 ## Conversation Text and Original Records
 
-Model/Memory Sync history should use `c4-fetch.js` or the projected C4 CLI
+Model-facing history should use `c4-fetch.js` or the projected C4 CLI
 outputs, not direct `sqlite3 SELECT content` output. These readers call the
 public Core `projectC4Content(content, { c4Id: row.id })` API from
 `cli/lib/content-projection.js` on complete content before formatting,
 truncation, byte accounting or matching. Structured messages expose fallback
 text and references; invalid marked messages expose only an error marker and
-C4 reference. Ordinary text is unchanged. `--origin-sync --raw-only` means the
-message segment rather than checkpoint summaries; its content is still projected.
+C4 reference. Ordinary text is unchanged.
 
 Use SQL for unsupported metadata queries. If a custom model/memory reader must
 select `content`, apply the same public projector to each full row before any

@@ -7,9 +7,6 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fixture as databaseFixture } from '../skills/comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { GlobalMemoryHandoverCoordinator } from '../skills/activity-monitor/scripts/global-memory-handover.js';
-import { withMemoryLock } from '../skills/zylos-memory/scripts/sync-lock.js';
-import { appendInbox } from '../skills/zylos-memory/scripts/memory-append.js';
-
 const worker = fileURLToPath(new URL('./fixtures/global-memory-handover-worker.js', import.meta.url));
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gm-integration-'));
@@ -29,12 +26,9 @@ function fixture(t) {
   return { root, memory, db, store, filename, deps, snapshot, owner: () => new GlobalMemoryHandoverCoordinator(deps) };
 }
 
-// Boundary: installation-template classification through real C4 and memory
-// append. Run when archive-only rules or template installation change; no
-// runtime or external service is started. The two independent branches are
-// exclusive Origin-state installation and optional daily-record fact append.
-
-for (const point of ['before-plan', 'plan', 'rename', 'append', 'enqueue']) test(`actual SIGKILL after ${point} recovers through real C4 and memory append without transition writes`, async t => {
+// Boundary: an isolated C4 database plus durable archive and queue writes.
+// Run for cutover/archive recovery changes. No runtime or external service starts.
+for (const point of ['before-plan', 'plan', 'rename', 'enqueue']) test(`actual SIGKILL after ${point} recovers through the archive and real C4 queue`, async t => {
   const f = fixture(t), before = f.snapshot();
   const completedAt = f.db.prepare("SELECT updated_at FROM mode_transitions WHERE run_id='old-migration'").pluck().get();
   for (const name of ['state.md', 'inbox.md']) {
@@ -53,37 +47,10 @@ for (const point of ['before-plan', 'plan', 'rename', 'append', 'enqueue']) test
   assert.equal(fs.existsSync(path.join(archive, '.done')), true);
   assert.equal(fs.readFileSync(path.join(archive, 'state.md'), 'utf8'), 'old single working state');
   assert.equal(fs.readFileSync(path.join(archive, 'inbox.md'), 'utf8'), 'global inbox');
-  const inbox = fs.readFileSync(path.join(f.memory, 'session-groups/origin/inbox.md'), 'utf8');
-  assert.doesNotMatch(inbox, /C4 interval/);
-  assert.equal([...inbox.matchAll(/commitment:/g)].length, ['append', 'enqueue'].includes(point) ? 2 : 1);
+  assert.equal(fs.existsSync(path.join(f.memory, 'session-groups/origin/inbox.md')), false);
   const controls = f.db.prepare("SELECT * FROM control_queue WHERE status='pending'").all();
   assert.equal(controls.length, 1); assert.equal(controls[0].session_group, 'origin');
   assert.equal(controls[0].target_binding, null); assert.equal(controls[0].priority, 2); assert.equal(controls[0].ack_deadline_at, null);
   assert.doesNotMatch(controls[0].content, /ack via/); assert.match(controls[0].content, new RegExp(id.replaceAll('.', '\\.')));
   assert.deepEqual(f.snapshot(), before);
-});
-
-test('real Origin memory lock timeout preserves pending handover and next pass resumes', async t => {
-  const f = fixture(t), events = []; f.deps.waitMs = 20; f.deps.diagnostic = event => events.push(event);
-  let release, acquired;
-  const ready = new Promise(resolve => { acquired = resolve; });
-  const held = withMemoryLock(path.join(f.root, 'activity-monitor/session-groups/origin'), async () => {
-    acquired(); await new Promise(resolve => { release = resolve; });
-  });
-  await ready;
-  try {
-    const owner = f.owner(), result = await owner.advance(); assert.equal(result.code, 'LOCK_TIMEOUT');
-    assert.equal(events.at(-1).event, 'global_memory_handover_failed'); assert.equal(owner.pending(), true);
-  } finally { release(); await held; }
-  f.deps.waitMs = 1000;
-  assert.equal((await f.owner().advance()).rule, 'other'); assert.equal(f.owner().pending(), false);
-});
-
-test('handover and ordinary concurrent Origin append share lock and preserve complete entries', async t => {
-  const f = fixture(t); const env = { ZYLOS_DIR: f.root, ZYLOS_SESSION_GROUP: 'origin' };
-  const results = await Promise.all([f.owner().advance(), appendInbox({ kind: 'fact', content: 'ordinary Origin entry', env })]);
-  assert.equal(results[0].rule, 'other');
-  const inbox = fs.readFileSync(path.join(f.memory, 'session-groups/origin/inbox.md'), 'utf8');
-  assert.equal([...inbox.matchAll(/commitment:/g)].length, 1); assert.equal([...inbox.matchAll(/fact: ordinary Origin entry/g)].length, 1);
-  assert.equal(inbox.split('\n').filter(line => line.startsWith('- ')).length, 2);
 });

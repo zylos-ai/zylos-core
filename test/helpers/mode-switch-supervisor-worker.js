@@ -37,7 +37,7 @@ service = await startSupervisor({ db: database, scenes, legacyPresent: async () 
     if (fault === 'before-confirm') return pause('before-confirm');
     return { confirmed: true, pending: false };
   } },
-  readSyncMarker: async () => ({ held: false, stale: false }),
+
   sendAlert: () => { throw new Error('external notification forbidden'); }, log: value => logs.push(value),
 });
 process.send({ ready: true, ...snapshot() });

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createMigration, backupState } from '../../../skills/zylos-memory/scripts/memory-migration.js';
-import { withMemoryLock } from '../../../skills/zylos-memory/scripts/sync-lock.js';
+import { withMemoryLock } from '../../../skills/zylos-memory/scripts/memory-lock.js';
 import { readyTmuxTarget } from '../../../test/helpers/ready-tmux-target.js';
 
 const coreModule = new URL('../memory-migration.js', import.meta.url).href;

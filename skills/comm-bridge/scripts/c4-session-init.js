@@ -146,21 +146,7 @@ async function alertTargetInstruction() {
   return `Alert target: ${value}. System alerts go there; change it only if the owner asks.`;
 }
 
-/** The group Sync threshold, resolved like the supervisor resolves it (env, then config.json, then default). */
-async function readSyncThreshold() {
-  const [{ readZylosConfigStrict }, { parseSupervisorConfiguration }] = await Promise.all([
-    import('./local-config.js'), import('../../activity-monitor/scripts/supervisor-configuration.js'),
-  ]);
-  const result = readZylosConfigStrict();
-  if (result.state === 'error') throw result.error;
-  return parseSupervisorConfiguration(result.state === 'ok' ? result.config : {}).syncThreshold;
-}
-
-/**
- * A backlog at or below the Sync threshold is injected whole when it fits the
- * shard budget; otherwise the latest messages are packed newest-first, dropping
- * whole oldest messages, and the notice points at the omitted middle.
- */
+/** The handoff's modification time is the start of the conversation tail. */
 export async function emitC4Conversations(payload, budget = null, {
   scopeReader, withDb = withC4Db,
   migrationReader = async scope => {
@@ -174,21 +160,18 @@ export async function emitC4Conversations(payload, budget = null, {
     const readScope = scopeReader ?? (await import('../../activity-monitor/scripts/bootstrap-scope.js')).bootstrapScope;
     const scope = await readScope();
     await normalHelpers();
-    const coverage = scope.sessionGroup ? db.getCoverageEnd(scope.sessionGroup) : db.getGlobalCoverageEnd();
-    const delivered = limit => scope.sessionGroup
-      ? db.getDeliveredSince(scope.sessionGroup, coverage, { limit })
-      : db.getGlobalDeliveredSince(coverage, { limit });
-    const conversations = delivered(6);
-    let unsummarized;
-    try {
-      unsummarized = scope.sessionGroup
-        ? await db.getUnsummarizedRange(scope.sessionGroup)
-        : await db.getGlobalUnsummarizedRange();
-    } catch { unsummarized = null; }
     const handoffPath = path.join(scope.memoryDir, 'handoff.md');
+    let afterTimestamp;
+    try {
+      const handoff = fs.statSync(handoffPath);
+      if (!handoff.isFile()) throw new Error(`Handoff is not a file: ${handoffPath}`);
+      afterTimestamp = handoff.mtime.toISOString();
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
     const instructions = [
       `Scope: ${scope.scope}. Working memory is not injected. Read the complete snapshot with: node ${path.join(scope.root, '.claude/skills/zylos-memory/scripts/read-work-memory.js')} --json`,
-      fs.existsSync(handoffPath)
+      afterTimestamp
         ? `Before resuming work, read ${handoffPath} in full, using successive file ranges when needed. Reading does not consume it; retain unfinished items. Also read and follow the handoff procedure in ${path.join(scope.root, '.claude/skills/comm-bridge/references/handoff-follow-up.md')}.`
         : `No handoff file is available for this scope (${handoffPath}).`,
     ];
@@ -200,30 +183,46 @@ export async function emitC4Conversations(payload, budget = null, {
         else if (migration.state === 'unreadable') instructions.push('References migration record UNAVAILABLE; do not overwrite it.');
       } catch { instructions.push('References migration record UNAVAILABLE; do not overwrite it.'); }
     }
-    const lagNotice = rows => {
-      if (!unsummarized) return 'Unsummarized count temporarily unavailable.';
-      if (unsummarized.count <= 0 || (rows.length && unsummarized.firstConversationId >= rows[0].id)) return '';
-      const command = `node ${path.join(scope.root, '.claude/skills/comm-bridge/scripts/c4-fetch.js')} --unsummarized${scope.sessionGroup ? ` --group ${scope.sessionGroup}` : ''} --limit 50`;
-      const stop = rows.length ? `until the oldest shown id ${rows[0].id}` : 'through the delivered frontier (no tail shown)';
-      return `Checkpoint covers id ${coverage}; state.md may lag (use its header coverage). About ${unsummarized.count} messages unsummarized; latest ${rows.length} shown. Before judging old tasks, promises or todos, inspect the omitted middle: ${command}. Continue with --after <previous output's round upper bound> ${stop}; reads stop at the delivered frontier.`;
+    const shardBudget = budget ?? DEFAULT_SHARD_BUDGET;
+    // Leave room for the orchestrator's numbered envelope.
+    const packBudget = { maxChars: Math.max(0, shardBudget.maxChars - 200), maxTokens: Math.max(0, shardBudget.maxTokens - 60) };
+    const assemble = (messages, notice) => formatSection('RECENT CONVERSATIONS',
+      [...instructions, ...(notice ? [notice] : [])].join('\n') + '\n\n' + messages.join('\n'));
+    // Even empty messages use more than 10 characters for their heading.
+    const limit = afterTimestamp ? Math.max(1, Math.floor(packBudget.maxChars / 10)) : 6;
+    const group = scope.sessionGroup ?? '*';
+    const { rows, older } = db.getRecentDeliveredConversations(group, { afterTimestamp, limit });
+    const messages = [];
+    let i = rows.length - 1;
+    // The newest messages get first claim on the budget. Keep the tail contiguous.
+    for (; i >= 0; i--) {
+      const message = db.formatConversationsForAgent([rows[i]], { spill: false });
+      if (!withinBudget(assemble([message, ...messages]), packBudget)) break;
+      messages.unshift(message);
+    }
+    if (!afterTimestamp || (i < 0 && !older?.count)) return assemble(messages);
+
+    const { shellQuote } = await import('./c4-query-format.js');
+    const fetchPath = path.join(scope.root, '.claude/skills/comm-bridge/scripts/c4-fetch.js');
+    const filter = 'import { readFileSync } from "node:fs"; const { data } = JSON.parse(readFileSync(0, "utf8")); console.log(JSON.stringify(data.rows.filter(row => row.session_group === process.argv[1]), null, 2));';
+    const scopedOutput = group === '*' ? '' : ` --json | node --input-type=module -e ${shellQuote(filter)} -- ${shellQuote(group)}`;
+    let count = older?.count ?? 0;
+    let firstId = older?.firstId ?? Infinity;
+    let lastId = older?.lastId ?? 0;
+    const includeOmitted = ({ id }) => {
+      count++;
+      firstId = Math.min(firstId, id);
+      lastId = Math.max(lastId, id);
     };
-    const assemble = rows => formatSection('RECENT CONVERSATIONS',
-      [...instructions, lagNotice(rows)].filter(Boolean).join('\n') + '\n\n' + db.formatConversationsForAgent(rows, { spill: false }));
-    const packBudget = budget && { maxChars: Math.max(0, budget.maxChars - 200), maxTokens: Math.max(0, budget.maxTokens - 60) };
-    let threshold = null;
-    if (unsummarized?.count > 0) {
-      try { threshold = await readSyncThreshold(); } catch { /* unreadable configuration keeps the latest-messages view */ }
+    for (let j = 0; j <= i; j++) includeOmitted(rows[j]);
+    // Make room for the notice by removing only the oldest remaining message.
+    while (true) {
+      const notice = `Messages after the handoff omitted from the start of the tail: ${count}. Retrieve them by ID with: node ${shellQuote(fetchPath)} --begin ${firstId} --end ${lastId}${scopedOutput}`;
+      const output = assemble(messages, notice);
+      if (messages.length === 0 || withinBudget(output, packBudget)) return output;
+      messages.shift();
+      includeOmitted(rows[++i]);
     }
-    if (Number.isSafeInteger(threshold) && unsummarized.count <= threshold) {
-      const covered = conversations.length && unsummarized.firstConversationId >= conversations[0].id;
-      const backlog = covered ? conversations : delivered(unsummarized.count);
-      const fullView = assemble(backlog);
-      if (backlog.length && unsummarized.firstConversationId >= backlog[0].id &&
-        withinBudget(fullView, packBudget ?? DEFAULT_SHARD_BUDGET)) return fullView;
-    }
-    let kept = conversations;
-    while (kept.length && packBudget && !withinBudget(assemble(kept), packBudget)) kept = kept.slice(1);
-    return assemble(kept);
   });
 }
 

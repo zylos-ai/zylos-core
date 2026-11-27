@@ -40,7 +40,7 @@ function seed(t, groups = ['chat:mine', 'chat:peer', 'chat:peer', 'chat:other', 
   const previous = process.env.ZYLOS_SESSION_GROUP;
   t.after(() => { caller(previous); close(); });
   const db = getDb();
-  db.exec('DELETE FROM conversations; DELETE FROM checkpoints; DELETE FROM group_heads; DELETE FROM origin_sync_cursors;');
+  db.exec('DELETE FROM conversations; DELETE FROM checkpoints; DELETE FROM group_heads;');
   const insert = db.prepare(`INSERT INTO conversations(id,timestamp,direction,channel,content,status,session_group)
     VALUES(?,'2026-01-01 00:00:00','out','system',?,'delivered',?)`);
   groups.forEach((group, i) => insert.run(i + 1, `message ${i + 1}`, group));
@@ -52,7 +52,7 @@ const readers = [
   ['since', args => fetchCli(['--since', '2026-01-01', ...args])],
 ];
 
-test('History single origin Sync and JSON reads preserve the baseline bytes', t => {
+test('history reads preserve baseline bytes for Origin, JSON and scoped coverage', t => {
   seed(t);
   const protocolReaders = [...readers, ['recent', args => databaseCli(['recent', '5', ...args])]];
   let outputs = 0;
@@ -75,27 +75,20 @@ test('History single origin Sync and JSON reads preserve the baseline bytes', t 
     assert.equal(after.includes('Note:'), false, `${name}: JSON reminder`);
     outputs++;
   }
-  const syncReaders = [
+  const coverageReaders = [
     ['unsummarized', () => fetchCli(['--unsummarized'])],
     ['scoped unsummarized', () => fetchCli(['--unsummarized', '--group', 'chat:peer'])],
-    ['origin combined', () => fetchCli(['--origin-sync', '--group', 'chat:peer'])],
-    ['origin summaries', () => fetchCli(['--origin-sync', '--group', 'chat:peer', '--summaries-only'])],
-    ['origin raw', () => fetchCli(['--origin-sync', '--group', 'chat:peer', '--raw-only', '--after', '0'])],
     ['database unsummarized', () => databaseCli(['unsummarized'])],
-    ['origin backlog', () => databaseCli(['origin-sync', 'backlog'])],
     ['fetch checkpoints', () => fetchCli(['--checkpoints', '--after', '0'])],
     ['database checkpoints', () => databaseCli(['checkpoints'])],
   ];
-  for (const [name, read] of syncReaders) {
+  for (const [name, read] of coverageReaders) {
     caller(undefined); const before = read();
     caller('chat:mine'); const after = read();
     assert.equal(after, before, `${name}: caller-independent bytes`);
     assert.equal(after.includes('Note:'), false, `${name}: no reminder`);
-    if (name === 'origin raw') {
-      assert.equal(after, '[2026-01-01 00:00:00] OUT (system):\nmessage 2\n\n[2026-01-01 00:00:00] OUT (system):\nmessage 3\n\n', 'origin raw: two foreign rows must be read');
-    }
     outputs++;
   }
-  assert.equal(outputs, 21);
-  console.log('History compatibility:', JSON.stringify({ outputs, originRawRows: 2 }));
+  assert.equal(outputs, 17);
+  console.log('History compatibility:', JSON.stringify({ outputs }));
 });

@@ -2,8 +2,7 @@
 
 Agents should run
 `node ~/zylos/.claude/skills/zylos-memory/scripts/memory-status.js` for files on
-disk. The shared-file Sync audit uses that command and includes `WARN` / `OVER`
-results in its report. The JS entry below is for component code measuring a
+disk. The command reports `WARN` and `OVER` statuses. The JS entry below is for component code measuring a
 candidate before writing it.
 
 ## Availability and entry point

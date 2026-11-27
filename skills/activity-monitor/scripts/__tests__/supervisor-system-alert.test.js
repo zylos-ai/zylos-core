@@ -70,7 +70,6 @@ async function deliverAlert(t, { alertTarget, channelName, endpoint, group }) {
     listSlotOccupancy: () => [], pruneSlots: () => ({ deletedHeld: 0, deletedOrphans: [] }),
     getLastCompletedModeTransition: () => null, getControlById: () => null,
     getOriginNeed: () => ({ inbound: { count: 0, oldestAt: null }, controls: { count: 0 } }),
-    getOriginSyncBacklog: () => ({ total: 0, groups: [] }),
     resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }),
   };
   const scenes = {

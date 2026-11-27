@@ -253,15 +253,7 @@ export function prepareUpgradeRuntime(ctx, {
       subagentHooksSupported, templateSettings, cfg: config.state === 'ok' ? config.config : {} });
     add('.claude/settings.json', JSON.stringify(settings, null, 2) + '\n', 'claude_settings', 't02');
 
-    const agentsRoot = path.join(sourceRoot, 'skills/zylos-memory/agents');
-    if (!fs.lstatSync(agentsRoot).isDirectory() || fs.lstatSync(agentsRoot).isSymbolicLink()) throw Error('Missing packaged Claude agent directory');
-    const agents = fs.readdirSync(agentsRoot).filter(name => name.endsWith('.md')).sort();
-    if (!agents.length) throw Error('No packaged Claude memory agents');
-    for (const name of agents) {
-      add(`.claude/agents/${name}`, readRegular(path.join(agentsRoot, name)));
-    }
-    // Memory MCP is already attached per launch. Preserve that gate and verify
-    // the installed target actually ships its server, without launching a runtime.
+    // Dream launches this server in a separate runtime process.
     readRegular(path.join(sourceRoot, 'skills/zylos-memory/scripts/memory-mcp-server.js'));
     const manifest = '.zylos/runtime-env.manifest';
     if (readRegular(path.join(zylosDir, manifest), { optional: true }) === null) {

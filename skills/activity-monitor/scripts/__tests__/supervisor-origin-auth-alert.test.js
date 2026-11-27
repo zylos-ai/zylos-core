@@ -20,7 +20,6 @@ test('Origin authentication expiry sends the bilingual owner alert with the runt
     listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:[]}),
     getLastCompletedModeTransition:()=>null,getControlById:()=>null,
     getOriginNeed:()=>({inbound:{count:1,oldestAt},controls:{count:0,oldestAt:null}}),
-    getOriginSyncBacklog:()=>({total:0,groups:[]}),
     resolveSessionLaunchConfig:()=>({runtime:'claude',mode:'default'})};
   const scenes={observe:async()=>[],readIdentity:async()=>({present:false}),
     observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};

@@ -30,7 +30,7 @@ function fixture(t, overrides = {}) {
   };
 }
 
-test('handover archives the full material set, preserves groups and daily records, appends one real memory entry', async t => {
+test('handover archives the full material set and queues archived follow-up without writing working memory', async t => {
   const f = fixture(t); f.file('state.md', 'live global'); f.file('inbox.md', 'global inbox');
   f.file('inbox.20261118T123456789Z.md', 'segment'); f.file('handoff.md', 'old handoff');
   f.file('sessions/old.md', 'daily'); f.file('identity.md', 'shared');
@@ -39,8 +39,8 @@ test('handover archives the full material set, preserves groups and daily record
   const owner = f.owner(); assert.equal(owner.pending(), true);
   const plan = await owner.advance();
   assert.equal(plan.rule, 'other'); assert.equal(plan.interval, undefined); assert.equal(owner.pending(), false);
-  assert.match(f.inbox(), /^existing entry\n### \d{4}-\d{2}-\d{2}\n- \d{2}:\d{2} commitment: Global memory handover /);
-  assert.match(f.inbox(), /Read all archived materials completely/); assert.match(f.inbox(), /memory\/sessions/);
+  assert.equal(f.inbox(), 'existing entry\n');
+  assert.match(f.controls[0].body, /memory\/mode-switch\/.*\/previous\/_global/);
   assert.equal(fs.readFileSync(path.join(f.memory, 'session-groups/origin/state.md'), 'utf8'), 'origin state');
   assert.equal(fs.readFileSync(path.join(f.memory, 'session-groups/origin/handoff.md'), 'utf8'), 'origin handoff');
   assert.equal(fs.readFileSync(path.join(f.memory, 'session-groups/group-a/state.md'), 'utf8'), 'group-a');
@@ -59,3 +59,16 @@ test('unplanned directory with unknown contents fails closed rather than removin
   assert.equal(fs.readFileSync(file, 'utf8'), 'retain'); assert.equal(f.owner().pending(), true);
 });
 
+
+test('an interrupted handover plan can resume after upgrade has archived its inbox', async t => {
+  const f = fixture(t), id = 'gm-20261118T000000.000Z';
+  f.file('archive/inbox/origin/inbox.archive-1.md', 'legacy inbox');
+  f.file(`mode-switch/${id}/plan.json`, JSON.stringify({ version: 1, id, rule: 'other', deliver: true,
+    files: [{ name: 'inbox.md' }, { name: 'state.md' }], dailyRecords: true }));
+  f.file(`mode-switch/${id}/previous/_global/state.md`, 'open state');
+  const owner = f.owner(), plan = await owner.advance();
+  assert.equal(plan.id, id);
+  assert.equal(owner.pending(), false);
+  assert.match(f.controls[0].body, /memory\/archive\/inbox\/origin/);
+  assert.equal(fs.existsSync(path.join(f.memory, 'session-groups/origin/inbox.md')), false);
+});

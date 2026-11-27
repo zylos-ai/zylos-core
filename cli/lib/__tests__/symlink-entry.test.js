@@ -28,7 +28,6 @@ function fixture(t) {
 // writable paths are private, no tmux/PM2 service starts, and t.after cleans.
 for (const [relative, args, status, output] of [
   ['skills/zylos-memory/scripts/memory-status.js', [], 0, /Memory Status/],
-  ['skills/zylos-memory/scripts/sync-files.js', ['invalid'], 1, /INVALID_INPUT/],
   ['skills/comm-bridge/scripts/c4-db.js', ['--help'], 0, /c4-db.js: init/],
 ]) test(`direct and symlink entries execute ${path.basename(relative)}`, t => {
   const f = fixture(t), real = path.join(repo, relative), link = path.join(f.root, 'entry.js');

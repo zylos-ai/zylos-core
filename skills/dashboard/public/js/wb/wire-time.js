@@ -68,7 +68,7 @@ const FLEET_RECORD = [
 ];
 const FLEET = [...ms('updated_at'), ...beneath('items.*', FLEET_RECORD)];
 const EVENTS = ms('items.*.timestamp', 'items.*.metadata.pasted_at');
-const MEMORY = ms('firstAt', 'items.*.firstAt', 'originSync.firstAt', 'commit.author_date', 'mtime');
+const MEMORY = ms('firstAt', 'items.*.firstAt', 'commit.author_date', 'mtime');
 
 function mapPath(value, segments, unit, convert = isoTimestamp) {
   if (!segments.length) return convert(value, unit);

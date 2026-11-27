@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { isMainModule } from './is-main-module.js';
 import { escapeText } from '../../comm-bridge/scripts/c4-query-format.js';
 
-export const exitCode = code => code === 'TOKEN_MISMATCH' ? 3 : ['LOCK_TIMEOUT', 'SYNC_BUSY'].includes(code) ? 2 : 1;
+export const exitCode = code => code === 'TOKEN_MISMATCH' ? 3 : code === 'LOCK_TIMEOUT' ? 2 : 1;
 export const memoryError = (code, message, extra = {}) => Object.assign(new Error(message), { code, exitCode: exitCode(code), ...extra });
 export const inputError = message => memoryError('INVALID_INPUT', message);
 export const isMain = isMainModule;
@@ -16,16 +16,6 @@ export function helpRequested(argv, values = []) {
         argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) i++;
   }
   return false;
-}
-export function nonnegativeInteger(value, name) {
-  if (typeof value !== 'string' || !/^[0-9]+$/.test(value) ||
-      !Number.isSafeInteger(Number(value)) || Number(value) < 0) {
-    throw inputError(`Expected a nonnegative integer for ${name}`);
-  }
-  return Number(value);
-}
-export function parseJson(text) {
-  try { return JSON.parse(text); } catch { throw inputError('Expected JSON input'); }
 }
 export function options(argv, values = [], flags = []) {
   const result = {}, positional = [];

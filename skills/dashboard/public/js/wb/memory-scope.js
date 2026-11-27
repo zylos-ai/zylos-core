@@ -52,7 +52,7 @@ export function memoryBudgetRows(rootFiles, budgets) {
 
 export function memoryWriteMessage(code, t) {
   const keys = {
-    memory_sync_busy: 'syncBusy', memory_lock_timeout: 'lockTimeout',
+    memory_lock_timeout: 'lockTimeout',
     memory_write_unavailable: 'writeUnavailable', memory_write_failed: 'writeFailed',
     memory_write_unknown: 'writeUnknown', memory_write_empty: 'writeEmpty',
   };
@@ -150,14 +150,6 @@ const byteSize = value => {
 // C4 timestamps are UTC even when their SQLite text omits the offset.
 const millis = value => typeof value !== 'string' || !value ? NaN
   : Date.parse(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?$/.test(value) ? `${value.replace(' ', 'T')}Z` : value);
-/**
- * Loaded backlog rows, in the server's order (long-waiting groups first, then by pending count, oldest first). The
- * server lists only groups with something pending, a Sync running or a failed read. `threshold` is the one most
- * groups share (from the page's summary of the listed groups); rows with a different one keep it as `ownThreshold`.
- */
-export function memoryBacklogView(rows, threshold = null) {
-  return { threshold, rows: (rows ?? []).map(row => ({ ...row, ownThreshold: isNumber(row.threshold) && row.threshold !== threshold ? row.threshold : null })) };
-}
 /** How long the oldest pending message has waited, in whole hours or days; null without a readable time. */
 export function memoryBacklogAge(firstAt, now = Date.now()) {
   const waited = now - millis(firstAt);
@@ -166,14 +158,6 @@ export function memoryBacklogAge(firstAt, now = Date.now()) {
   return hours >= 48 ? { unit: 'days', count: Math.floor(hours / 24) } : { unit: 'hours', count: hours };
 }
 const isNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-/** How long ago Origin last finished taking in a group (`lastSyncAt`, Unix seconds): whole minutes (at least one), hours or days. */
-export function memoryLastSync(lastSyncAt, now = Date.now()) {
-  const waited = now - lastSyncAt * 1000;
-  if (!isNumber(lastSyncAt) || !Number.isFinite(waited)) return null;
-  const minutes = Math.max(1, Math.floor(waited / 60e3));
-  return minutes < 60 ? { unit: 'minutes', count: minutes } : minutes < 48 * 60
-    ? { unit: 'hours', count: Math.floor(minutes / 60) } : { unit: 'days', count: Math.floor(minutes / 1440) };
-}
 /**
  * A shared minimum width for the backlog count column when a count is shown as words ("Unknown"), so every
  * row's bar starts at the same place. Measured in `ch`, two per wide (CJK) character; the column still grows
@@ -366,7 +350,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       element(document, 'span', isNumber(node.size_bytes) ? sizeText(node.size_bytes) : '', 'memory-file-meta' + sizeClass));
     return item;
   }
-  /** A group's heading: icon, name, technical ID and its pending count or syncing badge. */
+  /** A group's heading: icon, name, technical ID and its pending count. */
   function groupHead(parent, row, onClick, open) {
     const head = button(parent, undefined, onClick, 'wb-memory-group-h');
     head.dataset.collapseKey = row.path;
@@ -376,11 +360,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     if (detail() === 'technical') name.append(element(document, 'span', row.sessionGroup, 'wb-mono'));
     head.append(icon(document, memoryGroupIcon(row), 'xs'), name);
     const badge = row.backlog ?? null;
-    if (badge?.syncing === true) {
-      const node = element(document, 'span', undefined, 'wb-memory-badge');
-      node.append(icon(document, 'loader', 'xs'), element(document, 'span', t('wb.memory.syncing')));
-      head.append(node);
-    } else if (isNumber(badge?.count) && badge.count > 0) {
+    if (isNumber(badge?.count) && badge.count > 0) {
       head.append(element(document, 'span', t('wb.memory.pending', { count: badge.count }), 'wb-memory-count'));
     }
     return head;
@@ -527,18 +507,14 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     summaryRoot.replaceChildren();
     summaryRoot.hidden = detail() === 'technical' || !entries.get({ dir: '' });
     if (summaryRoot.hidden) return;
-    // With cross-group sync (multi mode) only it is judged; groups' own pending messages are not listed there.
-    // Otherwise the summary is counted over every listed group by the server, however many rows are loaded.
-    const cross = backlog?.originSync ?? null, summary = cross ? null : backlog?.summary ?? null;
-    const unknown = cross ? cross.count == null || cross.syncing === null : !summary || summary.unknown > 0;
-    const late = summary?.aged > 0, crossLate = cross?.aged === true;
-    const waiting = summary?.waiting ?? 0, syncing = summary?.syncing ?? 0;
-    summaryRoot.className = 'wb-memory-summary' + (late || crossLate ? ' wb-warn' : '');
-    summaryRoot.append(icon(document, late || crossLate ? 'alert' : unknown ? 'help' : 'check', 'xs'),
-      element(document, 'b', t(!loaded ? 'memory.loading' : late ? 'wb.memory.summaryLate' : crossLate ? 'wb.memory.summaryOriginLate'
+    const summary = backlog?.summary;
+    const unknown = !summary || summary.unknown > 0;
+    const late = summary?.aged > 0;
+    const waiting = summary?.waiting ?? 0;
+    summaryRoot.className = 'wb-memory-summary' + (late ? ' wb-warn' : '');
+    summaryRoot.append(icon(document, late ? 'alert' : unknown ? 'help' : 'check', 'xs'),
+      element(document, 'b', t(!loaded ? 'memory.loading' : late ? 'wb.memory.summaryLate'
         : unknown ? 'wb.memory.summaryUnknown' : 'wb.memory.summaryOk')));
-    if (cross?.syncing === true) summaryRoot.append(element(document, 'span', t('wb.memory.summaryOriginSyncing')));
-    if (syncing) summaryRoot.append(element(document, 'span', countLabel(t, 'wb.memory.summarySyncing', syncing)));
     if (waiting) summaryRoot.append(element(document, 'span', countLabel(t, 'wb.memory.summaryWaiting', waiting)));
     summaryRoot.append(element(document, 'span', t('wb.memory.summaryTech'), 'wb-sub'));
   }
@@ -559,56 +535,32 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     chartsRoot.append(card);
     return body;
   }
-  // Both cross-group Sync and single-session Origin represent machine-wide backlog, with no group directory to select.
-  function backlogItem(row, cross = false) {
-    const item = element(document, 'div', undefined, 'wb-memory-chart-row wb-memory-bl' + (cross ? ' wb-memory-bl-cross' : ''));
-    // Name and its badges share one cell: one line beside the bar on wide screens, a line of its own on phones.
+  function backlogItem(row, maxCount) {
+    const item = element(document, 'div', undefined, 'wb-memory-chart-row wb-memory-bl');
     const head = element(document, 'span', undefined, 'wb-memory-bl-head');
-    if (cross) {
-      // Static name: the label class lays it out like a group name, the modifier drops the link look.
-      const name = element(document, 'span', t('wb.memory.originPending'), 'wb-memory-chart-label wb-memory-chart-label-static');
-      // A plain-words explanation with the row's actual threshold; without one, the count clause is left out.
-      name.title = isNumber(row.threshold) ? t('wb.memory.originSyncHint', { count: row.threshold }) : t('wb.memory.originSyncHintNoThreshold');
-      head.append(name);
-    } else if (row.sessionGroup === 'origin') {
-      head.append(element(document, 'span', memoryGroupLabel(row, t), 'wb-memory-chart-label wb-memory-chart-label-static'));
+    const label = memoryGroupLabel(row, t);
+    if (row.sessionGroup === 'origin') {
+      head.append(element(document, 'span', label, 'wb-memory-chart-label wb-memory-chart-label-static'));
     } else {
-      const label = memoryGroupLabel(row, t);
       const name = button(head, label, () => selectGroup(row.sessionGroup), 'wb-memory-chart-label');
       name.title = label === row.sessionGroup ? label : `${label}\n${row.sessionGroup}`;
     }
-    const over = isNumber(row.count) && isNumber(row.threshold) && row.count > row.threshold;
     const value = isNumber(row.count) ? String(row.count) : t('wb.unknown');
     const track = element(document, 'div', undefined, 'wb-memory-track');
     if (isNumber(row.count)) {
-      const max = Math.max(row.count, isNumber(row.threshold) ? row.threshold * 1.25 : 0, 1);
-      const fill = element(document, 'span', undefined, 'wb-memory-fill' + (over ? ' warning' : ''));
-      fill.style.width = `${100 * row.count / max}%`; track.append(fill);
-      if (isNumber(row.threshold)) {
-        const line = element(document, 'span', undefined, 'wb-memory-threshold'); line.style.left = `${100 * row.threshold / max}%`;
-        line.title = t(cross ? 'wb.memory.originThreshold' : 'wb.memory.threshold', { count: row.threshold }); track.append(line);
-        track.setAttribute('aria-label', countLabel(t, 'wb.memory.countThreshold', row.count, { count: row.count, threshold: row.threshold }));
-      } else track.setAttribute('aria-label', value);
+      const fill = element(document, 'span', undefined, 'wb-memory-fill');
+      fill.style.width = `${100 * row.count / maxCount}%`;
+      track.append(fill);
+      track.setAttribute('aria-label', value);
     }
     const flags = element(document, 'span', undefined, 'wb-memory-flags');
     if (row.aged) {
       const age = memoryBacklogAge(row.firstAt);
       flags.append(element(document, 'span', age ? t(age.unit === 'days' ? 'wb.memory.agedDays' : 'wb.memory.agedHours', { count: age.count }) : t('wb.memory.aged'), 'wb-memory-bl-tag warn'));
     }
-    // Over the threshold is said in words too, not only by the bar's colour.
-    if (over) flags.append(element(document, 'span', t('wb.memory.overThreshold'), 'wb-memory-bl-tag warn'));
-    if (cross && isNumber(row.pendingSummaries) && row.pendingSummaries > 0) {
-      flags.append(element(document, 'span', countLabel(t, 'wb.memory.pendingSummaries', row.pendingSummaries), 'wb-memory-bl-tag'));
-    }
-    if (row.syncing === true) flags.append(element(document, 'span', t(cross ? 'wb.memory.originSyncing' : 'wb.memory.syncing'), 'wb-memory-bl-tag'));
-    else if (row.syncing === null) flags.append(element(document, 'span', t(cross ? 'wb.memory.originSyncUnknown' : 'wb.memory.syncUnknown'), 'wb-memory-bl-tag'));
-    if (cross && isNumber(row.threshold)) flags.append(element(document, 'span', t('wb.memory.originThreshold', { count: row.threshold }), 'wb-memory-bl-tag'));
-    const last = cross ? memoryLastSync(row.lastSyncAt) : null;
-    if (last) flags.append(element(document, 'span', t({ minutes: 'wb.memory.lastSyncMinutes', hours: 'wb.memory.lastSyncHours', days: 'wb.memory.lastSyncDays' }[last.unit], { count: last.count }), 'wb-memory-bl-tag'));
-    if (!cross && row.ownThreshold != null) flags.append(element(document, 'span', t('wb.memory.threshold', { count: row.ownThreshold }), 'wb-memory-bl-tag'));
     if (row.reason) flags.append(element(document, 'small', row.reason, 'wb-memory-bl-tag'));
     head.append(flags);
-    item.append(head, track, element(document, 'span', value, 'wb-memory-chart-value' + (over ? ' wb-txt-warn' : '')));
+    item.append(head, track, element(document, 'span', value, 'wb-memory-chart-value'));
     return item;
   }
   function moreButton(parent) {
@@ -619,18 +571,15 @@ export function createMemoryScope({ document = globalThis.document, root, charts
   function renderBacklogRows() {
     if (stopped) return;
     backlogRows.replaceChildren();
-    const { rows } = memoryBacklogView(backlog?.groups, backlog?.summary?.threshold ?? null);
-    const needle = backlogQuery.toLowerCase();
-    // The cross-group row leads; a search keeps it only when its name matches.
-    const cross = backlog?.originSync && (!needle || t('wb.memory.originSync').toLowerCase().includes(needle)) ? backlog.originSync : null;
-    backlogRows.style.setProperty('--wb-bl-value', memoryBacklogValueWidth(cross ? [cross, ...rows] : rows, t('wb.unknown')));
-    if (cross) backlogRows.append(backlogItem(cross, true));
-    for (const row of rows) backlogRows.append(backlogItem(row));
+    const rows = backlog?.groups ?? [];
+    const maxCount = rows.reduce((max, row) => Math.max(max, row.count ?? 0), 1);
+    backlogRows.style.setProperty('--wb-bl-value', memoryBacklogValueWidth(rows, t('wb.unknown')));
+    for (const row of rows) backlogRows.append(backlogItem(row, maxCount));
     if (backlog?.nextCursor) moreButton(backlogRows);
-    if (needle && !cross && !rows.length) backlogRows.append(element(document, 'p', t('wb.memory.noMatch'), 'wb-memory-source'));
-    // Without a search, an empty group list says so rather than leaving the card blank; with cross-group sync the
-    // card lists no groups at all.
-    else if (!needle && !cross && !rows.length && !backlog?.nextCursor) backlogRows.append(element(document, 'p', t('wb.memory.noBacklogGroups'), 'wb-memory-source'));
+    if (!rows.length && !backlog?.nextCursor) {
+      const label = backlogQuery ? 'wb.memory.noMatch' : 'wb.memory.noBacklogGroups';
+      backlogRows.append(element(document, 'p', t(label), 'wb-memory-source'));
+    }
   }
   function renderCharts() {
     if (!chartsRoot || stopped) return;
@@ -639,14 +588,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     chartsRoot.replaceChildren();
     chartsRoot.hidden = detail() !== 'technical';
     if (chartsRoot.hidden) return;
-    const view = memoryBacklogView(backlog?.groups, backlog?.summary?.threshold ?? null);
-    // Multi mode shows only cross-group sync; single mode lists Origin (the whole machine) like a group.
-    const cross = backlog?.originSync ?? null;
-    const origin = isNumber(cross?.threshold) ? cross.threshold : null;
-    const hint = cross
-      ? (origin == null ? t('wb.memory.originHintNoThreshold') : t('wb.memory.originHint', { origin }))
-      : (view.threshold == null ? t('wb.memory.backlogHint') : t('wb.memory.thresholdHint', { count: view.threshold }));
-    const progress = chartCard('wb-memory-progress', 'layers', t(cross ? 'wb.memory.originSync' : 'wb.memory.backlog'), hint, 'backlog');
+    const progress = chartCard('wb-memory-progress', 'layers', t('wb.memory.backlog'), t('wb.memory.backlogHint'), 'backlog');
     if (!backlog) progress.append(element(document, 'p', t('wb.unknown')));
     else {
       const many = (backlog.summary?.groups ?? 0) >= BACKLOG_FILTER_AT || Boolean(backlogQuery);
@@ -656,7 +598,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       renderBacklogRows();
       backlogRows.scrollTop = backlogScroll;
     }
-    progress.append(element(document, 'p', t(cross ? 'wb.memory.originSource' : 'wb.memory.backlogSource'), 'wb-memory-source'));
+    progress.append(element(document, 'p', t('wb.memory.backlogSource'), 'wb-memory-source'));
     const budgets = chartCard('wb-memory-budgets', 'book', t('wb.memory.budgets'), t('wb.memory.budgetHint'), 'budgets');
     for (const row of memoryBudgetRows(entries.known().rootFiles, backlog?.budgets)) {
       const item = element(document, 'div', undefined, 'wb-memory-chart-row');

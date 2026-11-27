@@ -9,7 +9,6 @@ import * as coreDb from '../../skills/comm-bridge/scripts/c4-db.js';
 import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
 import { requestRelease, deferReclaim } from '../../skills/activity-monitor/scripts/supervisor-request.js';
 import { tmuxNameForGroup, supervisorDiagnosticPath } from '../../cli/lib/session-group-paths.js';
-import { parseStateHeader, renderStateSkeleton } from '../../skills/zylos-memory/scripts/state-format.js';
 import { PRE_RECLAIM_CHECK_PROMPT } from '../../skills/activity-monitor/scripts/reclaim-prompts.js';
 const Database = createRequire(new URL('../../skills/comm-bridge/package.json', import.meta.url))('better-sqlite3');
 const [socketPath, binary, group, scenario] = process.argv.slice(2);
@@ -32,15 +31,7 @@ try {
     tmux('set-environment', '-t', tmuxNameForGroup(group), 'ZYLOS_SESSION_GROUP', group);
     fs.renameSync(path.join(root, 'activity-monitor/session-groups/origin'), path.join(root, 'activity-monitor/session-groups', group));
     db.insertConversation('out', 'telegram', 'test-chat', 'completed result', { groupName: 'release' });
-    const checkpoint = db.createCheckpoint(group, db.getDeliveredFrontier(group), 'already recorded');
-    // This fixture represents a completed Sync, including its published state.
-    // Keep all control assertions strict so unrelated alert pollution is visible.
-    const memoryDir = path.join(root, 'memory/session-groups', group);
-    fs.mkdirSync(memoryDir, { recursive: true });
-    const state = renderStateSkeleton({ scope: group, syncedAt: new Date(now).toISOString() })
-      .replace('coverage= |', `coverage=${checkpoint.end_conversation_id} |`);
-    fs.writeFileSync(path.join(memoryDir, 'state.md'), state);
-    assert.equal(parseStateHeader(state, { scope: group }).coverage, checkpoint.end_conversation_id);
+    db.createCheckpoint(group, db.getDeliveredFrontier(group), 'already recorded');
     assert.equal(db.adoptSlot(group, { runId: 'run-1' }).adopted, true);
   }
   const initial = await scenes.observeGroup(group);
@@ -49,7 +40,7 @@ try {
   const start = () => startSupervisor({ env: process.env, db: { ...coreDb, ...db, getDb: () => database }, scenes, now: () => now,
     readMode: () => ({ mode: 'multi' }), readConfiguration: () => ({ mode: 'multi', runtime: 'claude', capacity: 2,
       hotTtlSeconds: scenario === 'defer' ? 1 : 1800 }),
-    resolveTargetRuntime: () => 'claude', readSyncMarker: () => ({ held: false, stale: false }),
+    resolveTargetRuntime: () => 'claude',
     machineTasks: { tick() {}, stop() {} }, legacyStatus: { tick() {}, close() {} },
     sendAlert: () => assert.fail('External sends forbidden'), log: event => { if (logs.length < 64) logs.push(event); },
     loopOptions: { schedule: () => 1, cancel() {} } });
@@ -72,7 +63,7 @@ try {
     socket.once('end', () => { socket.destroy(); try { resolve(JSON.parse(response)); } catch (error) { reject(error); } });
   });
   service = await start();
-  // 16 new results exceed the default Sync threshold of 15.
+  // Pending Dream inputs do not affect release preparation.
   if (scenario === 'backlog') for (let n = 1; n <= 16; n++) db.insertConversation('out', 'telegram', 'test-chat', `new completed result ${n}`, { groupName: 'release' });
   if (scenario === 'child') children = [{ agentId: 'working-child', lastActivityAt: now }];
   if (scenario.endsWith('-before-intent')) {
@@ -102,7 +93,7 @@ try {
   assert.equal(result.data.result, 'accepted');
   assert.equal((await request()).data.result, 'already_accepted');
   await tick(); await stillRunning();
-  assert.equal(controls().length, 0, 'busy requester is accepted without preparing Sync or fencing');
+  assert.equal(controls().length, 0, 'busy requester is accepted without sending a handoff check or fencing');
 
   if (scenario === 'restart') {
     await service.stop(); service = null;

@@ -18,5 +18,5 @@ audit entry alone does not prove completion. Reply using the handoff's command
 with `--absorbed-reply R N` and stdin, not a reconstructed display route.
 SEND_FAILED means unknown delivery, so do not automatically resend.
 ENDPOINT_NOT_PASSABLE or COMPONENT_SPAWN_FAILED must be reported to the owner;
-continue other items. Preserve unfinished items on the next handoff. Sync removes
-followed-up Pending entries through its normal commit, without changing C4.
+continue other items. Keep unfinished items on the next handoff. Once an item
+is resolved, remove it from the handoff.

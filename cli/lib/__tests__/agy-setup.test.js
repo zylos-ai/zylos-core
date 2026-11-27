@@ -18,7 +18,7 @@ test('Antigravity setup merges user settings, hooks, MCP servers and onboarding 
   for (const file of Object.values(files)) fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(files.settings, JSON.stringify({ theme: 'dark', statusLine: { stack_with_default: true } }));
   fs.writeFileSync(files.hooks, JSON.stringify({ custom: { Stop: [{ command: './keep.sh' }] } }));
-  fs.writeFileSync(files.mcp, JSON.stringify({ mcpServers: { custom: { command: 'keep' } }, custom: true }));
+  fs.writeFileSync(files.mcp, JSON.stringify({ mcpServers: { custom: { command: 'keep' }, 'zylos-memory': { command: 'node', args: ['memory-mcp-server.js'] } }, custom: true }));
   fs.writeFileSync(files.onboarding, JSON.stringify({ enterpriseOnboardingComplete: false, custom: true }));
   assert.equal(hasAgyZylosHooks(f.home), false);
   assert.equal(syncAgyConfig(f).files.length, 4);
@@ -43,7 +43,7 @@ test('Antigravity setup merges user settings, hooks, MCP servers and onboarding 
     assert.match(hooks.zylos[event][0].command, new RegExp(`agy-hooks\\.js' ${event}$`));
   }
   assert.equal(read(files.mcp).mcpServers.custom.command, 'keep');
-  assert.match(read(files.mcp).mcpServers['zylos-memory'].args[0], /memory-mcp-server\.js$/);
+  assert.equal(Object.hasOwn(read(files.mcp).mcpServers, 'zylos-memory'), false);
   assert.deepEqual(read(files.onboarding), { enterpriseOnboardingComplete: false, custom: true, consumerOnboardingComplete: true, onboardingComplete: true });
   assert.equal(syncAgyConfig(f).changed, false);
   assert.equal(isAgyConfigReady(f), true);
