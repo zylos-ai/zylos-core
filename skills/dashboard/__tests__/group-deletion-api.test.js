@@ -7,7 +7,7 @@ import { FleetProxy } from '../src/lib/fleet-proxy.js';
 
 import { createGroupDeletionBridge, createGroupDeletionRoutes } from '../src/lib/workbench/group-deletion.js';
 
-const cookie = 'deletion-private-cookie', api = `zylos_st_${'a'.repeat(64)}`;
+const cookie = 'deletion-private-cookie', api = `zylos_st_${'a'.repeat(64)}`, readApi = `zylos_st_${'b'.repeat(64)}`;
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const boundary = { cutoffId: 4 };
 const owner = { cookie: `__Secure-zylos_dashboard_session=${cookie}`, 'sec-fetch-site': 'same-origin' };
@@ -17,7 +17,8 @@ function fixture(t) {
   const auth = new AuthGate(config, {
     getSession: hash => hash === sha(cookie) ? { created_at: now, last_activity_at: now } : null,
     touchSession() {}, deleteSession() {}, cleanupSessions() {}, cleanupExpiredApiSessions() {},
-    getApiSession: hash => hash === sha(api) ? { api_key_id: 'private', scope: 'admin', key_scope: 'admin', expires_at: now + 60000 } : null,
+    getApiSession: hash => hash === sha(api) ? { api_key_id: 'private', scope: 'admin', key_scope: 'admin', expires_at: now + 60000 }
+      : hash === sha(readApi) ? { api_key_id: 'reader', scope: 'read', key_scope: 'read', expires_at: now + 60000 } : null,
   });
   t.after(() => clearInterval(auth._cleanupTimer));
   const calls = [];
@@ -35,16 +36,19 @@ async function call(handler, path, { method = 'GET', headers = owner, body } = {
   return res;
 }
 
-test('deletion preview admits only password owner cookies including against admin API keys', async t => {
+test('deletion preview admits the password owner, and admin keys only while remote conversation access is on', async t => {
   const f = fixture(t), path = '/api/groups/dashboard%3Aexample/deletion-preview';
-  for (const headers of [{}, { authorization: `Bearer ${api}` }]) {
-    assert.equal((await call(f.handler, path, { headers })).status, 403);
-  }
+  const key = { authorization: `Bearer ${api}` };
+  assert.equal((await call(f.handler, path, { headers: {} })).status, 403);
+  assert.equal((await call(f.handler, path, { headers: key })).body.error.code, 'remote_chat_disabled');
   assert.equal(f.calls.length, 0);
   assert.equal((await call(f.handler, path)).status, 200);
   assert.deepEqual(f.calls[0].target, { sessionGroup: 'dashboard:example' });
   assert.equal(f.calls[0].options.preview, true);
   assert.equal(f.calls[0].options.actor, `dashboard:${sha(cookie)}`);
+  f.config.chat = { allowRemote: true };
+  assert.equal((await call(f.handler, path, { headers: key })).status, 200);
+  assert.equal((await call(f.handler, path, { headers: { authorization: `Bearer ${readApi}` } })).body.error.code, 'admin_required');
   f.config.auth.password = null;
   assert.equal((await call(f.handler, path)).status, 403);
 });
@@ -61,6 +65,9 @@ test('deletion requires same origin and explicit confirmation bound to an operat
   assert.equal(f.calls[0].options.operationId, body.operationId);
   assert.equal(f.calls[0].options.cutoffId, boundary.cutoffId);
   assert.deepEqual(Object.keys(f.calls[0].options).sort(), ['actor', 'cutoffId', 'operationId', 'preview']);
+  // Fleet relays with the other machine's key and no browser origin; keys carry no cross-site risk.
+  f.config.chat = { allowRemote: true };
+  assert.equal((await call(f.handler, path, { method: 'DELETE', body, headers: { authorization: `Bearer ${api}` } })).status, 200);
 });
 
 test('Origin and malformed group targets never reach Core', async t => {
@@ -97,16 +104,19 @@ test('unknown child outcomes are never turned into successful deletion', async (
   await assert.rejects(bridge({ sessionGroup: 'dashboard:x' }, { actor: 'owner' }), { code: 'deletion_result_unknown' });
 });
 
-test('Fleet never relays group or draft deletion preview and writes', async () => {
-  let calls = 0, tokenCalls = 0;
-  const proxy = new FleetProxy({ config: { fleet: { agents: [] } }, poller: { getSessionToken: async () => { tokenCalls++; return 'private'; } }, fetch: async () => { calls++; throw new Error('must not relay'); } });
-  for (const suffix of ['/api/groups/dashboard%3Ax/deletion-preview', '/api/groups/dashboard%3Ax', '/api/conversations/drafts/x/deletion', '/api/conversations/drafts/x']) {
-    const req = { method: (suffix.endsWith('/deletion-preview') || suffix.endsWith('/deletion')) ? 'GET' : 'DELETE', headers: owner, _authContext: { kind: 'cookie', scope: 'admin' } };
-    const res = { writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
-    await proxy.proxyApi(req, res, { name: 'remote' }, suffix, '');
-    assert.equal(res.status, 403);
-    assert.equal(res.body.error.code, 'remote_deletion_forbidden');
+test('Fleet relays group and draft deletion previews and deletes for admins only', async () => {
+  const relayed = [];
+  const proxy = new FleetProxy({ config: { fleet: { agents: [] } }, poller: { getSessionToken: async () => 'private' } });
+  proxy._fetchUpstream = async (req, agent, suffix) => { relayed.push(`${req.method} ${suffix}`); throw new Error('stop after relay'); };
+  const suffixes = ['/api/groups/dashboard%3Ax/deletion-preview', '/api/groups/dashboard%3Ax', '/api/conversations/drafts/x/deletion', '/api/conversations/drafts/x'];
+  const method = suffix => (suffix.endsWith('/deletion-preview') || suffix.endsWith('/deletion')) ? 'GET' : 'DELETE';
+  for (const [scope, status] of [['read', 403], ['admin', 502]]) {
+    for (const suffix of suffixes) {
+      const req = { method: method(suffix), headers: owner, _authContext: { kind: 'cookie', scope } };
+      const res = { writeHead(code) { this.status = code; }, end(body) { this.body = JSON.parse(body); } };
+      await proxy.proxyApi(req, res, { name: 'remote' }, suffix, '');
+      assert.equal(res.status, status, `${scope} ${suffix}`);
+    }
   }
-  assert.equal(calls, 0);
-  assert.equal(tokenCalls, 0);
+  assert.deepEqual(relayed, suffixes.map(suffix => `${method(suffix)} ${suffix}`));
 });

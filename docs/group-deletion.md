@@ -7,10 +7,12 @@ Later messages, pending/running input and data with uncertain ownership remain.
 Main memory, backups, scheduled tasks and usage/cost records remain. Deleted
 messages no longer contribute to message totals.
 
-Origin cannot be deleted. The Dashboard requires a local administrator signed
-in with the instance password; API keys and Fleet remote views cannot preview
-or execute deletion. DELETE must be same-origin. Active Core group deletion
-requires multi-session mode. A true Dashboard draft uses storage-only cleanup.
+Origin cannot be deleted. The Dashboard requires an administrator: the local
+owner signed in with the instance password, or an admin API key while remote
+conversation access is on. A Fleet view of another machine can therefore delete
+there when this machine registered it with an admin key. Read and custom keys
+cannot preview or execute deletion. A browser DELETE must be same-origin.
+Active Core group deletion requires multi-session mode. A true Dashboard draft uses storage-only cleanup.
 
 ## Preview and confirmation
 

@@ -3525,7 +3525,7 @@ const stopSchedule = mountSchedule({
 });
 window.addEventListener('pagehide', stopSchedule);
 chatPage = mountConversationPage({ root: document.querySelector('#wb-chat'), t,
-  local: () => !REMOTE_AGENT && !state.remoteAgent, confirm: confirmSetting,
+  confirm: confirmSetting,
   onRemoteDisabled: remoteAccess.refuse,
   onStreamSubscription: subscription => chatPush.setSubscription(subscription),
   fetch: draftFetch, draftStore: draftRestoreStore, composeDrafts: composeDraftStore,

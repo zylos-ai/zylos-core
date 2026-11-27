@@ -2,7 +2,6 @@
   "wb.error.adminRequired": "当前身份没有管理员权限，不能进行这项修改。",
   "wb.error.sameOriginRequired": "请求来源未通过安全检查，请从这台 agent 的控制台重新操作。",
   "wb.error.localCookieRequired": "这项操作需要在本机控制台登录后进行。",
-  "wb.error.remoteDeletionForbidden": "经舰队访问时不能删除对话，请打开目标 agent 的本机控制台。",
   "wb.error.originDeletionForbidden": "Origin 对话不能删除。",
   "wb.name.rejected": "起名请求被拒绝，尚未发送，请检查请求或访问权限。",
   "chat.delete.previewDenied": "没有权限进行删除前的安全检查，尚未开始删除。",

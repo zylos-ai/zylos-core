@@ -428,7 +428,7 @@ test('fleet object writes need a local admin principal and keep the write allowl
     ['PUT', '/api/groups/dashboard%3Aa/config', admin, 200],
     ['POST', '/api/groups/dashboard%3Aa/actions/interrupt', admin, 200],
     ['POST', '/api/groups/dashboard%3Aa/actions/unregistered', admin, 403],
-    ['DELETE', '/api/groups/dashboard%3Aa', admin, 403],
+    ['DELETE', '/api/groups/dashboard%3Aa', admin, 200],
     ['POST', '/api/groups/dashboard%3Aa/actions/interrupt', { scope: 'admin', kind: 'cookie' }, 403],
   ]) {
     const req = Readable.from([Buffer.from('{"confirmed":true}')]);
