@@ -1778,9 +1778,6 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   .wb-set-nav-btn > .wb-ico-chev { display: inline-block; color: var(--text-dim); }
   .wb-set-nav-btn.wb-set-id { gap: 12px; margin-bottom: 12px; padding: 10px 12px; }
   .wb-set-id .wb-av { --wb-av-size: 40px; }
-  .wb-set-id-line { flex-flow: row wrap; }
-  .wb-set-id-line > span { overflow: visible; white-space: normal; }
-  .wb-set-id-addr:not(:empty) + .wb-set-id-ver::before { content: "·"; margin: 0 4px; }
   .wb-set-section-head { position: sticky; top: var(--wb-header-h); z-index: 5; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; background: var(--bg); box-shadow: 0 0 0 6px var(--bg); }
   .wb-set-back.wb-icon-btn { display: inline-flex; flex: none; width: 44px; height: 44px; justify-content: center; }
   .wb-set-section-head .wb-set-h { margin: 0; overflow-wrap: anywhere; }
