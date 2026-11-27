@@ -27,7 +27,7 @@ test('accepted deferral and transcript appends reset idle while timestamp-only t
     insertControl: (content, options) => { const row = { id: controls.length + 1, status: 'pending', content, ...options }; controls.push(row); return row; },
     setDrainFence: (group, fence) => fences.push({ sessionGroup: group, ...fence }) };
   const lifecycle = new SupervisorLifecycle({ db, observeGroup: () => scene, requests: { read: () => [] },
-    readSyncMarker: () => ({ held: false, stale: false }), bindTarget: () => ({ expectedRunId: scene.runId }),
+    bindTarget: () => ({ expectedRunId: scene.runId }),
     prompts: { PRE_RECLAIM_CHECK_PROMPT: 'check' } }, { now: () => now });
   const transcript = path.join(root, 'transcript.jsonl');
   fs.writeFileSync(transcript, '{}\n'); fs.utimesSync(transcript, 0, 0);

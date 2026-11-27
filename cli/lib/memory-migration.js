@@ -7,7 +7,7 @@ import { readSessionMode } from './config.js';
 import { groupRunDir, zylosRoot } from './session-group-paths.js';
 import { openTmuxConnection } from './runtime/tmux-connection.js';
 import { observeSessionTarget } from './runtime/session-target.js';
-import { withMemoryLock } from '../../skills/zylos-memory/scripts/sync-lock.js';
+import { withMemoryLock } from '../../skills/zylos-memory/scripts/memory-lock.js';
 
 export const MIGRATION_ID = 'references-layout-v1';
 const OPTIONAL_REFERENCE_INDEXES = new Set(['memory/reference/projects/INDEX.md', 'memory/reference/decisions/INDEX.md']);

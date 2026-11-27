@@ -8,7 +8,6 @@ import { repairPageHeaders, stageTwoInput, tidyReference, PAGE_SOFT_LIMIT } from
 import { DREAM_RESULT_SCHEMAS, parseDreamResult } from './dream-results.js';
 import { publishReferenceFile } from './reference-index.js';
 import { resolveAllowedMemoryPath } from './self-write.js';
-import { memoryScope, withMemoryLock } from './sync-lock.js';
 
 const TEMPLATE = new URL('../templates/dreaming/', import.meta.url);
 const PARALLEL_BATCHES = 3;
@@ -152,11 +151,7 @@ export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday
       warnings.push(`Memory dreaming returned an invalid second-stage result. Diary and rule candidates were skipped. ${error.message}.`);
     }
     warnings.push(...(await repair()).map(file => `Unparsable reference header: ${file}`));
-    if (result?.diary) {
-      // The legacy single-session log writer uses the same lock.
-      const { runDir } = await memoryScope({ ZYLOS_DIR: root });
-      await withMemoryLock(runDir, () => mutate(() => publishDiary(root, date, result.diary)));
-    }
+    if (result?.diary) await mutate(() => publishDiary(root, date, result.diary));
     if (result?.rule_candidates.length) {
       signal?.throwIfAborted();
       await notify(ruleMessage(result.rule_candidates));

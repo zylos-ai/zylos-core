@@ -66,23 +66,6 @@ export function createQueryHandlers(store) {
       integer(after, 'after');
       return store.getContentCheckpointsSince(groupScope(group), after);
     },
-    originBacklog() { return store.getOriginSyncBacklog(); },
-    originSummaries({ group } = {}) {
-      requireGroup(group);
-      return store.queries.originSummaries(group);
-    },
-    originCombined({ group, limit } = {}) {
-      requireGroup(group);
-      if (limit !== undefined) integer(limit, 'limit', 1);
-      const result = store.queries.originCombined(group, { limit });
-      return { ...result, rows: result.rows.map(projectConversation) };
-    },
-    originRaw({ group, after, limit } = {}) {
-      requireGroup(group); integer(after, 'after');
-      if (limit !== undefined) integer(limit, 'limit', 1);
-      const result = store.queries.originRaw(group, { after, limit });
-      return { ...result, rows: result.rows.map(projectConversation) };
-    },
   };
 }
 

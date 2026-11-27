@@ -33,9 +33,6 @@ export function validateLaunchConfig(runtime, config, help = '') {
   }
   return true;
 }
-export function memoryMcpServerPath(root) {
-  return path.join(root, '.claude/skills/zylos-memory/scripts/memory-mcp-server.js');
-}
 /**
  * Read <root>/.env with the shared dotenv grammar, including exports, comments
  * and colon assignments. Later assignments win. Empty when absent.

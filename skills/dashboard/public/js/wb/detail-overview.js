@@ -353,7 +353,6 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
   const line = element(document, 'div', undefined, 'wb-mem-line');
   const count = data.backlog?.count;
   line.append(element(document, 'span', count == null ? t('wb.detail.memoryUnknown') : count ? countLabel(t, 'wb.detail.memoryPending', count) : t('wb.detail.memorySaved')));
-  if (data.backlog?.syncing === true) line.append(element(document, 'span', ' · ' + t('wb.detail.syncing'), 'wb-sub'));
   const link = element(document, 'button', t('wb.detail.memoryLink', { count: count == null ? t('wb.unknown') : count }), 'wb-link-btn wb-chev');
   link.type = 'button'; listen(link, 'click', onMemory); line.append(link);
   memory.append(line);

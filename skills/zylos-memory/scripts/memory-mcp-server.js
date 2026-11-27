@@ -2,16 +2,16 @@
 import path from 'node:path';
 import { isMainModule } from './is-main-module.js';
 import { createInterface } from 'node:readline';
-import { guard, memoryError, requireSyncToken } from './sync-lock.js';
+import { memoryError } from './sync-cli.js';
 import { resolveAllowedMemoryPath, applyFragmentLocked, isSelfPath } from './self-write.js';
 import { dreamLock } from './dream-lock.js';
 import { DREAM_READ_TOOLS, readDreamTool } from './dream-read-tools.js';
 import { PAGE_FILENAME_GUIDANCE, pagePath } from './reference-index.js';
 
-const codes = new Set(['PATH_NOT_ALLOWED', 'TOKEN_MISMATCH', 'FRAGMENT_CONFLICT', 'EXISTS', 'INVALID_INPUT', 'LOCK_TIMEOUT', 'SCOPE_UNBOUND', 'WRITE_FAILED', 'LOCK_UNAVAILABLE', 'LEGACY_READ_ONLY']);
+const codes = new Set(['PATH_NOT_ALLOWED', 'TOKEN_MISMATCH', 'FRAGMENT_CONFLICT', 'EXISTS', 'INVALID_INPUT', 'LOCK_TIMEOUT', 'WRITE_FAILED', 'LOCK_UNAVAILABLE', 'LEGACY_READ_ONLY']);
 export const EDIT_MEMORY_TOOL = {
   name: 'edit_memory',
-  description: 'Create or edit an authorized memory fragment. Every call must include token: the T printed by `sync-lock.js acquire`.',
+  description: 'Create or edit an authorized memory fragment. Every call must include the token from the dream instructions.',
   inputSchema: {
     type: 'object', additionalProperties: false, required: ['op', 'path', 'replacement', 'token'],
     properties: { op: { type: 'string', enum: ['edit', 'create'] }, path: { type: 'string' },
@@ -31,9 +31,6 @@ export function createMemoryEditor(env = process.env, { fragment = applyFragment
     };
     if (old === null || body(old) !== body(next)) throw memoryError('PATH_NOT_ALLOWED', 'A header repair may only edit the page header');
   } : undefined;
-  const owned = (token, action) => dreamRoot
-    ? dreamLock(dreamRoot).guard(token, () => action({ root: dreamRoot, marker: { kind: 'origin' } }))
-    : guard({ kind: 'auto', token, env: binding }, action);
   return async input => {
     try {
       if (!input || Array.isArray(input) || typeof input !== 'object' ||
@@ -43,25 +40,21 @@ export function createMemoryEditor(env = process.env, { fragment = applyFragment
           ((input.op === 'edit' || Object.hasOwn(input, 'expected')) && typeof input.expected !== 'string')) {
         throw memoryError('INVALID_INPUT', 'Expected an edit or create memory operation');
       }
-      requireSyncToken(input.token);
-      return await owned(input.token, scope => {
+      if (!dreamRoot || typeof input.token !== 'string' || !/^[a-f0-9]{32}$/.test(input.token)) {
+        throw memoryError('TOKEN_MISMATCH', 'A valid dream token is required');
+      }
+      return await dreamLock(dreamRoot).guard(input.token, () => {
         if (repairPage && (input.path !== repairPage || input.op !== 'edit')) {
           throw memoryError('PATH_NOT_ALLOWED', 'A header repair may only edit the designated page');
         }
-        const { marker } = scope;
-        const temporary = marker.kind === 'origin' ? null : path.relative(path.join(scope.root, 'memory'),
-          path.join(scope.memoryDir, `state.md.${input.token}.tmp`)).split(path.sep).join('/');
-        const allowed = relative => (marker.kind !== 'origin' && relative === temporary) ||
-          (marker.kind !== 'group' && isSelfPath(relative));
         const legacy = relative => {
           const lower = relative.toLowerCase();
           return ['reference/projects.md', 'reference/decisions.md'].includes(lower) ||
             lower === 'reference/legacy' || lower.startsWith('reference/legacy/');
         };
-        const requested = input.path === 'state.md.tmp' && marker.kind !== 'origin' ? temporary : input.path;
-        const resolved = resolveAllowedMemoryPath({ root: scope.root, path: requested, allowed: candidate => {
+        const resolved = resolveAllowedMemoryPath({ root: dreamRoot, path: input.path, allowed: candidate => {
           if (legacy(candidate)) throw memoryError('LEGACY_READ_ONLY', 'Legacy memory paths are read-only');
-          if (!allowed(candidate)) return false;
+          if (!isSelfPath(candidate)) return false;
           if (input.op === 'create' && /^reference\/(projects|decisions)\//.test(candidate) &&
               !pagePath(candidate) && !pagePath(candidate, true)) {
             throw memoryError('PATH_NOT_ALLOWED', PAGE_FILENAME_GUIDANCE);
@@ -85,9 +78,9 @@ export async function serveMemoryTools({ input = process.stdin, output = process
   let initialized = false;
   const dreamRoot = env.ZYLOS_MEMORY_DREAM_ROOT;
   const tools = dreamRoot ? [
-    { ...EDIT_MEMORY_TOOL, description: 'Create or edit a memory fragment. Supply the dream token from the request.' },
+    EDIT_MEMORY_TOOL,
     ...DREAM_READ_TOOLS.filter(tool => !env.ZYLOS_MEMORY_DREAM_PAGE || tool.name === 'read_memory'),
-  ] : [EDIT_MEMORY_TOOL];
+  ] : [];
   const rpcError = (id, code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
   async function dispatch(request) {
     if (!request || typeof request !== 'object' || request.jsonrpc !== '2.0' || typeof request.method !== 'string') {

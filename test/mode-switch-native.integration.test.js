@@ -187,7 +187,7 @@ test('gating stops busy groups after inbound delivery settles and preserves exis
   coordinator.lifecycle = new SupervisorLifecycle({
     db: f.store,
     observeGroup: group => f.scenes.find(scene => scene.sessionGroup === group) ?? { present: false },
-    readSyncMarker: () => assert.fail('mode-switch gating must not read Sync markers'),
+
     stop: scene => {
       stopped.push(scene.sessionGroup);
       f.scenes.splice(f.scenes.findIndex(item => item.sessionGroup === scene.sessionGroup), 1);

@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { withMemoryLock } from '../sync-lock.js';
-const moduleUrl = new URL('../sync-lock.js', import.meta.url).href;
+import { withMemoryLock } from '../memory-lock.js';
+const moduleUrl = new URL('../memory-lock.js', import.meta.url).href;
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'memory-lock-'));
 
 // callback process retains the lock after acquisition helper exits.

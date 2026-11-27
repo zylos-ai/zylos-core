@@ -639,10 +639,9 @@ function createDirectoryStructure() {
  * Recursively copy source files into dest directory, but only when missing.
  * Preserves user-managed files while ensuring nested template dirs exist.
  */
-function copyMissingTree(src, dest, excludedNames = []) {
+function copyMissingTree(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    if (excludedNames.includes(entry.name)) continue;
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
@@ -650,21 +649,6 @@ function copyMissingTree(src, dest, excludedNames = []) {
     } else if (!fs.existsSync(destPath)) {
       fs.copyFileSync(srcPath, destPath);
     }
-  }
-}
-
-function syncPackagedClaudeMemoryAgents() {
-  const agentsRoot = path.join(PACKAGE_ROOT, 'skills/zylos-memory/agents');
-  if (!fs.lstatSync(agentsRoot).isDirectory() || fs.lstatSync(agentsRoot).isSymbolicLink()) {
-    throw Error('Missing packaged Claude agent directory');
-  }
-  const agents = fs.readdirSync(agentsRoot).filter(name => name.endsWith('.md')).sort();
-  if (!agents.length) throw Error('No packaged Claude memory agents');
-
-  const destination = path.join(ZYLOS_DIR, '.claude/agents');
-  fs.mkdirSync(destination, { recursive: true });
-  for (const name of agents) {
-    fs.copyFileSync(path.join(agentsRoot, name), path.join(destination, name));
   }
 }
 
@@ -713,20 +697,10 @@ export async function deployTemplates({ freshInstall = false } = {}) {
     fs.writeFileSync(path.join(CONFIG_DIR, 'onboarding-pending'), '', { flag: 'a', mode: 0o600 });
   }
 
-  // Shared templates fill missing files, but global working state is never recreated.
+  // Shared templates fill missing files. Historical state belongs to the user.
   const memorySrc = path.join(TEMPLATES_SRC, 'memory');
   const memoryDest = path.join(ZYLOS_DIR, 'memory');
-  if (fs.existsSync(memorySrc)) {
-    copyMissingTree(memorySrc, memoryDest, ['state.md']);
-    if (freshInstall) {
-      const stateSrc = path.join(memorySrc, 'state.md');
-      const originDir = path.join(memoryDest, 'session-groups', 'origin');
-      fs.mkdirSync(originDir, { recursive: true });
-      const state = fs.readFileSync(stateSrc, 'utf8').replace('scope=*', 'scope=origin');
-      try { fs.writeFileSync(path.join(originDir, 'state.md'), state, { flag: 'wx' }); }
-      catch (error) { if (error.code !== 'EEXIST') throw error; }
-    }
-  }
+  if (fs.existsSync(memorySrc)) copyMissingTree(memorySrc, memoryDest);
 
   // .claude/ project settings (hooks, etc.) — only create missing files
   const claudeSrc = path.join(TEMPLATES_SRC, '.claude');
@@ -734,7 +708,6 @@ export async function deployTemplates({ freshInstall = false } = {}) {
   if (fs.existsSync(claudeSrc)) {
     copyMissingTree(claudeSrc, claudeDest);
   }
-  syncPackagedClaudeMemoryAgents();
 
   // runtime-env.manifest — create from template if missing
   const manifestSrc = path.join(TEMPLATES_SRC, 'runtime-env.manifest.example');

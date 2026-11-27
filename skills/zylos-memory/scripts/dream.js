@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
 import { durableJson } from '../../activity-monitor/scripts/runtime-generation.js';
-import { SyncAlertEpisodes } from '../../activity-monitor/scripts/sync-alert-episodes.js';
 import { notifyOwner } from '../../comm-bridge/scripts/c4-owner-alert.js';
 import { dreamLock, dreamRunDirectory, DREAM_HEARTBEAT_MS } from './dream-lock.js';
 import { createDreamModel } from './dream-model.js';
@@ -15,6 +14,26 @@ const ALERT = { scope: '*', kind: 'global', type: 'dream_consecutive_failure' };
 function readRecord(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; return null; }
+}
+
+function claimFailureAlert(file, ongoing) {
+  try {
+    const record = readRecord(file);
+    const episode = record?.episodes?.[0];
+    if (record && (record.version !== 1 || !Array.isArray(record.episodes) || record.episodes.length > 1 ||
+        (record.episodes.length === 1 && (!episode || typeof episode.sent !== 'boolean' ||
+          Object.keys(ALERT).some(key => episode.alert?.[key] !== ALERT[key]))))) {
+      throw new Error('Invalid dream alert state');
+    }
+    if (ongoing && !episode?.sent) {
+      durableJson(file, { version: 1, episodes: [{ alert: ALERT, sent: true }] });
+      return true;
+    }
+    if (!ongoing && episode) durableJson(file, { version: 1, episodes: [] });
+  } catch (error) {
+    console.error(`Dream alert state unavailable: ${error.code ?? error.message}`);
+  }
+  return false;
 }
 
 export async function runDream({ root, config, date: runDate, timezone, signal: requestedSignal,
@@ -71,11 +90,10 @@ export async function runDream({ root, config, date: runDate, timezone, signal: 
       if (controller.signal.aborted) throw error;
     }
     await lock.guard(token, () => durableJson(record, { status: result.failed ? 'failed' : 'ok', date, ...result }));
-    const episodes = new SyncAlertEpisodes({ file: path.join(dreamRunDirectory(root), 'alert-episodes.json') });
     day.setUTCDate(day.getUTCDate() - 1);
     const previous = readRecord(path.join(dreamRunDirectory(root), day.toISOString().slice(0, 10), 'run.json'));
-    if (!result.failed || !previous || previous.status === 'ok') episodes.reconcile({ resolved: [ALERT] });
-    if (result.failed && previous && previous.status !== 'ok' && episodes.claim(ALERT)) {
+    const consecutiveFailure = result.failed && previous && previous.status !== 'ok';
+    if (claimFailureAlert(path.join(dreamRunDirectory(root), 'alert-episodes.json'), consecutiveFailure)) {
       result.warnings.push('Memory dreaming had failures on two consecutive days. Unprocessed conversations remain available for the next run.');
     }
     if (result.warnings.length) await send(result.warnings.join('\n'));

@@ -17,27 +17,23 @@ mock.module('../../../dashboard/src/lib/c4-reader.js', { namedExports: { C4Reade
   constructor() { dashboardCalls++; assert.fail('startup must not query Dashboard'); }
 } } });
 const actualDb = await import('../c4-db.js');
-let rows = [], scopeMode = 'multi', closeCalls = 0;
+let rows = [], closeCalls = 0;
 const queryCalls = [];
 mock.module('../c4-db.js', { namedExports: {
   ...actualDb,
   formatConversationsForAgent: (values, options) => actualDb.formatConversationsForAgent(values,
     { ...options, ownerName: () => 'Replay Owner' }),
   close: () => { closeCalls++; },
-  getCoverageEnd: group => { queryCalls.push(['coverage', group]); return 40; },
-  getGlobalCoverageEnd: () => { queryCalls.push(['globalCoverage']); return 40; },
-  getDeliveredSince: (group, after, options) => { queryCalls.push(['tail', group, after, options]); return rows; },
-  getGlobalDeliveredSince: (after, options) => { queryCalls.push(['globalTail', after, options]); return rows; },
-  getUnsummarizedRange: group => { queryCalls.push(['range', group]); return { count: 1, firstConversationId: 95 }; },
-  getGlobalUnsummarizedRange: () => { queryCalls.push(['globalRange']); return { count: 1, firstConversationId: 95 }; },
+  getRecentDeliveredConversations: (group, options) => { queryCalls.push([group, options]); return rows; },
 } });
 mock.module('../../../activity-monitor/scripts/bootstrap-scope.js', { namedExports: {
-  bootstrapScope: async () => ({ mode: scopeMode, scope: scopeMode === 'multi' ? 'work' : '*',
-    sessionGroup: scopeMode === 'multi' ? 'work' : null, root: process.env.ZYLOS_DIR,
+  bootstrapScope: async () => ({ mode: 'multi', scope: 'work',
+    sessionGroup: 'work', root: process.env.ZYLOS_DIR,
     memoryDir: path.join(process.env.ZYLOS_DIR, 'memory') }),
   loadCoreModule: async () => assert.fail('startup must not load a runtime or pending-question store'),
 } });
 const { createDelivery } = await import('../router/delivery.js');
+const { emitC4Conversations } = await import('../c4-session-init.js');
 
 const home = fs.realpathSync(process.env.HOME), root = fs.realpathSync(process.env.ZYLOS_DIR);
 assert.notEqual(home, fs.realpathSync(os.userInfo().homedir));
@@ -95,6 +91,17 @@ test('hidden legacy route text cannot suppress the actual inbound reply route', 
   assert.ok(text.includes(envelope.fallbackText));
   assert.ok(text.endsWith(route(row) + '\n'));
   assert.equal(text.includes('/hidden/'), false);
+});
+
+test('startup packs projected content without spilling hidden metadata', async () => {
+  const row = sample('long');
+  rows = [row];
+  const output = await emitC4Conversations({});
+  checkVisible(output, row);
+  assert.deepEqual(queryCalls, [['work', { afterTimestamp: undefined, limit: 6 }]]);
+  assert.equal(closeCalls, 1);
+  assert.equal(databaseOpens, 0);
+  assert.equal(dashboardCalls, 0);
 });
 
 // New delivery interface cases: run on live formatter/transport handoff changes;

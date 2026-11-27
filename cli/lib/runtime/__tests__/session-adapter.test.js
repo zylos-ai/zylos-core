@@ -48,12 +48,12 @@ test('keystroke options and command syntax are rejected before any target I/O',a
   const f=fixture();await f.adapter.sendKeys({target:f.target,connection:f.connection,keys:['Escape','Enter','C-c','M-x','F1']});
   assert.deepEqual(f.calls,[['validate'],['send-keys','-t','%8','Escape','Enter','C-c','M-x','F1']]);
 });
-test('default argv omits model and effort and both runtimes attach per-process MCP',async()=> {
+test('default interactive argv omits model, effort and memory tools',async()=> {
   for(const runtime of ['claude','codex']) {
     const args=(await getRuntime(runtime)).launch.buildArgs({runtime,mode:'default'},{root:'/isolated root'});
     assert.equal(args.includes('--model'),false);
     assert.equal(args.some(x=>x.includes('model_reasoning_effort')),false);
-    assert.match(args.join(' '),/memory-mcp-server/);
+    assert.doesNotMatch(args.join(' '), /memory-mcp-server/);
   }
 });
 for (const bypassPermissions of [true, false]) {

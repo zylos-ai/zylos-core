@@ -88,7 +88,7 @@ test('lower capacity admits a waiting group only after both required idle reclai
       const live = f.scene.get(group);
       return live ? { ...live, sessionGroup: group, createdAt: live.createdAt * 1000 } : { present: false };
     },
-    readSyncMarker: () => ({ held: false, stale: false }),
+
     bindTarget: scene => ({ expectedRunId: scene.runId, tmuxTarget: { serverGeneration: 'private-server', sessionId: '$1', paneId: '%1' } }),
     prompts: { PRE_RECLAIM_CHECK_PROMPT },
     stop: async scene => {

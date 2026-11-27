@@ -1,6 +1,6 @@
 # c4-fetch.js — Fetch Conversations
 
-Retrieves the last checkpoint summary and conversations within a specified id range or from a point in time. Used by Memory Sync to load conversation data for summarization.
+Retrieves the last checkpoint summary and conversations within a specified id range or from a point in time.
 
 ## Usage
 
@@ -18,87 +18,15 @@ A datetime without an offset is UTC, like the conversation timestamps in the out
 ## Text Projection
 
 `--unsummarized [--group G] [--after ID] [--up-to ID] [--limit N] --out FILE`
-creates a new private file (mode 0600), refusing to overwrite an existing path.
-The file contains exactly the ordinary direct output, including when `--json`
-is selected. Stdout contains only export metadata: the absolute `path` (the
-script resolves a relative `FILE`), `count`, `firstId`, `lastId`, `bytes`,
-`sha256`, and `batch` (inside the usual data envelope with `--json`). Read the
-entire file in byte ranges before summarizing it. Use reported byte counts only
-as byte-range read endpoints. `sha256` hashes the file bytes; `batch.sha256` instead hashes
-stable projected conversation fields and is the receipt used by checkpoint
-verification. The receipt's `after` honors actual coverage and `--after`;
-its `end` is the last returned row ID, or the query's upper bound for an empty
-batch. A limit cannot authorize checkpointing unread rows. No receipt is stored
-on the host. An export with a reversed receipt range is rejected.
-
-Origin Sync exports its two reads the same way:
-`--origin-sync --group G --summaries-only --out FILE` and
-`--origin-sync --group G --raw-only --after C [--limit N] --out FILE`. The file
-again equals the direct output byte for byte, and the metadata has the same
-fields with `receipt` instead of `batch`; `count`, `firstId` and `lastId` count
-checkpoints for the summary read. The summary receipt is
-`{scope, after, end, coverageEnd, count, sha256}`: `after` is the group's
-current Origin summary cursor, `end` the last returned checkpoint ID (equal to
-`after` when there is none), `coverageEnd` the coverage C of the same snapshot,
-and `sha256` hashes stable checkpoint fields. The raw receipt is
-`{scope, after, end, count, sha256}`: `after` is max(current Origin raw cursor,
-`--after`), `end` the last returned row when the limit stopped the read and
-otherwise the snapshot's upper bound, and `sha256` hashes the same projected
-conversation fields as `batch`. `origin-cursor.js advance` recomputes both from
-the database. The combined Origin read (neither `--summaries-only` nor
-`--raw-only`) rejects `--out`.
-
-Create a unique private directory with `mktemp -d` (0700) and place exports
-inside it, never at reusable shared `/tmp` paths. Remove only this run's private
-directory and its files with `rm -r "<absolute path of this run's private directory>"`
-on success or failure before releasing the Sync token, including after
-TOKEN_MISMATCH under the common failure rules. Do not add `-f`; report cleanup
-failure. Do not redirect a second copy of the text.
-Read long single lines by bytes: `dd if="<absolute path>" bs=1 skip=0
-count=8192 status=none`, then skip=8188, 16376, and so on, with four-byte overlap
-for UTF-8. Read the actual text for every range and record `[start,end)` ranges
-through the reported file size in the Sync result. Truncation requires smaller
-ranges and rereading; hashes, grep or word counts do not establish a full read.
-
-### Complete byte-range reads
-
-For every exported file and every listed input, complete these reading steps
-before summarizing, checkpointing or advancing its cursor:
-
-1. Read the entire file in bounded byte ranges and record every `[start,end)`.
-   Run **one byte range per top-level tool call**, returning that range's actual
-   text before requesting the next. Do not batch ranges in loops (shell or
-   JavaScript), parallel calls, or any wrapper that accumulates several reads
-   into one return. On Codex, use a direct `exec_command` when exposed as a
-   top-level tool; in code mode, each range needs its own `functions.exec`
-   invocation containing one `exec_command`. Separate inner calls inside one
-   outer invocation still share the outer output cap. On Claude, use one Bash
-   call containing one `dd` command per range. Use Bash byte reads for long
-   single-line JSON: Read's offset/limit select lines and cannot bound one long
-   line by bytes. Start at 8192 bytes in both runtimes; if the runtime has a
-   smaller configured output cap, start smaller. Preserve the four-byte overlap
-   when advancing: next start is the last completely read end minus four.
-   After reducing the size, keep that smaller size for the rest of the file.
-   Never advance from a truncated range or add it to the completed ledger.
-2. After the full text read, display the last 64 bytes of every exported file
-   and every listed input with
-   `tail -c 64 "<returned absolute path>" | od -An -v -c`.
-   A file shorter than 64 bytes is displayed in full. This makes trailing spaces,
-   tabs and newlines visible in only a few lines, even when the final text range
-   is 8192 bytes. Repeat for every file; do not skip files or crop this display
-   further. Truncated output is unread and must be reread in a fresh top-level
-   call under the bounded read-retry rules below.
-   This supplements the text read and does not replace it.
-
-For the retry budget, failure gates and final range/recovery report, follow
-[zylos-memory's bounded read retries](../../zylos-memory/references/sync-common.md#bounded-read-retries-and-reporting).
+writes exactly the direct output to a new private file (0600). Stdout carries
+its absolute `path`, `count`, `firstId`, `lastId`, `bytes`, and `sha256`. Use a
+private directory for exports and read large files in bounded byte ranges.
 
 All message content is projected before text/JSON formatting, absorbed preview
 budgets or `--out` file writes. Valid structured content becomes fallbackText
 plus a short C4 reference; invalid marked content becomes an error marker with
 the source C4 ID and no raw payload. Ordinary text remains byte-compatible.
-`--origin-sync --raw-only` selects conversations instead of checkpoint summaries;
-it does not bypass projection. Absorbed `--field endpoint` still returns the
+Absorbed `--field endpoint` still returns the
 original routing field; `--field text` and its byte/truncation metadata describe
 the projected text. C4 storage and authorized original-body/reconciliation APIs
 remain separate and unchanged.
@@ -109,7 +37,7 @@ Outputs to stdout:
 1. Last checkpoint summary (if exists)
 2. Formatted conversations in the specified range (chronological order). With `--since`, the header shows the resolved UTC start time and the id range found, for use with `--begin`/`--end`.
 
-Range and `--since` text may end with a counted reminder and a complete internal-message template for each foreign session group. Reminders are absent when `ZYLOS_SESSION_GROUP` is missing or empty, the caller is `origin`, or all returned rows belong to the caller (or there are no rows). JSON and Sync reads (`--unsummarized`, all `--origin-sync` forms) never append reminders; `c4-db.js recent` always retains its JSON output, including without `--json`.
+Range and `--since` text may end with a counted reminder and a complete internal-message template for each foreign session group. Reminders are absent when `ZYLOS_SESSION_GROUP` is missing or empty, the caller is `origin`, or all returned rows belong to the caller (or there are no rows). JSON and `--unsummarized` reads never append reminders; `c4-db.js recent` always retains its JSON output, including without `--json`.
 
 ## Example
 

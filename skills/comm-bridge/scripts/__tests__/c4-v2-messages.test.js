@@ -59,17 +59,16 @@ for (const phase of ['before', 'after']) test(`crash ${phase} COMMIT preserves w
   for (const table of ['conversations','channel_namespaces','group_heads']) assert.equal(db.prepare(`SELECT count(*) n FROM ${table}`).get().n, expected);
   if (expected) assert.equal(db.prepare('SELECT head_id FROM group_heads').get().head_id, db.prepare('SELECT id FROM conversations').get().id);
 });
-test('group case is preserved independently in messages, heads, checkpoints and cursors', t => {
+test('group case is preserved independently in messages, heads and checkpoints', t => {
   const { db, store: s } = fixture(t);
   const groups = ['AbC','abc',undefined,'x'];
   for (const local of groups) {
     const row = s.insertConversation('in','ns',null,'content',{groupName:local});
     s.claimConversation(row.id); s.markDelivered(row.id,{sessionId:'sid'});
-    const cp = s.createCheckpoint(row.session_group,row.id,'summary');
-    s.advanceOriginSyncCursor(row.session_group,{syncedId:row.id,checkpointId:cp.id});
+    s.createCheckpoint(row.session_group,row.id,'summary');
     assert.equal(s.getCoverageEnd(row.session_group),row.id);
   }
-  for (const table of ['group_heads','origin_sync_cursors']) assert.equal(db.prepare(`SELECT count(*) n FROM ${table}`).get().n,4);
+  assert.equal(db.prepare('SELECT count(*) n FROM group_heads').get().n,4);
   assert.deepEqual(db.prepare('SELECT session_group FROM group_heads ORDER BY session_group').all().map(r=>r.session_group), ['ns','ns:AbC','ns:abc','ns:x']);
 });
 test('maintained heads equal independent message aggregation across 20 groups', t => {

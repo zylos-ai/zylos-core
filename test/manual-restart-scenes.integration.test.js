@@ -74,7 +74,7 @@ async function healthGuardFixture(t, mode = 'multi') {
       stop: async scene => { stopped.push(scene.sessionGroup); Object.assign(scenes.get(scene.sessionGroup), { present: false, ready: false, processRunning: false }); },
       listRuns: async () => [], readRun: async group => ({ ...scenes.get(group) }) },
     requestStore, readMode: () => ({ mode }), readConfiguration: () => config,
-    resolveTargetRuntime: () => 'claude', readSyncMarker: () => ({ held: false, stale: false }),
+    resolveTargetRuntime: () => 'claude',
     prompts: {}, checkAuth: async () => ({ status: 'success' }),
     loopOptions: { schedule: () => assert.fail('fixture must not start a background loop'), cancel() {} }, log() {},
   });

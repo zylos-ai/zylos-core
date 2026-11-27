@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { memoryError } from './sync-lock.js';
+import { memoryError } from './sync-cli.js';
 import { inputError } from './sync-cli.js';
 
 export const isSelfPath = relative => relative === 'identity.md' || relative === 'references.md' || /^(reference|users)\/.+/.test(relative);

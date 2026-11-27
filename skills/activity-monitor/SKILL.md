@@ -37,11 +37,10 @@ conversations, leave release to idle TTL. Use the installed absolute path to
 `node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js request-release --json`
 (expand `~/zylos` to the actual installation directory), inheriting
 `ZYLOS_SESSION_GROUP` and `ZYLOS_RUN_ID`; never supply another group's identity.
-An `ok:true` response registers a group/run-scoped in-memory intent, not a
-completed release. Finish the current turn. Once the session is idle and no subagent or memory
-sync is running, the supervisor follows the same steps as idle reclaim: it
-sends the pre-reclaim check prompt, runs a memory sync if the unsummarized
-conversations exceed the Sync threshold, then reclaims the session.
+An `ok:true` response registers a group/run-scoped in-memory intent. Finish
+the current turn. Once the session is idle and no subagent is running, the
+supervisor sends the pre-reclaim handoff check and reclaims the session after
+the check settles.
 New delivered work before fencing cancels the intent. Supervisor restart drops
 the intent; ordinary idle TTL remains the fallback. On rejection or an unknown
 result, keep the current run; do not exit or assume release succeeded.
@@ -54,7 +53,6 @@ the Zylos data directory, with valid environment values taking precedence:
 | `session_hot_ttl_seconds` | [`ZYLOS_SESSION_HOT_TTL_SECONDS`](https://github.com/zylos-ai/zylos-core/blob/main/README.md#idle-reclaim-environment) | 3300 seconds |
 | `session_evict_min_idle_seconds` | `ZYLOS_SESSION_EVICT_MIN_IDLE_SECONDS` | 300 seconds |
 | `session_reclaim_defer_alert_count` | `ZYLOS_SESSION_RECLAIM_DEFER_ALERT_COUNT` | 4 requests |
-| `sync_threshold` | `ZYLOS_SYNC_THRESHOLD` | 15 conversations |
 
 Values must be positive safe integers. An invalid environment value falls back
 to the config file; an invalid or missing config value falls back to the default.
@@ -68,20 +66,15 @@ is present, and displays the effective
 value (including fallback when that environment value is invalid). The environment
 scope follows the [authoritative README rule](https://github.com/zylos-ai/zylos-core/blob/main/README.md#idle-reclaim-environment).
 The eviction minimum remains a startup setting and requires a restart to change.
-The Sync threshold is also a startup setting of the supervisor. A group Sync is due
-when a group's unsummarized conversations exceed it, and pre-reclaim Sync uses the
-same comparison. Session-start context and Dashboard resolve it from the same keys
-in their own process environment, so prefer the config key; an environment value
-must be set uniformly for the supervisor, Dashboard and the managed sessions.
 
 Both TTL and capacity eviction use the latest C4 message, runtime creation,
 same-run reclaim cancellation reset, or session activity (hooks/transcript).
 Missing or non-finite session activity is ignored. TTL waits for the configured
 interval after that latest activity.
 
-Every TTL reclaim, Origin included, is preceded by preparation controls bound
-to the current run, each require-idle, with the ack suffix and a 5-minute ack
-deadline. The first is always the pre-reclaim check: a one-line control that
+Each migrated session receives a single check bound to its current run before
+TTL reclaim. The control requires idle and has a 5-minute acknowledgement
+deadline. The one-line control
 names the idle reclaim check in
 [Reclaim and restart checks](references/session-checks.md), which holds what
 the session does during every reclaim and restart check. Only that idle check
@@ -98,18 +91,8 @@ restart loses them.
 
 A wake-up the check creates with scheduler `add` saves the session's own group
 (Origin saves none and runs in Origin).
-The PRE_RECLAIM Sync control follows when the group's unsummarized
-conversations exceed the Sync threshold; a smaller backlog stays in C4 and the
-group's next session receives it in its startup context. Then for Origin the Origin Sync control when Origin has a Sync
-backlog, so Sync records the handoff and task the check left. Reclaim begins
-only after every preparation control is terminal (`done`, `timeout` once the
-ack deadline passes without an ack, `superseded`, `failed` or `cancelled`)
-and the same run is idle; while any is still pending or running the group is
-not reclaimed. If only some controls could be written, preparation restarts
-from the check after the written ones terminate.
-Pre-reclaim Group and Origin Sync controls have a 15-minute acknowledgement
-deadline. Ordinary periodic Group Sync retains its five-minute deadline;
-periodic Origin Sync remains without a deadline.
+Reclaim begins once the check is terminal (acknowledged, timed out,
+superseded, failed or cancelled) and the same run is idle.
 
 Once the same run is preparing for TTL reclaim, its own preparation activity
 does not restart or cancel that preparation; a new C4 message still cancels it.
@@ -156,7 +139,7 @@ still applies. AGY keeps its native statusLine and 500ms idle stability rule.
 Capacity eviction (a waiting group needs a slot) and memory-pressure reclaim
 first send the same pre-reclaim check to the selected group: bound to the
 current run, require-idle, with the ack suffix, but with a 60-second ack
-deadline and no Sync control. No fence is written while that check is pending
+deadline. No fence is written while that check is pending
 or running. Once it is terminal, the group is evicted when the same run is
 still idle; when the deadline passes first, eviction continues without waiting
 for the answer. A new C4 message, a replaced run, or session or child activity
@@ -473,7 +456,13 @@ Event-driven context monitoring via Claude Code's statusLine feature, replacing 
 - **Two-stage design**: The trigger message instructs Claude to start the new-session handoff flow; the actual `/clear` is gated by block-queue-until-idle in the new-session skill's final step
 - **Log**: `~/zylos/activity-monitor/context-monitor.log`
 
-Context usage does not request Memory Sync; the early Sync at 80% of the rotation threshold is disabled. Memory Sync follows the backlog triggers only: unsummarized conversations above the Sync threshold, or an oldest unsummarized conversation older than `sync_max_interval_seconds` (default 6 hours). A smaller backlog carries over to the next session, whose startup context includes it in full when it fits the shard budget.
+## Memory Dream
+
+The supervisor starts Memory Dream in a separate process at 02:00 by default.
+Set `memory_dream_hour` to another whole hour in the deployment's `.env` time
+zone. If the supervisor starts after that hour, it catches up once that day.
+Set `memory_tidy_weekday` to choose the weekly cleanup day (default Sunday).
+See [Memory Dream](../zylos-memory/SKILL.md) for the process and diagnostics.
 
 ## Daily Memory Commit
 
@@ -482,17 +471,20 @@ The activity monitor runs a daily git commit of the `memory/` directory.
 - **Schedule**: 3:00 AM local time
 - **Timezone**: Same as daily upgrade (from `~/zylos/.env` TZ)
 - **Persisted state**: `~/zylos/activity-monitor/daily-memory-commit-state.json`
+
 - **Script**: Calls `zylos-memory/scripts/daily-commit.js` directly (no C4, no Claude needed)
 - **Once per day, also when it fails**: Date-based deduplication. A failed run is recorded for the day (`last_status: "failed"`, `last_error` truncated) and the next attempt is the next day, not the next round
 - **Idempotent**: If no memory changes exist, the script skips the commit
 - **Large files**: Files over 50 MB are left out of the commit (untracked ones stay untracked, later changes to tracked ones are not committed) and listed in the activity monitor log
+
+- **Temporary files**: The snapshot excludes additions and edits, including staged content, and records deletions of tracked temporary files.
 
 ## Timing Guarantees
 
 Machine tasks use `SupervisorMachineTasks`:
 - **Catch-up**: Upgrade check (06:00) and optional Claude upgrade (05:00) remain due later that local date until successfully recorded
 - **Memory commit**: Runs only during the 03:00 hour, including during a mode transition; it does not catch up after that hour
-- **Dedup**: Successful work records `last_date`; failed work remains eligible for retry
+- **Dedup**: Successful work records `last_date`. Dream and memory commit also record failures and retry the next day.
 - **Persistence**: State files survive activity monitor restarts
 - **Usage**: Account health, configured intervals and active hours govern sampling/alerts; Origin presence, idle state, input state and pending-work gates are not required. Mode transitions defer usage work
 
@@ -563,103 +555,3 @@ The sole health writer caches the decoded file, invalidating it on inode, size,
 mtime or ctime changes. Reads return independent snapshots; every successful
 write still performs its original durable publication and immediately refreshes
 the cache. Cleanup publishes only when it removes entries, without changing v1.
-
-
-## Memory Sync diagnostics and repair
-
-`activity-monitor/supervisor-events.jsonl` records `sync_triggered` and
-`sync_result` and incident-level `sync_alert` alongside existing supervisor decisions. Existing log rotation
-and retention apply to diagnostic evidence only. Records contain metadata,
-never conversation content, receipts or Sync tokens.
-
-Trigger records include scope, kind (group/origin/global), backlog, lag in
-seconds, optional context percent and control/run/checkpoint identifiers.
-Reasons include threshold, max_lag, catch_up and pre_reclaim. Logging
-failure cannot change a protected operation or its control bookkeeping.
-
-Protected results include commit (checkpoint, verified first/last C4 IDs and
-count), advance (both cursor columns before/after), and round_complete (raw
-count, advanced groups, remaining quota/backlog). Commit eligibility matches
-receipt verification: outgoing rows or delivered incoming rows, filtered to
-the appropriate scope. Summary-only Origin progress counts as useful work.
-Each failed named operation emits one error record; nested guards delegate
-reporting to it. Standalone guards report their failures. Successful lock
-acquisition emits no result. Interrupted rounds have no completion result.
-
-### Repair before notification
-
-Release and TTL preparation capture the requested range before dispatch. A
-terminal control is not proof of success. Group success requires a new content
-checkpoint covering that range and a released Sync marker. A lagging state
-header is diagnostic evidence only; it does not fail or retry reclaim Sync.
-An Origin round proves durable cursor progress and marker release;
-its bounded round need not drain all groups. A failed preparation retries once
-with the same 900-second deadline. Two failed attempts permit normal reclaim
-and persist one repair_failed incident with the latest matching result code or
-no_checkpoint or control_timeout. New real work cancels the
-preparation through the existing gates. Child/turn/identity checks still apply.
-
-Groups without a live session do not receive backlog or checkpoint/state-gap
-notifications and are not activated for repair. Their backlog follows the
-ordinary threshold and longest-wait triggers when ordinary work next activates them. Active readers continue
-using normal Sync triggers. Pre-reclaim symptoms are recorded once as diagnostics;
-the retry verdict owns any final owner notification.
-
-### Persistent notification incidents
-
-`activity-monitor/sync-alert-episodes.json` atomically records an incident by
-scope + kind + alert type. A timeout includes control ID, so each control is a
-separate permanent identity. There is no elapsed-time reset or retention cutoff
-for notification ownership. This replaces both duration-based throttling and
-handled-timeout recovery from rotated diagnostic logs. The same ownership rule
-applies to diagnostic-only incidents.
-
-Origin frequency, Origin idle rounds, control confirmation timeouts and active
-checkpoint/state gaps emit one `sync_alert` record with type, scope, kind and evidence. They never enqueue an
-alert control or notify the owner. Recording does not depend on Origin being
-available. External scripts that monitor these diagnostic signals are outside
-this mechanism.
-
-Online unrepaired backlog, three requests without a checkpoint,
-and final automatic repair failures retain the existing owner notification
-route. Their text states the problem, the automatic repair attempted, the failure
-reason and a concrete action the owner can request. Final automatic repair
-failures continue notifying the owner; suppressing them in a future release is
-not implemented here.
-
-Resolution is explicit:
-
-- backlog: count and age have returned inside the applicable trigger limits;
-- state_uncommitted: valid state coverage reaches the checkpoint end;
-- no_checkpoint: a newer content checkpoint exists;
-- control_timeout: a different control is a different incident; the old ID is
-  never announced again;
-- origin_frequency: trailing-hour requests return to at most four;
-- origin_idle: ten known completed rounds contain at most five truly idle rounds;
-- repair_failed: durable checkpoint/marker or Origin cursor facts prove
-  the captured repair target is fixed.
-
-An unresolved incident records or notifies once, according to its type, including
-after restart or loss of trigger logs. Resolved incidents can recur. Notification ownership is persisted before
-enqueue; unknown enqueue outcomes keep ownership to avoid duplicates. A final
-repair failure blocked by an Origin fence remains durably pending and can send
-later even after its group goes offline, without blocking reclaim. Unreadable or
-unwritable incident state stops notifications and emits a diagnostic rather than repeatedly messaging owners.
-
-Sync marker expiration retains the baseline rule: a holder from a different run
-is immediately stale; a same-run marker retains its existing 30-minute expiry.
-Same-run worker failure recovery remains separate.
-
-The incident ledger deliberately remains closed after an unreadable/unwritable
-state failure; automatic reset would discard notification ownership and permit
-repeated notices. Timeout identities have no retention cutoff, as required by
-the one-control/one-incident contract; their small persistent set grows and is
-rewritten atomically. This change does not add compaction or a recovery policy.
-Origin backlog owner notices retain their threshold-based behavior, including
-when every bounded Origin round succeeds but backlog remains above the limit.
-Other repair-first notification gates are unchanged. A successful Origin round
-is not described as a failed repair in its backlog notice.
-
-Daily snapshots exclude tmp
-additions and edits, including staged content, while committing deletions of
-tracked temporary files.

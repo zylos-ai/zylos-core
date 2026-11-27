@@ -7,7 +7,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const CLI_PATH = fileURLToPath(new URL('../c4-session-init.js', import.meta.url));
-const CHECKPOINT_PATH = fileURLToPath(new URL('../c4-checkpoint.js', import.meta.url));
 
 function cli(args, env = {}) {
   const result = spawnSync('node', [CLI_PATH, ...args], {
@@ -33,36 +32,21 @@ function receive(args, env = {}) {
   return delivered;
 }
 
-// Insert delivered rows in one child; returns the session group of the last row.
-function receiveMany(contents, env = {}, { channel = 'system', endpoint = null, groupName } = {}) {
+// Insert delivered rows in one child.
+function receiveMany(contents, env) {
   const delivered = spawnSync(process.execPath, ['--input-type=module', '-e', `
     const db = await import(${JSON.stringify(new URL('../c4-db.js', import.meta.url).href)});
-    const {createStore} = await import(${JSON.stringify(new URL('../c4-v2-store.js', import.meta.url).href)});
-    const store = createStore(db.getDb(), {validateComponent:()=>true});
-    let group = null;
     for (const content of ${JSON.stringify(contents)}) {
-      const row = store.insertConversation('in', ${JSON.stringify(channel)}, ${JSON.stringify(endpoint)}, content,
-        ${JSON.stringify(groupName ? { groupName } : {})});
-      store.claimConversation(row.id); store.markDelivered(row.id, {sessionId:'fixture'});
-      group = db.getDb().prepare('SELECT session_group FROM conversations WHERE id=?').pluck().get(row.id);
+      db.insertConversation('out', 'system', null, content);
     }
     db.close();
-    process.stdout.write(JSON.stringify(group));
   `], { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 15000 });
   assert.equal(delivered.status, 0, delivered.stderr);
-  return JSON.parse(delivered.stdout);
 }
 
-const numbered = (count, prefix, size = 0) => Array.from({ length: count },
-  (_, i) => `${prefix}-${String(i + 1).padStart(2, '0')}${size ? ` ${'x'.repeat(size)}` : ''}`);
-const OMITTED_MIDDLE = /latest \d+ shown\. Before judging old tasks, promises or todos, inspect the omitted middle/;
-
-function checkpoint(args, env = {}) {
-  return spawnSync('node', [CHECKPOINT_PATH, ...args], {
-    env: { ...process.env, ...env },
-    encoding: 'utf8', timeout: 15000
-  });
-}
+const numbered = (count, prefix) => Array.from({ length: count },
+  (_, i) => `${prefix}-${String(i + 1).padStart(2, '0')}`);
+const OLD_GUIDANCE = /unsummarized|omitted middle|Checkpoint covers id/i;
 
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-session-init-'));
@@ -72,8 +56,6 @@ function withTmpDir(fn) {
   for (const directory of [env.HOME, env.PM2_HOME, env.TMPDIR]) fs.mkdirSync(directory);
   console.log('Session init isolation:', JSON.stringify({ ...env, database: path.join(tmpDir, 'comm-bridge/c4.db'),
     amSocket: path.join(tmpDir, 'activity-monitor/am.sock'), tmux: 'not launched', pm2: 'not launched' }));
-  // Warm up DB
-  checkpoint(['latest'], env);
   try {
     return fn({ tmpDir, env });
   } finally {
@@ -122,7 +104,7 @@ describe('c4-session-init', () => {
     });
   });
 
-  // Real CLI + private SQLite storage checks tail, coverage and lag guidance.
+  // The real CLI reads only its scope and keeps the newest six without a handoff.
   // Run for scope/C4 boot reads; no runtime, PM2 or tmux starts. The shared
   // fixture prints isolated paths, bounds children and removes its directory.
   for (const [mode, group] of [['single','origin'], ['single',null]]) {
@@ -139,22 +121,22 @@ describe('c4-session-init', () => {
           db.close();
         `], {env,encoding:'utf8',timeout:15000});
         assert.equal(setup.status,0,setup.stderr);
-        // A Sync threshold below the backlog keeps the latest-tail view with its coverage line.
-        const selectedEnv = {...env, ZYLOS_RUN_ID:'isolated-run', ZYLOS_SYNC_THRESHOLD:'5'};
+        const selectedEnv = { ...env, ZYLOS_RUN_ID: 'isolated-run' };
         if (group) selectedEnv.ZYLOS_SESSION_GROUP = group;
         const {stdout,stderr,status} = cli([],selectedEnv);
         assert.equal(status,0,stderr);
         assert.ok(stdout.includes(`Scope: ${group ?? '*'}.`));
-        assert.match(stdout,new RegExp('Checkpoint covers id '+(group ? 2 : 1)));
+        assert.doesNotMatch(stdout, OLD_GUIDANCE);
         assert.match(stdout,/ORIGIN-TAIL-10/);
         assert.doesNotMatch(stdout,/SUMMARY MUST NOT LOAD/);
         if (group) {
           assert.doesNotMatch(stdout,/OTHER-GROUP-TAIL/);
-          assert.match(stdout,/--unsummarized --group origin --limit 50/);
+          assert.match(stdout, /ORIGIN-TAIL-5\n/);
+          assert.doesNotMatch(stdout, /ORIGIN-TAIL-4\n/);
         } else {
           assert.match(stdout,/OTHER-GROUP-TAIL/);
-          assert.match(stdout,/--unsummarized --limit 50/);
-          assert.doesNotMatch(stdout,/--unsummarized --group/);
+          assert.match(stdout, /ORIGIN-TAIL-6\n/);
+          assert.doesNotMatch(stdout, /ORIGIN-TAIL-5\n/);
         }
       });
     });
@@ -184,41 +166,48 @@ describe('c4-session-init', () => {
     });
   });
 
-  // Startup view of a backlog left for the next session. Run for session-init,
-  // Sync threshold or shard budget changes; same private-database isolation as above.
-  it('injects the whole unsummarized backlog at the Sync threshold and the latest six above it', () => {
+  it('shows up to six recent messages when there is no handoff', () => {
     withTmpDir(({ env }) => {
-      const quiet = { ...env, ZYLOS_SYNC_THRESHOLD: '' };
-      receiveMany(numbered(15, 'backlog'), quiet);
-      const at = cli([], quiet);
-      assert.equal(at.status, 0, at.stderr);
-      for (const content of numbered(15, 'backlog')) assert.ok(at.stdout.includes(`${content}\n`), content);
-      assert.doesNotMatch(at.stdout, OMITTED_MIDDLE);
-
-      receiveMany(['backlog-16'], quiet);
-      const above = cli([], quiet);
-      assert.equal(above.status, 0, above.stderr);
-      assert.ok(above.stdout.includes('About 16 messages unsummarized; latest 6 shown.'));
-      assert.ok(above.stdout.includes('backlog-11\n') && above.stdout.includes('backlog-16\n'));
-      assert.ok(!above.stdout.includes('backlog-10\n'));
+      const messages = numbered(15, 'backlog');
+      receiveMany(messages, env);
+      const { stdout, stderr, status } = cli([], env);
+      assert.equal(status, 0, stderr);
+      for (const content of messages.slice(-6)) assert.match(stdout, new RegExp(`${content}\n`));
+      for (const content of messages.slice(0, -6)) assert.doesNotMatch(stdout, new RegExp(`${content}\n`));
+      assert.doesNotMatch(stdout, OLD_GUIDANCE);
     });
   });
 
-  it('a multi-session group injects only its own whole small backlog', () => {
+  it('uses the scope handoff mtime as a strict cutoff, independent of checkpoints', () => {
     withTmpDir(({ tmpDir, env }) => {
-      fs.mkdirSync(path.join(tmpDir, '.zylos'));
-      fs.writeFileSync(path.join(tmpDir, '.zylos/config.json'), JSON.stringify({ session_mode: 'multi' }));
-      const quiet = { ...env, ZYLOS_SYNC_THRESHOLD: '' };
-      const earlier = numbered(9, 'earlier');
-      const group = receiveMany(earlier, quiet, { channel: 'telegram', endpoint: 'chat-1', groupName: 'room' });
-      receiveMany(['other group message'], quiet, { channel: 'telegram', endpoint: 'chat-2', groupName: 'other' });
-      assert.equal(receiveMany(['the new message'], quiet, { channel: 'telegram', endpoint: 'chat-1', groupName: 'room' }), group);
-      const { stdout, status, stderr } = cli([], { ...quiet, ZYLOS_SESSION_GROUP: group });
+      const group = 'telegram:room';
+      const handoffPath = path.join(tmpDir, 'memory/session-groups', group, 'handoff.md');
+      const cutoff = new Date('2026-11-27T02:00:00.000Z');
+      fs.mkdirSync(path.dirname(handoffPath), { recursive: true });
+      fs.writeFileSync(handoffPath, 'HANDOFF BODY MUST NOT LOAD');
+      fs.utimesSync(handoffPath, cutoff, cutoff);
+      const setup = spawnSync(process.execPath, ['--input-type=module', '-e', `
+        const db = await import(${JSON.stringify(new URL('../c4-db.js', import.meta.url).href)});
+        const insert = db.getDb().prepare("INSERT INTO conversations(timestamp,direction,channel,content,status,session_group) VALUES(?,?,'system',?,?,?)");
+        insert.run('2026-11-27 01:59:59', 'out', 'BEFORE-CUTOFF', 'delivered', '${group}');
+        insert.run('2026-11-27 02:00:00', 'out', 'AT-CUTOFF', 'delivered', '${group}');
+        // The newest timestamp has a smaller id than the tied earlier messages.
+        insert.run('2026-11-27 02:00:20', 'out', 'LATEST-ROW', 'delivered', '${group}');
+        insert.run(Date.parse('2026-11-27T02:00:10Z') / 1000, 'out', 'LEGACY-TIME', 'delivered', '${group}');
+        for (let i = 1; i <= 8; i++) insert.run('2026-11-27 02:00:01', 'in', 'AFTER-CUTOFF-' + i, 'delivered', '${group}');
+        insert.run('2026-11-27 02:00:21', 'out', 'OTHER-SCOPE', 'delivered', 'telegram:other');
+        db.createCheckpoint('${group}', 12, 'CHECKPOINT MUST NOT LOAD');
+        insert.run('2026-11-27 02:00:22', 'in', 'STILL-PENDING', 'pending', '${group}');
+        db.close();
+      `], { env, encoding: 'utf8', timeout: 15000 });
+      assert.equal(setup.status, 0, setup.stderr);
+      const { stdout, stderr, status } = cli([], { ...env, ZYLOS_SESSION_GROUP: group });
       assert.equal(status, 0, stderr);
-      assert.ok(stdout.includes(`Scope: ${group}.`));
-      for (const content of [...earlier, 'the new message']) assert.ok(stdout.includes(content), content);
-      assert.ok(!stdout.includes('other group message'));
-      assert.doesNotMatch(stdout, OMITTED_MIDDLE);
+      assert.ok(stdout.includes(handoffPath));
+      const markers = Array.from({ length: 8 }, (_, i) => `AFTER-CUTOFF-${i + 1}`).concat('LEGACY-TIME', 'LATEST-ROW');
+      assert.deepEqual(stdout.match(/AFTER-CUTOFF-\d+|LEGACY-TIME|LATEST-ROW/g), markers);
+      assert.doesNotMatch(stdout, /BEFORE-CUTOFF|AT-CUTOFF|OTHER-SCOPE|STILL-PENDING|MUST NOT LOAD/);
+      assert.doesNotMatch(stdout, OLD_GUIDANCE);
     });
   });
 });

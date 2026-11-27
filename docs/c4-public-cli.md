@@ -91,15 +91,11 @@ Other independent commands:
 - `c4-db.js groups [--match TEXT | --active-since MS | --key-match TEXT] [--limit N] [--raw] [--json]`
 - `c4-db.js group-queues [--json]`
 - `c4-db.js mode-transition show [--run-id UUID] [--json]`
-- `c4-db.js origin-sync backlog [--json]`
 - `c4-fetch.js --begin ID --end ID [--json]` preserves the requested historical range.
 - `c4-fetch.js --checkpoints [--group GROUP] --after END [--json]`
-- `c4-fetch.js --origin-sync --group GROUP --summaries-only [--out FILE] [--json]`
-- `c4-fetch.js --origin-sync --group GROUP --raw-only --after COVERAGE [--limit N] [--out FILE] [--json]`; `--out` writes the direct output to a new 0600 file and prints only metadata with an absolute path and a receipt (see `skills/comm-bridge/references/c4-fetch.md`).
-- `c4-fetch.js --origin-sync --group GROUP [--limit N] [--json]` reads both parts in one snapshot.
 - `c4-fetch.js --absorbed --run-id UUID [--summary [--scope-after GROUP] | --id ID [--field text|endpoint] [--out FILE] | --after ID] [--limit N] [--json]`
 
-Range (`--begin`/`--end`) and `--since` text output may end with counted reminders and complete internal-message templates for foreign session groups. No reminder is appended for a missing/empty `ZYLOS_SESSION_GROUP`, an `origin` caller, same-group-only or empty results, JSON, Sync (`--unsummarized` and all `--origin-sync` forms), or other query modes. `c4-db.js recent` remains JSON even without `--json` and never appends reminders.
+Range (`--begin`/`--end`) and `--since` text output may end with counted reminders and complete internal-message templates for foreign session groups. No reminder is appended for a missing/empty `ZYLOS_SESSION_GROUP`, an `origin` caller, same-group-only or empty results, JSON, `--unsummarized`, or other query modes. `c4-db.js recent` remains JSON even without `--json` and never appends reminders.
 
 `groups` filters are mutually exclusive. `--match` also searches message previews.
 `--key-match` matches group keys only (any part, any letter case) and is meant for occasional

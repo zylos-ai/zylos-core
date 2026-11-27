@@ -179,6 +179,8 @@ export class SupervisorLoop {
       const transitionOpen = Boolean(transition || context.transition);
       await this.each(context.fences, fence => d.advanceReclaim(fence, context), 'reclaim');
       if (transitionOpen || context.configuration.legacy) return;
+      try { await d.checkReferenceReorg?.(context); }
+      catch (error) { await d.reportError(error, { phase: 'reference-reorganization' }); }
       await this.each(context.scenes, scene => d.checkRotation(scene, context), 'rotation');
       await this.each(context.scenes, scene => d.checkTtl(scene, context), 'ttl');
       if (context.configuration.mode === 'multi') {

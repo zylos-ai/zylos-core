@@ -6,12 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { SupervisorLifecycle, evictionDemand } from '../supervisor-lifecycle.js';
 import { MANUAL_WAKE_PROMPT } from '../origin-prompts.js';
-import { groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
 
 const contexts = await loadRuntimeContexts();
 
-// Each fixture owns its persistent alert ledger and published state files.
-// No fixture can inherit another case's incident claims or touch a live tree.
 const fixtureRoots = [];
 after(() => { for (const root of fixtureRoots) fs.rmSync(root, { recursive: true, force: true }); });
 
@@ -19,8 +16,6 @@ const scene = (sessionGroup = 'a', extra = {}) => ({ sessionGroup, present: true
   runId: `run-${sessionGroup}`, runtime: 'claude', sessionId: 'session-1', createdAt: 0,
   processRunning: true, state: 'idle', idleSince: 0, runDir: '/isolated/run',
   launchConfig: { runtime: 'claude', mode: 'default' }, ...extra });
-// Above the default Sync threshold of 15, so a reclaim prepares a Sync.
-const SYNC_DUE = 16;
 function fixture(Class = SupervisorLifecycle) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lifecycle-')); fixtureRoots.push(root);
   const env = { ...process.env, HOME: path.join(root, 'home'), ZYLOS_DIR: path.join(root, 'z'),
@@ -29,14 +24,12 @@ function fixture(Class = SupervisorLifecycle) {
     assert.ok(env[key].startsWith(root + path.sep)); fs.mkdirSync(env[key], { recursive: true });
   }
   const f = { now: 2_000_000, scenes: [scene()], fences: new Map(), requests: [], controls: [], events: [], stops: [], forgotten: [],
-    conversations: 0, runningControls: 0, lastActivity: 0, unsummarized: 0,
-    transition: null, pending: [], marker: { held: false, stale: false }, markerReads: [],
-    backlog: { total: 0, groups: [] },
+    conversations: 0, runningControls: 0, lastActivity: 0,
+    transition: null, pending: [],
     context: { configuration: { contexts, mode: 'multi', capacity: 1, hotTtlSeconds: 1800 } } };
   const configuration = f.context.configuration;
   Object.defineProperty(f, 'context', { get: () => ({ configuration, transition: f.transition,
     scenes: f.scenes.map(s => ({ ...s })), fences: [...f.fences].map(([sessionGroup, value]) => ({ sessionGroup, ...value })), restartRequests: [...f.requests] }) });
-  f.checkpoints = new Map(); f.cursors = new Map(); f.env = env;
   f.db = {
     listSlotOccupancy: () => f.slots ?? f.scenes.filter(s => s.sessionGroup !== 'origin' && s.present).map(s => ({ sessionGroup: s.sessionGroup, runId: s.runId, state: 'running', heldUntil: null, createdAt: 0 })),
     getModeTransition: () => f.transition,
@@ -52,49 +45,21 @@ function fixture(Class = SupervisorLifecycle) {
     countNonTerminalControls: () => ({ running: f.runningControls }),
     expireStaleRunningControls: () => [],
     getLastActivity: () => ({ ts: f.lastActivity }),
-    getUnsummarizedRange: () => ({ count: f.unsummarized, firstAt: f.unsummarized ? 1_000_000 : null, lastConversationId: f.unsummarized || null }),
-    getGlobalUnsummarizedRange: () => ({ count: f.unsummarized, firstAt: f.unsummarized ? 1_000_000 : null }),
-    getLatestContentCheckpoint: scope => f.checkpoints.get(scope) ?? null,
-    getDeliveredFrontier: () => f.unsummarized,
-    getOriginSyncCursor: scope => f.cursors.get(scope) ?? null,
-    getOriginSyncBacklog: () => ({ ...f.backlog, groups: f.backlog.groups.map(row => ({
-      sessionGroup: 'fixture-source', cursorFrom: 0, checkpointFrom: 0, ...row,
-    })) }),
     listPendingSessionGroups: () => f.pending,
     getControlById: id => f.controls.find(c => c.id === id),
     insertControl: (content, options) => { const row = { id: f.controls.length + 1, content, ...options, status: 'pending' }; f.controls.push(row); return row; },
   };
-  f.deps = { db: f.db, env, observe: () => f.scenes,
+  f.deps = { db: f.db,
     observeGroup: group => f.scenes.find(s => s.sessionGroup === group || group === null && s.sessionGroup === 'origin') ?? { present: false },
     stop: s => { f.stops.push(s.runId); f.scenes = f.scenes.filter(x => x.runId !== s.runId); },
     intentionalStop: (group, runId) => { f.forgotten.push([group, runId]); },
-    readSyncMarker: args => { f.markerReads.push(args); return f.marker; },
-    groupRunDir: group => `/isolated/${group}`,
     requests: { read: () => f.requests, remove: id => { f.requests = f.requests.filter(r => r.requestId !== id); } },
     bindTarget: s => ({ expectedRunId: s.runId }),
     diagnostic: e => f.events.push(e),
-    prompts: { PRE_RECLAIM_CHECK_PROMPT: 'check', UPGRADE_RESTART_CHECK_PROMPT: 'upgrade check', PRE_RECLAIM_SYNC_PROMPT: 'prepare', PRE_RECLAIM_ORIGIN_SYNC_PROMPT: 'prepare origin', GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
-      ROTATION_PROMPT: () => 'rotate', SYNC_BACKLOG_ALERT: (kind, count, lag, scope) => `alert:${kind === 'group' ? scope : kind}` },
+    prompts: { PRE_RECLAIM_CHECK_PROMPT: 'check', UPGRADE_RESTART_CHECK_PROMPT: 'upgrade check',
+      ROTATION_PROMPT: 'rotate' },
   };
   f.lifecycle = new Class(f.deps, { now: () => f.now });
-  f.publishSyncFacts = () => {
-    // Model the persisted result separately from control settlement. The real
-    // proof reads these checkpoint/cursor observations and private state bytes.
-    for (const preparation of [...f.lifecycle.ttlPreparation.values(), ...f.lifecycle.releasePreparation.values()]) {
-      for (const { target } of preparation.syncs ?? []) {
-        if (target.kind === 'origin') {
-          for (const cursor of target.cursors) f.cursors.set(cursor.scope, {
-            syncedId: cursor.syncedId + 1, checkpointId: cursor.checkpointId + 1,
-          });
-          continue;
-        }
-        const checkpoint = { id: (target.checkpointId ?? 0) + 1, end_conversation_id: target.end };
-        f.checkpoints.set(target.scope, checkpoint);
-        const directory = groupMemoryDir(target.scope, env); fs.mkdirSync(directory, { recursive: true });
-        fs.writeFileSync(path.join(directory, 'state.md'), `<!-- zylos-state v1 | scope=${target.scope} | synced_at=2026-11-17T00:00:00Z | coverage=${target.end} | inbox_committed= -->\n`);
-      }
-    }
-  };
   f.settle = (status = 'done') => { for (const control of f.controls) control.status = status; };
   f.fence = (reason = 'ttl', group = 'a') => { const row = { sessionGroup: group, reason, runId: `run-${group}` }; f.fences.set(group, row); return row; };
   return f;
@@ -174,7 +139,7 @@ test('TTL reclaim expires running controls only through the cutoff allowed by th
 // reclaim-policy: TTL preparation is cancellable; all real terminal statuses recheck.
 test('TTL preparation cancels on new messages or replaced run without fencing', async () => {
   for (const change of ['message', 'replacement']) {
-    const f = fixture(); f.unsummarized = SYNC_DUE;
+    const f = fixture();
     await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
     assert.deepEqual(f.controls.map(control => control.content), ['check']);
     for (const control of f.controls) { assert.equal(control.requireIdle, true); assert.equal(control.appendAckSuffix, true); }
@@ -183,35 +148,8 @@ test('TTL preparation cancels on new messages or replaced run without fencing', 
     await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
   }
 });
-test('completed TTL preparation waits for every held Sync marker to release', async () => {
-  for (const group of ['a', 'origin']) {
-    for (const heldKind of group === 'origin' ? ['group', 'origin'] : ['group']) {
-      const f = fixture(); f.scenes = [scene(group)]; f.unsummarized = SYNC_DUE;
-      await f.lifecycle.checkTtl(f.scenes[0], f.context);
-      const preparation = f.lifecycle.ttlPreparation.get(group);
-      f.settle();
-      f.deps.readSyncMarker = args => { f.markerReads.push(args); return { held: args.kind === heldKind, stale: false }; };
-      for (const elapsed of [1, 90_000]) {
-        f.now = preparation.at + elapsed; f.scenes[0].lastActivityAt = f.now;
-        await f.lifecycle.checkTtl(f.scenes[0], f.context);
-        assert.equal(f.lifecycle.ttlPreparation.get(group), preparation);
-        assert.equal(f.fences.size, 0);
-        assert.equal(f.controls.length, 1);
-      }
-      assert.ok(f.markerReads.some(args => args.kind === heldKind && args.currentRunId === preparation.runId));
-      f.deps.readSyncMarker = () => ({ held: false, stale: false });
-      await f.lifecycle.checkTtl(f.scenes[0], f.context);
-      assert.equal(f.fences.get(group)?.reason, 'ttl');
-      assert.equal(f.lifecycle.ttlPreparation.get(group), preparation);
-      assert.equal(f.controls.length, 1);
-      assert.equal(f.lifecycle.ttlReset.has(group), false);
-      assert.equal(await f.lifecycle.advanceReclaim(f.fences.get(group), f.context), 'done');
-      assert.equal(f.lifecycle.ttlPreparation.has(group), false);
-    }
-  }
-});
 test('active subagents block TTL preparation, direct fences and capacity selection without changing idle', async () => {
-  const f = fixture(); f.unsummarized = 1;
+  const f = fixture();
   f.scenes[0].activeSubagents = [{ agentId: 'child', lastActivityAt: f.now - 1 }];
   f.scenes[0].lastSubagentActivityAt = f.now - 1;
   assert.equal(await f.lifecycle.idle(f.scenes[0], f.context), true);
@@ -244,16 +182,6 @@ test('rotation cooldown follows successful write and run/session pair', async ()
   f.scenes[0].sessionId = 'session-2'; await f.lifecycle.checkRotation(f.scenes[0], f.context);
   assert.equal(f.controls.length, 2); assert.equal(f.events.some(e => e.event === 'rotate_done'), false);
 });
-// trigger conditions: backlog above threshold, per-scope marker, minimum interval, Origin checkpoint age.
-test('regular Sync obeys held marker and minimum interval across a run replacement', async () => {
-  const f = fixture(); f.unsummarized = SYNC_DUE; f.marker = { held: true, stale: false };
-  await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls.length, 0);
-  f.marker.stale = true; f.now += 60000; await f.lifecycle.checkSync(f.scenes, f.context);
-  assert.equal(f.controls.length, 1); assert.equal(f.controls[0].priority, 2); assert.equal(f.controls[0].appendAckSuffix, false);
-  f.scenes[0].runId = 'new-run'; f.now += 60000; await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls.length, 1);
-  f.now += 600000; await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls.length, 2);
-});
-// immutable restart list and durable delete before diagnostic.
 test('upgrade waits startup and unknown inventory; new run never joins original restart list', async () => {
   const f = fixture(); f.requests = [{ reason: 'upgrade', requestId: 'req', runIds: ['run-a'] }];
   f.scenes[0].ready = false; await f.lifecycle.advanceRestarts(f.context); assert.equal(f.fences.size, 0);
@@ -265,7 +193,7 @@ test('upgrade waits startup and unknown inventory; new run never joins original 
 test('manual stops requested Origin run immediately then waits only real conversation drain', async () => {
   const f = fixture(); f.scenes = [scene('origin', { state: 'busy' })];
   f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'run-origin' }];
-  f.conversations = 1; f.runningControls = 1; f.marker.held = true;
+  f.conversations = 1; f.runningControls = 1;
   await f.lifecycle.advanceManual(f.context); assert.deepEqual(f.stops, ['run-origin']); assert.deepEqual(f.forgotten,[['origin','run-origin']]); assert.equal(f.requests.length, 1); assert.equal(f.fences.size, 1);
   f.scenes = [scene('origin', { runId: 'replacement' })]; f.conversations = 0;
   f.lifecycle = new SupervisorLifecycle(f.deps, { now: () => f.now });
@@ -439,7 +367,6 @@ test('native single reclaims only after global conversations and Origin controls
   f.runningControls = 0;
   assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
   assert.ok(targets.every(target => target.sessionGroup === 'origin'));
-  assert.deepEqual(f.markerReads.map(row => row.kind), ['group','origin']);
   assert.equal(f.endings[0].sessionGroup, 'origin');
 });
 

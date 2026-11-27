@@ -1,5 +1,3 @@
-import { CHECKPOINT_THRESHOLD } from '../../comm-bridge/scripts/c4-config.js';
-
 function positiveInteger(value) {
   if (typeof value === 'string') {
     if (!/^\d+$/.test(value.trim())) return undefined;
@@ -18,10 +16,5 @@ export function parseSupervisorConfiguration(config, env = process.env) {
     hotTtlSeconds: setting('session_hot_ttl_seconds', 3300),
     reclaimDeferAlertCount: setting('session_reclaim_defer_alert_count', 4),
     evictMinIdleSeconds: setting('session_evict_min_idle_seconds', 300),
-    syncMinIntervalSeconds: setting('sync_min_interval_seconds', 600),
-    syncMaxIntervalSeconds: setting('sync_max_interval_seconds', 21600),
-    originSyncThreshold: setting('origin_sync_threshold', 50),
-    syncBatchLimit: setting('sync_batch_limit', 200),
-    syncThreshold: setting('sync_threshold', CHECKPOINT_THRESHOLD),
   };
 }

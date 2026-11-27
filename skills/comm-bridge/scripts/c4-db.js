@@ -479,6 +479,7 @@ export const getGlobalDeliveredFrontier = (...args) => store.getGlobalDeliveredF
 export const createCheckpoint = (...args) => store.createCheckpoint(...args);
 export const getLatestContentCheckpoint = (...args) => store.getLatestContentCheckpoint(...args);
 export const hasPendingStartupReply = (...args) => store.hasPendingStartupReply(...args);
+export const getRecentDeliveredConversations = (...args) => store.getRecentDeliveredConversations(...args);
 export const getDeliveredSince = (...args) => store.getDeliveredSince(...args);
 export const getGlobalDeliveredSince = (...args) => store.getGlobalDeliveredSince(...args);
 export const getUnsummarizedRange = (...args) => store.getUnsummarizedRange(...args);
@@ -487,11 +488,6 @@ export const getUnsummarizedConversations = (...args) => store.getUnsummarizedCo
 export const getDreamConversations = () => store.getDreamConversations();
 export const getGlobalUnsummarizedConversations = (...args) => store.getGlobalUnsummarizedConversations(...args);
 export const getContentCheckpointsSince = (...args) => store.getContentCheckpointsSince(...args);
-export const getOriginSyncConversations = (...args) => store.getOriginSyncConversations(...args);
-export const advanceOriginSyncCursor = (...args) => store.advanceOriginSyncCursor(...args);
-export const getOriginSyncCursor = (...args) => store.getOriginSyncCursor(...args);
-export const getOriginSyncReceiptInputs = (...args) => store.getOriginSyncReceiptInputs(...args);
-export const getOriginSyncBacklog = (...args) => store.getOriginSyncBacklog(...args);
 export const takeSlot = (...args) => store.takeSlot(...args);
 export const releaseSlot = (...args) => store.releaseSlot(...args);
 export const adoptSlot = (...args) => store.adoptSlot(...args);

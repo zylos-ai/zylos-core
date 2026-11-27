@@ -13,7 +13,7 @@ const scenes=new SupervisorScenes({env:process.env,connectionOptions:{socketPath
 const stop=scenes.stop.bind(scenes);scenes.stop=async scene=>{await barrier('before-stop');await stop(scene);await barrier('after-stop');};
 const service=await startSupervisor({env:process.env,db:{...db,getDb:()=>database},scenes,
  readMode:()=>({mode:'multi'}),readConfiguration:()=>({mode:'multi',runtime:'claude',capacity:2}),resolveTargetRuntime:()=> 'claude',
- readSyncMarker:()=>({held:false,stale:false}),restoreTransition:async()=>{await barrier('after-fence');if(pause==='clear-fence')db.clearDrainFence('origin',{expectedReason:'upgrade',expectedRunId:'run-1'});},
+ restoreTransition:async()=>{await barrier('after-fence');if(pause==='clear-fence')db.clearDrainFence('origin',{expectedReason:'upgrade',expectedRunId:'run-1'});},
  machineTasks:{tick(){},stop(){}},legacyStatus:{tick(){},close(){}},sendAlert:()=>{throw new Error('No external send');},log:()=>{},loopOptions:{schedule:()=>1,cancel:()=>{}}});
 await service.supervisor.loop.tick();
 const events=path.join(root,'activity-monitor/supervisor-events.jsonl');

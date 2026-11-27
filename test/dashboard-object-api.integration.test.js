@@ -135,7 +135,6 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     }
     else if (file === process.execPath && args[0]?.endsWith('/c4-control.js') && args[1] === 'enqueue') data = { id: 7 };
     else if (file === process.execPath && args[0]?.endsWith('/scheduler/scripts/cli.js')) { callback(null, JSON.stringify({ ok: true, data: { id: 'fixture-task' } }), ''); return new EventEmitter(); }
-    else if (file === process.execPath && args[0]?.endsWith('/sync-lock.js')) { callback(null, JSON.stringify({ sync: { held: false } }), ''); return new EventEmitter(); }
     else throw new Error(`Unexpected child process in HTTP fixture: ${file} ${args[0]}`);
     callback(null, JSON.stringify({ ok: true, data }), ''); return new EventEmitter();
   };

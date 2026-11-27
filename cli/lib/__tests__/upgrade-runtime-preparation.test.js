@@ -66,7 +66,7 @@ function snapshot(dir) {
   return result;
 }
 
-test('split preparation changes no live bytes and stages both runtimes, assets and packaged agents', t => {
+test('split preparation changes no live bytes and stages both runtimes without retired agents', t => {
   const f = fixture(t), before = snapshot(f.zylosDir);
   const prepared = f.prepare();
   assert.deepEqual(snapshot(f.zylosDir), before);
@@ -82,12 +82,7 @@ test('split preparation changes no live bytes and stages both runtimes, assets a
   }
   assert.equal(prepared.replacements.some(r => r.path === '.zylos/instructions/onboarding.md'), false);
   assert.equal(prepared.replacements.some(r => r.path === '.zylos/onboarding-pending'), false);
-  const agents = prepared.replacements.filter(item => item.path.startsWith('.claude/agents/'));
-  assert.equal(agents.length, 3);
-  for (const { path: name } of agents) {
-    const bytes = prepared.replacements.find(r => r.path === name).content;
-    assert.deepEqual(bytes, fs.readFileSync(path.join(packageRoot, 'skills/zylos-memory/agents', path.basename(name))));
-  }
+  assert.equal(prepared.replacements.some(item => item.path.startsWith('.claude/agents/')), false);
 });
 
 test('legacy files and ZYLOS bytes are preserved with truthful pending migration', t => {

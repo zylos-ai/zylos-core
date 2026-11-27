@@ -170,7 +170,7 @@ test('CLI direct baseline keeps official URLs and creates no upstream files; blo
   assert.ok(f.readLog().every(r => ['github.com', 'api.github.com', 'raw.githubusercontent.com'].includes(new URL(r.url).hostname)));
 });
 
-test('real init installs packaged Claude memory agents and rejects invalid sources', t => {
+test('real init leaves retired memory agents and working state absent', t => {
   const args = ['init', '--yes', '--quiet', '--runtime', 'claude', '--timezone', 'UTC', '--no-caddy'];
   const prepare = f => {
     for (const name of ['tmux', 'npm']) fs.writeFileSync(path.join(f.bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
@@ -184,39 +184,15 @@ test('real init installs packaged Claude memory agents and rejects invalid sourc
   fs.symlinkSync(path.join(coreRoot, 'node_modules'), path.join(installed.zylosDir, 'node_modules'), 'dir');
   installed.success(installed.run(args));
 
-  const source = path.join(installed.candidateRoot, 'skills/zylos-memory/agents');
   const destination = path.join(installed.zylosDir, '.claude/agents');
-  const agents = fs.readdirSync(source).filter(name => name.endsWith('.md')).sort();
-  assert.deepEqual(agents, ['zylos-global-sync.md', 'zylos-group-sync.md', 'zylos-origin-sync.md']);
-  for (const name of agents) {
-    assert.deepEqual(fs.readFileSync(path.join(destination, name)), fs.readFileSync(path.join(source, name)));
-  }
-
-  const unrelated = path.join(destination, 'user-agent.md');
-  fs.writeFileSync(unrelated, 'preserve me\n');
-  fs.writeFileSync(path.join(destination, agents[0]), 'stale definition\n');
+  assert.equal(fs.existsSync(destination), false);
+  assert.equal(fs.existsSync(path.join(installed.zylosDir, 'memory/state.md')), false);
+  assert.equal(fs.existsSync(path.join(installed.zylosDir, 'memory/session-groups/origin/state.md')), false);
+  fs.mkdirSync(destination, { recursive: true });
+  const userAgent = path.join(destination, 'user-agent.md');
+  fs.writeFileSync(userAgent, 'preserve me\n');
   installed.success(installed.run(args));
-  assert.equal(fs.readFileSync(unrelated, 'utf8'), 'preserve me\n');
-  for (const name of agents) {
-    assert.deepEqual(fs.readFileSync(path.join(destination, name)), fs.readFileSync(path.join(source, name)));
-  }
-
-  for (const invalid of ['missing', 'symlink', 'empty']) {
-    const f = fixture(t, { initialized: true });
-    prepare(f);
-    const agentsRoot = path.join(f.candidateRoot, 'skills/zylos-memory/agents');
-    fs.rmSync(agentsRoot, { recursive: true, force: true });
-    if (invalid === 'symlink') fs.symlinkSync(path.join(f.candidateRoot, 'templates'), agentsRoot, 'dir');
-    if (invalid === 'empty') fs.mkdirSync(agentsRoot);
-    const result = f.run(args);
-    const diagnostic = `${result.stdout}\n${result.stderr}`.replace(/\x1b\[[0-9;]*m/g, '');
-    assert.equal(result.status, 1, diagnostic);
-    assert.match(diagnostic, invalid === 'missing'
-      ? /ENOENT.*skills\/zylos-memory\/agents/
-      : invalid === 'symlink'
-        ? /Missing packaged Claude agent directory/
-        : /No packaged Claude memory agents/);
-  }
+  assert.equal(fs.readFileSync(userAgent, 'utf8'), 'preserve me\n');
 });
 
 

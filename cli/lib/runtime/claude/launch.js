@@ -8,7 +8,6 @@ import { claudeProbeEnvironment } from './auth.js';
 import { context } from './context.js';
 import { repairProjectSettings } from './hooks.js';
 import { writePrivateFile } from '../../private-file.js';
-import { memoryMcpServerPath } from '../session-command.js';
 
 export const env = Object.freeze({
   fromDotenv: Object.freeze([
@@ -27,15 +26,10 @@ export const promptPlacement = 'separator';
 export const efforts = Object.freeze(['low', 'medium', 'high', 'max']);
 export const overrideHelpFlags = Object.freeze(['--model', '--effort']);
 
-export function buildArgs(config, { root, bypassPermissions = true }) {
+export function buildArgs(config, { bypassPermissions = true }) {
   const args = ['--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode,Artifact,ReportFindings,Workflow'];
   if (bypassPermissions) args.push('--dangerously-skip-permissions');
   if (config.mode === 'override') args.push('--model', config.model, '--effort', config.effort);
-  args.push('--mcp-config', JSON.stringify({
-    mcpServers: {
-      'zylos-memory': { type: 'stdio', command: 'node', args: [memoryMcpServerPath(root)] },
-    },
-  }));
   return args;
 }
 

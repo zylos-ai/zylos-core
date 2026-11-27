@@ -45,7 +45,7 @@ function fixture(t, { mode = 'multi', runtime = 'codex', checkAuth, create = cre
     supervisor = create({ db, scenes, zylosDir: root, env: { ZYLOS_DIR: root }, now: () => state.now,
       readMode: () => ({ mode, keyPresent: true }), readConfiguration: () => ({ mode, runtime, capacity: 4 }),
       resolveTargetRuntime: () => runtime, requestStore: new RestartRequestStore({ file: path.join(root, 'requests.json') }),
-      readSyncMarker: () => ({ held: false, stale: false }),
+
       checkAuth: async checked => { state.checks.push(checked); return checkAuth ? checkAuth(checked) : { status: 'success' }; },
       loopOptions: { schedule: () => 1, cancel: () => {} },
     });

@@ -15,7 +15,7 @@ requests.publish=(...args)=>{if(pause==='before-remove'&&args[1].length===0){pro
 const scenes=new SupervisorScenes({env:process.env,connectionOptions:{socketPath,binary},readMode:()=>({mode,keyPresent:true}),readActivity:()=>({state:'idle',idleSince:1}),readUsage:()=>null});
 const observe=scenes.observeGroup.bind(scenes);scenes.observeGroup=async group=>{const scene=await observe(group);return holding&&scene.present?{...scene,processRunning:undefined}:scene;};
 const service=await startSupervisor({env:process.env,db:{...db,getDb:()=>database,getModeTransition:()=>holding?{phase:'fixture_hold'}:db.getModeTransition()},scenes,requestStore:requests,
- readMode:()=>({mode,keyPresent:true}),readConfiguration:()=>({mode,runtime:'claude',capacity:2}),resolveTargetRuntime:()=> 'claude',readSyncMarker:()=>({held:false,stale:false}),
+ readMode:()=>({mode,keyPresent:true}),readConfiguration:()=>({mode,runtime:'claude',capacity:2}),resolveTargetRuntime:()=> 'claude',
  machineTasks:{tick(){},stop(){}},legacyStatus:{tick(){},close(){}},sendAlert:(target,message)=>{alerts.push({target,message});},log:()=>{},loopOptions:{schedule:()=>1,cancel:()=>{}}});
 process.send({ready:true});
 process.on('message',async command=>{try{

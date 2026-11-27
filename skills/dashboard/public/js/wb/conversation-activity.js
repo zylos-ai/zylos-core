@@ -24,10 +24,10 @@ export function formatDuration(ms, t = key => key) {
   return t('chat.activity.hours').replace('{h}', String(Math.floor(seconds / 3600))).replace('{m}', String(Math.floor(seconds % 3600 / 60)));
 }
 
-/** A subtask's name: Memory Sync by what it does, otherwise the description it was started with. */
+/** The launch description or the default subtask label. */
 export function subtaskName(label, t = key => key) {
   if (label?.key === 'named' && label.arg) return label.arg;
-  return t(label?.key === 'memorySync' ? 'chat.activity.subtask.memorySync' : 'chat.activity.subtask.plain');
+  return t('chat.activity.subtask.plain');
 }
 
 const MARK_ICON = { message: 'msg', scheduled: 'clock', control: 'info', other: 'in', subtask: 'layers' };

@@ -19,7 +19,7 @@ export function executeMemoryWrite(file, args, options, text) {
   });
 }
 
-/** Core owns the shared Sync lock, hash comparison and atomic publication. */
+/** Core owns the write lock, hash comparison and atomic publication. */
 export function createMemoryWriter({ zylosDir, env = process.env, execute = executeMemoryWrite } = {}) {
   const script = path.join(zylosDir, '.claude', 'skills', 'zylos-memory', 'scripts', 'memory-write.js');
   return async function saveMemory(rel, { text, sha256 }) {
@@ -50,7 +50,6 @@ export function createMemoryWriter({ zylosDir, env = process.env, execute = exec
     const code = envelope.error.code;
     const mapping = {
       MEMORY_CONFLICT: ['memory_conflict', 409],
-      SYNC_BUSY: ['memory_sync_busy', 409],
       LOCK_TIMEOUT: ['memory_lock_timeout', 503],
       INVALID_MEMORY_PATH: ['invalid_memory_path', 400],
       MEMORY_FILE_NOT_FOUND: ['memory_file_not_found', 404],

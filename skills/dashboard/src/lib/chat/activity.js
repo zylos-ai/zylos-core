@@ -36,8 +36,6 @@ const LAUNCH_LEAD_MS = 10_000;
  * delivery carries when it was typed in, and the prompt is looked for from then.
  */
 const PROMPT_DELIVERY_LAG_MS = 2_000;
-// Memory Sync workers, named by what they do rather than by their worker type.
-const MEMORY_SYNC_AGENTS = /^zylos-(group|origin|global)-sync$/;
 // This module awaits the Dashboard runtime factory at top level. Runtime implementations must not statically import it.
 const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
 const dashboardRuntimes = await Promise.all(SUPPORTED_RUNTIMES.map(id => getDashboardRuntime(id)));
@@ -116,14 +114,8 @@ export function isActivityToolEvent(event) {
   return (vocab(event.runtime).toolEvents === 'transcript' ? transcriptTools : toolEventTypes).includes(event.type);
 }
 
-/**
- * A subtask's name: Memory Sync by what it does, otherwise the short description of the Claude call that launched it,
- * otherwise a plain "subtask". What Codex records with a start is the message the subtask was given or a generated
- * nickname, never a name, so it is not shown.
- */
-function subtaskLabel(start, launch = null) {
-  const meta = start.meta;
-  if (typeof meta.agent_type === 'string' && MEMORY_SYNC_AGENTS.test(meta.agent_type)) return { key: 'memorySync' };
+// Agent launch descriptions are useful labels; a missing description gets the default name.
+function subtaskLabel(launch) {
   const named = plain(launch?.meta.tool_detail);
   return named ? { key: 'named', arg: named } : { key: 'plain' };
 }
@@ -449,7 +441,7 @@ export class ChatActivity {
     const counts = new Map([...keys].map(([id, set]) => [id, set.size]));
     return ids.filter(id => latest.has(id)).map(id => {
       const start = latest.get(id);
-      return { id: subtaskKey(id), label: subtaskLabel(start, launches.get(id)), start: start.at, steps: counts.get(id) ?? 0 };
+      return { id: subtaskKey(id), label: subtaskLabel(launches.get(id)), start: start.at, steps: counts.get(id) ?? 0 };
     }).sort((a, b) => a.start - b.start);
   }
 
@@ -566,7 +558,7 @@ export class ChatActivity {
     const marks = [
       ...deliveries.flatMap(event => { const mark = kind(event); return mark ? [{ kind: 'mark', ...mark, at: event.at }] : []; }),
       ...events.filter(event => event.type === 'subagent_start' && agentOf(event))
-        .map(event => ({ kind: 'mark', mark: 'subtask', label: subtaskLabel(event, launches.get(agentOf(event))), at: event.at })),
+        .map(event => ({ kind: 'mark', mark: 'subtask', label: subtaskLabel(launches.get(agentOf(event))), at: event.at })),
     ];
     const steps = interleave(built.steps, marks);
     // The header's reading; the subtasks' agent ids on it are not enumerable and stay out of the response.

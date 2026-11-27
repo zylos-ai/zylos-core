@@ -1,13 +1,11 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
 import { MemoryBrowser, memoryErrorPayload } from '../src/lib/memory-browser.js';
-import { tmuxNameForGroup } from '../../../cli/lib/session-group-paths.js';
 import { installMemoryScripts, memoryTestEnv, memoryTempRoot } from './fixtures/memory-installation.js';
 
 const digest = text => createHash('sha256').update(text).digest('hex');
@@ -25,14 +23,10 @@ function fixture(t, { execute, env = {} } = {}) {
   fs.writeFileSync(path.join(memory, 'identity.md'), 'original\n');
   fs.mkdirSync(path.join(root, '.zylos'));
   fs.writeFileSync(path.join(root, '.zylos', 'config.json'), JSON.stringify({ session_mode: 'multi' }));
-  const cleanups = [];
-  t.after(async () => {
-    try { for (const cleanup of cleanups.reverse()) await cleanup(); }
-    finally { fs.rmSync(root, { recursive: true, force: true }); }
-  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const browser = new MemoryBrowser({ zylosDir: root, executeMemoryWrite: execute, env: childEnv });
   const args = { text: 'changed é\n', sha256: digest('original\n') };
-  return { root, childEnv, script, file, relative, browser, args, onCleanup: action => cleanups.push(action) };
+  return { root, childEnv, script, file, relative, browser, args };
 }
 
 function assertFailure(browser, rel, args, error, status, code) {
@@ -45,33 +39,14 @@ function assertFailure(browser, rel, args, error, status, code) {
   });
 }
 
-// Integration: exercising actual Core save/Sync admission and publication; run
-// when the adapter/locking boundary changes, skip for unrelated frontend work.
-test('active group Sync blocks saving until its real marker is released', { timeout: 30000 }, async t => {
+// Boundary: the real Core writer invoked by Dashboard against a fixture-owned memory tree.
+// Run for writer admission or publication changes; no runtime or tmux starts.
+test('a Dashboard save uses the installed Core writer to publish scoped memory', { timeout: 30000 }, async t => {
   const f = fixture(t);
-  const env = { ...f.childEnv, ZYLOS_SESSION_GROUP: group, ZYLOS_RUN_ID: 'memory-test-run' };
-  const lock = path.join(path.dirname(f.script), 'sync-lock.js');
-  const tmux = args => execFileSync('tmux', args, { env, encoding: 'utf8', timeout: 5000 });
-  f.onCleanup(() => { try { tmux(['kill-server']); } catch {} });
-  tmux(['-f', '/dev/null', 'new-session', '-d', '-s', tmuxNameForGroup(group),
-    '-e', `ZYLOS_SESSION_GROUP=${group}`, '-e', 'ZYLOS_RUN_ID=memory-test-run']);
-  const token = execFileSync(process.execPath, [lock, 'acquire', '--kind', 'group'], { env, encoding: 'utf8', timeout: 15000 }).trim();
-  await assertFailure(f.browser, relative, f.args, 'memory_sync_busy', 409);
-  assert.equal(fs.readFileSync(f.file, 'utf8'), 'original\n');
-  execFileSync(process.execPath, [lock, 'release', '--kind', 'group', '--token', token], { env, timeout: 15000 });
   const result = await f.browser.writeFile(relative, f.args);
   assert.equal(result.text, f.args.text);
   assert.equal(result.sha256, digest(fs.readFileSync(f.file)));
 });
-
-// Integration: verifies real admission observes tmux identity, not a fabricated
-// on-disk marker; run with Sync/save boundary changes, skip for display changes.
-
-// Integration: the real Core default lock wait is ten seconds; run after lock
-// timeout/adapter changes, skip for unrelated UI or read-only changes.
-
-// Integration: permission failure comes from the actual Core temporary-file
-// creation; run after publication/error changes, skip for unrelated frontend work.
 
 test('invalid requests never launch the Core writer', async t => {
   let calls = 0;

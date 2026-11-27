@@ -36,9 +36,6 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   put.run(2, 'origin', 'out', 'telegram', '2026-10-01 12:00:00', 'private Origin body');
   put.run(3, null, 'out', 'internal', '2026-10-01 12:00:00', 'private internal body');
   put.run(4, 'telegram:a', 'in', 'telegram', '2026-10-01 12:00:00', 'private ordinary body');
-  // Origin's Sync marker: only a group with one asks sync-lock.js whether its Sync is held.
-  fs.mkdirSync(path.join(root, 'activity-monitor/session-groups/origin'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'activity-monitor/session-groups/origin/sync.lock'), '{}');
   let clock = 1800000000000;
   let engine, auth, reader, server, view = 'multi', cachedSnapshot = null;
   const calls = [], restarts = [];
@@ -80,9 +77,6 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     if (args[0] === path.join(root, '.claude/skills/comm-bridge/scripts/c4-db.js') && args[1] === 'groups') {
       const cutoff = Number(args[args.indexOf('--active-since') + 1]);
       return { stdout: JSON.stringify({ ok: true, data: { groups: groups.filter(row => row.lastActivityAt >= cutoff), hasOlder: false } }) };
-    }
-    if (args[0] === path.join(root, '.claude/skills/zylos-memory/scripts/sync-lock.js')) {
-      return { stdout: JSON.stringify({ sync: { held: true }, origin: { held: false } }) };
     }
     assert.fail(`Unexpected child request: ${file} ${args.join(' ')}`);
   };

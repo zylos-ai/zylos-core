@@ -47,7 +47,6 @@ export const RUNTIME_CONTRACT = Object.freeze({
     template: 'required',
     output: 'required',
     sessionStartInjection: 'optional',
-    groupSyncPrompt: 'optional',
   }) }),
   input: Object.freeze({ required: true, members: Object.freeze({
     bracketedPaste: 'required',

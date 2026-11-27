@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createMemoryEditor } from '../memory-mcp-server.js';
-import { acquire, memoryScope } from '../sync-lock.js';
+import { dreamLock } from '../dream-lock.js';
 
 for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
   assert.ok(process.env[key]);
@@ -14,50 +14,39 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-tool-'));
 console.log('Memory tool test isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
   PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, fixtureRoot: root, tmux: 'unused', database: 'unused' }));
 after(() => fs.rmSync(root, { recursive: true, force: true }));
-const runId = '11111111-1111-4111-8111-111111111111';
-async function fixture(kind, group, sharedRoot) {
-  const dir = sharedRoot ?? fs.mkdtempSync(path.join(root, kind));
-  const env = { ...process.env, ZYLOS_DIR: dir, ZYLOS_RUN_ID: runId };
-  if (group) env.ZYLOS_SESSION_GROUP = group; else delete env.ZYLOS_SESSION_GROUP;
-  const currentRunId = async () => runId;
-  const token = await acquire({ kind, env }, { currentRunId });
-  return { env, token, dir, editor: createMemoryEditor(env), scope: await memoryScope(env) };
+async function fixture() {
+  const dir = fs.mkdtempSync(path.join(root, 'dream-'));
+  const env = { ZYLOS_MEMORY_DREAM_ROOT: dir };
+  const token = await dreamLock(dir).acquire();
+  return { env, token, dir, editor: createMemoryEditor(env) };
 }
 const create = (token, file, replacement = 'content') => ({ op: 'create', path: file, replacement, token });
 
-test('local: group, origin and global use marker-derived target scopes', async () => {
-  const group = await fixture('group', 'telegram:g-1');
-  const temporary = `session-groups/telegram:g-1/state.md.${group.token}.tmp`;
-  assert.equal((await group.editor(create(group.token, temporary))).ok, true);
-  for (const target of ['identity.md', 'state.md', 'session-groups/telegram:g-1/state.md',
-    'session-groups/telegram:g-1/inbox.md', 'session-groups/telegram:g-2/state.md.' + group.token + '.tmp']) {
-    assert.equal((await group.editor(create(group.token, target))).code, 'PATH_NOT_ALLOWED');
-  }
-  const origin = await fixture('origin', 'origin');
+test('the dream editor can write shared memory but cannot write retired state or session files', async () => {
+  const { editor, token } = await fixture();
   for (const target of ['identity.md', 'references.md', 'reference/projects/example.md', 'users/person/profile.md']) {
-    assert.equal((await origin.editor(create(origin.token, target))).ok, true);
+    assert.equal((await editor(create(token, target))).ok, true);
   }
-  assert.equal((await origin.editor(create(origin.token, `session-groups/origin/state.md.${origin.token}.tmp`))).code, 'PATH_NOT_ALLOWED');
-  const global = await fixture('global');
-  for (const target of ['identity.md', `state.md.${global.token}.tmp`]) assert.equal((await global.editor(create(global.token, target))).ok, true);
-  assert.equal((await global.editor(create(global.token, 'session-groups/origin/state.md'))).code, 'PATH_NOT_ALLOWED');
+  for (const target of ['state.md', 'session-groups/origin/state.md', 'session-groups/origin/inbox.md', 'sessions/2026-11-27.md']) {
+    assert.equal((await editor(create(token, target))).code, 'PATH_NOT_ALLOWED');
+  }
 });
 
 test('local: model role claims are rejected and the server environment stays bound', async () => {
-  const f = await fixture('global');
+  const f = await fixture();
   assert.equal((await f.editor({ ...create(f.token, 'identity.md'), kind: 'global' })).code, 'INVALID_INPUT');
   assert.equal((await f.editor(create('0'.repeat(32), 'identity.md'))).code, 'TOKEN_MISMATCH');
   const unbound = createMemoryEditor({ ZYLOS_DIR: f.dir });
-  assert.equal((await unbound(create(f.token, 'identity.md'))).code, 'SCOPE_UNBOUND');
+  assert.equal((await unbound(create(f.token, 'identity.md'))).code, 'TOKEN_MISMATCH');
   // Server captures its own environment at startup, independent of later mutation.
   const env = { ...f.env }, captured = createMemoryEditor(env);
-  env.ZYLOS_RUN_ID = 'different';
+  env.ZYLOS_MEMORY_DREAM_ROOT = path.join(f.dir, 'different');
   assert.equal((await captured(create(f.token, 'identity.md'))).ok, true);
   assert.equal(fs.existsSync(path.join(f.dir, 'memory', 'state.md')), false);
 });
 
 test('local: create and fragment conflicts preserve existing files', async () => {
-  const f = await fixture('global');
+  const f = await fixture();
   assert.equal((await f.editor(create(f.token, 'identity.md', 'left middle right'))).ok, true);
   assert.equal((await f.editor(create(f.token, 'identity.md', 'overwrite'))).code, 'EXISTS');
   const edit = (expected, replacement) => f.editor({ op: 'edit', path: 'identity.md', expected, replacement, token: f.token });
@@ -70,7 +59,7 @@ test('local: create and fragment conflicts preserve existing files', async () =>
 });
 
 test('local: traversal, target symlinks and parent symlinks cannot escape allowed paths', async () => {
-  const f = await fixture('global');
+  const f = await fixture();
   const memory = path.join(f.dir, 'memory');
   fs.mkdirSync(memory, { recursive: true });
   const outside = path.join(f.dir, 'outside'); fs.mkdirSync(outside);
@@ -91,7 +80,7 @@ test('local: traversal, target symlinks and parent symlinks cannot escape allowe
 test('local: actual stdio process exposes no authority when forwarded run env is absent', async () => {
   const { execFileSync } = await import('node:child_process');
   const env = { ...process.env };
-  delete env.ZYLOS_RUN_ID; delete env.ZYLOS_SESSION_GROUP;
+  delete env.ZYLOS_MEMORY_DREAM_ROOT; delete env.ZYLOS_MEMORY_DREAM_PAGE;
   const requests = [
     { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } },
     { jsonrpc: '2.0', method: 'notifications/initialized' },
@@ -103,21 +92,19 @@ test('local: actual stdio process exposes no authority when forwarded run env is
   const frames = output.trim().split('\n').map(line => JSON.parse(line));
   assert.equal(frames.length, 2);
   assert.equal(frames[0].result.protocolVersion, '2024-11-05');
-  assert.equal(JSON.parse(frames[1].result.content[0].text).code, 'SCOPE_UNBOUND');
+  assert.equal(frames[1].error.code, -32602);
 });
 
 test('local: legacy paths are read-only for create and edit before path permissions', async () => {
-  for (const [kind, group] of [['global', undefined], ['origin', 'origin'], ['group', 'telegram:legacy']]) {
-    const f = await fixture(kind, group);
-    for (const name of ['reference/projects.md', 'reference/decisions.md', 'reference/legacy/stored.md']) {
-      const target = path.join(f.dir, 'memory', name);
-      assert.equal((await f.editor(create(f.token, name))).code, 'LEGACY_READ_ONLY');
-      assert.equal(fs.existsSync(target), false);
-      fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, 'unchanged');
-      assert.equal((await f.editor({ op: 'edit', path: name, expected: 'unchanged', replacement: 'new', token: f.token })).code, 'LEGACY_READ_ONLY');
-      assert.equal(fs.readFileSync(target, 'utf8'), 'unchanged');
-    }
-    assert.equal((await f.editor(create('0'.repeat(32), 'reference/projects.md'))).code, 'TOKEN_MISMATCH');
-    assert.equal((await f.editor(create(f.token, 'reference/projects/../projects.md'))).code, 'LEGACY_READ_ONLY');
+  const f = await fixture();
+  for (const name of ['reference/projects.md', 'reference/decisions.md', 'reference/legacy/stored.md']) {
+    const target = path.join(f.dir, 'memory', name);
+    assert.equal((await f.editor(create(f.token, name))).code, 'LEGACY_READ_ONLY');
+    assert.equal(fs.existsSync(target), false);
+    fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, 'unchanged');
+    assert.equal((await f.editor({ op: 'edit', path: name, expected: 'unchanged', replacement: 'new', token: f.token })).code, 'LEGACY_READ_ONLY');
+    assert.equal(fs.readFileSync(target, 'utf8'), 'unchanged');
   }
+  assert.equal((await f.editor(create('0'.repeat(32), 'reference/projects.md'))).code, 'TOKEN_MISMATCH');
+  assert.equal((await f.editor(create(f.token, 'reference/projects/../projects.md'))).code, 'LEGACY_READ_ONLY');
 });

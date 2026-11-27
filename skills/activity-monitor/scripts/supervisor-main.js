@@ -132,16 +132,15 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     PRE_RECLAIM_CHECK_PROMPT,
     UPGRADE_RESTART_CHECK_PROMPT,
   };
-  const missingDependencies=new Set();
-  const dependencyMissing=(dependency,affected)=>{if(missingDependencies.has(dependency))return;missingDependencies.add(dependency);log({error:'DEPENDENCY_UNAVAILABLE',dependency,affected});};
-  let syncReader;
   try {
-    const module=await import(new URL('../../zylos-memory/scripts/sync-lock.js',import.meta.url));syncReader=module.readSyncMarker;
-    Object.assign(prompts,await import(new URL('../../zylos-memory/scripts/sync-prompts.js',import.meta.url)));
-    if(typeof syncReader!=='function')throw unavailable('Sync marker reader');
-  }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;dependencyMissing('Sync marker reader','Sync actions retain their state');}
+    const memoryPrompts = await import('../../zylos-memory/scripts/sync-prompts.js');
+    prompts.REFERENCE_REORG_PROMPT = memoryPrompts.REFERENCE_REORG_PROMPT;
+  } catch (error) {
+    if (error.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+    log({ error: 'DEPENDENCY_UNAVAILABLE', dependency: 'Reference reorganization prompt' });
+  }
   const healthIdentity=scene=>Number.isSafeInteger(scene.runtimePid)?{runtime:scene.runtime,session_id:scene.sessionId,claude_pid:scene.runtimePid}:null;
-  supervisor=createSupervisor({env,zylosDir:root,db,scenes,readMode,missingDependencies,requestStore:new RestartRequestStore({file:path.join(directory,'restart-requests.json')}),
+  supervisor=createSupervisor({env,zylosDir:root,db,scenes,readMode,requestStore:new RestartRequestStore({file:path.join(directory,'restart-requests.json')}),
     readReclaimConfiguration:async()=>parseSupervisorConfiguration(await readConfig(),env),
     readConfiguration:async()=>{
       const raw=await readConfig(), {mode,legacy}=await readMode();
@@ -186,8 +185,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
       return source && source!==UNSUPPORTED ? source.match(screen) : {};
     },
     resolveToolRule:(runtime,tool)=>findMatchingToolRule({runtimeId:runtime,watchdog:healthOf(runtime)?.toolWatchdog,toolName:tool.name,toolInput:tool.input,config:configuration}),
-    prepareReferenceReorg:()=>prepareReferenceReorg({root,now:clock()}),
-    readSyncMarker:options=>{if(!syncReader)throw unavailable('Sync marker reader');return syncReader(options);},prompts,
+    prepareReferenceReorg:()=>prepareReferenceReorg({root}),prompts,
     freezeNotice:options=>{
       const {mode,legacy}=configuration ?? readMode();
       if(!['single','multi'].includes(mode))throw Object.assign(new Error('Notice mode is unavailable'),{code:'CONFIG_UNREADABLE'});

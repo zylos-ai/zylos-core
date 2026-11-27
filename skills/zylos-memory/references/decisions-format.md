@@ -74,9 +74,8 @@ page files have no hard size cap.
    `reference/preferences.md`, project status in `reference/projects/`, and
    uncommitted proposals in `reference/ideas.md`.
 2. Update the page's Updated and append a dated decision with its rationale.
-3. Origin Sync or single global Sync archives a topic when all its decisions
-   have been superseded, using
-   `reference-index.js archive --path reference/decisions/<page>.md`.
+3. Weekly memory tidy archives topics marked completed or abandoned when
+   their Updated date is more than 30 days old.
 4. When an archived topic is mentioned again, run
    `reference-index.js unarchive --path reference/decisions/archive/<page>.md`
    before updating it. Both moves rebuild the indexes. An existing destination

@@ -10,7 +10,7 @@ const [socketPath, binary, mode, variant = ''] = process.argv.slice(2);
 const root = process.env.ZYLOS_DIR, database = new Database(path.join(root, 'comm-bridge/c4.db'));
 const runtime = JSON.parse(fs.readFileSync(path.join(root, '.zylos/config.json'))).runtime;
 const store = createStore(database, { readConfig: () => ({ state: 'ok', config: { runtime, session_mode: mode } }) });
-let busy = false, syncHeld = false, stopped = [], events = [], pauseRead = false, releaseRead;
+let busy = false, stopped = [], events = [], pauseRead = false, releaseRead;
 const barrier = name => { if (variant === name) { process.send({ barrier: name }); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); } };
 const requestStore = new RestartRequestStore({ file: path.join(root, 'activity-monitor/restart-requests.json') });
 const publish = requestStore.publish;
@@ -51,7 +51,7 @@ if (variant === 'waiting') {
 }
 const service = await startSupervisor({ env: process.env, db, scenes, requestStore,
   readMode: () => ({ mode, keyPresent: true }), readConfiguration: () => ({ mode, runtime, capacity: 4 }), resolveTargetRuntime: () => runtime,
-  readSyncMarker: () => ({ held: syncHeld, stale: false }), machineTasks: { tick() {}, stop() {} }, legacyStatus: { tick() {}, close() {} },
+  machineTasks: { tick() {}, stop() {} }, legacyStatus: { tick() {}, close() {} },
   sendAlert: () => {}, log: event => events.push(event), loopOptions: { schedule: () => 1, cancel() {} } });
 const state = async () => ({ requests: service.supervisor.admission.store.read(), fences: store.listDrainFences(),
   scene: await scenes.observeGroup('origin'), stopped, events,
@@ -62,7 +62,7 @@ process.on('message', async command => {
     if (command === 'arm-read') pauseRead = true;
     if (command === 'release-read') releaseRead();
     if (command === 'tick') await service.supervisor.loop.tick();
-    if (command === 'busy') { busy = true; syncHeld = true; }
+    if (command === 'busy') busy = true;
     if (command === 'stop') { await service.stop(); database.close(); process.send({ stopped: true }); process.disconnect(); return; }
     process.send(await state());
   } catch (error) { process.send({ error: error.stack }); }

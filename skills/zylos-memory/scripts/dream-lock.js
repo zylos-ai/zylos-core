@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { withMemoryLock, memoryError } from './sync-lock.js';
+import { memoryError } from './sync-cli.js';
+import { withMemoryLock } from './memory-lock.js';
 
 export const DREAM_HEARTBEAT_MS = 30_000;
 export const DREAM_LEASE_MS = 120_000;

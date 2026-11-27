@@ -82,7 +82,7 @@ async function fixture(t, { mode = 'single', runtime = 'claude', group = 'origin
   const supervisor = createSupervisor({ db: store, scenes, zylosDir: root, env,
     readConfiguration: async () => ({ mode, runtime }), readMode: async () => ({ mode, keyPresent: true }), resolveTargetRuntime: async () => runtime,
     requestStore: new RestartRequestStore({ file: path.join(root, 'requests.json') }),
-    readSyncMarker: async () => null, resolveToolRule: async () => null,
+    resolveToolRule: async () => null,
     matchScreen: async () => ({}), checkAuth: async () => ({ status: 'uncertain' }),
     now: () => now, log: value => calls.push(['log', value]),
     loopOptions: { schedule: () => 1, cancel: () => {} } });

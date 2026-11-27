@@ -4,7 +4,7 @@ description: >-
   C4 communication bridge — central gateway for ALL external communication (Telegram, Lark, etc.).
   Use when replying to users via the "reply via" path, sending proactive messages to external channels,
   querying recent conversations or checkpoint status (prefer c4-db.js CLI; direct SQL text reads require the projection rules below),
-  fetching conversation history for Memory Sync, or creating checkpoints after sync.
+  fetching projected conversation history or looking up coverage checkpoints.
   Incoming messages are queued by channel bots and delivered to Claude via a PM2 dispatcher daemon.
   Session-start hooks automatically provide conversation context, including the whole unsummarized backlog when it is at or below the Sync threshold.
 ---
@@ -143,14 +143,13 @@ A relay request is an internal message asking you to deliver something to an add
 
 ## Conversation Text and Original Records
 
-Model/Memory Sync history should use `c4-fetch.js` or the projected C4 CLI
+Model-facing history should use `c4-fetch.js` or the projected C4 CLI
 outputs, not direct `sqlite3 SELECT content` output. These readers call the
 public Core `projectC4Content(content, { c4Id: row.id })` API from
 `cli/lib/content-projection.js` on complete content before formatting,
 truncation, byte accounting or matching. Structured messages expose fallback
 text and references; invalid marked messages expose only an error marker and
-C4 reference. Ordinary text is unchanged. `--origin-sync --raw-only` means the
-message segment rather than checkpoint summaries; its content is still projected.
+C4 reference. Ordinary text is unchanged.
 
 Use SQL for unsupported metadata queries. If a custom model/memory reader must
 select `content`, apply the same public projector to each full row before any

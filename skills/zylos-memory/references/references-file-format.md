@@ -11,7 +11,7 @@ Always loaded at session start via SessionStart hook.
 
 ## Size Guideline
 
-Use the [startup display budget](memory-budget.md): both character and estimated-token limits apply, with an audit warning at 80% of either. Keep this file a pointer/index, not narrative prose. Audit growth at warning or over-limit status on the next Memory Sync. Writes are never blocked by the budget.
+Use the [startup display budget](memory-budget.md): both character and estimated-token limits apply, with an audit warning at 80% of either. Keep this file a pointer/index, not narrative prose. Review growth at warning or over-limit status. Writes are never blocked by the budget.
 
 ## Update Frequency
 
@@ -57,5 +57,5 @@ See `examples/references.md` for a full example.
 3. Keep entries as terse pointers, not explanations. One line per entry;
    no narrative sentences attached to identifiers.
 4. Active IDs section is for IDs needed in current context only.
-5. Memory Sync audits this file against these rules on every sync
+5. When updating references, check this file against these rules
    (see SKILL.md Sync Flow): violations are relocated, not left in place.

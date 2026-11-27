@@ -1,20 +1,15 @@
-import { SyncAlertEpisodes } from './sync-alert-episodes.js';
 import { loadCoreModule } from './core-modules.js';
 const { modelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
 import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
-import { observeSyncCompletion, latestSyncFailure } from './sync-reclaim.js';
-import { CHECKPOINT_THRESHOLD } from '../../comm-bridge/scripts/c4-config.js';
 
-const { findRuntime, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/index.js');
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/index.js');
 
-const SYNC_DIAGNOSTIC_TYPES = new Set(['origin_frequency', 'origin_idle', 'control_timeout', 'state_uncommitted']);
 const TERMINAL_CONTROLS = new Set(['done', 'timeout', 'superseded', 'failed', 'cancelled']);
 const CAPACITY_REASONS = new Set(['ttl', 'evict', 'upgrade', 'auth']);
 const RECLAIM_REASONS = new Set([...CAPACITY_REASONS, 'mode_switch', 'delete', 'release']);
 const error = (code, message) => Object.assign(new Error(message), { code });
 const modeOf = context => context.configuration.mode;
 const finite = value => Number.isFinite(value);
-const groupSyncThreshold = configuration => configuration.syncThreshold ?? CHECKPOINT_THRESHOLD;
 const legacy = context => context.configuration.legacy === true;
 const oldUnique = (scene, context) => !legacy(context) && scene.sessionGroup === 'origin' && scene.sourceScope === null;
 const manualTarget = request => request.sessionGroup ?? 'origin';
@@ -56,17 +51,15 @@ export function evictionDemand(slots, pending, fences, capacity) {
 /** Lifecycle methods run inside the same serial section as socket admission.
  * Round checks share context.scenes and the captured authorities. Mutations
  * revalidate their gates and stop uses the adapter's expected-run guard.
- * Sync marker reading and prompt constants are supplied by the memory module.
  */
 export class SupervisorLifecycle {
   constructor(deps, { now = Date.now, idleConfirmMs = 3000, rotationCooldownMs = 300000,
-    syncCheckMs = 60000, ackTimeoutMs = 300000, evictionAckTimeoutMs = EVICTION_CHECK_ACK_TIMEOUT_MS,
+    ackTimeoutMs = 300000, evictionAckTimeoutMs = EVICTION_CHECK_ACK_TIMEOUT_MS,
     upgradeAckTimeoutMs = UPGRADE_CHECK_ACK_TIMEOUT_MS } = {}) {
     this.d = deps;
     this.now = now;
     this.idleConfirmMs = idleConfirmMs;
     this.rotationCooldownMs = rotationCooldownMs;
-    this.syncCheckMs = Math.min(syncCheckMs, 60000);
     this.ackTimeoutMs = ackTimeoutMs;
     if (!(ackTimeoutMs > 0) || !finite(ackTimeoutMs)) throw new TypeError('A finite acknowledgment timeout is required');
     this.evictionAckTimeoutMs = evictionAckTimeoutMs;
@@ -81,13 +74,6 @@ export class SupervisorLifecycle {
     this.ttlReset = new Map();
     this.reclaimDeferrals = new Map();
     this.rotationSent = new Map();
-    this.syncSent = new Map();
-    this.syncProgress = new Map();
-    this.referenceReorgSent = new Map();
-    this.syncBacklogCandidates = new Map();
-    this.syncAlertEpisodes = deps.syncAlertEpisodes ?? new SyncAlertEpisodes({ env: deps.env, now,
-      diagnostic: row => deps.diagnostic?.(row) });
-    this.lastSyncCheck = null;
     this.warnings = new Set();
     this.runEndFailures = new Map();
     this.roundToken = null;
@@ -158,22 +144,9 @@ export class SupervisorLifecycle {
     if (current) Object.assign(current, { present: false, ready: false, processRunning: false });
   }
 
-  async checkReclaimDependencies(scene, context) {
-    if (typeof this.d.readSyncMarker !== 'function') throw error('DEPENDENCY_UNAVAILABLE', 'Sync marker reader is unavailable');
-    const kinds = oldUnique(scene, context) ? ['global'] : scene.sessionGroup === 'origin' ? ['group', 'origin'] : ['group'];
-    let unheld = true;
-    for (const kind of kinds) {
-      const marker = await this.d.readSyncMarker({ runDir: scene.runDir, kind, currentRunId: scene.runId });
-      if (!marker || typeof marker.held !== 'boolean' || typeof marker.stale !== 'boolean') throw error('INVALID_OBSERVATION', 'Invalid Sync marker result');
-      if (marker.held && !marker.stale) unheld = false;
-    }
-    return unheld;
-  }
-
-  async idle(scene, context) {
-    if (!scene.present || !scene.ready || scene.processRunning !== true || scene.state !== 'idle' ||
-        !finite(scene.idleSince) || this.now() - scene.idleSince < this.idleConfirmMs) return false;
-    return this.checkReclaimDependencies(scene, context);
+  idle(scene) {
+    return scene.present && scene.ready && scene.processRunning === true && scene.state === 'idle' &&
+      finite(scene.idleSince) && this.now() - scene.idleSince >= this.idleConfirmMs;
   }
 
   async alertOnce(key, event) {
@@ -267,7 +240,6 @@ export class SupervisorLifecycle {
     const fresh = await this.observe(scene.sessionGroup, context);
     if (!fresh.present || !fresh.ready || fresh.runId !== scene.runId) return false;
     if (this.subagentReclaimBlocked(fresh, reason, context)) return false;
-    await this.checkReclaimDependencies(fresh, context);
     if (reason === 'evict' && !(await this.evictionCandidates([fresh], context)).length) return false;
     if (!await this.beforeWrite(scene.sessionGroup, context)) return false;
     await this.d.db.setDrainFence(scene.sessionGroup, { reason, runId: scene.runId });
@@ -323,7 +295,7 @@ export class SupervisorLifecycle {
         if (preparedTtl && this.activeSubagents(scene, context)) return 'waiting_idle';
         const childBlocked = this.subagentReclaimBlocked(scene, fence.reason, context);
         if (childBlocked ||
-            !await this.reclaimRead(fence, () => this.idle(scene, context))) {
+            !this.idle(scene)) {
           if (fence.reason === 'delete') return 'waiting_idle';
           await this.clear(fence, context);
           if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
@@ -568,7 +540,7 @@ export class SupervisorLifecycle {
       if (!await this.preparationControlsSettled(intent)) return;
       // The check can still be finishing its turn after acknowledging the control.
       if (scene.turnOpen === true || this.subagentReclaimBlocked(scene, 'release', context) ||
-          !await this.idle(scene, context)) return;
+          !this.idle(scene)) return;
       if (!intent.prepared) await this.prepareRelease(scene, context, intent);
       if (!intent.prepared || intent.controlIds.length) {
         if (!await this.preparationControlsSettled(intent)) return;
@@ -596,7 +568,7 @@ export class SupervisorLifecycle {
     if (now - last < ttl) return;
     if (preparation) {
       if (!await this.preparationControlsSettled(preparation)) return;
-      if (this.activeSubagents(scene, context) || !await this.idle(scene, context)) return;
+      if (this.activeSubagents(scene, context) || !this.idle(scene)) return;
       // Keep the preparation cutoff through the fence's final activity recheck.
       await this.beginReclaim(scene, 'ttl', context);
       return;
@@ -663,7 +635,7 @@ export class SupervisorLifecycle {
       const expired = this.now() >= preparation.deadline;
       if (!TERMINAL_CONTROLS.has(control?.status) && !expired) return 'waiting';
       // An answered check may still be finishing its turn; that wait also ends at the deadline.
-      if (!expired && (this.activeSubagents(scene, context) || !await this.idle(scene, context))) return 'waiting';
+      if (!expired && (this.activeSubagents(scene, context) || !this.idle(scene))) return 'waiting';
       const started = await this.beginReclaim(scene, 'evict', context, { subreason: preparation.subreason });
       if (!started) this.evictionPreparation.delete(group);
       return started ? 'started' : null;
@@ -727,216 +699,28 @@ export class SupervisorLifecycle {
     this.rotationSent.set(key, now);
   }
 
-  async checkSync(scenes, context) {
+  async checkReferenceReorg(context) {
+    const origin = context.scenes.find(scene => scene.sessionGroup === 'origin');
+    if (origin?.observationError || origin?.present && oldUnique(origin, context)) return;
+    const group = 'origin';
+    if (!this.d.prepareReferenceReorg || !this.allowed(group, context)) return;
     const now = this.now();
-    if (this.lastSyncCheck !== null && now - this.lastSyncCheck < this.syncCheckMs) return;
-    if (context.restartRequestsError || context.transition || context.fences.some(fence => fence.sessionGroup === '*')) return;
-    this.lastSyncCheck = now;
-    await this.each(scenes, async scene => {
-      if (scene.observationError) throw scene.observationError;
-      if (!await this.allowed(scene.sessionGroup, context)) return;
-      if (!scene.present || !scene.ready || oldUnique(scene, context)) return;
-      const range = await this.d.db.getUnsummarizedRange(scene.sessionGroup);
-      await this.syncScope(scene, 'group', { count: range.count, firstAt: range.firstAt,
-        firstConversationId: range.firstConversationId, nonempty: range.count > 0 }, context);
-    });
-    if (this.allowed('origin', context) &&
-        !scenes.some(scene => scene.sessionGroup === 'origin' &&
-          (context.configuration.mode === 'single' && scene.observationError || scene.present && oldUnique(scene, context)))) {
-      const origin = scenes.find(scene => scene.sessionGroup === 'origin' && scene.present && scene.ready);
-      const originScene = { sessionGroup: 'origin', runDir: this.d.groupRunDir('origin'),
-        runId: origin?.runId ?? null, sessionId: origin?.sessionId ?? null };
-      const backlog = await this.d.db.getOriginSyncBacklog();
-      const times = backlog.groups.flatMap(g => [g.firstAt, g.firstCheckpointAt]).filter(v => v !== null && v !== undefined).map(activityTime);
-      const rawTimes = backlog.groups.map(g => g.firstAt).filter(v => v !== null && v !== undefined).map(activityTime);
-      await this.syncScope(originScene, 'origin', {
-        count: backlog.total, firstAt: times.length ? Math.min(...times) : null,
-        alertFirstAt: rawTimes.length ? Math.min(...rawTimes) : null,
-        nonempty: backlog.total > 0 || backlog.groups.some(g => g.pendingCheckpoints > 0),
-      }, context);
-    }
-    await this.syncAlerts(context);
-  }
-
-  async syncCheckpoint(scene, kind) {
-    try {
-      return kind !== 'origin' && this.d.db.getLatestContentCheckpoint
-        ? (await this.d.db.getLatestContentCheckpoint(kind === 'global' ? '*' : scene.sessionGroup))?.id ?? null : null;
-    } catch (cause) { this.d.reportError?.(cause, { phase: 'sync-trigger-metadata' }); return null; }
-  }
-
-  async recordSyncTrigger(scene, kind, reason, range, control, checkpointId) {
-    try {
-      if (kind === 'origin') {
-        const backlog = await this.d.db.getOriginSyncBacklog();
-        const times = backlog.groups.flatMap(row => [row.firstAt, row.firstCheckpointAt]).filter(value => value != null).map(activityTime);
-        range = { count: backlog.total, firstAt: times.length ? Math.min(...times) : null };
-      }
-    } catch (cause) { this.d.reportError?.(cause, { phase: 'sync-trigger-metadata' }); }
-    await this.event('sync_triggered', { scope: kind === 'global' ? '*' : scene.sessionGroup, kind, reason,
-      backlog: range.count, lag: range.firstAt == null ? 0 : Math.floor(Math.max(0, this.now() - activityTime(range.firstAt)) / 1000),
-      ...(finite(scene.usagePercent) ? { contextPercent: scene.usagePercent } : {}), checkpointId,
-      controlId: control?.id ?? null, runId: scene.runId ?? null });
-  }
-
-  async syncAlerts(context) {
-    if (!this.d.syncObserver) return;
-    let alerts = await this.d.syncObserver.inspect(this.d.db, { ...context.configuration,
-      mode: 'multi',
-      episodes: this.syncAlertEpisodes.entries(),
-      activeScopes: context.scenes.filter(scene => (scene.present || scene.observationError) && !oldUnique(scene, context))
-        .map(scene => scene.sessionGroup),
-    }, async (scope, kind) => {
-      const scene = context.scenes.find(row => row.sessionGroup === scope);
-      const marker = await this.d.readSyncMarker({ runDir: scene?.runDir ?? this.d.groupRunDir(scope === '*' ? 'origin' : scope), kind, currentRunId: scene?.runId ?? null });
-      return marker.held && !marker.stale;
-    });
-    for (const candidate of this.syncBacklogCandidates.values()) {
-      // Origin backlog retains threshold-based notification even when bounded
-      // rounds succeed; successful progress need not drain all pending work.
-      if (candidate.kind === 'origin') { alerts.push(candidate); continue; }
-      const trigger = [...this.d.syncObserver.groups.values()].find(row => row.kind === candidate.kind && row.scope === candidate.scope);
-      const startedAt = trigger?.ts;
-      const scene = context.scenes.find(row => row.sessionGroup === candidate.scope && row.present);
-      if (!scene) continue;
-      const code = scene && startedAt != null ? latestSyncFailure({ env: this.d.env, scene,
-        target: { kind: candidate.kind, scope: candidate.scope }, startedAt }) : null;
-      const failed = trigger?.attempts >= 3;
-      if (code || failed) alerts.push({ ...candidate, ...(code ? { reason: code } : {}) });
-    }
-    // Scheduling anomalies are engineering evidence, including timeouts owned
-    // by reclaim. Record before those owners suppress symptoms;
-    // no Origin control or session write gate is involved.
-    for (const alert of alerts.filter(row => SYNC_DIAGNOSTIC_TYPES.has(row.type))) {
-      if (await this.sendSyncAlert(alert, context)) this.d.syncObserver.acknowledged(alert);
-    }
-    alerts = alerts.filter(row => !SYNC_DIAGNOSTIC_TYPES.has(row.type));
-    let resolved = this.d.syncObserver.resolved ?? [];
-    for (const episode of this.syncAlertEpisodes.entries().filter(row => row.type === 'repair_failed')) {
-      if (episode.kind === 'global' || episode.kind === 'origin' && !episode.cursors) continue;
-      const scene = context.scenes.find(row => row.sessionGroup === episode.scope) ?? {
-        sessionGroup: episode.scope, runId: null, runDir: this.d.groupRunDir(episode.scope),
-      };
-      const proof = await observeSyncCompletion({ db: this.d.db, scene,
-        target: { kind: episode.kind, scope: episode.scope, end: episode.checkpointEnd ?? 0,
-          checkpointId: episode.checkpointId, cursors: episode.cursors },
-        readSyncMarker: this.d.readSyncMarker, env: this.d.env, requireNewCheckpoint: false });
-      if (proof.ok) resolved.push(episode);
-    }
-    const resolvedKeys = new Set(resolved.map(row => JSON.stringify([row.scope, row.kind, row.type])));
-    alerts.push(...this.syncAlertEpisodes.entries().filter(row => row.type === 'repair_failed' && !row.sent &&
-      !resolvedKeys.has(JSON.stringify([row.scope, row.kind, row.type]))));
-    const activeKeys = new Set(alerts.map(alert => JSON.stringify([alert.scope, alert.kind, alert.type])));
-    this.syncAlertEpisodes.reconcile({ active: alerts, resolved: resolved.filter(alert =>
-      !activeKeys.has(JSON.stringify([alert.scope, alert.kind, alert.type]))) });
-    for (const alert of alerts) if (await this.sendSyncAlert(alert, context)) this.d.syncObserver.acknowledged(alert);
-  }
-
-  async sendSyncAlert(alert, context) {
-    if (context.scenes.some(scene => scene.sessionGroup === 'origin' &&
-      (context.configuration.mode === 'single' && scene.observationError || scene.present && oldUnique(scene, context)))) return false;
-    this.syncAlertEpisodes.reconcile({ active: [alert] });
-    if (!this.syncAlertEpisodes.available) return false;
-    if (SYNC_DIAGNOSTIC_TYPES.has(alert.type)) {
-      if (this.syncAlertEpisodes.claim(alert)) await this.event('sync_alert', alert);
-      return this.syncAlertEpisodes.available;
-    }
-    if (!await this.beforeWrite('origin', context)) return false;
-    if (!this.syncAlertEpisodes.claim(alert)) return true;
-    try {
-      await this.d.db.insertControl(this.prompt('SYNC_BACKLOG_ALERT', alert.kind, alert.backlog ?? 0, alert.lag ?? 0, alert.scope, alert.type, alert), {
-        sessionGroup: 'origin', appendAckSuffix: false,
-      });
-    } catch (cause) {
-      // SQLite admission failures are definite non-enqueues; an unknown result
-      // keeps its durable claim so supervisor restart cannot multiply messages.
-      if (/^(?:SQLITE_|DRAIN_|MODE_)/.test(cause.code ?? '')) this.syncAlertEpisodes.retry(alert);
-      throw cause;
-    }
-    await this.event('sync_alert', alert);
-    return true;
-  }
-
-  async checkReferenceReorg(scene, kind, context) {
-    if (kind !== 'origin' && kind !== 'global') return;
-    const key = JSON.stringify([kind, scene.sessionGroup]);
-    const identity = JSON.stringify([scene.runId ?? null, scene.sessionId ?? null]);
-    const previous = this.referenceReorgSent.get(key);
-    if (previous === identity) return;
-    // Missing observations cannot reset a known session's successful send.
-    if (previous !== undefined && !scene.runId) return;
+    if (this.lastReferenceReorgCheck !== undefined && now - this.lastReferenceReorgCheck < 60_000) return;
+    this.lastReferenceReorgCheck = now;
+    const identity = JSON.stringify([origin?.runId ?? null, origin?.sessionId ?? null]);
+    const previous = this.referenceReorgSent;
     // An unbound proposal already queued for absent Origin belongs to its first run.
     if (previous === '[null,null]') {
-      this.referenceReorgSent.set(key, identity);
+      this.referenceReorgSent = identity;
       return;
     }
-    try {
-      if (!await this.beforeWrite(kind === 'global' ? null : 'origin', context, kind === 'global' ? scene : undefined)) return;
-      const proposal = this.prompt('REFERENCE_REORG_PROMPT');
-      if (typeof this.d.prepareReferenceReorg !== 'function') throw error('DEPENDENCY_UNAVAILABLE', 'Reference reorganization check is unavailable');
-      if (!await this.d.prepareReferenceReorg()) return;
-      await this.d.db.insertControl(proposal, {
-        sessionGroup: kind === 'global' ? null : 'origin', priority: 3, appendAckSuffix: false,
-      });
-      // Keep only the latest identity per scope; a Supervisor restart may retry.
-      this.referenceReorgSent.set(key, identity);
-    } catch (cause) {
-      this.d.reportError?.(cause, { phase: 'reference-reorganization' });
-    }
-  }
-
-  async syncScope(scene, kind, range, context) {
-    if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid Sync backlog');
-    // Reference cleanup must not depend on backlog surviving pre-reclaim Sync.
-    await this.checkReferenceReorg(scene, kind, context);
-    const now = this.now(), config = context.configuration;
-    const key = JSON.stringify([kind, scene.sessionGroup]);
-    const min = (config.syncMinIntervalSeconds ?? 600) * 1000, max = (config.syncMaxIntervalSeconds ?? 21600) * 1000;
-    const threshold = kind === 'origin' ? (config.originSyncThreshold ?? 50) : groupSyncThreshold(config);
-    const lag = range.firstAt === null || range.firstAt === undefined ? 0 : Math.max(0, now - activityTime(range.firstAt));
-    const alertLag = kind === 'origin' ? (range.alertFirstAt === null || range.alertFirstAt === undefined ? 0 : Math.max(0, now - activityTime(range.alertFirstAt))) : lag;
-    const alert = kind !== 'origin' && range.count > 4 * (config.syncBatchLimit ?? 200) || alertLag > 2 * max;
-    const alertScope = kind === 'global' ? '*' : scene.sessionGroup;
-    const backlogKey = JSON.stringify([kind, alertScope]);
-    if (alert) this.syncBacklogCandidates.set(backlogKey, { type: 'backlog', kind, scope: alertScope,
-      backlog: range.count, lag: Math.floor(alertLag / 1000) });
-    else {
-      this.syncBacklogCandidates.delete(backlogKey);
-      this.syncAlertEpisodes.reconcile({ resolved: [{ type: 'backlog', kind, scope: alertScope }] });
-    }
-    const previous = this.syncProgress.get(key);
-    const catchingUp = kind !== 'origin' && !this.ttlPreparation.has(scene.sessionGroup) &&
-      previous?.n0 > (config.syncBatchLimit ?? 200) && previous.runId === scene.runId &&
-      range.firstConversationId > previous.f0;
-    if (!range.nonempty || (!catchingUp && this.syncSent.has(key) && now - this.syncSent.get(key) < min)) return;
-    // Early Sync at 80% of the rotation threshold is disabled: a smaller backlog reaches the next
-    // session through its startup context, and a larger one is already due by the threshold.
-    // const rotationThreshold = sceneRotationThreshold(scene, config);
-    // ... || kind !== 'origin' && rotationThreshold !== null && finite(scene.usagePercent) && scene.usagePercent >= 0.8 * rotationThreshold
-    const due = range.count > threshold || lag >= max;
-    if (!catchingUp && !due) return;
-    if (typeof this.d.readSyncMarker !== 'function') throw error('DEPENDENCY_UNAVAILABLE', 'Sync marker reader is unavailable');
-    const marker = await this.d.readSyncMarker({ runDir: scene.runDir, kind, currentRunId: scene.runId });
-    if (!marker || typeof marker.held !== 'boolean' || typeof marker.stale !== 'boolean') throw error('INVALID_OBSERVATION', 'Invalid Sync marker result');
-    if (marker.held && !marker.stale) return;
-    const runtimePrompt = kind === 'group' && modeOf(context) === 'multi'
-      ? (await findRuntime(scene.runtime))?.instructions.groupSyncPrompt
-      : undefined;
-    if (!await this.beforeWrite(scene.sessionGroup, context, kind === 'origin' ? undefined : scene)) return;
-    const checkpointId = await this.syncCheckpoint(scene, kind);
-    const promptName = kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT';
-    const prompt = typeof runtimePrompt === 'string' ? runtimePrompt : this.prompt(promptName);
-    const control = await this.d.db.insertControl(prompt, {
-      sessionGroup: scene.sessionGroup, priority: 2, appendAckSuffix: false,
-      ...(kind === 'origin' ? {} : { ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000), createdAt: Math.floor(now / 1000) }),
+    if (previous === identity || previous !== undefined && !origin?.runId) return;
+    if (!await this.d.prepareReferenceReorg() || !await this.beforeWrite(group, context)) return;
+    await this.d.db.insertControl(this.prompt('REFERENCE_REORG_PROMPT'), {
+      sessionGroup: group, priority: 3, appendAckSuffix: false,
     });
-    const reason = [];
-    if (range.count > threshold) reason.push('threshold');
-    if (lag >= max) reason.push('max_lag');
-    if (catchingUp) reason.push('catch_up');
-    await this.recordSyncTrigger(scene, kind, reason, range, control, checkpointId);
-    this.syncSent.set(key, now);
-    if (kind !== 'origin') this.syncProgress.set(key, { n0: range.count, f0: range.firstConversationId, runId: scene.runId });
+    // Keep only the latest identity; a Supervisor restart may retry.
+    this.referenceReorgSent = identity;
   }
 
   async advanceRestarts(context) {
@@ -976,8 +760,6 @@ export class SupervisorLifecycle {
     // A started restart continues as before; other fences and manual work keep their existing precedence.
     if (context.fences.some(fence => fence.sessionGroup === scene.sessionGroup)) return true;
     if (!await this.beforeWrite(scene.sessionGroup, context, scene)) return false;
-    // Missing reclaim dependencies stop the upgrade before anything is sent, as they would stop its fence.
-    await this.checkReclaimDependencies(scene, context);
     const targetBinding = await this.bindCurrentRun(scene);
     // Without a bindable current run there is nobody to ask; the restart's own guards decide.
     if (!targetBinding) return true;

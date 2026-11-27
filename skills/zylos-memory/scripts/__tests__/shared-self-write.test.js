@@ -4,15 +4,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { applyFragmentLocked } from '../self-write.js';
-import { memoryScope, withMemoryLock } from '../sync-lock.js';
+import { withMemoryLock } from '../memory-lock.js';
+import { dreamRunDirectory } from '../dream-lock.js';
 
 async function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'model-workflow-self-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const env = { ...process.env, ZYLOS_DIR: root, ZYLOS_SESSION_GROUP: 'origin', ZYLOS_RUN_ID: 'self-test' };
-  const scope = await memoryScope(env);
-  fs.mkdirSync(scope.runDir, { recursive: true }); fs.mkdirSync(path.join(root, 'memory'), { recursive: true });
-  return { root, ...scope };
+  fs.mkdirSync(path.join(root, 'memory'), { recursive: true });
+  return { root, runDir: dreamRunDirectory(root) };
 }
 test('shared fragments retain other content and reject stale/ambiguous fragments', async t => {
   const f = await fixture(t), target = path.join(f.root, 'memory', 'identity.md');

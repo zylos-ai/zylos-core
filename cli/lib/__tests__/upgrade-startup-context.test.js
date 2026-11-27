@@ -87,10 +87,10 @@ test('C4 delivered-tail hook reads normal context after READY but isolates block
   fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/c4-session-init.js'), path.join(scripts, 'c4-session-init.js'));
   fs.writeFileSync(path.join(scripts, 'c4-diagnostic.js'), 'export function logHookTiming() {}\n');
   fs.writeFileSync(path.join(scripts, 'session-format.js'), 'export const formatSection = (label, text) => label + ": " + text;\n');
-  fs.writeFileSync(path.join(registry, 'shard-registry.js'), 'export const withinBudget = () => true;\n');
+  fs.writeFileSync(path.join(registry, 'shard-registry.js'), 'export const withinBudget = () => true; export const DEFAULT_SHARD_BUDGET = {maxChars: 10000, maxTokens: 2200};\n');
   fs.writeFileSync(path.join(registry, 'bootstrap-identity.js'), 'export const isSubsession = () => false;\n');
   fs.writeFileSync(path.join(registry, 'bootstrap-scope.js'), `export const bootstrapScope = () => ({mode:'single',scope:'*',root:${JSON.stringify(root)},memoryDir:${JSON.stringify(path.join(root, 'memory'))}});\n`);
-  fs.writeFileSync(path.join(scripts, 'c4-db.js'), 'export const getGlobalCoverageEnd = () => 0; export const getGlobalDeliveredSince = () => [{content: "ordinary delivered message"}]; export const formatConversationsForAgent = rows => rows.map(row => row.content).join("\\n"); export function close() {}\n');
+  fs.writeFileSync(path.join(scripts, 'c4-db.js'), 'export const getRecentDeliveredConversations = () => [{content: "ordinary delivered message"}]; export const formatConversationsForAgent = rows => rows.map(row => row.content).join("\\n"); export function close() {}\n');
   for (const blocked of [false, true]) {
     fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), `exports.bootstrap = () => ({active: true, blocked: ${blocked}, prompt: 'isolated recovery'});\n`);
     fs.chmodSync(path.join(stable, 'bootstrap.cjs'), 0o600);

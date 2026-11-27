@@ -3,10 +3,8 @@ import path from 'node:path';
 import { parseSessionGroup } from '../../../../comm-bridge/scripts/c4-session-group.js';
 import { listFailure, parseListQuery } from '../list-query.js';
 
-const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-const positive = value => Number.isSafeInteger(value) && value > 0 ? value : null;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const known = value => Number.isSafeInteger(value) && value >= 0;
-const configurationModule = () => import('../../../../activity-monitor/scripts/supervisor-configuration.js');
 const budgetModule = () => import('../../../../zylos-memory/scripts/memory-budget.js');
 
 function timestampMillis(value) {
@@ -21,27 +19,11 @@ async function readAll(groupBacklog, keys) {
   try { return await groupBacklog.many(keys); } catch { return keys.map(() => null); }
 }
 
-/** A group the backlog lists: something pending, a Sync running, or a read that failed. */
-const listed = row => (known(row.count) && row.count > 0) || row.syncing === true || Boolean(row.reason);
+/** Groups with messages awaiting Dream or an unreadable count are listed. */
+const listed = row => (known(row.count) && row.count > 0) || Boolean(row.reason);
 
-/**
- * The supplied group reader owns the only per-group backlog cache, shared with details and the memory entries' group badges.
- * In multi mode the backlog is only the cross-group Origin Sync field: each group's own pending messages are not listed
- * (they stay in group details and the memory entries' badges), so no group is read here. In single mode Origin is the
- * whole machine and is listed like a group, comparing its unsummarized count with the Sync threshold.
- */
-export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, originBacklog = null,
-  readConfig = async () => JSON.parse(await fs.readFile(path.join(zylosDir, '.zylos', 'config.json'), 'utf8')),
-  loadConfiguration = configurationModule, loadBudgets = budgetModule,
-  env = process.env, now = Date.now } = {}) {
-  async function thresholds() {
-    try {
-      const { parseSupervisorConfiguration } = await loadConfiguration();
-      let config;
-      try { config = await readConfig(); } catch { config = {}; }
-      return parseSupervisorConfiguration(config, env);
-    } catch { return null; }
-  }
+export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog,
+  loadBudgets = budgetModule, now = Date.now } = {}) {
   async function budgets() {
     try {
       const { BUDGETS, WARN_THRESHOLDS, measureMemoryText } = await loadBudgets();
@@ -55,46 +37,25 @@ export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, origi
     } catch { return null; }
   }
   return async function getMemoryBacklog(at = now()) {
-    const [snapshot, config, limits] = await Promise.all([getSnapshot(at), thresholds(), budgets()]);
+    const [snapshot, limits] = await Promise.all([getSnapshot(at), budgets()]);
     const rows = new Map(snapshot.rows
       .map(row => [snapshot.view === 'single' ? row.sessionGroup ?? 'origin' : row.sessionGroup, row])
       .filter(([key]) => key !== null));
     const keys = [...rows.keys()];
-    const threshold = positive(config?.syncThreshold);
-    const backlogs = snapshot.view === 'multi' ? null : readAll(groupBacklog, keys);
-    async function readGroups() {
-      if (snapshot.view === 'multi') return [];
-      return (await backlogs).map((read, index) => {
-        const sessionGroup = keys[index], row = rows.get(sessionGroup);
-        const backlog = read ?? { count: null, firstAt: null, syncing: null, reason: 'backlog_failed' };
-        const firstAt = backlog.firstAt ?? null, firstMillis = timestampMillis(firstAt);
-        return {
-          sessionGroup, displayName: row.name?.displayName ?? null,
-          c4: { componentName: row.c4?.componentName ?? null },
-          count: backlog.count ?? null, firstAt,
-          aged: parseSessionGroup(sessionGroup) !== null && Number.isFinite(firstMillis) && at - firstMillis > SIX_HOURS_MS,
-          syncing: backlog.syncing ?? null,
-          threshold,
-          ...(backlog.reason ? { reason: backlog.reason } : {}),
-        };
-      }).filter(listed);
-    }
-    async function readOrigin() {
-      if (snapshot.view !== 'multi' || !originBacklog) return undefined;
-      let backlog;
-      try { backlog = await originBacklog(); }
-      catch { backlog = { count: null, pendingSummaries: null, firstAt: null, syncing: null, reason: 'origin_backlog_failed' }; }
+    const reads = await readAll(groupBacklog, keys);
+    const groups = reads.map((read, index) => {
+      const sessionGroup = keys[index], row = rows.get(sessionGroup);
+      const backlog = read ?? { count: null, firstAt: null, reason: 'backlog_failed' };
       const firstAt = backlog.firstAt ?? null, firstMillis = timestampMillis(firstAt);
       return {
-        count: backlog.count ?? null, pendingSummaries: backlog.pendingSummaries ?? null, firstAt,
-        aged: Number.isFinite(firstMillis) && at - firstMillis > SIX_HOURS_MS,
-        syncing: backlog.syncing ?? null, threshold: positive(config?.originSyncThreshold),
-        lastSyncAt: positive(backlog.lastSyncAt),
+        sessionGroup, displayName: row.name?.displayName ?? null,
+        c4: { componentName: row.c4?.componentName ?? null },
+        count: backlog.count ?? null, firstAt,
+        aged: parseSessionGroup(sessionGroup) !== null && Number.isFinite(firstMillis) && at - firstMillis > ONE_DAY_MS,
         ...(backlog.reason ? { reason: backlog.reason } : {}),
       };
-    }
-    const [originSync, groups] = await Promise.all([readOrigin(), readGroups()]);
-    return { groups, ...(originSync ? { originSync } : {}), budgets: limits };
+    }).filter(listed);
+    return { groups, budgets: limits };
   };
 }
 
@@ -118,17 +79,12 @@ const orderPosition = position => Array.isArray(position) && position.length ===
   && [0, 1].includes(position[0]) && Number.isSafeInteger(position[1])
   && (position[2] === null || Number.isFinite(position[2])) && typeof position[3] === 'string';
 
-/** What the page says about all listed groups, whatever is loaded or searched. `threshold` is the one most groups share. */
 function backlogSummary(groups) {
-  const tally = new Map();
-  for (const row of groups) if (positive(row.threshold)) tally.set(row.threshold, (tally.get(row.threshold) ?? 0) + 1);
   return {
     groups: groups.length,
     waiting: groups.filter(row => known(row.count) && row.count > 0).length,
     aged: groups.filter(row => row.aged).length,
-    syncing: groups.filter(row => row.syncing === true).length,
-    unknown: groups.filter(row => row.count == null || row.syncing === null).length,
-    threshold: [...tally].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0] ?? null,
+    unknown: groups.filter(row => row.count == null).length,
   };
 }
 
@@ -142,7 +98,7 @@ export function parseBacklogQuery(searchParams) {
 /**
  * One page of the backlog under the list API standard. The listed groups are ordered in memory (the group
  * reader's 30-second cache is shared with group details and the memory entries' group badges), then `q` (session-group ID or
- * display name) selects and the cursor pages. Origin Sync, budgets and the summary are page fields.
+ * display name) selects and the cursor pages. Budgets and the summary are page fields.
  */
 export function memoryBacklogPage(value, query) {
   const needle = query.q?.toLowerCase() ?? null;
@@ -156,7 +112,6 @@ export function memoryBacklogPage(value, query) {
     items: page.map(({ row }) => row),
     nextCursor: rest.length > query.limit ? query.nextCursor(page.at(-1).key) : null,
     summary: backlogSummary(value.groups),
-    ...(value.originSync ? { originSync: value.originSync } : {}),
     budgets: value.budgets,
   };
 }
@@ -172,12 +127,8 @@ export async function readBacklogPage(read, searchParams) {
   return memoryBacklogPage(value, query);
 }
 
-/**
- * Pending count and syncing state for the given session groups (the groups on a page of memory entries), read with
- * the backlog's own reader. A count or state that cannot be read is null, and a failed read leaves every badge null:
- * the entries still answer.
- */
+/** Read the pending counts for the groups on a page of memory entries. */
 export async function groupBadges(groupBacklog, keys) {
   const reads = await readAll(groupBacklog, keys);
-  return reads.map(read => read ? { count: known(read.count) ? read.count : null, syncing: read.syncing ?? null } : null);
+  return reads.map(read => read ? { count: known(read.count) ? read.count : null } : null);
 }

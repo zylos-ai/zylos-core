@@ -67,13 +67,12 @@ page files have no hard size cap.
 
 1. A project is scoped work, not a committed design choice (use
    `reference/decisions/`) or an uncommitted idea (use `reference/ideas.md`).
-   One-off tasks belong in state.
+   Unfinished one-off tasks belong in the session handoff.
 2. Read the whole page before updating its Status and Updated, then append a
-   dated result. Do not copy whole state blocks into project history.
-3. Origin Sync or single global Sync judges whether a project is done or
-   abandoned and untouched for about a month, then runs
-   `reference-index.js archive --path reference/projects/<page>.md`.
-   Paused projects stay in the current directory. No script enforces an age rule.
+   dated result.
+3. Weekly memory tidy archives project pages marked completed or abandoned
+   when their Updated date is more than 30 days old. Paused projects stay in
+   the current directory.
 4. When an archived project is mentioned again, run
    `reference-index.js unarchive --path reference/projects/archive/<page>.md`
    before updating it. Both moves rebuild the indexes. An existing destination

@@ -5,7 +5,6 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { renderStateSkeleton } from '../skills/zylos-memory/scripts/state-format.js';
 
 const repo = fileURLToPath(new URL('..', import.meta.url));
 const driver = fileURLToPath(new URL('./helpers/instruction-deployment.js', import.meta.url));
@@ -37,15 +36,26 @@ for (const mode of ['fresh', 'refresh']) test(`${mode} instruction deployment pr
     assert.ok(initialized.stdout.includes(path.join(env.ZYLOS_DIR, 'memory/handoff.md')));
     assert.ok(initialized.stdout.includes(path.join(env.ZYLOS_DIR, '.claude/skills/comm-bridge/references/handoff-follow-up.md')));
 
-    // A converted non-Origin group receives Pending entries but no handoff.
-    // The always-loaded generated instructions must still name the procedure
-    // for both that state entry and an absorbed-message internal notice.
+    // A previously converted non-Origin group may still have Pending entries
+    // in its retired state file and no handoff.
     const group = 'telegram:absorbed-pending';
     const groupDir = path.join(env.ZYLOS_DIR, 'memory/session-groups', group);
     fs.mkdirSync(groupDir, { recursive: true });
-    const state = renderStateSkeleton({ scope: group, syncedAt: '2026-01-01T00:00:00Z',
-      absorbed: { runId: 'absorbed-fixture', rows: [{ id: 7, channel: 'telegram', endpointId: 'fixture',
-        timestamp: '2026-01-01T00:00:00Z', content: 'unfinished group request' }] } });
+    const state = `<!-- zylos-state v1 | scope=${group} | synced_at=2026-01-01T00:00:00Z | coverage= | inbox_committed= -->
+
+# Working State
+
+## Headline
+
+## In Progress
+
+## Pending
+
+- [Mode-switch messages] run=absorbed-fixture count=1 (#7–#7); reply: c4-send.js --absorbed-reply absorbed-fixture <id>; full text: c4-fetch.js --absorbed --run-id absorbed-fixture --id <id>
+- #7 2026-01-01T00:00:00Z [telegram fixture] unfinished group request
+
+## Commitments
+`;
     fs.writeFileSync(path.join(groupDir, 'state.md'), state);
     assert.match(state, /## Pending\n\n- \[Mode-switch messages\] run=absorbed-fixture/);
     assert.equal(fs.existsSync(path.join(groupDir, 'handoff.md')), false);
@@ -58,7 +68,8 @@ for (const mode of ['fresh', 'refresh']) test(`${mode} instruction deployment pr
     for (const output of ['CLAUDE.md', 'AGENTS.md']) {
       const instructions = fs.readFileSync(path.join(env.ZYLOS_DIR, output), 'utf8');
       assert.match(instructions, /send a one-line transition notice via C4 before running `zylos runtime <target> --yes`/);
-      assert.match(instructions, /when a handoff exists, state Pending lists Mode-switch messages, or an internal notice concerns absorbed messages, read and follow `~\/zylos\/\.claude\/skills\/comm-bridge\/references\/handoff-follow-up\.md`/);
+      assert.match(instructions, /Follow `~\/zylos\/\.claude\/skills\/comm-bridge\/references\/handoff-follow-up\.md` when a handoff exists, retired state lists Mode-switch messages, or an internal notice concerns absorbed messages/);
+      assert.match(instructions, /Verify the handoff write before moving that state file to `memory\/archive\/state\/<scope>\/state\.md`/);
     }
     const authRelay = fs.readFileSync(path.join(env.ZYLOS_DIR,
       '.claude/skills/component-management/references/runtime-switch.md'), 'utf8');

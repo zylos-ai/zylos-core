@@ -31,7 +31,7 @@ function fixture(t, config, suffix = '') {
   function data(file, args) { return JSON.parse(cli(file, [...args, '--json']).stdout).data; }
   return { database, store, cli, data, root };
 }
-test('scope/frontier/limit and Origin summaries use actual rows and fixed boundaries', t => {
+test('scoped history and checkpoint queries use actual rows and fixed boundaries', t => {
   const { store, data, cli }=fixture(t);
   const a=store.insertConversation('in','chat','e','a',{groupName:'A'});
   store.claimConversation(a.id); store.markDelivered(a.id);
@@ -45,10 +45,5 @@ test('scope/frontier/limit and Origin summaries use actual rows and fixed bounda
   assert.deepEqual(result.rows.map(r=>r.id),[b.id]); assert.equal(result.upTo,b.id); assert.equal(result.safeEnd,c.id);
   assert.match(cli('c4-fetch.js',['--unsummarized','--group','chat:A','--limit','1']).stdout,new RegExp(`checkpointEnd=${a.id}.*\\n[\\s\\S]*upTo=${b.id}`));
   assert.equal(data('c4-fetch.js',['--checkpoints','--group','chat:A','--after','0'])[0].summary,'A summary');
-  const summary=data('c4-fetch.js',['--origin-sync','--group','chat:A','--summaries-only']);
-  assert.equal(summary.coverageEnd,a.id); assert.equal(summary.rows.length,1);
-  assert.deepEqual(data('c4-fetch.js',['--origin-sync','--group','chat:A','--raw-only','--after',String(summary.coverageEnd)]).map(r=>r.id),[b.id,c.id]);
-  const combined=data('c4-fetch.js',['--origin-sync','--group','chat:A','--limit','1']);
-  assert.equal(combined.coverageEnd,a.id); assert.equal(combined.summaries.length,1); assert.deepEqual(combined.rows.map(r=>r.id),[b.id]); assert.equal(combined.upTo,b.id); assert.equal(combined.safeEnd,c.id);
-  assert.equal(data('c4-db.js',['origin-sync','backlog']).groups.length,2);
+
 });

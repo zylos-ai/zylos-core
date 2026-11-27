@@ -78,8 +78,12 @@ function withTmpDir(fn) {
 const marker = i => `UNIQ_MARK_${i}`;
 
 describe('emitC4Conversations budget packing (message-boundary, newest-first)', () => {
-  it('drops the oldest whole messages when the char budget overflows', () => {
-    withTmpDir(({ env }) => {
+  it('drops the oldest whole messages after the handoff when the char budget overflows', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const handoff = path.join(tmpDir, 'memory/handoff.md');
+      fs.mkdirSync(path.dirname(handoff), { recursive: true });
+      fs.writeFileSync(handoff, 'previous work');
+      fs.utimesSync(handoff, 0, 0);
       for (let i = 1; i <= 6; i++) receive(`${marker(i)} ${'x'.repeat(1800)}`, env);
 
       // ~11K chars total against a 5K char budget (room for two whole
@@ -89,6 +93,7 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
 
       assert.ok(out.includes(marker(6)), 'newest message must survive');
       assert.ok(!out.includes(marker(1)), 'oldest message must be dropped whole');
+      assert.doesNotMatch(out, /unsummarized|omitted middle/i);
       assert.ok(out.length <= 5000, `packed output must fit the char budget (got ${out.length})`);
       // Every kept message is complete: its marker implies its full body.
       for (let i = 1; i <= 6; i++) {

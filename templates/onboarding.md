@@ -51,4 +51,4 @@ Immediately after the security notice has been **successfully sent via C4** (c4-
 
 The command uses an absolute marker path beneath the configured ZYLOS_DIR, or `~/zylos` by default. An already absent marker is not an error. Do not delete it before sending or when c4-send fails; leave it present so a later real owner message can retry. There is no completed marker and no state.md status update.
 
-After successful delivery and deletion, do not show the security notice again. If the owner completes a first project, record the dated result with `memory-append.js inbox --kind fact`, passing the content on stdin. Memory Sync will create the project page in `memory/reference/projects/`.
+After successful delivery and deletion, do not show the security notice again. The nightly memory dream reads the conversation and can record a completed first project in `memory/reference/projects/`.

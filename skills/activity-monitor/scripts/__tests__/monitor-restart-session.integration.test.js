@@ -26,7 +26,7 @@ test('ordinary monitor restart preserves the agent tmux session', { timeout: 200
     const exited = new Promise(resolve => { signals.exit = code => { exits.push(code); resolve(); }; });
     const service = await main({ runtime: signals, log: () => {}, start: () => startSupervisor({ env: f.env,
       db: { ...store, getDb: () => f.db }, scenes, readMode, readConfiguration: () => ({ mode: 'multi', runtime: 'claude', capacity: 2 }),
-      resolveTargetRuntime: () => 'claude', readSyncMarker: () => ({ held: false, stale: false }),
+      resolveTargetRuntime: () => 'claude',
       machineTasks: { tick() {}, stop() {} }, legacyStatus: { tick() {}, close() {} },
       sendAlert: () => { throw new Error('external send forbidden'); }, log: () => {},
       loopOptions: { schedule: () => 1, cancel: () => {} } }) });

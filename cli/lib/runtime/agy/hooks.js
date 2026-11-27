@@ -41,6 +41,12 @@ export function syncAgyConfig({ zylosDir = ZYLOS_DIR, home = os.homedir(), dryRu
   if (current.mcp.mcpServers !== undefined && (!current.mcp.mcpServers || typeof current.mcp.mcpServers !== 'object' || Array.isArray(current.mcp.mcpServers))) {
     throw Object.assign(new Error('Cannot merge Antigravity MCP servers'), { code: 'AGY_CONFIG_UNREADABLE' });
   }
+  const mcp = { ...current.mcp };
+  // Clear the obsolete entry left by older installations while preserving other servers.
+  if (Object.hasOwn(current.mcp.mcpServers ?? {}, 'zylos-memory')) {
+    mcp.mcpServers = { ...current.mcp.mcpServers };
+    delete mcp.mcpServers['zylos-memory'];
+  }
   const command = event => `node ${quote(path.join(root, '.claude/skills/activity-monitor/scripts/agy-hooks.js'))} ${event}`;
   const desired = {
     settings: { ...current.settings, modelProvider: 'gemini', userDataCollectionForceDisabled: true,
@@ -55,7 +61,7 @@ export function syncAgyConfig({ zylosDir = ZYLOS_DIR, home = os.homedir(), dryRu
       ],
       PostToolUse: [{ matcher: '^run_command$', hooks: [{ type: 'command', command: command('PostToolUse'), timeout: 10 }] }],
     } },
-    mcp: { ...current.mcp, mcpServers: { ...current.mcp.mcpServers, 'zylos-memory': { command: 'node', args: [path.join(root, '.claude/skills/zylos-memory/scripts/memory-mcp-server.js')] } } },
+    mcp,
     onboarding: { ...current.onboarding, consumerOnboardingComplete: true, onboardingComplete: true },
   };
   const changedFiles = Object.keys(files).filter(key => JSON.stringify(current[key]) !== JSON.stringify(desired[key]));

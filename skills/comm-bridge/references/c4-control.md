@@ -50,7 +50,7 @@ OK: enqueued control 42
 - **Acknowledgement deadline:** a targeted control that keeps the ack suffix must also pass `--ack-deadline`; otherwise it is rejected with `ACK_DEADLINE_REQUIRED`.
 - **Delivery is not guaranteed:** controls are delivered only to a running session. A control for a session group that is not running stays pending until that group next starts, and that start marks it `timeout` (`last_error=SESSION_ENDED`) without delivering it. Origin's own restarts keep its pending controls. Senders must not assume delivery: read the result with `get`, or treat the control as best effort.
 
-A notice that should become part of the agent's conversation history (and so feed Memory Sync) is not a control: send it as an ordinary message with [c4-receive](c4-receive.md). Controls are not read by Memory Sync.
+A notice that should become part of the agent's conversation history (and so feed nightly memory dreaming) is not a control: send it as an ordinary message with [c4-receive](c4-receive.md). Memory dreaming reads conversations, so controls are excluded.
 
 ### get
 

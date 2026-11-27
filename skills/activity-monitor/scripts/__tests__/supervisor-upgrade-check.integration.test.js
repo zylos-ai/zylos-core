@@ -68,7 +68,7 @@ test('upgrade restart checks every private session first and restarts after the 
       readConfig: () => JSON.parse(fs.readFileSync(configFile, 'utf8')),
       readMode: () => ({ mode: 'multi', keyPresent: true }),
       legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
-      readSyncMarker: () => ({ held: false, stale: false }), loopOptions: { schedule: () => 1, cancel() {} },
+      loopOptions: { schedule: () => 1, cancel() {} },
       log() {}, sendAlert() { throw Error('External send forbidden'); } });
     assert.equal(service.supervisor.loop.configurationError, null);
     const { lifecycle, admission } = service.supervisor;

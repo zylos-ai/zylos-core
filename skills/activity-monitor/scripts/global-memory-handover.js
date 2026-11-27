@@ -1,11 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { resolveCoreConfigModule } from '../../comm-bridge/scripts/core-config-loader.js';
-import { appendInbox } from '../../zylos-memory/scripts/memory-append.js';
-import { inboxSegmentName } from '../../zylos-memory/scripts/state-format.js';
-
-const material = name => ['state.md', 'inbox.md', 'handoff.md'].includes(name) || inboxSegmentName.test(name);
+// Only historical plans and installations can still reference these names.
+const inbox = name => name === 'inbox.md' || /^inbox\.\d{8}T\d{9}Z(?:-[1-9]\d*)?\.md$/.test(name);
+const material = name => name === 'state.md' || name === 'handoff.md' || inbox(name);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 // Published templates: Memory v5 (#53), onboarding (#291), scoped bootstrap,
 // and the scoped state template with onboarding managed separately.
@@ -16,7 +14,6 @@ const templateHashes = new Set([
   'f58d087fadd661a03cf0a81746d39252fbf3825e1e781f903d2169b82eac3e27',
 ]);
 const error = (code, message) => Object.assign(new Error(message), { code });
-const currentTemplatePath = () => path.resolve(path.dirname(resolveCoreConfigModule()), '../../templates/memory/state.md');
 
 /** Filesystem recovery record only; this coordinator never mutates mode transitions or gates.
  * pending() is called inside admission's lifecycle queue. advance() takes that
@@ -24,10 +21,10 @@ const currentTemplatePath = () => path.resolve(path.dirname(resolveCoreConfigMod
 export class GlobalMemoryHandoverCoordinator {
   constructor({ db, zylosDir, readMode, readConfiguration = readMode, readRequests,
     legacyPresent, observe, serialize = operation => operation(), diagnostic = () => {},
-    now = Date.now, fsImpl = fs, append = appendInbox, waitMs = 1000,
+    now = Date.now, fsImpl = fs,
   } = {}) {
     Object.assign(this, { db, zylosDir, readMode, readConfiguration, readRequests, legacyPresent,
-      observe, serialize, diagnostic, now, io: fsImpl, append, waitMs });
+      observe, serialize, diagnostic, now, io: fsImpl });
     this.lastFailure = null;
     this.memory = path.join(zylosDir, 'memory');
     this.root = path.join(this.memory, 'mode-switch');
@@ -117,17 +114,12 @@ export class GlobalMemoryHandoverCoordinator {
         const source = path.join(this.memory, name), destination = path.join(archive, name);
         if (this.stat(source)) {
           this.archiveFile(id, name, source, destination);
-        } else if (!this.stat(destination)?.isFile()) throw error('ENOENT', 'Planned material is missing');
-      }
-      step = 'template';
-      if (plan.rule === 'template') this.installTemplate(plan.template);
-      step = 'append';
-      if (plan.deliver || plan.dailyRecords) {
-        await this.append({ kind: plan.deliver ? 'commitment' : 'fact', content: this.body(plan, archive),
-          env: { ZYLOS_DIR: this.zylosDir, ZYLOS_SESSION_GROUP: 'origin' }, waitMs: this.waitMs });
+        } else if (!this.stat(destination)?.isFile() && !this.hasMigratedInbox(name)) {
+          throw error('ENOENT', 'Planned material is missing');
+        }
       }
       step = 'enqueue';
-      if (plan.deliver) await this.db.insertControl(`Please follow up on the global working-memory handover entry numbered ${id} in your inbox.`, {
+      if (plan.deliver) await this.db.insertControl(this.body(plan), {
         sessionGroup: 'origin', priority: 2, appendAckSuffix: false,
       });
       step = 'done';
@@ -147,11 +139,17 @@ export class GlobalMemoryHandoverCoordinator {
   plan(id, files) {
     const installationTemplate = files.length === 1 && files[0].name === 'state.md' &&
       templateHashes.has(hash(this.io.readFileSync(path.join(this.memory, 'state.md'), 'utf8').replace(/\s/gu, '')));
-    const plan = { version: 1, id, files: files.map(({ name }) => ({ name })),
-      rule: installationTemplate ? 'template' : 'other', deliver: !installationTemplate,
-      dailyRecords: this.entries(path.join(this.memory, 'sessions')).length > 0 };
-    if (installationTemplate) plan.template = this.io.readFileSync(currentTemplatePath(), 'utf8').replace('scope=*', 'scope=origin');
-    return plan;
+    return { version: 1, id, files: files.map(({ name }) => ({ name })),
+      rule: installationTemplate ? 'template' : 'other', deliver: !installationTemplate };
+  }
+
+  hasMigratedInbox(name) {
+    if (!inbox(name)) return false;
+    const directory = path.join(this.memory, 'archive', 'inbox', 'origin');
+    const prefix = name.slice(0, -3) + '.archive-';
+    return this.entries(directory).some(file =>
+      (file === name || file.startsWith(prefix) && /^[1-9]\d*\.md$/.test(file.slice(prefix.length))) &&
+      this.stat(path.join(directory, file))?.isFile());
   }
 
   archivedFiles(archive) {
@@ -186,8 +184,7 @@ export class GlobalMemoryHandoverCoordinator {
   validate(plan, id) {
     if (plan?.version !== 1 || plan.id !== id || !['template', 'other'].includes(plan.rule) || plan.deliver !== (plan.rule === 'other') ||
       !Array.isArray(plan.files) || !plan.files.length || plan.files.some(file => typeof file.name !== 'string' || !material(file.name)) ||
-      new Set(plan.files.map(file => file.name)).size !== plan.files.length ||
-      plan.rule === 'template' && typeof plan.template !== 'string') throw error('INVALID_DATA', 'Invalid handover plan');
+      new Set(plan.files.map(file => file.name)).size !== plan.files.length) throw error('INVALID_DATA', 'Invalid handover plan');
   }
 
   atomic(file, body) {
@@ -196,21 +193,11 @@ export class GlobalMemoryHandoverCoordinator {
     finally { try { this.io.unlinkSync(temporary); } catch (cause) { if (cause.code !== 'ENOENT') throw cause; } }
   }
 
-  installTemplate(body) {
-    const file = path.join(this.memory, 'session-groups', 'origin', 'state.md');
-    this.io.mkdirSync(path.dirname(file), { recursive: true });
-    const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`;
-    try {
-      this.io.writeFileSync(temporary, body, { mode: 0o600, flag: 'wx' });
-      try { this.io.linkSync(temporary, file); } catch (cause) { if (cause.code !== 'EEXIST') throw cause; }
-    } finally { this.io.unlinkSync(temporary); }
-  }
-
-  body(plan, archive) {
-    const daily = path.join(this.memory, 'sessions');
-    if (!plan.deliver) return `Global memory handover ${plan.id}: daily records remain at ${JSON.stringify(daily)}; they were not moved. Read them when needed.`;
-    return `Global memory handover ${plan.id}: archived at ${JSON.stringify(archive)}; files: ${JSON.stringify(this.archivedFiles(archive))}. ` +
-      `Daily records remain at ${JSON.stringify(daily)}; read when needed. Read all archived materials completely and verify actual progress before continuing. ` +
-      "Record your own work in your own working memory. In multi use internal to relay other groups' work to their threads, and in single take it over yourself.";
+  body(plan) {
+    const movedInbox = plan.files.some(({ name }) => inbox(name)) ?
+      ' If a planned inbox file was moved by the upgrade, read it in memory/archive/inbox/origin.' : '';
+    return `Follow up on the legacy global handover at memory/mode-switch/${plan.id}/previous/_global. ` +
+      'Read the archived material in full and check which work is still open.' + movedInbox +
+      " Add open work for Origin to its handoff. In multi, relay other groups' open work to their own threads using internal messages. Daily records are in memory/sessions.";
   }
 }

@@ -15,7 +15,7 @@ function fixture(t, { absent = false } = {}) {
   const state = { requests: [], stops: [], config: { mode: 'multi' } };
   const requests = { read: () => state.requests, write: rows => { state.requests = rows; } };
   const admission = new SupervisorAdmission({ store: requests, db: store, readMode: () => state.config, readRun: () => live, now: () => 10000 }); admission.openEntry();
-  const deps = { db: store, requests, observeGroup: () => live ?? { present: false }, readSyncMarker: () => ({ held: false, stale: false }),
+  const deps = { db: store, requests, observeGroup: () => live ?? { present: false },
     stop: scene => { assert.equal(scene.runId, live?.runId); state.stops.push(scene.runId); live = null; }, intentionalStop: () => {}, diagnostic: () => {} };
   const lifecycle = new SupervisorLifecycle(deps, { now: () => 10000 });
   const context = () => ({ configuration: state.config, transition: store.getModeTransition(), scenes: live ? [{ ...live }] : [], fences: store.listDrainFences(), restartRequests: state.requests });
