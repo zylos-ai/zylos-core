@@ -88,7 +88,7 @@ function isAllowedProxyWrite(method, suffix) {
     method === 'POST' && /^\/api\/schedules(?:\/[^/]+\/actions\/(?:pause|resume))?$/.test(suffix) ||
     ['PUT', 'DELETE'].includes(method) && /^\/api\/schedules\/[^/]+$/.test(suffix) ||
     method === 'POST' && /^\/api\/instance\/actions\/(?:switch-mode|switch-runtime|upgrade-runtime|recheck-runtime-cli)$/.test(suffix) ||
-    method === 'PUT' && suffix === '/api/instance/defaults' ||
+    method === 'PUT' && (suffix === '/api/instance/defaults' || suffix === '/api/instance/avatar') ||
     method === 'PUT' && (suffix === '/api/settings/pricing' || suffix === '/api/settings/timezone' || suffix === '/api/memory/file') ||
     method === 'POST' && (
       /^\/api\/observer\/(?:install|enable|disable|leases|agent-size)$/.test(suffix) ||
