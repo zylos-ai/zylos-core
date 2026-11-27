@@ -1179,7 +1179,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       top.append(renderKpi(), renderWeek(), renderTimeline());
       const taskContents = [renderFilters(), renderList()];
       if (creationNotice) {
-        const status = element(document, 'p', t('wb.schedule.createUnconfirmed'), 'wb-sched-notice');
+        const status = element(document, 'p', t('wb.schedule.createUnconfirmed'), 'wb-sched-notice wb-sched-create-notice');
         status.setAttribute('role', 'status');
         taskContents.unshift(status);
       }
