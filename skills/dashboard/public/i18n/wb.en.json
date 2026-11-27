@@ -1206,6 +1206,7 @@
   "chat.upload.chat_upload_config_failed": "Upload configuration is unavailable. Choose files again to retry.",
   "chat.upload.chat_upload_unavailable": "Attachments cannot be uploaded here.",
   "chat.upload.chat_attachment_unavailable": "Attachment unavailable or expired. Remove it and upload it again.",
+  "chat.upload.chat_upload_failed": "Upload failed. Please retry.",
   "chat.upload.upload_result_unknown": "Connection lost before the upload was confirmed. Retry uploads it again.",
   "chat.upload.upstream_unreachable": "Cannot reach the other machine. Try again later.",
   "chat.upload.remote_chat_disabled": "The other machine does not allow remote access to conversations.",
