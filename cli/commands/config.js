@@ -1,4 +1,4 @@
-import { loadRuntimeContexts, modelThreshold, readDefaultModels, readModelWindows, setModelThreshold } from '../lib/model-rotation-thresholds.js';
+import { LEGACY_KEYS, loadRuntimeContexts, modelThreshold, readDefaultModels, readModelWindows, setModelThreshold } from '../lib/model-rotation-thresholds.js';
 /**
  * zylos config - View and update Zylos configuration
  *
@@ -68,7 +68,7 @@ export async function configCommand(args) {
 }
 
 /** Legacy threshold keys: `set` writes the engine default model's entry, so show that effective value. */
-const THRESHOLD_RUNTIME = { new_session_threshold: 'claude', codex_new_session_threshold: 'codex' };
+const THRESHOLD_RUNTIME = Object.fromEntries(Object.entries(LEGACY_KEYS).map(([runtime, key]) => [key, runtime]));
 
 async function displayValues(config, keys = Object.keys(config)) {
   const effective = {};
