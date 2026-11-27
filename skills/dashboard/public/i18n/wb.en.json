@@ -220,6 +220,7 @@
   "wb.actions.accepted": "Restart request accepted",
   "wb.actions.notSubmitted": "Request not submitted",
   "wb.nav.schedule": "Schedule",
+  "wb.schedule.creating": "Creating task...",
   "wb.schedule.createUnconfirmed": "Creation was not confirmed. Check the list before creating the task again.",
   "wb.schedule.checkingResult": "Result unknown. Checking...",
   "wb.schedule.checkUnavailable": "Result unknown. Could not refresh the task.",

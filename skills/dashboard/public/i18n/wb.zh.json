@@ -220,6 +220,7 @@
   "wb.actions.accepted": "重启请求已接受",
   "wb.actions.notSubmitted": "请求未提交",
   "wb.nav.schedule": "定时任务",
+  "wb.schedule.creating": "正在创建任务…",
   "wb.schedule.createUnconfirmed": "创建结果未确认，请先在列表里核对，别重复创建",
   "wb.schedule.checkingResult": "结果未知，正在核对…",
   "wb.schedule.checkUnavailable": "结果未知，未能重新读取任务",

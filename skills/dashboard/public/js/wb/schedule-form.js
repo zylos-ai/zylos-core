@@ -175,6 +175,7 @@ export function createForm(document, { state: initial, t = key => key, creating 
   const save = element(document, 'button', t(creating ? 'wb.schedule.create' : 'wb.schedule.save'), 'wb-btn wb-btn-primary wb-sched-save');
   const previewLine = element(document, 'p', '', 'wb-sched-preview');
   const message = element(document, 'p', '', 'wb-sched-message');
+  message.setAttribute('role', 'status');
   const sync = () => {
     save.disabled = busy || !saveAllowed(state, preview, { creating, reenable });
     previewLine.textContent = previewText(preview, { t, formatTime });
@@ -276,6 +277,7 @@ export function createForm(document, { state: initial, t = key => key, creating 
     },
     setMessage(text) {
       message.textContent = text ?? '';
+      message.classList.toggle('wb-sched-message-busy', busy);
     },
     setBusy(value) {
       busy = value;

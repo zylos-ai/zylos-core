@@ -850,6 +850,7 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 .wb-sched-check > span { display: grid; gap: 2px; }
 .wb-sched-form > .wb-sched-note { margin: 0; }
 .wb-sched-message { margin: 0; color: var(--wb-err); font-size: var(--fs-small); }
+.wb-sched-message.wb-sched-message-busy { color: var(--text-dim); }
 .wb-sched-message:empty { display: none; }
 .wb-sched-form-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 14px; border-top: 1px solid var(--wb-line); }
 .wb-sched-form-acts small { margin-left: auto; }

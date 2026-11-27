@@ -612,7 +612,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
           creation = handle;
           redraw();
         }
-        handle.setMessage('');
+        handle.setMessage(creating ? t('wb.schedule.creating') : '');
         const body = formPayload(state, creating ? null : original, { reenable });
         const outcome = creating ? await write('POST', '/api/schedules', body)
           : await write('PUT', `/api/schedules/${encodeURIComponent(task.id)}`, body);
