@@ -36,6 +36,7 @@ export default Object.freeze({
       npmPackage: '@openai/codex', dataDir: '.codex',
     }),
     postUpgradeSync,
+    retiredProjectFiles: UNSUPPORTED,
   }),
   auth,
   dream,

@@ -32,6 +32,7 @@ export default Object.freeze({
     dailyUpgradePrompt: UNSUPPORTED,
     uninstall: UNSUPPORTED,
     postUpgradeSync: UNSUPPORTED,
+    retiredProjectFiles: UNSUPPORTED,
   }),
   auth,
   dream,

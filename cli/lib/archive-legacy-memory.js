@@ -5,6 +5,7 @@ import { withMemoryLock } from '../../skills/zylos-memory/scripts/memory-lock.js
 import { groupRunDir } from './session-group-paths.js';
 import { maintenance } from './upgrade-protection.js';
 import { getRuntime, SUPPORTED_RUNTIMES } from './runtime/index.js';
+import { UNSUPPORTED } from './runtime/contract.js';
 
 const inboxName = /^inbox(?:\.[^.]+)?\.md$/;
 
@@ -93,7 +94,7 @@ export async function archiveRetiredRuntimeFiles(zylosDir) {
   for (const id of SUPPORTED_RUNTIMES) {
     const { install } = await getRuntime(id);
     const retired = install.retiredProjectFiles;
-    if (!retired) continue;
+    if (retired === UNSUPPORTED) continue;
     let source = zylosDir;
     for (const part of retired.source) {
       source = path.join(source, part);
