@@ -91,7 +91,7 @@ Other independent commands:
 - `c4-db.js groups [--match TEXT | --active-since MS | --key-match TEXT] [--limit N] [--raw] [--json]`
 - `c4-db.js group-queues [--json]`
 - `c4-db.js mode-transition show [--run-id UUID] [--json]`
-- `c4-fetch.js --begin ID --end ID [--json]` preserves the requested historical range.
+- `c4-fetch.js --begin ID --end ID [--group GROUP] [--json]` preserves the requested historical range; `--group` keeps only that session group's rows.
 - `c4-fetch.js --checkpoints [--group GROUP] --after END [--json]`
 - `c4-fetch.js --absorbed --run-id UUID [--summary [--scope-after GROUP] | --id ID [--field text|endpoint] [--out FILE] | --after ID] [--limit N] [--json]`
 

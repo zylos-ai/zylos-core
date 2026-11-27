@@ -5,7 +5,7 @@ Retrieves the last checkpoint summary and conversations within a specified id ra
 ## Usage
 
 ```bash
-~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --begin <id> --end <id>
+~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --begin <id> --end <id> [--group <session group>]
 ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --since <duration|datetime>
 ```
 
@@ -13,7 +13,9 @@ Retrieves the last checkpoint summary and conversations within a specified id ra
 - a relative duration in minutes, hours or days: `30m`, `6h`, `24h`, `1d`
 - a datetime: `2026-06-04`, `2026-06-04 12:00`, `2026-06-04 12:00:00`, optionally with `T`, milliseconds and a `Z` or `±HH:MM` offset (`2026-06-04T20:00+08:00`, `2026-06-04T12:00:00.000Z`)
 
-A datetime without an offset is UTC, like the conversation timestamps in the output. Conversations at or after that time are returned. `--since` cannot be combined with `--begin`/`--end` or another fetch mode such as `--unsummarized`. Like `--begin`/`--end`, it covers all session groups and shows the global last checkpoint summary. With `--json`, the result is `{checkpoint, since, rows}`.
+Message IDs are shared by all session groups, so an ID range can contain other groups' messages. `--group` keeps only the rows of that session group.
+
+A datetime without an offset is UTC, like the conversation timestamps in the output. Conversations at or after that time are returned. `--since` cannot be combined with `--begin`/`--end` or another fetch mode such as `--unsummarized`. Like `--begin`/`--end` without `--group`, it covers all session groups and shows the global last checkpoint summary. With `--json`, the result is `{checkpoint, since, rows}`.
 
 ## Text Projection
 
