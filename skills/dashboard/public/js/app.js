@@ -326,6 +326,9 @@ async function refreshViewedMachineAccess(name) {
     const data = await response.json();
     if (request !== fleetAccessRequest || (state.remoteAgent ?? REMOTE_AGENT) !== name) return;
     state.remoteMachineAccess = data.items[0]?.access === 'admin' ? 'admin' : 'read';
+    // The address this machine reaches it at: the viewed page cannot know it from its own data.
+    state.remoteMachineAddress = data.items[0]?.base_url ?? null;
+    if (REMOTE_AGENT) renderLocalAvatar();
     refreshSettingsLocks();
     syncAccessControls();
     renderObserverPage();
@@ -2397,11 +2400,12 @@ function renderSettingsIdentity() {
   if (!settingsPage) return;
   const { color, version } = localMachine();
   if (REMOTE_AGENT) {
-    // This page does not know the other machine's address; its name and zylos version are its own.
+    // Its name and zylos version are its own; its address is the one this machine's fleet reaches it at.
     const name = viewedAgentName(), core = coreVersion(state.dashboardState?.versions);
+    const address = (state.remoteMachineAddress ?? '').replace(/^https?:\/\//, '');
     settingsPage.identity.render({
       avatar: avatarNode(document, { name, color, src: avatars.src(api('/api/instance/avatar'), version), size: 'md' }),
-      name, address: '', version: core ? 'zylos v' + core : '',
+      name, address, version: core ? 'zylos v' + core : '',
     });
     return;
   }
