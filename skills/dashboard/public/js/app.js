@@ -2991,7 +2991,7 @@ function initSettingsPage() {
   settingsTimezone = mountTimezoneSettings(settingsPage.slots.timezone, { t,
     read: () => requestAgentJson('/api/settings/timezone'),
     write: body => requestAgentJson('/api/settings/timezone', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
-    restart: body => requestAgentJson('/api/settings/timezone/actions/restart-services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+    restart: body => requestAgentJson('/api/settings/timezone/actions/restart-services', { signal: AbortSignal.timeout(90_000), method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
     confirm: confirmSetting, writable: () => !remoteIsReadOnly(),
     identity: observerTargetKey, target: viewedRemoteTarget, onSaved: () => refreshState().catch(() => {}),
   });

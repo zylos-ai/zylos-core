@@ -799,6 +799,8 @@ main:has(> #tab-schedule.active) { padding: 0 0 var(--space-xl); }
 .wb-sched-section > h3 { margin: 0; padding: 14px 16px 8px; border-bottom: 1px solid var(--wb-line); color: var(--text-dim); font-size: var(--fs-small); font-weight: var(--fw-strong); }
 .wb-sched-section > h3 small { color: var(--text-muted); font-size: var(--fs-small); font-weight: var(--fw-body); }
 .wb-sched-row { position: relative; padding: 0 16px; border-bottom: 1px solid var(--wb-line); }
+.wb-sched-row > .wb-action-result { grid-column: 1 / -1; padding: 0 12px 8px; }
+.wb-sched-row > .wb-action-result:only-child { padding-top: 8px; }
 .wb-sched-row:hover { background: var(--wb-hover); }
 .wb-sched-row.active { background: var(--wb-accent-soft); }
 .wb-sched-row.active::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }
@@ -835,6 +837,7 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 .wb-sched-empty { margin: 0; padding: 28px 16px; color: var(--text-dim); text-align: center; }
 .wb-sched-error, .wb-sched-invalid { color: var(--wb-err); }
 .wb-sched-notice { color: var(--text-dim); }
+.wb-sched-create-notice { padding-inline: 16px; }
 .wb-sched-valid { color: var(--wb-work); }
 /* Drawer */
 .wb-sched-side { position: fixed; top: var(--wb-header-h); right: env(safe-area-inset-right); bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: var(--shadow-card); overflow-wrap: anywhere; }
@@ -884,6 +887,7 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 .wb-sched-check > span { display: grid; gap: 2px; }
 .wb-sched-form > .wb-sched-note { margin: 0; }
 .wb-sched-message { margin: 0; color: var(--wb-err); font-size: var(--fs-small); }
+.wb-sched-message.wb-sched-message-busy { color: var(--text-dim); }
 .wb-sched-message:empty { display: none; }
 .wb-sched-form-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 14px; border-top: 1px solid var(--wb-line); }
 .wb-sched-form-acts small { margin-left: auto; }
@@ -921,6 +925,7 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
   .wb-sched-kpi > .wb-sched-note { grid-column: 1 / -1; }
   .wb-sched-kpi-item b { font-size: var(--fs-title-md); }
   .wb-sched-filters { position: static; padding: 10px 12px; }
+  .wb-sched-create-notice { padding-inline: 12px; }
   /* The five filters share the full width; a thin scrollbar remains only if counts grow past it. */
   .wb-sched-filters .wb-seg { display: flex; flex: 1 1 100%; max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
   .wb-sched-filters .wb-seg button { flex: 1 0 auto; justify-content: center; padding: 0 6px; font-size: var(--fs-small); }
