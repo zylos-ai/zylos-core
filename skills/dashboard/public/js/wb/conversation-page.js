@@ -2221,8 +2221,10 @@ export function mountConversationPage({
     }
     tray.hidden = trayLabel.hidden = !upload.items.length;
     text(trayLabel, countLabel(t, 'chat.upload.trayCount', upload.items.length, {}).replace('{count}', String(upload.items.length)));
-    // A server rejection with a known reason (file too large and the like) names it; other failures keep the row's generic "upload failed".
-    const itemError = upload.items.find(item => item.status === 'failed' && t('chat.upload.' + item.error) !== 'chat.upload.' + item.error)?.error;
+    // A failed upload's row shows no text, so the notice names the reason, or says "upload failed" when it has none.
+    const failedError = upload.items.find(item => item.status === 'failed')?.error;
+    const itemError = failedError && t('chat.upload.' + failedError) !== 'chat.upload.' + failedError ? failedError
+      : upload.items.some(item => item.status === 'failed') ? 'chat_upload_failed' : null;
     const uploadError = upload.error || itemError || (s.error === 'chat_attachment_unavailable' ? s.error : null);
     uploadNotice.hidden = !uploadError;
     text(uploadNotice, uploadError ? t('chat.upload.' + uploadError).replace('{count}', String(upload.config?.maxAttachments || 20)) : '');

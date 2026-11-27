@@ -56,8 +56,10 @@ export function createChatAttachment({ document, attachment = {}, t = key => key
   const setStatus = key => {
     root.dataset.attachmentState = key || 'ready';
     const percent = Math.min(100, Math.max(0, Number(attachment.progress) || 0));
-    const value = key ? t('chat.attachment.' + key) + (mode === 'tray' && key === 'uploading' ? ` ${Math.round(percent)}%` : '') : '';
-    setText(status, value); status.hidden = !key; separator.hidden = !key || !size.textContent;
+    // A failed upload says why in the notice under the tray; the row keeps only its retry button.
+    const shown = mode === 'tray' && key === 'failed' ? null : key;
+    const value = shown ? t('chat.attachment.' + shown) + (mode === 'tray' && shown === 'uploading' ? ` ${Math.round(percent)}%` : '') : '';
+    setText(status, value); status.hidden = !shown; separator.hidden = !shown || !size.textContent;
   };
   const imageStatus = key => {
     const transfer = mode === 'tray' ? attachment.status : null;

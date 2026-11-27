@@ -1,6 +1,8 @@
 import { instantMs } from './api-time.js';
 const SEND_WINDOW_MS = 25 * 60 * 1000;
 const CONFIG_REQUEST_TIMEOUT_MS = 120000;
+// A server-side size refusal names the same reason as the browser's own size check.
+const SAME_REASON = { chat_upload_too_large: 'chat_attachment_too_large' };
 const scopeKey = scope => scope && typeof scope.instance === 'string' && scope.instance
   && ['string', 'number'].includes(typeof scope.conversationId) && String(scope.conversationId)
   ? JSON.stringify([scope.instance, String(scope.conversationId)]) : null;
@@ -176,7 +178,8 @@ export function createUploadTray({ fetch: read = globalThis.fetch,
         if (xhr.status < 200 || xhr.status >= 300 || !result || typeof result.id !== 'string' || !result.id
           || typeof result.name !== 'string' || !Number.isSafeInteger(result.size) || result.size < 0
           || !['image', 'file'].includes(result.kind)) {
-          item.status = 'failed'; item.error = typeof result?.error?.code === 'string' ? result.error.code : 'chat_upload_failed'; notify(); return;
+          const code = result?.error?.code;
+          item.status = 'failed'; item.error = typeof code === 'string' ? SAME_REASON[code] || code : 'chat_upload_failed'; notify(); return;
         }
         Object.assign(item, { id: result.id, name: result.name, size: result.size, mime: typeof result.mime === 'string' ? result.mime : '',
           kind: result.kind, progress: 100,
@@ -185,8 +188,9 @@ export function createUploadTray({ fetch: read = globalThis.fetch,
           status: 'ready', error: null });
         expire(); notify();
       });
-      listen(xhr, 'error', () => fail('chat_upload_unknown'));
-      listen(xhr, 'timeout', () => fail('chat_upload_unknown'));
+      // The request may have reached the server before the connection failed.
+      listen(xhr, 'error', () => fail('upload_result_unknown'));
+      listen(xhr, 'timeout', () => fail('upload_result_unknown'));
       listen(xhr, 'abort', () => fail('chat_upload_interrupted'));
       item.stop = () => { cleanup(); xhr.abort(); };
       const body = createFormData(); body.append('file', item.file, item.name);
