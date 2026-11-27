@@ -19,6 +19,13 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
       message ?? messageForFailureReceipt({ ...row, reason }), row.endpoint_id,
       { deliveryAction: 'failure_receipt' });
   }
+  // An interrupted delivery may already have pasted the control.
+  function expireOrphanControls(c, scope = '', args = []) {
+    return all(c, `UPDATE control_queue
+      SET status='timeout', last_error='ORPHAN_EXPIRED', updated_at=?
+      WHERE status='running' AND ack_deadline_at IS NULL ${scope}
+      RETURNING id, session_group`, seconds(), ...args);
+  }
   return {
     enqueueFailureReceipt: (id, message) => write(c => enqueueReceipt(c, id, null, message)),
     getNextPending: ({ sessionGroups, sessionMode } = {}) => { const filter = groups(sessionGroups); return read(c => get(c, `SELECT * FROM conversations WHERE direction='in' AND status='pending' AND ${deliveryFence(sessionMode)}${filter.sql} ORDER BY priority,id LIMIT 1`, ...filter.args) ?? null); },
@@ -57,20 +64,20 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
         result[key].ids.push(row.id); result[key].count++;
         if (row.status === 'failed') enqueueReceipt(c, row.id, row.delivery_action);
       }
-      // An interrupted delivery may already have pasted the control.
-      const controlIds = all(c, `UPDATE control_queue
-        SET status='timeout', last_error='ORPHAN_EXPIRED', updated_at=?
-        WHERE status='running' AND ack_deadline_at IS NULL RETURNING id`, seconds())
-        .map(row => row.id).sort((a, b) => a - b);
+      const controlIds = expireOrphanControls(c).map(row => row.id).sort((a, b) => a - b);
       return { ...result, controlsExpired: { ids: controlIds, count: controlIds.length } };
     }),
-    listGroupQueues: () => snapshot(c => {
-      const groups = new Map();
+    expireOrphanGroupControls: inFlight => write(c => expireOrphanControls(c,
+      'AND session_group IS NOT NULL AND id NOT IN (SELECT value FROM json_each(?))',
+      [JSON.stringify([...inFlight])])),
+    listGroupQueues: ({ sessionGroups } = {}) => snapshot(c => {
+      const filter = groups(sessionGroups);
+      const queues = new Map();
       const entry = sessionGroup => {
-        if (!groups.has(sessionGroup)) groups.set(sessionGroup, { sessionGroup, pending: { count: 0, oldestAt: null, head: null }, running: { count: 0 }, fence: null });
-        return groups.get(sessionGroup);
+        if (!queues.has(sessionGroup)) queues.set(sessionGroup, { sessionGroup, pending: { count: 0, oldestAt: null, head: null }, running: { count: 0 }, fence: null });
+        return queues.get(sessionGroup);
       };
-      for (const row of all(c, "SELECT session_group,status,priority,id,timestamp FROM conversations WHERE direction='in' AND status IN ('pending','running') AND session_group<>''")) {
+      for (const row of all(c, `SELECT session_group,status,priority,id,timestamp FROM conversations WHERE direction='in' AND status IN ('pending','running') AND session_group<>''${filter.sql}`, ...filter.args)) {
         const group = entry(row.session_group);
         if (row.status === 'running') { group.running.count++; continue; }
         const pending = group.pending;
@@ -80,11 +87,11 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
         if (!pending.head || row.priority < pending.head.priority || (row.priority === pending.head.priority && row.id < pending.head.id)) pending.head = { id: row.id, priority: row.priority };
       }
       let globalFence = null;
-      for (const fence of all(c, 'SELECT session_group AS sessionGroup,reason,run_id AS runId,created_at AS createdAt FROM drain_fences')) {
+      for (const fence of all(c, `SELECT session_group AS sessionGroup,reason,run_id AS runId,created_at AS createdAt FROM drain_fences WHERE 1${filter.sql}`, ...filter.args)) {
         if (fence.sessionGroup === '*') globalFence = fence;
         else entry(fence.sessionGroup).fence = fence;
       }
-      return { groups: [...groups.values()].sort((a, b) => Buffer.compare(Buffer.from(a.sessionGroup), Buffer.from(b.sessionGroup))), globalFence };
+      return { groups: [...queues.values()].sort((a, b) => Buffer.compare(Buffer.from(a.sessionGroup), Buffer.from(b.sessionGroup))), globalFence };
     }),
     listPendingSessionGroups: () => read(c => all(c, `WITH pending AS (SELECT session_group,id,priority,ROW_NUMBER() OVER(PARTITION BY session_group ORDER BY priority,id) AS rn,COUNT(*) OVER(PARTITION BY session_group) AS count FROM conversations WHERE direction='in' AND status='pending' AND session_group<>'' AND ${unfenced}) SELECT session_group AS sessionGroup,id AS headId,priority AS headPriority,count FROM pending WHERE rn=1 ORDER BY priority,id`)),
     countRunningConversations: group => { requireGroup(group); return read(c => get(c, "SELECT count(*) AS n FROM conversations WHERE session_group=? AND direction='in' AND status='running'", group).n); },

@@ -453,6 +453,8 @@ export const markDelivered = (...args) => store.markDelivered(...args);
 export const expirePending = (...args) => store.expirePending(...args);
 export const failDelivery = (...args) => store.failDelivery(...args);
 export const recoverOrphanRunning = (...args) => store.recoverOrphanRunning(...args);
+export const expireOrphanGroupControls = (...args) => store.expireOrphanGroupControls(...args);
+export const listGroupQueues = (...args) => store.listGroupQueues(...args);
 export const listPendingSessionGroups = (...args) => store.listPendingSessionGroups(...args);
 export const countRunningConversations = (...args) => store.countRunningConversations(...args);
 export const countGlobalRunningConversations = (...args) => store.countGlobalRunningConversations(...args);

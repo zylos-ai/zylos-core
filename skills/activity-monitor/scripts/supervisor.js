@@ -34,6 +34,34 @@ export function createSupervisor(deps) {
   const authChecks=new Set(),authFlights=new Map(),authRetryAt=new Map();
   const startupAuthChecks=new Set();
   const originAuthAlerted=new Set();
+  const alertedGroupFences = new Map();
+  async function alertOnFencedBacklog(fences) {
+    const sessionGroups = fences.map(fence => fence.sessionGroup).filter(group => group !== 'origin' && group !== '*');
+    if (sessionGroups.length === 0) {
+      alertedGroupFences.clear();
+      return;
+    }
+
+    const { groups } = await db.listGroupQueues({ sessionGroups });
+    const activeGroups = new Set();
+    const threshold = now() - (PENDING_MAX_AGE_SECONDS - 300) * 1000;
+    for (const { sessionGroup, pending, fence } of groups) {
+      if (!fence) continue;
+      activeGroups.add(sessionGroup);
+      const key = JSON.stringify([fence.runId, fence.reason, fence.createdAt]);
+      if (alertedGroupFences.get(sessionGroup) === key) continue;
+      alertedGroupFences.delete(sessionGroup);
+      if (!Number.isFinite(pending.oldestAt) || pending.oldestAt > threshold) continue;
+      await deps.alert({
+        event: 'group_fence_backlog', sessionGroup, reason: fence.reason,
+        count: pending.count, oldestAt: pending.oldestAt,
+      });
+      alertedGroupFences.set(sessionGroup, key);
+    }
+    for (const group of alertedGroupFences.keys()) {
+      if (!activeGroups.has(group)) alertedGroupFences.delete(group);
+    }
+  }
   const missingDependencies=deps.missingDependencies ?? new Set();
   let restartRequestsUnreadable=false;
   const restartRequestsPath=()=>admission?.store.file ?? path.join(deps.zylosDir,'activity-monitor','restart-requests.json');
@@ -366,6 +394,8 @@ export function createSupervisor(deps) {
           return observed.present===false || (typeof observed.runId==='string' && observed.runId!==target.runId);
         },hasAuthFence:async target=> (await db.getDrainFence(target.sessionGroup))?.reason==='auth'});
       }
+      try { await alertOnFencedBacklog(context.fences); }
+      catch (error) { reportError(error, { phase: 'fenced-backlog-alert' }); }
       if(context.transition || context.fences.some(fence=>fence.sessionGroup==='*'))return;
       const runtime=await deps.resolveTargetRuntime('origin');
       if(health.store(runtime).read().health!=='auth_failed') {originAuthAlerted.delete(runtime);return;}
