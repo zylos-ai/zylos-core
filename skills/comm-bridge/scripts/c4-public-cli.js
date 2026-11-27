@@ -206,7 +206,7 @@ const exported = (file, rows) => ({ path: file.path, count: rows.length, firstId
 
 export function fetchCli(args) {
   if (!args.length) invalid('Usage: c4-fetch.js requires a query');
-  if (helpRequested(args, ['group', 'after', 'up-to', 'limit', 'begin', 'end', 'since', 'run-id', 'scope-after', 'id', 'field', 'out'])) return 'c4-fetch.js --unsummarized [--group G] [--after ID] [--up-to ID] [--limit N] [--out FILE] | --begin ID --end ID | --since DURATION|DATETIME | --checkpoints --after ID | --absorbed --run-id UUID [--summary [--scope-after G]|--id ID [--field text|endpoint] [--out FILE]|--after ID] [--limit N]\n';
+  if (helpRequested(args, ['group', 'after', 'up-to', 'limit', 'begin', 'end', 'since', 'run-id', 'scope-after', 'id', 'field', 'out'])) return 'c4-fetch.js --unsummarized [--group G] [--after ID] [--up-to ID] [--limit N] [--out FILE] | --begin ID --end ID [--group G] | --since DURATION|DATETIME | --checkpoints --after ID | --absorbed --run-id UUID [--summary [--scope-after G]|--id ID [--field text|endpoint] [--out FILE]|--after ID] [--limit N]\n';
   const modes = ['unsummarized','since','checkpoints','absorbed'];
   const selected = modes.filter(key => args.includes('--' + key));
   if (selected.length > 1) invalid('Fetch modes are mutually exclusive');
@@ -216,7 +216,7 @@ export function fetchCli(args) {
     checkpoints: [['group','after'], ['checkpoints','json']],
     absorbed: [['run-id','group','scope-after','after','limit','id','field','out'], ['absorbed','summary','json']],
     since: [['since'], ['json']],
-    range: [['begin','end'], ['json']],
+    range: [['begin','end','group'], ['json']],
   };
   const o = options(args, ...allowed[mode]); noPositionals(o);
   if (mode === 'absorbed') {
@@ -249,8 +249,9 @@ export function fetchCli(args) {
   }
   const begin = number(o.begin, 'begin'), end = number(o.end, 'end');
   if (begin > end) invalid('begin must not exceed end');
-  const checkpoint = db.getLatestContentCheckpoint('*');
-  const rows = db.getConversationsByRange(begin, end).map(projectConversation);
+  const scope = o.group === undefined ? null : requireGroup(o.group);
+  const checkpoint = db.getLatestContentCheckpoint(scope ?? '*');
+  const rows = db.getConversationsByRange(begin, end).filter(row => !scope || row.session_group === scope).map(projectConversation);
   return o.json ? json({ checkpoint, rows }) : `${checkpoint?.summary ? '[Last Checkpoint Summary] ' + checkpoint.summary + '\n\n' : ''}[Conversations] (id ${begin} ~ ${end})\n${conversations(rows) || 'No conversations in this range.\n'}${historyNotes(rows)}`;
 }
 export function runCli(kind, args) {

@@ -5,15 +5,17 @@ Retrieves the last checkpoint summary and conversations within a specified id ra
 ## Usage
 
 ```bash
-~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --begin <id> --end <id>
+~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --begin <id> --end <id> [--group <session group>]
 ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --since <duration|datetime>
 ```
+
+Message IDs are shared by all session groups, so an ID range can contain other groups' messages. `--group` keeps only the rows of that session group and shows that group's own last checkpoint summary, never the global one; when the group has no current checkpoint, no summary is shown.
 
 `--since` accepts:
 - a relative duration in minutes, hours or days: `30m`, `6h`, `24h`, `1d`
 - a datetime: `2026-06-04`, `2026-06-04 12:00`, `2026-06-04 12:00:00`, optionally with `T`, milliseconds and a `Z` or `±HH:MM` offset (`2026-06-04T20:00+08:00`, `2026-06-04T12:00:00.000Z`)
 
-A datetime without an offset is UTC, like the conversation timestamps in the output. Conversations at or after that time are returned. `--since` cannot be combined with `--begin`/`--end` or another fetch mode such as `--unsummarized`. Like `--begin`/`--end`, it covers all session groups and shows the global last checkpoint summary. With `--json`, the result is `{checkpoint, since, rows}`.
+A datetime without an offset is UTC, like the conversation timestamps in the output. Conversations at or after that time are returned. `--since` cannot be combined with `--begin`/`--end` or another fetch mode such as `--unsummarized`. Like `--begin`/`--end` without `--group`, it covers all session groups and shows the global last checkpoint summary. With `--json`, the result is `{checkpoint, since, rows}`.
 
 ## Text Projection
 
@@ -34,7 +36,7 @@ remain separate and unchanged.
 ## Output
 
 Outputs to stdout:
-1. Last checkpoint summary (if exists)
+1. Last checkpoint summary (if exists; the group's own with `--group`)
 2. Formatted conversations in the specified range (chronological order). With `--since`, the header shows the resolved UTC start time and the id range found, for use with `--begin`/`--end`.
 
 Range and `--since` text may end with a counted reminder and a complete internal-message template for each foreign session group. Reminders are absent when `ZYLOS_SESSION_GROUP` is missing or empty, the caller is `origin`, or all returned rows belong to the caller (or there are no rows). JSON and `--unsummarized` reads never append reminders; `c4-db.js recent` always retains its JSON output, including without `--json`.

@@ -235,6 +235,7 @@ describe('c4-session-init', () => {
           }
           insert.run(${lastId}, '2026-11-27 02:00:02', 'NEWEST-MESSAGE ' + 'x'.repeat(${oversized ? 12000 : 16}), '${group}');
           c.exec('COMMIT');
+          db.createCheckpoint('*', 1, 'GLOBAL-SUMMARY');
           db.close();
         `], { env: selectedEnv, encoding: 'utf8', timeout: 15000 });
         assert.equal(setup.status, 0, setup.stderr);
@@ -250,15 +251,14 @@ describe('c4-session-init', () => {
           assert.doesNotMatch(stdout, /SMALL-MESSAGE|NEWEST-MESSAGE/);
           assert.ok(stdout.includes(`omitted from the start of the tail: ${olderCount + 1}.`));
           const command = stdout.match(/Retrieve them by ID with: (.+)/)?.[1];
-          assert.ok(command?.includes(`--begin ${firstId} --end ${lastId} --json`));
+          assert.ok(command?.includes(`--begin ${firstId} --end ${lastId} --group '${group}'`));
           const fetchPath = path.join(tmpDir, '.claude/skills/comm-bridge/scripts/c4-fetch.js');
           fs.mkdirSync(path.dirname(fetchPath), { recursive: true });
           fs.symlinkSync(fileURLToPath(new URL('../c4-fetch.js', import.meta.url)), fetchPath);
           const fetched = spawnSync('/bin/sh', ['-c', command], { env: { ...process.env, ...selectedEnv }, encoding: 'utf8', timeout: 15000 });
           assert.equal(fetched.status, 0, fetched.stderr);
-          const rows = JSON.parse(fetched.stdout);
-          assert.equal(rows.length, olderCount + 1);
-          assert.ok(rows.every(row => row.session_group === group));
+          assert.equal(fetched.stdout.match(/SMALL-MESSAGE-\d+|NEWEST-MESSAGE/g)?.length, olderCount + 1);
+          assert.doesNotMatch(fetched.stdout, /OTHER-GROUP|GLOBAL-SUMMARY/);
         }
       });
     }

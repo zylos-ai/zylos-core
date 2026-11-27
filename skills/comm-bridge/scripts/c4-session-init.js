@@ -204,8 +204,7 @@ export async function emitC4Conversations(payload, budget = null, {
 
     const { shellQuote } = await import('./c4-query-format.js');
     const fetchPath = path.join(scope.root, '.claude/skills/comm-bridge/scripts/c4-fetch.js');
-    const filter = 'import { readFileSync } from "node:fs"; const { data } = JSON.parse(readFileSync(0, "utf8")); console.log(JSON.stringify(data.rows.filter(row => row.session_group === process.argv[1]), null, 2));';
-    const scopedOutput = group === '*' ? '' : ` --json | node --input-type=module -e ${shellQuote(filter)} -- ${shellQuote(group)}`;
+    const scopedOutput = group === '*' ? '' : ` --group ${shellQuote(group)}`;
     let count = older?.count ?? 0;
     let firstId = older?.firstId ?? Infinity;
     let lastId = older?.lastId ?? 0;
