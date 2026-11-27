@@ -9,7 +9,7 @@ Retrieves the last checkpoint summary and conversations within a specified id ra
 ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --since <duration|datetime>
 ```
 
-Message IDs are shared by all session groups, so an ID range can contain other groups' messages. `--group` keeps only the rows of that session group and shows that group's last checkpoint summary.
+Message IDs are shared by all session groups, so an ID range can contain other groups' messages. `--group` keeps only the rows of that session group and shows that group's own last checkpoint summary, never the global one; when the group has no current checkpoint, no summary is shown.
 
 `--since` accepts:
 - a relative duration in minutes, hours or days: `30m`, `6h`, `24h`, `1d`
