@@ -32,12 +32,12 @@ function fakeDatabase(conversations) {
   return { checkpoints, getDreamConversations: () => conversations.map(({ group, rows }) =>
     raw(group, rows.filter(row => row.id > (coverage.get(group) ?? 0)))).filter(group => group.rows.length),
   getCoverageEnd: group => coverage.get(group) ?? 0,
-  createCheckpoint: (group, end, summary) => { coverage.set(group, end); checkpoints.push({ group, end, summary }); } };
+  createCheckpoint: (group, end, summary, options) => { coverage.set(group, end); checkpoints.push({ group, end, summary, ...options }); } };
 }
 
 test('cleaned batches preserve message order, split only oversized groups and pack small groups together', () => {
   const signal = '<smart-mode>omit this</smart-mode><group-context>keep this</group-context>';
-  const batches = makeDreamBatches([
+  const { batches } = makeDreamBatches([
     raw('origin', [message(1, 'a'.repeat(100 * 1024) + signal), message(2, 'b'.repeat(100 * 1024))]),
     raw('chat:small', [message(3, 'c'.repeat(20 * 1024))]),
     raw('chat:short', [message(4, 'd'.repeat(30 * 1024))]),
@@ -68,11 +68,11 @@ test('dream lock rejects a replaced or expired editor token and can take over a 
   assert.notEqual(await owner.acquire(), null);
 });
 
-test('failed extraction blocks later coverage in that group, while invalid merge JSON still commits the good batches', async t => {
+test('failed extraction blocks later merge input and coverage in that group, while invalid merge JSON commits the good batches', async t => {
   const { root, read } = fixture(t);
   const db = fakeDatabase([
-    raw('origin', [message(1, 'a'.repeat(100 * 1024)), message(2, 'b'.repeat(100 * 1024))]),
-    raw('chat:peer', [message(3, 'c'.repeat(20 * 1024))]),
+    raw('origin', [message(1, 'a'.repeat(100 * 1024)), message(2, 'b'.repeat(100 * 1024)), message(3, 'c'.repeat(100 * 1024))]),
+    raw('chat:peer', [message(4, 'd'.repeat(20 * 1024))]),
   ]);
   const inputs = [], notices = [];
   const result = await runDream({ root, config: {}, date: '2026-11-23', timezone: 'Asia/Singapore',
@@ -85,18 +85,23 @@ test('failed extraction blocks later coverage in that group, while invalid merge
         return 'invalid merge result';
       }
       assert.equal(tools, false);
-      if (input.includes('(C4 #1)')) return '{';
+      if (input.includes('(C4 #2)')) return '{';
+      if (input.includes('(C4 #3)')) return JSON.stringify({ groups: [{ group: 'origin', summary: 'Deferred origin batch', items: [] }] });
       return responses([input.includes('## Group origin') ? 'origin' : 'chat:peer']);
     },
   });
   assert.equal(result.failed, true);
-  const failed = inputs.filter(({ input }) => input.includes('(C4 #1)'));
+  const failed = inputs.filter(({ input }) => input.includes('(C4 #2)'));
   assert.equal(failed.length, 3);
   assert.ok(failed[1].input.startsWith(failed[0].input + '\n'));
   assert.match(failed[1].input, /Validation error/);
-  assert.equal(inputs.filter(({ stage }) => stage === 'stage2').length, 1);
-  assert.deepEqual(db.checkpoints.map(({ group, end }) => [group, end]), [['chat:peer', 3]]);
-  assert.deepEqual(db.getDreamConversations().map(group => group.rows.map(row => row.id)), [[1, 2]]);
+  const merges = inputs.filter(({ stage }) => stage === 'stage2');
+  assert.equal(merges.length, 1);
+  assert.match(merges[0].input, /Summary of origin/);
+  assert.match(merges[0].input, /Summary of chat:peer/);
+  assert.doesNotMatch(merges[0].input, /Deferred origin batch/);
+  assert.deepEqual(db.checkpoints.map(({ group, end }) => [group, end]), [['origin', 1], ['chat:peer', 4]]);
+  assert.deepEqual(db.getDreamConversations().map(group => group.rows.map(row => row.id)), [[2, 3]]);
   assert.equal(read('activity-monitor/memory-dreaming/2026-11-22/invalid-stage2-response.txt'), 'invalid merge result');
   assert.equal(fs.existsSync(path.join(root, 'memory/sessions/2026-11-22.md')), false);
   assert.equal(notices.length, 1);
@@ -146,6 +151,7 @@ test('a completed dream publishes the diary, proposes rules, and repairs invalid
   const { root, read, write } = fixture(t);
   const db = fakeDatabase([raw('origin', [message(1, 'message')])]);
   const relative = 'reference/projects/malformed.md';
+  const legacyLog = '# Work log\n\nLate entry after the previous snapshot.';
   const diary = '# Day\n' + 'd'.repeat(25 * 1024);
   const rule = { text: 'Care for fixtures', source: 'C4 #1', owner_stated: true, destination: 'rules' };
   const notices = [];
@@ -160,6 +166,7 @@ test('a completed dream publishes the diary, proposes rules, and repairs invalid
       if (stage === 'stage2') {
         assert.match(input, /^Date: 2026-11-30\n/);
         write('memory/' + relative, pageText('Broken', 'done', '2026-11-21'));
+        write('memory/sessions/2026-11-30.md', legacyLog);
         return JSON.stringify({ ...empty, diary, rule_candidates: [rule] });
       }
       assert.equal(stage, 'repair');
@@ -175,33 +182,40 @@ test('a completed dream publishes the diary, proposes rules, and repairs invalid
   assert.equal(result.failed, false);
   assert.equal(repaired, 1);
   assert.equal(db.getCoverageEnd('origin'), 1);
-  assert.equal(read('memory/sessions/2026-11-30.md'), diary);
+  assert.equal(read('memory/sessions/2026-11-30.md'), `${legacyLog}\n\n${diary}`);
   assert.equal(notices.length, 1);
   assert.match(notices[0], /Care for fixtures/);
   assert.match(notices[0], /C4 #1/);
 });
 
-test('a second launch for the same date does not rerun models or send rule candidates', async t => {
+test('system notices advance coverage without reaching models or prompting a same-date rerun', async t => {
   const { root } = fixture(t);
-  const rows = [message(1, 'first')];
-  const db = fakeDatabase([raw('origin', rows)]);
+  const systemNotice = id => ({ ...message(id, 'system-only text'), delivery_action: 'system_notice' });
+  const rows = [message(1, 'first'), systemNotice(2)];
+  const db = fakeDatabase([raw('origin', rows), raw('chat:notice-only', [systemNotice(3)])]);
   const notices = [];
   let calls = 0;
   const launch = () => runDream({ root, config: {}, date: '2026-11-23', timezone: 'Asia/Singapore',
     database: () => db, send: text => notices.push(text),
-    newModel: () => ({ stage }) => {
+    newModel: () => ({ stage, input }) => {
       calls++;
+      if (stage === 'stage1') {
+        assert.match(input, /\(C4 #1\)/);
+        assert.doesNotMatch(input, /system-only text|\(C4 #[23]\)|chat:notice-only/);
+      }
       return stage === 'stage1' ? responses(['origin']) : JSON.stringify({ ...empty,
         rule_candidates: [{ text: 'Care for fixtures', source: 'C4 #1', owner_stated: true, destination: 'rules' }],
       });
     },
   });
   assert.equal((await launch()).failed, false);
-  rows.push(message(2, 'later delivery'));
+  rows.push(message(4, 'later delivery'));
   assert.equal((await launch()).skipped, 'already attempted');
   assert.equal(calls, 2);
   assert.equal(notices.length, 1);
-  assert.equal(db.getCoverageEnd('origin'), 1);
+  assert.equal(db.getCoverageEnd('origin'), 2);
+  assert.deepEqual(db.checkpoints.find(({ group }) => group === 'chat:notice-only'),
+    { group: 'chat:notice-only', end: 3, summary: null, noContent: true });
 });
 
 function pageText(title, status, date, key = 'Shared Key', body = 'Body') {

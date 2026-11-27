@@ -67,11 +67,11 @@ export function candidatePages(pages) {
   };
 }
 
-export function stageTwoInput(root, date, batches) {
+export function stageTwoInput(root, date, extracted) {
   const current = indexes(root);
   const findCandidates = candidatePages(pageCatalog(root, current));
   const groups = new Map();
-  for (const batch of batches) for (const entry of batch.groups) {
+  for (const entry of extracted) {
     if (!groups.has(entry.group)) groups.set(entry.group, []);
     groups.get(entry.group).push(entry);
   }

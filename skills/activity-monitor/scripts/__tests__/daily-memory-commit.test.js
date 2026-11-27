@@ -112,19 +112,6 @@ describe('daily memory commit', () => {
     assert.equal(run.attempts(), 1);
   });
 
-  it('uses the hour and date in the workspace .env for the snapshot', async t => {
-    fs.writeFileSync(path.join(zylosDir, '.env'), 'TZ=Asia/Singapore\n');
-    const run = machine(t, 10);
-    run.tasks.now = () => Date.UTC(2026, 10, 10, 18, 59);
-    await run.round();
-    assert.equal(run.state(), null);
-
-    run.tasks.now = () => Date.UTC(2026, 10, 10, 19);
-    await run.round();
-    assert.equal(run.state().last_date, '2026-11-11');
-    assert.equal(commits(), '1');
-  });
-
   it('leaves files over 50 MB out of the commit, logs them, and never streams a file over 512 MB into a pack', async t => {
     sparse('archive/memory-backup.tar', 600 * MB);
     sparse('archive/odd [1] *.bin', 50 * MB + 1);

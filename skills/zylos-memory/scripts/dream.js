@@ -1,14 +1,10 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
 import { durableJson } from '../../activity-monitor/scripts/runtime-generation.js';
-import { DEFAULT_ALERT_DESTINATION } from '../../activity-monitor/scripts/supervisor-server-health.js';
-import { parseServerAlertTarget } from '../../activity-monitor/scripts/supervisor-server-observation.js';
 import { SyncAlertEpisodes } from '../../activity-monitor/scripts/sync-alert-episodes.js';
-import { systemSendEnvironment } from '../../comm-bridge/scripts/c4-system-send-env.js';
+import { notifyOwner } from '../../comm-bridge/scripts/c4-owner-alert.js';
 import { dreamLock, dreamRunDirectory, DREAM_HEARTBEAT_MS } from './dream-lock.js';
 import { createDreamModel } from './dream-model.js';
 import { runDreamRound } from './dream-round.js';
@@ -21,25 +17,11 @@ function readRecord(file) {
   catch (error) { if (error.code !== 'ENOENT') throw error; return null; }
 }
 
-function notify(config, message) {
-  const selected = parseServerAlertTarget(config.alert_target);
-  const target = selected?.default || !selected ? DEFAULT_ALERT_DESTINATION : selected;
-  const script = fileURLToPath(new URL('../../comm-bridge/scripts/c4-send.js', import.meta.url));
-  return new Promise(resolve => {
-    const child = execFile(process.execPath, [script, target.channel, target.endpoint], {
-      timeout: 30_000, env: systemSendEnvironment(process.env, { notice: true }),
-    }, error => {
-      if (error) console.error(`Dream notification failed: ${error.code ?? 'delivery failure'}`);
-      resolve();
-    });
-    child.stdin.on('error', () => {});
-    child.stdin.end(message + '\n');
-  });
-}
-
 export async function runDream({ root, config, date: runDate, timezone, signal: requestedSignal,
   newModel = createDreamModel, database = () => import('../../comm-bridge/scripts/c4-db.js'),
-  send = message => notify(config, message), lock = dreamLock(root),
+  send = message => notifyOwner(message, { readConfig: () => config,
+    log: error => console.error(`Dream notification failed: ${error.code ?? 'delivery failure'}`) }),
+  lock = dreamLock(root),
 }) {
   const day = new Date(`${runDate}T00:00:00Z`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(runDate) || !Number.isFinite(day.valueOf()) || day.toISOString().slice(0, 10) !== runDate) {

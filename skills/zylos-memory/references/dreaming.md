@@ -12,10 +12,13 @@ a late dream enter the following snapshot.
 Dreaming reads full delivered conversations and outgoing replies from C4, between
 each group's checkpoint and delivered frontier. The first stage uses up to three
 parallel calls without tools. Each receives up to 150 KiB of cleaned conversation
-text. The second stage combines the validated results using a memory-scoped
+text. Outbound system notices advance coverage without appearing in model input.
+Groups containing only system notices use a no-content checkpoint. The second
+stage combines the validated results using a memory-scoped
 read-only toolset and the existing fragment editor. Only after a second-stage
 call exits successfully can first-stage batches advance their checkpoints.
-A failed batch blocks coverage for its group at that batch. A completed second
+A failed batch defers its group from that batch onward in both the second-stage
+input and checkpoint coverage. A completed second
 stage with invalid result JSON still advances coverage, and its unparsed reply
 is recorded for inspection.
 
@@ -32,8 +35,9 @@ Writes already published by the models are retained.
 
 The date supplied to the models and used for the diary is the calendar day
 before the run. Daily records live in `activity-monitor/memory-dreaming/<date>/`. The script
-writes accepted diary text to `memory/sessions/<date>.md` and sends proposals
-and alerts to `alert_target`, or Dashboard Origin when none is set. Diary size
+writes accepted diary text to `memory/sessions/<date>.md`, appending it to any
+existing session log. It sends proposals and alerts to `alert_target` and uses
+Dashboard Origin once when the configured target is unavailable or unset. Diary size
 has a 24 KiB soft limit.
 
 Weekly tidy runs after a successful dream. Set the weekday with

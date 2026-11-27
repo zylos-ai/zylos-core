@@ -8,6 +8,7 @@ import { repairPageHeaders, stageTwoInput, tidyReference, PAGE_SOFT_LIMIT } from
 import { DREAM_RESULT_SCHEMAS, parseDreamResult } from './dream-results.js';
 import { publishReferenceFile } from './reference-index.js';
 import { resolveAllowedMemoryPath } from './self-write.js';
+import { memoryScope, withMemoryLock } from './sync-lock.js';
 
 const TEMPLATE = new URL('../templates/dreaming/', import.meta.url);
 const PARALLEL_BATCHES = 3;
@@ -52,22 +53,57 @@ function ruleMessage(candidates) {
   return `Memory dreaming found rules for your review. Reply with the items you approve or want to revise.\n\n${lines.join('\n\n')}`;
 }
 
-export function advanceDreamCheckpoints(db, batches, results) {
+function completedExtractions(batches, results) {
   const blocked = new Set();
+  const incomplete = new Map();
+  const completed = [];
   for (const [index, batch] of batches.entries()) {
     const result = results[index];
     for (const { group, end } of batch.groups) {
-      if (!result) { blocked.add(group); continue; }
-      if (blocked.has(group) || end === null || end <= db.getCoverageEnd(group)) continue;
-      db.createCheckpoint(group, end, result.groups.find(row => row.group === group).summary);
+      if (blocked.has(group)) continue;
+      if (!result) {
+        blocked.add(group);
+        incomplete.delete(group);
+        continue;
+      }
+      const entries = incomplete.get(group) ?? [];
+      entries.push(result.groups.find(row => row.group === group));
+      if (end === null) {
+        // Include earlier fragments only once the complete message can be covered.
+        incomplete.set(group, entries);
+      } else {
+        completed.push({ group, end, entries });
+        incomplete.delete(group);
+      }
     }
   }
+  return completed;
+}
+
+function advanceDreamCheckpoints(db, completed) {
+  for (const { group, end, entries } of completed) {
+    if (end <= db.getCoverageEnd(group)) continue;
+    if (entries) db.createCheckpoint(group, end, entries.at(-1).summary);
+    else db.createCheckpoint(group, end, null, { noContent: true });
+  }
+}
+
+function publishDiary(root, date, text) {
+  const relative = `sessions/${date}.md`;
+  const diary = resolveAllowedMemoryPath({ root, path: relative, allowed: candidate => candidate === relative }).target;
+  let previous;
+  try { previous = fs.readFileSync(diary); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const separator = previous?.at(-1) === 10 ? '\n' : '\n\n';
+  const content = previous?.length ? Buffer.concat([previous, Buffer.from(separator + text)]) : Buffer.from(text);
+  if (content.length > PAGE_SOFT_LIMIT) console.log(`Dream diary for ${date} exceeds the soft limit: ${content.length} bytes`);
+  publishReferenceFile(diary, content);
 }
 
 /** One independent run. Opening a model call and publishing effects are separate operations. */
 export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday, db, model, directory, token, mutate, notify, signal }) {
   const variables = promptVariables(root, timezone);
-  const batches = makeDreamBatches(db.getDreamConversations(), date, timezone);
+  const { batches, noticeOnly } = makeDreamBatches(db.getDreamConversations(), date, timezone);
   const results = new Array(batches.length);
   const failedBatches = [];
   const warnings = [];
@@ -95,9 +131,11 @@ export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday
       }
     }
   }
+  if (noticeOnly.length) await mutate(() => advanceDreamCheckpoints(db, noticeOnly));
   await Promise.all(Array.from({ length: Math.min(PARALLEL_BATCHES, batches.length) }, worker));
   signal?.throwIfAborted();
-  const extracted = results.filter(Boolean);
+  const completed = completedExtractions(batches, results);
+  const extracted = completed.flatMap(({ entries }) => entries);
   if (batches.length && !extracted.length) return { failedBatches, failed: true, warnings };
   let result;
   const failedRepairs = new Set();
@@ -114,18 +152,16 @@ export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday
       warnings.push(`Memory dreaming returned an invalid second-stage result. Diary and rule candidates were skipped. ${error.message}.`);
     }
     warnings.push(...(await repair()).map(file => `Unparsable reference header: ${file}`));
-    if (result?.diary) await mutate(() => {
-      const relative = `sessions/${date}.md`;
-      const diary = resolveAllowedMemoryPath({ root, path: relative, allowed: candidate => candidate === relative }).target;
-      const bytes = Buffer.byteLength(result.diary);
-      if (bytes > PAGE_SOFT_LIMIT) console.log(`Dream diary for ${date} exceeds the soft limit: ${bytes} bytes`);
-      publishReferenceFile(diary, result.diary);
-    });
+    if (result?.diary) {
+      // The legacy single-session log writer uses the same lock.
+      const { runDir } = await memoryScope({ ZYLOS_DIR: root });
+      await withMemoryLock(runDir, () => mutate(() => publishDiary(root, date, result.diary)));
+    }
     if (result?.rule_candidates.length) {
       signal?.throwIfAborted();
       await notify(ruleMessage(result.rule_candidates));
     }
-    await mutate(() => advanceDreamCheckpoints(db, batches, results));
+    await mutate(() => advanceDreamCheckpoints(db, completed));
   }
   signal?.throwIfAborted();
   if (weekday === tidyWeekday) {
