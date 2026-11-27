@@ -114,8 +114,8 @@ async function getConfig(key) {
 }
 
 async function setConfig(key, value) {
-  if (key === 'new_session_threshold' || key === 'codex_new_session_threshold') {
-    const runtime = key === 'new_session_threshold' ? 'claude' : 'codex';
+  if (Object.hasOwn(THRESHOLD_RUNTIME, key)) {
+    const runtime = THRESHOLD_RUNTIME[key];
     const model = readDefaultModels({ contexts: await loadRuntimeContexts() })[runtime];
     if (!model) throw Object.assign(new Error('Configure the engine default model before setting its threshold'), { code: 'CONFIG_VALUE_INVALID' });
     await setModelThreshold({ runtime, model, value });
