@@ -18,7 +18,7 @@ export const dream = Object.freeze({
     return typeof answer === 'string' ? answer : JSON.stringify(answer ?? null);
   },
   prepare({ instructions, input, tools, cwd, env, server, serverEnv, schema }) {
-    const home = path.join(cwd, 'home');
+    const home = path.join(fs.realpathSync(cwd), 'home');
     const config = agyConfigurationPaths(home);
     function write(file, value) {
       fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -27,11 +27,13 @@ export const dream = Object.freeze({
     write(path.join(cwd, 'AGENTS.md'), instructions);
     const settings = { modelProvider: 'gemini', trustedWorkspaces: [cwd] };
     if (tools) settings.permissions = { allow: ['mcp(dream/*)'] };
-    const descriptions = path.join(path.dirname(config.settings), 'mcp', 'dream');
+    const cliDirectory = path.dirname(config.settings);
+    const descriptions = path.join(cliDirectory, 'mcp', 'dream');
+    const brain = path.join(cliDirectory, 'brain');
     write(config.settings, { ...settings, userDataCollectionForceDisabled: true });
     write(config.onboarding, { consumerOnboardingComplete: true, onboardingComplete: true });
     write(config.hooks, { dreaming: { PreToolUse: [{ matcher: '.*', hooks: [{
-      type: 'command', command: [process.execPath, toolGuard, ...(tools ? ['memory', descriptions] : [])].map(quote).join(' '), timeout: 5,
+      type: 'command', command: [process.execPath, toolGuard, ...(tools ? ['memory', descriptions, brain] : [])].map(quote).join(' '), timeout: 5,
     }] }] } });
     write(config.mcp, { mcpServers: tools ? { dream: { command: process.execPath, args: [server], env: serverEnv } } : {} });
     const args = ['--settings', JSON.stringify(settings), '--model', 'Gemini 4 Hydrogen (Medium)',

@@ -89,3 +89,39 @@ test('Antigravity restricts memory tools and their descriptions to memory mode',
   assert.equal(decide({ name: 'write_file' }, true), 'deny');
   assert.equal(decide({ name: 'run_command' }, true), 'deny');
 });
+
+test('Antigravity reads only its current memory conversation’s spilled step output', t => {
+  const guard = fileURLToPath(new URL('../agy/dream-tool-guard.js', import.meta.url));
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'dream-output-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const brain = path.join(root, 'home', '.gemini', 'antigravity-cli', 'brain');
+  const conversationId = 'f96e64e8-de70-450b-b56e-ba6242f99faf';
+  const otherId = '7f1cb815-f1aa-43b4-bb58-93a1c07c814f';
+  const artifactDirectoryPath = path.join(brain, conversationId);
+  const steps = directory => path.join(directory, '.system_generated', 'steps');
+  const stepOutput = (directory, step) => path.join(steps(directory), step, 'output.txt');
+  const output = stepOutput(artifactDirectoryPath, '12');
+  const otherOutput = stepOutput(path.join(brain, otherId), '12');
+  const linkedOutput = stepOutput(artifactDirectoryPath, '13');
+  for (const file of [output, otherOutput, linkedOutput]) fs.mkdirSync(path.dirname(file), { recursive: true });
+  for (const file of [output, otherOutput]) fs.writeFileSync(file, 'result');
+  fs.symlinkSync(otherOutput, linkedOutput);
+  fs.symlinkSync(path.dirname(otherOutput), path.dirname(stepOutput(artifactDirectoryPath, '14')));
+
+  const decide = (file, { memory = true, artifact = artifactDirectoryPath } = {}) => {
+    const toolCall = { name: 'read_file', args: { Path: file, StartLine: 1, EndLine: 2 } };
+    const args = memory ? [guard, 'memory', path.join(root, 'descriptions'), brain] : [guard];
+    return JSON.parse(execFileSync(process.execPath, args, {
+      input: JSON.stringify({ conversationId, artifactDirectoryPath: artifact, toolCall }),
+      encoding: 'utf8', timeout: 2000,
+    })).decision;
+  };
+
+  assert.equal(decide(output), 'allow');
+  assert.equal(decide(output, { memory: false }), 'deny');
+  assert.equal(decide(otherOutput, { artifact: path.join(brain, otherId) }), 'deny');
+  assert.equal(decide(steps(artifactDirectoryPath)), 'deny');
+  assert.equal(decide(`${path.dirname(output)}/../12/output.txt`), 'deny');
+  assert.equal(decide(linkedOutput), 'deny');
+  assert.equal(decide(stepOutput(artifactDirectoryPath, '14')), 'deny');
+});
