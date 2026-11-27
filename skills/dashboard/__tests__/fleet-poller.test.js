@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import test from 'node:test';
 
-import { agentColor } from '../src/lib/agent-color.js';
+import { agentColor } from '../public/js/agent-color.js';
 import { FleetPoller, stateToFleetRecord } from '../src/lib/fleet-poller.js';
 import { objectResponse } from './fixtures/fleet-object-api.js';
 import { assertFleetPayloadSafe, buildSafeFleetPayload } from '../src/lib/fleet-payload.js';

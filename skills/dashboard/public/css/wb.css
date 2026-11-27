@@ -205,6 +205,10 @@
 .brand-ver { flex: none; color: var(--text-dim); font-size: var(--fs-body-sm); white-space: nowrap; }
 .brand-inst::before, .brand-ver::before { content: "· "; }
 .brand-inst[hidden], .brand-ver[hidden] { display: none; }
+/* A machine opened from the fleet shows its avatar before its name; the name still truncates first. */
+.brand-inst:has(> .wb-av) { display: inline-flex; align-items: center; gap: 6px; align-self: center; }
+.brand-inst:has(> .wb-av)[hidden] { display: none; }
+.brand-inst > .wb-brand-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .app-header .tab-bar { display: flex; gap: 2px; padding: 0; margin-left: 10px; overflow: visible; }
 .app-header .tab { height: 30px; min-width: 0; padding: 0 10px; border-radius: var(--wb-r); color: var(--text-dim); font-size: var(--fs-body-sm); font-weight: var(--fw-control); }
 .app-header .tab::after { display: none; }
@@ -585,6 +589,38 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-modal h3 { margin: 0 0 8px; font-size: var(--fs-title-sm); }
 .wb-modal p { margin: 0 0 16px; color: var(--text-dim); font-size: var(--fs-body); line-height: var(--lh-body); white-space: pre-line; }
 .wb-modal-acts { display: flex; justify-content: flex-end; gap: 8px; }
+/* Machine avatar crop: drag and zoom inside the circle, previews at the sizes the fleet uses. */
+.wb-modal.wb-av-crop { width: min(580px, 100%); max-height: 100%; overflow: auto; padding: 20px 22px; }
+.wb-av-crop p { margin: 0; }
+.wb-av-crop h3 { margin: 0 0 4px; }
+.wb-av-body { display: flex; align-items: flex-start; gap: 22px; margin-top: 14px; }
+.wb-av-stage { --wb-av-stage: min(300px, calc(100vw - 72px)); position: relative; width: var(--wb-av-stage); height: var(--wb-av-stage); flex: none; overflow: hidden; border-radius: 12px; background: #111; cursor: grab; touch-action: none; }
+.wb-av-stage.dragging { cursor: grabbing; }
+.wb-av-stage:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.wb-av-stage canvas { display: block; width: 100%; height: 100%; }
+.wb-av-mask { position: absolute; inset: 0; pointer-events: none; border-radius: 50%; box-shadow: 0 0 0 2px rgba(255, 255, 255, .9), 0 0 0 999px rgba(0, 0, 0, .55); }
+.wb-av-hint { position: absolute; left: 50%; bottom: 10px; padding: 3px 10px; border-radius: 12px; background: rgba(0, 0, 0, .45); color: #fff; font-size: var(--fs-small); white-space: nowrap; pointer-events: none; transform: translateX(-50%); }
+.wb-av-zoom { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.wb-av-zoom input { flex: 1; accent-color: var(--accent); }
+.wb-av-zoom span { width: 22px; color: var(--text-dim); font-size: var(--fs-title-sm); text-align: center; }
+.wb-av-side { display: flex; flex: 1; flex-direction: column; gap: 14px; min-width: 0; }
+.wb-av-side-h { color: var(--text); font-size: var(--fs-body-sm); font-weight: var(--fw-control); }
+.wb-av-side p, .wb-av-status { color: var(--text-dim); font-size: var(--fs-small); line-height: var(--lh-body); }
+.wb-av-status { margin-top: 12px !important; color: var(--wb-err); }
+.wb-av-status[hidden] { display: none; }
+.wb-av-previews { display: flex; align-items: flex-end; gap: 14px; }
+.wb-av-previews figure { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 0; color: var(--text-dim); font-size: var(--fs-small); }
+.wb-av-previews .wb-av { background: var(--wb-line); }
+.wb-av-crop .wb-modal-acts { align-items: center; margin-top: 18px; }
+@media (max-width: 600px) {
+  .wb-av-body { flex-direction: column; align-items: center; }
+  .wb-av-left, .wb-av-side { width: 100%; }
+  .wb-av-stage { margin: 0 auto; }
+  .wb-av-previews { justify-content: center; }
+  .wb-av-zoom input { height: 36px; }
+  .wb-modal-bg.wb-av-crop-bg { align-items: flex-end; padding: 0; }
+  .wb-modal.wb-av-crop { border-radius: 16px 16px 0 0; padding: 18px 18px 26px; }
+}
 .wb-auto-name-dialog { position: fixed; z-index: 70; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(420px, calc(100vw - 32px)); max-height: 80dvh; overflow-y: auto; box-shadow: var(--wb-shadow), 0 0 0 100vmax var(--wb-scrim); }
 .wb-auto-name-dialog .wb-name-failed { color: var(--wb-err); }
 .wb-auto-name-dialog .wb-name-detail { margin: -6px 0 16px; color: var(--text-dim); font-size: var(--fs-small); }
@@ -1517,7 +1553,23 @@ html[lang^="zh"] .wb-sent-gap { display: none; }
 .wb-once p { margin: 0; }
 .wb-once code { display: block; margin: 8px 0; padding: 8px 10px; border: 1px solid var(--wb-line-strong); border-radius: 6px; background: var(--wb-panel); color: var(--text); font-family: "JetBrains Mono", ui-monospace, monospace; font-size: var(--fs-body-sm); word-break: break-all; }
 .wb-self-name { color: var(--text); font-size: var(--fs-body); }
-.wb-agent-row { display: grid; grid-template-columns: 18px minmax(80px, 140px) minmax(0, 1fr) minmax(0, max-content) auto; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--wb-line); font-size: var(--fs-body-sm); }
+.wb-self-machine { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.wb-self-machine[hidden] { display: none; }
+.wb-self-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wb-self-text .wb-note { margin: 0; }
+.wb-self-acts { display: flex; gap: 8px; margin-left: auto; }
+/* Machine avatar: uploaded picture or the name's first letter on the machine's fleet colour, with an optional status dot on its corner. */
+.wb-av { --wb-av-size: 24px; position: relative; display: inline-flex; flex: none; align-items: center; justify-content: center; width: var(--wb-av-size); height: var(--wb-av-size); border-radius: 50%; background: var(--wb-av-c, var(--text-muted)); color: #fff; font-size: calc(var(--wb-av-size) * .45); font-weight: var(--fw-strong); line-height: 1; vertical-align: middle; }
+.wb-av-xs { --wb-av-size: 20px; }
+.wb-av-sm { --wb-av-size: 24px; }
+.wb-av-md { --wb-av-size: 32px; }
+.wb-av-lg { --wb-av-size: 56px; }
+.wb-av > :is(img, canvas) { display: block; width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+.wb-av.off { background: color-mix(in srgb, var(--wb-av-c, var(--text-muted)) 45%, #8a8f98); }
+.wb-av.off > :is(img, .wb-av-l) { opacity: .55; filter: grayscale(1); }
+.wb-av > .wb-hdot { position: absolute; right: -2px; bottom: -2px; width: 11px; height: 11px; box-shadow: 0 0 0 2px var(--wb-panel); }
+.wb-av-sm > .wb-hdot, .wb-av-xs > .wb-hdot { right: -1px; bottom: -1px; width: 8px; height: 8px; box-shadow: 0 0 0 1.5px var(--wb-panel); }
+.wb-agent-row { display: grid; grid-template-columns: 20px minmax(80px, 140px) minmax(0, 1fr) minmax(0, max-content) auto; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--wb-line); font-size: var(--fs-body-sm); }
 .wb-agent-row:first-child { border-top: 0; }
 .wb-agent-row > b { font-weight: var(--fw-control); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-agent-url { overflow: hidden; color: var(--text-dim); font-size: var(--fs-small); text-overflow: ellipsis; white-space: nowrap; }
@@ -1563,6 +1615,10 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 .fleet-view .agent-open { min-width: 0; color: var(--text); font-weight: var(--fw-strong); text-decoration: none; }
 .fleet-view .agent-open:hover, .fleet-view .agent-open:focus-visible { color: var(--accent-hover); text-decoration: underline; text-underline-offset: 3px; }
 .wb-f-top > .wb-ico { color: var(--wb-err); }
+.wb-f-top > .wb-av { margin-right: 2px; }
+/* An online card or list row opens its machine anywhere outside its own controls. */
+.wb-f-card:not(.bad), .wb-f-list-row:not(.bad) { cursor: pointer; }
+@media (hover: hover) { .wb-f-card:not(.bad):hover { border-color: var(--wb-accent-line); } }
 .wb-mode-tag { flex: none; padding: 0 5px; border: 1px solid var(--wb-line-strong); border-radius: 5px; color: var(--text-dim); font-size: var(--fs-badge); font-weight: var(--fw-strong); line-height: var(--lh-badge); white-space: nowrap; }
 .wb-f-list {
   --fleet-host-column: ;
@@ -1742,7 +1798,7 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   .wb-model-field:nth-child(3) { grid-column: 2; }
   .wb-fld > .wb-note { grid-column: 1; }
   .wb-addform { grid-template-columns: 1fr; }
-  .wb-agent-row { grid-template-columns: 18px minmax(0, 1fr) auto; }
+  .wb-agent-row { grid-template-columns: 20px minmax(0, 1fr) auto; }
   .wb-agent-row .wb-agent-url { grid-column: 2 / -1; }
   .wb-agent-row .wb-agent-st { grid-column: 2 / 3; white-space: normal; }
   .wb-input-name { width: 100%; }

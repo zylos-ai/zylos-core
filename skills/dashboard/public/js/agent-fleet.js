@@ -6,6 +6,7 @@ import { recoveryTime } from './wb/cooldown.js';
 import { formatZoned, instanceZoneReady } from './wb/instance-zone.js';
 
 import { fallbackName, platformOf, runtimeName } from './wb/plain-text.js';
+import { avatarHtml } from './wb/machine-avatar.js';
 
 const REASON_BADGE_REASONS = new Set(['unreachable', 'auth_failed', 'version_unsupported', 'timeout', 'conn_refused', 'bad_payload', 'offline']);
 const LINK_CHIP_QUALITIES = new Set(['slow', 'degraded', 'stale']);
@@ -207,6 +208,7 @@ export function buildAgentFleetView(fleet, options = {}) {
   const basePath = options.basePath || '';
   const self = options.self || null;
   const ageText = options.ageText || ageLabel;
+  const avatarSrc = options.avatarSrc || (() => null);
   const agents = fleet?.items ?? [];
   const tiles = agents.map((agent) => {
     const offline = isOffline(agent);
@@ -214,6 +216,7 @@ export function buildAgentFleetView(fleet, options = {}) {
     const isSelf = agent.self === true;
     const link = agent.link && typeof agent.link === 'object' ? agent.link : null;
     const linkChip = buildLinkChip(link, labels);
+    const href = isSelf ? `${basePath}/` : `${basePath}/fleet/${encodeURIComponent(String(agent.name || ''))}/`;
     return {
       name: String(agent.name || ''),
       mood,
@@ -243,7 +246,9 @@ export function buildAgentFleetView(fleet, options = {}) {
       sessionMode: ['single', 'multi'].includes(agent.session_mode) ? agent.session_mode : isSelf ? self?.mode : null,
       groupSummary: agent.group_summary ?? null,
       supervisorPaused: isSelf ? self?.supervisorPaused ?? agent.supervisor_paused : agent.supervisor_paused,
-      href: isSelf ? `${basePath}/` : `${basePath}/fleet/${encodeURIComponent(String(agent.name || ''))}/`
+      href,
+      // The machine's own avatar endpoint, reached the same way as its page.
+      avatarSrc: avatarSrc(`${href}api/instance/avatar`, agent.avatar_version ?? null)
     };
   });
   const page = options.page ?? 1;
@@ -355,6 +360,10 @@ function machineStatePill(tile) {
   return `<span class="wb-pill wb-${escapeHtml(pillKind[tile.mood] ?? 'unknown')}" data-mood="${escapeHtml(tile.mood)}"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span>`;
 }
 
+function machineAvatar(tile, size, dot) {
+  return avatarHtml({ name: tile.name, color: tile.color, src: tile.avatarSrc, size, offline: tile.offline, dot });
+}
+
 function poolText(tile) {
   const pool = tile.groupSummary?.pool;
   return pool?.used == null ? '--' : String(pool.used) + (pool.capacity == null ? '' : '/' + pool.capacity);
@@ -367,13 +376,13 @@ function renderTile(tile, labels, t) {
     : '';
   const multi = tile.sessionMode === 'multi';
   const mode = multi ? labels.modeMulti : tile.sessionMode === 'single' ? labels.modeSingle : labels.modeUnknown;
-  const sub = tile.isSelf
-    ? `<div class="wb-f-sub"><span class="wb-f-seg">${escapeHtml(labels.self)}</span></div>`
+  // This machine is already marked by the tag beside its name.
+  const sub = tile.isSelf ? ''
     : `<div class="wb-f-sub wb-tech"><span class="wb-f-seg"><span class="wb-mono">${escapeHtml(tile.baseUrl)}</span></span>${tile.offline ? '' : `${tile.latencyLabel ? `<span class="wb-f-seg">${escapeHtml(labels.linkLatency)} ${escapeHtml(tile.latencyLabel)}</span>` : ''}`}${linkChip}</div>`;
   if (tile.offline) {
     const seen = tile.lastSeenText;
     return `<div class="wb-f-card bad" ${data} data-state="${escapeHtml(tile.mood)}">
-    <div class="wb-f-top"><i class="wb-ico wb-ico-alert wb-ico-xs" aria-hidden="true"></i>${machineName(tile)}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
+    <div class="wb-f-top">${machineAvatar(tile, 'md', 'wb-hdot err')}${machineName(tile)}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
     ${sub}
     <div class="wb-f-reason"><span class="wb-plain">${escapeHtml(tile.problem.short)}</span><span class="wb-tech agent-fleet-reason">${escapeHtml(tile.stateLabel)}</span><span class="wb-tech wb-mono"> · ${escapeHtml(tile.reason)}</span></div>
     <p class="wb-note">${escapeHtml(afterSentence(tile.problem.fix, seen ? fill(labels.lastSeen, { time: seen }) : ''))}</p>
@@ -384,7 +393,7 @@ function renderTile(tile, labels, t) {
     : `<div class="wb-f-act">${machineStatePill(tile)}</div>`;
   const second = multi ? `<div>${escapeHtml(labels.pool)}<b>${escapeHtml(poolText(tile))}</b></div>` : '';
   return `<div class="wb-f-card${tile.isSelf ? ' self' : ''}" ${data} data-state="${escapeHtml(tile.mood)}"${tile.linkQuality !== 'ok' ? ` data-link-quality="${escapeHtml(tile.linkQuality)}"` : ''}>
-    <div class="wb-f-top"><span class="wb-hdot"></span>${machineName(tile)}${tile.isSelf ? `<span class="wb-tag">${escapeHtml(labels.self)}</span>` : ''}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
+    <div class="wb-f-top">${machineAvatar(tile, 'md', 'wb-hdot')}${machineName(tile)}${tile.isSelf ? `<span class="wb-tag">${escapeHtml(labels.self)}</span>` : ''}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
     ${sub}
     ${tile.supervisorPaused === true ? `<div class="wb-f-reason wb-txt-warn" data-supervisor-paused>${escapeHtml(t('wb.attention.supervisor_paused'))}</div>` : ''}
     ${act}
@@ -446,8 +455,7 @@ function renderListRow(tile, labels, t) {
   const modeTag = tile.sessionMode === 'single' ? `<span class="wb-mode-tag">${escapeHtml(labels.modeSingle)}</span>` : '';
   const access = tile.isSelf ? labels.self : tile.access === 'read' ? labels.readOnly : '';
   const accessTag = access ? `<span class="wb-tag">${escapeHtml(access)}</span>` : '';
-  const dot = tile.offline ? '<i class="wb-ico wb-ico-alert wb-ico-xs" aria-hidden="true"></i>'
-    : `<span class="wb-hdot${problemTone || (tile.mood === 'idle' ? ' idle' : '')}"></span>`;
+  const dot = machineAvatar(tile, 'sm', tile.offline ? 'wb-hdot err' : `wb-hdot${problemTone || (tile.mood === 'idle' ? ' idle' : '')}`);
   const cost = `${tile.dailyCostLabel} / ${tile.weeklyCostLabel}`;
   const host = [tile.cpuPct, tile.memPct, tile.diskPct].map(value => pctText(pctValue(value))).join(' · ');
   const quota = compactQuota(tile);
@@ -535,12 +543,12 @@ export function renderAgentFleetHtml(fleet, options = {}) {
  * Options the Machines page renders with: the page's labels, and "how long ago" in the page language
  * (whole hours from an hour on, the page's own short wording below that).
  */
-export function fleetPageOptions({ t, fmtAge, basePath = '', labels, self = null, now = Date.now, layout, page }) {
+export function fleetPageOptions({ t, fmtAge, basePath = '', labels, self = null, now = Date.now, layout, page, avatarSrc }) {
   const ageText = ts => {
     const seconds = Math.max(0, Math.floor((now() - Date.parse(ts)) / 1000));
     return seconds >= 3600 ? t('time.hours_exact', { h: Math.floor(seconds / 3600) }) : fmtAge(ts);
   };
-  return { basePath, labels, ageText, self, t, layout, page };
+  return { basePath, labels, ageText, self, t, layout, page, avatarSrc };
 }
 
 export function renderAgentFleet(container, fleet, options = {}) {
@@ -594,8 +602,8 @@ export function renderFleetAttention(root, items = [], t = key => key) {
 }
 
 /** Renders the Machines page with the page's own options, including "how long ago" in the page language. */
-export function renderFleetPage(container, fleet, { t, fmtAge, basePath, labels, self, now, layout, page } = {}) {
-  return renderAgentFleet(container, fleet, fleetPageOptions({ t, fmtAge, basePath, labels, self, now, layout, page }));
+export function renderFleetPage(container, fleet, { t, fmtAge, basePath, labels, self, now, layout, page, avatarSrc } = {}) {
+  return renderAgentFleet(container, fleet, fleetPageOptions({ t, fmtAge, basePath, labels, self, now, layout, page, avatarSrc }));
 }
 
 // What the header's machines icon does on the page being viewed: leave a machine opened in-page for the machines
@@ -621,8 +629,16 @@ export function handleFleetClick(event, { onRefresh = () => {}, onSelf = () => {
     onRefresh();
     return;
   }
-  const open = event.target?.closest?.('.agent-open');
-  if (!open) return;
+  // The name opens the machine, and so does the rest of an online card or list row; other controls inside keep
+  // their own action, and a click that ends a text selection does not open anything.
+  let open = event.target?.closest?.('.agent-open');
+  if (!open) {
+    if (event.target?.closest?.('a, button, input, select, textarea, summary, label')) return;
+    if (String(event.view?.getSelection?.() ?? '')) return;
+    const machine = event.target?.closest?.('.wb-f-card, .wb-f-list-row');
+    open = machine?.querySelector('.agent-open');
+    if (!open) return;
+  }
   event.preventDefault?.();
   if (open.dataset.self === 'true') onSelf();
   else if (open.dataset.agent) onRemote(open.dataset.agent);
