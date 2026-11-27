@@ -424,7 +424,7 @@ export function mountConversationPage({
   const unreadDivider = node('div', undefined, 'conversation-unread-divider');
   const historyNotice = node('p', undefined, 'chat-notice conversation-history-notice');
   stream.append(historyStart, gap, historyNotice, messageList);
-  const latest = action('chat.page.newMessages', () => state.jumpToLatest(), 'chev', 'wb-btn conversation-new-messages');
+  const latest = action('chat.page.newMessages', () => showNewMessages(), 'chev', 'wb-btn conversation-new-messages');
   latest.dataset.action = 'latest';
   history.append(stream, latest);
   const composer = node('form', undefined, 'conversation-composer chat-composer');
@@ -1362,6 +1362,18 @@ export function mountConversationPage({
       node('span', String(quote.preview ?? ''), 'conversation-quote-block-text'));
     block.addEventListener('click', event => { event.stopPropagation(); void locate(quote.id); });
     return block;
+  }
+  /**
+   * The new-messages button: with unread messages, the oldest one the reader has not seen comes to the top so they read
+   * on from there; otherwise, or when that message is not loaded, the latest page shows.
+   */
+  function showNewMessages() {
+    const s = state.snapshot();
+    const first = s.tab === 'mine' && s.unreadCount > 0
+      ? s.messages.find(row => row.id > s.readUpTo && !isOwnChatMessage(row)) : null;
+    const article = first && messages.get(String(first.id))?.node;
+    if (!article?.isConnected) return void state.jumpToLatest();
+    stream.scrollTop += article.getBoundingClientRect().top - stream.getBoundingClientRect().top - 12;
   }
   /** Shows a message; one that is not loaded yet is older, so earlier pages load until it appears. */
   async function locate(id) {
