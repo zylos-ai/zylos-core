@@ -7,7 +7,7 @@ import { FleetProxy } from '../src/lib/fleet-proxy.js';
 
 import { createGroupDeletionBridge, createGroupDeletionRoutes } from '../src/lib/workbench/group-deletion.js';
 
-const cookie = 'deletion-private-cookie', api = `zylos_st_${'a'.repeat(64)}`;
+const cookie = 'deletion-private-cookie', api = `zylos_st_${'a'.repeat(64)}`, readApi = `zylos_st_${'b'.repeat(64)}`;
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const boundary = { cutoffId: 4 };
 const owner = { cookie: `__Secure-zylos_dashboard_session=${cookie}`, 'sec-fetch-site': 'same-origin' };
@@ -17,7 +17,8 @@ function fixture(t) {
   const auth = new AuthGate(config, {
     getSession: hash => hash === sha(cookie) ? { created_at: now, last_activity_at: now } : null,
     touchSession() {}, deleteSession() {}, cleanupSessions() {}, cleanupExpiredApiSessions() {},
-    getApiSession: hash => hash === sha(api) ? { api_key_id: 'private', scope: 'admin', key_scope: 'admin', expires_at: now + 60000 } : null,
+    getApiSession: hash => hash === sha(api) ? { api_key_id: 'private', scope: 'admin', key_scope: 'admin', expires_at: now + 60000 }
+      : hash === sha(readApi) ? { api_key_id: 'reader', scope: 'read', key_scope: 'read', expires_at: now + 60000 } : null,
   });
   t.after(() => clearInterval(auth._cleanupTimer));
   const calls = [];
@@ -47,6 +48,7 @@ test('deletion preview admits the password owner, and admin keys only while remo
   assert.equal(f.calls[0].options.actor, `dashboard:${sha(cookie)}`);
   f.config.chat = { allowRemote: true };
   assert.equal((await call(f.handler, path, { headers: key })).status, 200);
+  assert.equal((await call(f.handler, path, { headers: { authorization: `Bearer ${readApi}` } })).body.error.code, 'admin_required');
   f.config.auth.password = null;
   assert.equal((await call(f.handler, path)).status, 403);
 });
