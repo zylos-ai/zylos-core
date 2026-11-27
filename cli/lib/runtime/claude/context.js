@@ -3,6 +3,11 @@ import path from 'node:path';
 import { readJsonSample } from '../../session-usage-reader.js';
 import { UNSUPPORTED } from '../contract.js';
 
+// Models measured to run at a 1M window on Claude Code (claude -p --output-format json, 2026-11-28).
+// Other names count as 1M only with the `[1m]` suffix.
+const ONE_MILLION_MODELS = new Set(['fable', 'opus', 'sonnet', 'haiku',
+  'claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']);
+
 export const context = Object.freeze({
   readUsageSample: ({ dir }) => readJsonSample(path.join(dir, 'statusline.json'), 'usage'),
   usageSampleExpires: true,
@@ -14,7 +19,7 @@ export const context = Object.freeze({
     effort: value?.effort?.level ?? value?.reasoningEffort ?? value?.reasoning_effort,
     version: value?.version ?? value?.cliVersion,
   }),
-  contextWindowFor: () => null,
+  contextWindowFor: model => ONE_MILLION_MODELS.has(String(model ?? '').trim().toLowerCase()) ? 1_000_000 : null,
   readModelWindows: UNSUPPORTED,
   thresholdKeys: Object.freeze({
     key: (model, large) => large && !model.toLowerCase().includes('[1m]') ? `${model}[1m]` : model,

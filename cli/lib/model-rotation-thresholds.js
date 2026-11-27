@@ -56,7 +56,11 @@ function candidates(options) {
   // is the model this session runs.
   const sameModel = startedModel && [key, alias].includes(options.context.thresholdKeys.key(startedModel, isLargeWindow(options)));
   const launchKey = sameModel ? modelThresholdKey({ ...options, model: startedModel, contextWindow: undefined }) : '';
-  return launchKey && launchKey !== key ? [launchKey, key] : [key];
+  // Entries stored before the runtime's window table knew a model keep its plain name (e.g. `opus` before `opus[1m]`);
+  // each plain name follows its own key.
+  const tableModel = name => Number(options.context.contextWindowFor(name, options.modelWindows?.[options.runtime])) >= 1_000_000;
+  const withPlain = (candidate, name) => candidate ? [candidate, ...(tableModel(name) ? [name] : [])] : [];
+  return [...new Set([...withPlain(launchKey, startedModel), ...withPlain(key, cleanModel(options.model))])];
 }
 function defaultMatches(options) {
   const { defaultModel } = options;
