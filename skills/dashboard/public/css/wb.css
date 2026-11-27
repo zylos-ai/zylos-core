@@ -1301,6 +1301,13 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-set-nav-btn[hidden] { display: none; }
 .wb-set-nav-n { margin-left: auto; color: var(--wb-wait); font-size: var(--fs-caption); font-weight: var(--fw-strong); }
 .wb-set-nav-n[hidden] { display: none; }
+/* This machine heads the settings list: its avatar, its name, then its address and zylos version. */
+.wb-set-nav-btn.wb-set-id { height: auto; min-height: 52px; margin-bottom: 8px; padding: 8px 10px; color: var(--text); font-weight: var(--fw-body); }
+.wb-set-id > .wb-set-nav-copy { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; }
+.wb-set-id-name { overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-strong); text-overflow: ellipsis; white-space: nowrap; }
+.wb-set-id-line { display: flex; flex-direction: column; color: var(--text-dim); font-size: var(--fs-small); line-height: var(--lh-caption); }
+.wb-set-id-line > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-set-id-line > [hidden] { display: none; }
 .wb-set-section-head { display: contents; }
 .wb-set-back.wb-icon-btn, .wb-set-nav-summary, .wb-set-nav-btn > .wb-ico-chev { display: none; }
 .wb-set-body { flex: 1; min-width: 0; padding: 22px 28px 40px; }
@@ -1560,9 +1567,6 @@ html[lang^="zh"] .wb-sent-gap { display: none; }
 .wb-self-name { color: var(--text); font-size: var(--fs-body); }
 .wb-self-machine { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
 .wb-self-machine[hidden] { display: none; }
-.wb-self-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.wb-self-text .wb-note { margin: 0; }
-.wb-self-acts { display: flex; gap: 8px; margin-left: auto; }
 /* Machine avatar: uploaded picture or the name's first letter on the machine's fleet colour, with an optional status dot on its corner. */
 .wb-av { --wb-av-size: 24px; position: relative; display: inline-flex; flex: none; align-items: center; justify-content: center; width: var(--wb-av-size); height: var(--wb-av-size); border-radius: 50%; background: var(--wb-av-c, var(--text-muted)); color: #fff; font-size: calc(var(--wb-av-size) * .45); font-weight: var(--fw-strong); line-height: 1; vertical-align: middle; }
 .wb-av-xs { --wb-av-size: 20px; }
@@ -1772,6 +1776,8 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   .wb-set-nav-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .wb-set-nav-summary { display: block; margin-top: 2px; color: var(--text-dim); font-size: var(--fs-small); line-height: var(--lh-caption); }
   .wb-set-nav-btn > .wb-ico-chev { display: inline-block; color: var(--text-dim); }
+  .wb-set-nav-btn.wb-set-id { gap: 12px; margin-bottom: 12px; padding: 10px 12px; }
+  .wb-set-id .wb-av { --wb-av-size: 40px; }
   .wb-set-section-head { position: sticky; top: var(--wb-header-h); z-index: 5; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; background: var(--bg); box-shadow: 0 0 0 6px var(--bg); }
   .wb-set-back.wb-icon-btn { display: inline-flex; flex: none; width: 44px; height: 44px; justify-content: center; }
   .wb-set-section-head .wb-set-h { margin: 0; overflow-wrap: anywhere; }
