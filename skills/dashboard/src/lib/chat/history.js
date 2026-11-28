@@ -401,6 +401,7 @@ export class ChatHistory {
     return this._query(`SELECT c.id FROM conversations c INDEXED BY idx_conv_group_id
       WHERE ${range.where} AND ${visibleIn(range, true)} AND c.id>@readUpTo
         AND NOT (c.direction='in' AND c.channel='dashboard')
+        AND c.channel<>'internal'
       ORDER BY c.id DESC LIMIT @limit`, {
       ...range.parameters, readUpTo, limit,
     }).length;
