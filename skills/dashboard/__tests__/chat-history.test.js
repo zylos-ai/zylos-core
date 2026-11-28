@@ -145,14 +145,19 @@ test('Mine list and read anchor report the same unread count', t => {
   const id = groupId(dialog.session_group);
   add({ ...dialog, id: 1, direction: 'out' });
   history.markRead(id, 1);
-  for (const msg of [2, 3, 4]) add({ ...dialog, id: msg, direction: 'out' });
-  add({ ...dialog, id: 5 });
+  add({ ...dialog, id: 2, direction: 'out' });
+  add({ ...dialog, id: 3, channel: 'internal', direction: 'out', endpoint_id: 'dash-owned:b' });
+  add({ ...dialog, id: 4, channel: 'internal', direction: 'in', endpoint_id: 'dash-owned:b' });
+  add({ ...dialog, id: 5, direction: 'out' });
+  add({ ...dialog, id: 6 });
 
-  const row = history.list().items.find(item => item.id === id);
+  const { items, summary } = history.list({ includeSummary: true });
+  const row = items.find(item => item.id === id);
   const anchor = history.messages(id, { anchor: 'read' });
-  assert.equal(row.unreadCount, 3);
+  assert.equal(row.unreadCount, 2);
   assert.equal(row.unreadCount, anchor.unreadCount);
   assert.equal(row.unread, true);
+  assert.equal(summary.unread_conversations, 1);
 });
 
 test('message pages use C4 ids across gaps and later polling never crosses groups', t => {
