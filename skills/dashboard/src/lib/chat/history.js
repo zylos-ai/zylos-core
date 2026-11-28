@@ -22,6 +22,7 @@ const visibleIn = (range, messages = false) => range?.origin
 // external chat, whose rows are recorded under `origin` at delivery.
 const originWhere = 'c.session_group=@group';
 const tabs = ['mine', 'external'];
+const UNREAD_COUNT_LIMIT = 100;
 // A long legacy conversation ID still produces a bounded cursor scope.
 export const chatCollection = (id, kind) => kind ? `conversations:${kind}:${createHash('sha256').update(id).digest('base64url')}` : 'conversations';
 
@@ -231,21 +232,19 @@ export class ChatHistory {
           ? { latest: null, unread_conversations: 0 } : null;
         let newest = null;
         const readMessage = row => (row.origin ? originLatest : latest).get(row.session_group);
-        const readUnread = row => this.hasUnread(row.id, this._messageRange(tab, row.id, this._range(tab, row.id)));
+        const unreadRange = row => this._messageRange(tab, row.id, this._range(tab, row.id));
         const preview = (row, message) => conversationPreview(previewContent(message), {
           external: tab === 'external' || row.origin && message?.channel !== 'dashboard', locale,
         });
 
         const append = (row, head) => {
           if (summary) {
-            const unread = readUnread(row);
-            summary.unread_conversations += Number(unread);
+            summary.unread_conversations += Number(this.hasUnread(row.id, unreadRange(row)));
             const at = isoTimestamp(head?.timestamp);
             if (at && (!newest || at > newest.at || at === newest.at && head.id > newest.id)) {
               newest = { row, id: head.id, at };
             }
             if (summaryOnly) return;
-            row.unread = unread;
           }
           if (search && !matchesSearch({ ...row, display_name: row.display_name ?? unnamed }, search)) return;
           const isPinned = pinOrders.has(row.id);
@@ -284,10 +283,14 @@ export class ChatHistory {
         pinned.sort((a, b) => (a.pinOrder ?? -1) - (b.pinOrder ?? -1));
         rows.sort(compareRows);
         const items = [...pinned, ...rows.slice(0, slots)].map(row => {
-          if (row.draft) return row;
+          if (row.draft) return { ...row, unreadCount: 0 };
           const message = readMessage(row);
-          return { ...row, previewDirection: message?.direction ?? null, preview: preview(row, message),
-            ...(tab === 'mine' ? { unread: row.unread ?? readUnread(row) } : {}) };
+          const item = { ...row, previewDirection: message?.direction ?? null, preview: preview(row, message) };
+          if (tab === 'mine') {
+            item.unreadCount = this._unread(unreadRange(row), this.readPosition(row.id), UNREAD_COUNT_LIMIT);
+            item.unread = item.unreadCount > 0;
+          }
+          return item;
         });
         const last = rows[slots - 1];
         return { items, nextCursor: rows.length > slots ? page.nextCursor([last.stamp, last.id]) : null,
@@ -468,7 +471,7 @@ export class ChatHistory {
     let page, more, next, readUpTo, unreadCount;
     if (anchor) {
       readUpTo = this.readPosition(id);
-      unreadCount = this._unread(range, readUpTo, 100);
+      unreadCount = this._unread(range, readUpTo, UNREAD_COUNT_LIMIT);
       const newer = readRows('>', 'ASC', readUpTo, Math.ceil(limit / 2));
       const olderCount = limit - newer.length;
       const older = readRows('<=', 'DESC', readUpTo, olderCount + 1);
