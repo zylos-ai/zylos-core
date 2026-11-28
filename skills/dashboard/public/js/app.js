@@ -267,15 +267,20 @@ function agentFleetLabels() {
 
 
 // ─── Render: Info Bar ───
+// The viewed machine's avatar, once its instance data has been read (null before).
+function viewedMachineAvatar(size) {
+  const name = viewedAgentName(), agent = state.dashboardState?.agent;
+  return name && agent ? avatarNode(document, { name, color: agent.color, size,
+    src: avatars.src(api(agentPath('/api/instance/avatar')), agent.avatar_version ?? null) }) : null;
+}
+
 // The header's instance name and Core version, both the viewed instance's.
 function renderIdentityChrome() {
   const nameEl = $('#tab-bar-agent-name');
   if (nameEl) {
     const name = viewedAgentName();
     // A machine opened from the fleet also shows its avatar before its name.
-    const agent = state.dashboardState?.agent;
-    const avatar = name && (state.remoteAgent || REMOTE_AGENT) && agent ? avatarNode(document, { name, color: agent.color, size: 'xs',
-      src: avatars.src(api(agentPath('/api/instance/avatar')), agent.avatar_version ?? null) }) : null;
+    const avatar = state.remoteAgent || REMOTE_AGENT ? viewedMachineAvatar('xs') : null;
     if (avatar) {
       const text = document.createElement('span'); text.className = 'wb-brand-name'; text.textContent = name;
       nameEl.replaceChildren(avatar, text);
@@ -286,6 +291,7 @@ function renderIdentityChrome() {
   renderBrandVersion($('#tab-bar-core-version'), state.dashboardState?.versions);
   if (!state.remoteAgent && !REMOTE_AGENT) localCoreVersion = coreVersion(state.dashboardState?.versions) ?? localCoreVersion;
   if (REMOTE_AGENT) renderLocalAvatar(); else renderSettingsIdentity();
+  chatPage?.renderAvatar();
   mobileNavigation?.sync();
 }
 
@@ -3525,6 +3531,8 @@ const stopSchedule = mountSchedule({
 });
 window.addEventListener('pagehide', stopSchedule);
 chatPage = mountConversationPage({ root: document.querySelector('#wb-chat'), t,
+  // The conversation header shows the agent the conversations are with: the viewed machine.
+  agentAvatar: () => viewedMachineAvatar('md'),
   confirm: confirmSetting,
   onRemoteDisabled: remoteAccess.refuse,
   onStreamSubscription: subscription => chatPush.setSubscription(subscription),
