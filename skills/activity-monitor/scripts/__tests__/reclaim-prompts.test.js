@@ -16,7 +16,9 @@ test('every check prohibits messages and requires a current-record handoff witho
   assert.ok(normalized.includes('Run the named check now, following the steps below in order. During this check, do not send messages to anyone.'));
   assert.equal(section('2. Handoff'), '## 2. Handoff Otherwise write the session handoff: list open business items as they stand now, '
     + 'checking each against its current record and leaving out any that have finished. Replies, reviews or decisions you are waiting for '
-    + 'from people or other sessions need nothing more: an incoming reply wakes this group again.');
+    + 'from people or other sessions need nothing more: an incoming reply wakes this group again. '
+    + 'When legacy working state is present, follow the startup instructions for reading it, carrying open items into this handoff '
+    + 'and archiving the old file after verifying the handoff.');
   assert.doesNotMatch(normalized, /more than a day|tell the person responsible|handle each such item/);
 });
 
