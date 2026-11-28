@@ -82,7 +82,7 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
     execFileSync: (_file, args) => { assert.deepEqual(args, ['--version']); return '1.0.0'; }, execFile,
   } });
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
-    if (['runtime/descriptors.js', 'runtime/index.js', 'runtime/contract.js'].includes(name)) return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
+    if (['runtime/descriptors.js', 'runtime/index.js', 'runtime/contract.js', 'dream-settings.js'].includes(name)) return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
     if (name === 'config-store.js') return { readConfigStrict: () => ({ state: 'ok', config: { session_mode: mode, runtime: 'claude' } }) };
     if (name === 'config.js') return { readSessionMode: () => ({ mode, keyPresent: mode !== null }) };
     if (name === 'status-view.js') return { collectStatus: options => collectStatus({ ...options,
