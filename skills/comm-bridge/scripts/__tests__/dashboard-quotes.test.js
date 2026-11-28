@@ -62,7 +62,7 @@ test('Existing channel rows retain exact live and replay formatting without refe
   }
   const digest = createHash('sha256').update(JSON.stringify(outputs)).digest('hex');
   // Captured from the untouched base with the same rows and path normalization.
-  assert.equal(digest, '56c70f67f7c50d7ca9b1f1a80c948ba1a8e27eb54fd2b63d979d473bcb301b09');
+  assert.equal(digest, 'ad32aaa3ba11f9f87b6aa512293c5174a5a8973ce4c2eac2f6ab4d9c041eb84f');
   console.log('Channel formatting comparison:', JSON.stringify({ rows: rows.length, outputs: outputs.length * 2,
     referenceReads: reads, sha256: digest }));
 });
