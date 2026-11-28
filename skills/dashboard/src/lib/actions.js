@@ -15,6 +15,8 @@ const thresholdContexts = await loadRuntimeContexts();
 const { resolveSessionHotTtl, HOT_TTL_MIN_MINUTES, HOT_TTL_MAX_MINUTES } = await loadCoreModule('session-hot-ttl.js');
 const { readConfigStrict, configUnreadable } = await loadCoreModule('config-store.js');
 const { updateConfigWithLock } = await loadCoreModule('config-lock.js');
+const { dreamSettings, dreamSettingUpdate } = await loadCoreModule('dream-settings.js');
+const CORE_RUNTIMES = new Map(await Promise.all(SUPPORTED_RUNTIMES.map(async id => [id, await getRuntime(id)])));
 const modelRuntimeIds = runtimesWith('modelOverride');
 const dashboardModelRuntimes = await Promise.all(modelRuntimeIds.map(id => getDashboardRuntime(id)));
 const coreModelRuntimes = await Promise.all(modelRuntimeIds.map(id => getRuntime(id)));
@@ -82,6 +84,8 @@ export async function handleAction(action, body, config, { timezone } = {}) {
       case 'switch-effort': result = await switchEffort(reqId, body, config, zylosDir); break;
       case 'set-threshold': result = await setThreshold(reqId, body, config, zylosDir); break;
       case 'set-session-hot-ttl': result = await setSessionHotTtl(reqId, body, zylosDir); break;
+      case 'set-dream-model': result = setDreamSetting(reqId, 'model', body, zylosDir); break;
+      case 'set-dream-effort': result = setDreamSetting(reqId, 'effort', body, zylosDir); break;
       case 'upgrade-cc': result = await upgradeRuntimeCli(reqId, body.runtime, zylosDir); break;
       default: result = { ok: false, error: 'unknown_action', messageKey: 'result.unknown_action' };
     }
@@ -265,6 +269,36 @@ async function setSessionHotTtl(reqId, body, zylosDir) {
   }
 }
 
+/** Save one runtime's dream model or effort (`null` restores its default); Core validates and builds the update. */
+function setDreamSetting(reqId, kind, body, zylosDir) {
+  const runtime = CORE_RUNTIMES.get(body?.runtime);
+  if (!runtime) return { ok: false, error: 'INVALID_RUNTIME' };
+  if (!Object.hasOwn(body, kind)) return { ok: false, error: 'invalid_' + kind, messageKey: 'result.invalid_' + kind };
+  let update;
+  try { update = dreamSettingUpdate(runtime, kind, body[kind]); }
+  catch (err) {
+    if (!err.code?.startsWith('invalid_')) throw err;
+    const values = err.efforts?.join(', ') ?? '';
+    return { ok: false, error: err.code, message: err.message, messageKey: 'result.' + err.code, messageParams: { values } };
+  }
+  const configFile = path.join(zylosDir, '.zylos/config.json');
+  try {
+    updateConfigWithLock({ configFile, lockFile: `${configFile}.lock`, update });
+  } catch (err) {
+    return { ok: false, error: 'set_failed', message: err.message, messageKey: 'result.set_failed', messageParams: { error: err.message } };
+  }
+  const current = readConfigStrict(configFile);
+  const dream = dreamApiSettings(current.state === 'ok' ? current.config : {}, runtime);
+  log(reqId, `dream ${kind} for ${runtime.id}: ${dream[kind] ?? '(default)'}`);
+  return { ok: true, runtime: runtime.id, dream, messageKey: 'result.dream_saved' };
+}
+
+function dreamApiSettings(config, runtime) {
+  const settings = dreamSettings(config, runtime);
+  return { model: settings.configured.model, effort: settings.configured.effort,
+    default_model: settings.defaults.model, default_effort: settings.defaults.effort, efforts: settings.efforts };
+}
+
 export function getActionsMeta(config) {
   const runtime = config.runtime || process.env.ZYLOS_RUNTIME || DEFAULT_RUNTIME;
   const zylosDir = config.zylosDir || path.join(os.homedir(), 'zylos');
@@ -298,6 +332,7 @@ export function getActionsMeta(config) {
     new_session_threshold: newSessionThreshold,
     session_hot_ttl: resolveSessionHotTtl(config),
     catalog_strict: catalog?.strict ?? null,
+    dream: CORE_RUNTIMES.has(runtime) ? dreamApiSettings(config, CORE_RUNTIMES.get(runtime)) : null,
   };
 }
 

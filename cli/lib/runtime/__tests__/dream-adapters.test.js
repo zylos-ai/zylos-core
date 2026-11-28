@@ -7,8 +7,10 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { getRuntime } from '../index.js';
 import { agyConfigurationPaths } from '../agy/hooks.js';
+import { dreamSettingUpdate, dreamSettings } from '../../dream-settings.js';
+import { evaluateConfigUpdate } from '../../config-store.js';
 
-test('dream runtime adapters select their fixed model and medium effort with an isolated tool configuration', async t => {
+test('dream runtime adapters select their default model and medium effort with an isolated tool configuration', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dream-adapters-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const model = {
@@ -24,6 +26,8 @@ test('dream runtime adapters select their fixed model and medium effort with an 
     const options = { cwd, root, env: {}, server: '/private/memory-mcp-server.js',
       serverEnv: { ZYLOS_MEMORY_DREAM_ROOT: root }, instructions: 'System prompt', input, tools: true,
       schema: { type: 'object' } };
+    const { model: dreamModel, effort } = dreamSettings({}, runtime);
+    options.model = dreamModel; options.effort = effort;
     const prepared = runtime.dream.prepare(options);
     if (id !== 'agy') assert.equal(prepared.stdin, input);
     for (const arg of expected) assert.ok(prepared.args.includes(arg), id);
@@ -65,6 +69,42 @@ test('dream runtime adapters select their fixed model and medium effort with an 
       }
     }
   }
+});
+
+test('a saved dream model and effort reach only their own runtime adapter call, and unset restores the default', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dream-settings-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const runtimes = Object.fromEntries(await Promise.all(['claude', 'codex', 'agy'].map(async id => [id, await getRuntime(id)])));
+  const call = (config, id) => {
+    const cwd = fs.mkdtempSync(path.join(root, id + '-'));
+    const { model, effort } = dreamSettings(config, runtimes[id]);
+    const { args } = runtimes[id].dream.prepare({ cwd, root, env: {}, server: '/private/memory-mcp-server.js', serverEnv: {},
+      instructions: 'System prompt', input: 'Dream input', tools: false, model, effort });
+    const after = flag => args[args.indexOf(flag) + 1];
+    return { claude: () => [after('--model'), after('--effort')], codex: () => [after('-m'), args.find(arg => arg.startsWith('model_reasoning_effort='))],
+      agy: () => [after('--model')] }[id]();
+  };
+  const save = (config, id, kind, value) => evaluateConfigUpdate(config, dreamSettingUpdate(runtimes[id], kind, value)).config;
+  const defaults = { claude: ['claude-sonnet-5-5', 'medium'], codex: ['gpt-6.1-terra', 'model_reasoning_effort="medium"'], agy: ['Gemini 4 Hydrogen (Medium)'] };
+  for (const id of Object.keys(runtimes)) assert.deepEqual(call({}, id), defaults[id]);
+
+  let config = save({}, 'claude', 'model', ' claude-opus-5-5 ');
+  config = save(config, 'claude', 'effort', 'high');
+  config = save(config, 'codex', 'effort', 'xhigh');
+  config = save(config, 'agy', 'model', 'Gemini 4 Hydrogen (High)');
+  assert.deepEqual(call(config, 'claude'), ['claude-opus-5-5', 'high']);
+  assert.deepEqual(call(config, 'codex'), ['gpt-6.1-terra', 'model_reasoning_effort="xhigh"']);
+  assert.deepEqual(call(config, 'agy'), ['Gemini 4 Hydrogen (High)']);
+  // Another runtime's effort and an effort for a runtime without one are refused.
+  assert.throws(() => dreamSettingUpdate(runtimes.claude, 'effort', 'xhigh'), { code: 'invalid_effort' });
+  assert.throws(() => dreamSettingUpdate(runtimes.agy, 'effort', 'medium'), { code: 'invalid_effort' });
+  assert.throws(() => dreamSettingUpdate(runtimes.codex, 'model', '  '), { code: 'invalid_model' });
+
+  config = save(config, 'claude', 'model', null);
+  assert.deepEqual(call(config, 'claude'), ['claude-sonnet-5-5', 'high']);
+  config = save(config, 'claude', 'effort', null);
+  assert.deepEqual(call(config, 'claude'), defaults.claude);
+  assert.deepEqual(call(config, 'codex'), ['gpt-6.1-terra', 'model_reasoning_effort="xhigh"']);
 });
 
 test('Antigravity restricts memory tools and their descriptions to memory mode', () => {

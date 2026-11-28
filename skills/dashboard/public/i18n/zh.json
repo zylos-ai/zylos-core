@@ -233,6 +233,7 @@
   "result.hot_ttl_multi_only": "此实例完成会话模式迁移前，空闲回收时间为只读",
   "result.hot_ttl_set": "空闲回收时间已设为 {minutes} 分钟，下一轮回收判断生效。",
   "result.threshold_set": "换会话阈值已设为 {value}%",
+  "result.dream_saved": "已保存记忆做梦设置",
   "result.unknown_action": "未知操作",
   "result.internal_error": "内部错误：{error}",
   "result.interrupt_failed": "中断失败：{error}",

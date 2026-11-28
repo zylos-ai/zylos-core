@@ -110,7 +110,8 @@ export async function readGroupSnapshot(read, { signal, side = 'running', cursor
 
 /** Instance defaults use one write resource; process actions belong to their object. */
 export function instanceActionRequest(action, body = {}) {
-  const defaults = { 'switch-model': 'model', 'switch-effort': 'effort', 'set-threshold': 'threshold', 'set-session-hot-ttl': 'session-hot-ttl' };
+  const defaults = { 'switch-model': 'model', 'switch-effort': 'effort', 'set-threshold': 'threshold', 'set-session-hot-ttl': 'session-hot-ttl',
+    'set-dream-model': 'dream-model', 'set-dream-effort': 'dream-effort' };
   if (defaults[action]) return { method: 'PUT', path: '/api/instance/defaults', body: { ...body, kind: defaults[action] } };
   const groups = { 'restart-session': 'restart', interrupt: 'interrupt', 'chop-chop': 'chop-chop' };
   if (groups[action]) return { method: 'POST', path: '/api/groups/origin/actions/' + groups[action], body };

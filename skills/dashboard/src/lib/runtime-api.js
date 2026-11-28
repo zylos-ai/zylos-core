@@ -22,7 +22,7 @@ export function runtimeDefaults(zylosConfig) {
     const meta = getActionsMeta({ ...zylosConfig, runtime });
     return [runtime, { model: meta.current_model, effort: meta.current_effort,
       threshold: meta.new_session_threshold, model_thresholds: meta.model_thresholds,
-      session_hot_ttl: meta.session_hot_ttl }];
+      session_hot_ttl: meta.session_hot_ttl, dream: meta.dream }];
   }));
 }
 

@@ -145,6 +145,7 @@ Setup:
   config get <key>    Get a config value
   config set <key> <value>  Set a config value
   config unset alert_target  Remove the alert target (alerts go to Dashboard's Origin conversation)
+  config unset memory_dream_model|memory_dream_effort  Restore the current runtime's dream default
   attach              Attach to the Claude tmux session
   doctor              Diagnose and repair Zylos installation
                       --check   Diagnose only, no repair run

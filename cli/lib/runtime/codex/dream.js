@@ -4,9 +4,11 @@ import { UNSUPPORTED } from '../contract.js';
 
 export const dream = Object.freeze({
   decodeOutput: UNSUPPORTED,
-  prepare({ instructions, input, tools, cwd, env, server, serverEnv, schema }) {
+  defaultModel: 'gpt-6.1-terra',
+  defaultEffort: 'medium',
+  prepare({ instructions, input, tools, cwd, env, server, serverEnv, schema, model, effort }) {
     const answer = path.join(cwd, 'answer.json');
-    const args = ['-a', 'never', 'exec', '-m', 'gpt-6.1-terra', '-c', 'model_reasoning_effort="medium"',
+    const args = ['-a', 'never', 'exec', '-m', model, '-c', `model_reasoning_effort=${JSON.stringify(effort)}`,
       '--sandbox', 'read-only', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check',
       '--ephemeral', '--disable', 'shell_tool', '--disable', 'unified_exec', '--disable', 'hooks',
       '--disable', 'apps', '--disable', 'multi_agent', '-c', 'web_search="disabled"',
