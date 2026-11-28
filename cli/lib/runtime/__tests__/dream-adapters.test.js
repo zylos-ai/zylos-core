@@ -37,10 +37,29 @@ test('dream runtime adapters select their default model and medium effort with a
         assert.equal(prepared.args[prepared.args.indexOf('--tools') + 1], '');
         break;
       case 'codex':
-        assert.ok(prepared.args.includes('--ignore-user-config'));
-        assert.ok(prepared.args.includes('shell_tool'));
-        assert.ok(prepared.args.includes('unified_exec'));
-        assert.ok(prepared.args.includes('mcp_servers.dream.default_tools_approval_mode="approve"'));
+        assert.ok(!prepared.args.includes('--ignore-user-config'));
+        for (const flag of ['--ignore-rules', '--ephemeral']) assert.ok(prepared.args.includes(flag), flag);
+        for (const [flag, value] of [
+          ['-a', 'never'],
+          ['-m', dreamModel],
+          ['-c', `model_reasoning_effort=${JSON.stringify(effort)}`],
+          ['--sandbox', 'read-only'],
+          ['--disable', 'shell_tool'],
+          ['--disable', 'unified_exec'],
+          ['--disable', 'hooks'],
+          ['--disable', 'apps'],
+          ['--disable', 'multi_agent'],
+          ['-c', 'web_search="disabled"'],
+          ['-c', 'mcp_servers={}'],
+          ['-c', 'notify=[]'],
+          ['-c', 'developer_instructions="System prompt"'],
+          ['-c', 'mcp_servers.dream.default_tools_approval_mode="approve"'],
+          ['--output-last-message', prepared.answer],
+          ['--output-schema', path.join(cwd, 'output-schema.json')],
+        ]) {
+          assert.ok(prepared.args.some((arg, index) => arg === flag && prepared.args[index + 1] === value),
+            `Missing Codex dream argument: ${flag} ${value}`);
+        }
         break;
       case 'agy': {
         const config = agyConfigurationPaths(prepared.env.HOME);
