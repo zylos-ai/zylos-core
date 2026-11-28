@@ -71,9 +71,15 @@ A PR adding or changing a Dashboard collection (list) endpoint must follow [the 
 
 ## Testing
 
-Run `npm test` for the default suite or `node scripts/run-node-tests.js --list`
-to see the collected paths. The runner discovers `*.test.js` under the root
-`test/` and the existing module test directories.
+Core currently has no test CI. Before opening a PR, authors run checks that
+finish in seconds and need no compilation, such as formatting and version
+consistency checks. The reviewer runs the tests affected by each change during review.
+Running the full test suite requires the maintainer's approval. Follow any applicable
+targeted checks documented below.
+
+Use `node scripts/run-node-tests.js --list` to see the collected paths. The runner
+discovers `*.test.js` under the root `test/` and the existing module test
+directories. With approval, use `npm test` to run the default suite.
 
 Tests never touch a live instance. The Node test runner sets `HOME` and
 `ZYLOS_DIR` to fresh temporary directories before any test module loads; do not
@@ -90,14 +96,31 @@ test helpers or fixtures. The default runner skips them. Set `ZYLOS_SLOW_TESTS=1
 to include them, or pass an explicit slow path to `node scripts/run-node-tests.js`.
 Run `node scripts/select-slow-tests.js --since <git-ref>` to list slow tests whose
 own file or covered paths changed, including staged and unstaged changes.
-Developers and reviewers must run the selected tests when those boundaries change;
-before a
-release, select against the previous release ref and run only triggered tests.
+Reviewers run the selected tests when those boundaries change. Before a release,
+select against the previous release ref and run only the triggered tests.
 An empty selection requires no slow run. Keep covers paths aligned with the real
 imports, CLI entry points and direct test dependencies; directory coverage
 includes all descendants. Indirect dependencies are not automatically followed.
-Run selected integration tests only with isolated HOME, ZYLOS_DIR, PM2_HOME,
-short TMPDIR, private tmux sockets and fixture databases, and clean up afterward.
+
+### Integration test isolation
+
+Run integration tests and their services under a dedicated system user. Set
+isolated `HOME`, `ZYLOS_DIR`, `PM2_HOME`, and a short `TMPDIR`. Use a private
+tmux socket and a dedicated test database. Before running, verify the resolved
+paths and actual targets. During cleanup, stop the test services and verify
+that their processes have exited before deleting the runtime directories.
+
+Before starting an isolated tmux server, PM2, or Zylos instance, remove every
+`ZYLOS_*` variable from the environment it would inherit. After the isolated
+tmux server starts, read back its environment with `tmux show-environment -g`
+and confirm no `ZYLOS_*` variables remain. A server started from an agent
+session can inherit that session's identity variables. Run every command
+from a PR checkout inside the isolated environment, including seemingly
+read-only commands such as `--help` or `list`. Some CLIs open and migrate their
+database at startup.
+
+Use `TZ=Asia/Singapore` for test runs. Dedicated timezone unit tests may select
+the timezone required by the case.
 
 ## tmux Compatibility
 
