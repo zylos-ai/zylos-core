@@ -1747,12 +1747,19 @@ export function createServer() {
     catch { console.error('[chat] Conversation naming reconciliation remains pending.'); }
   };
   reconcileNames();
-  chatObserver.subscribe({ tab: 'mine' }, {
+  const watchFleetChat = () => chatObserver.subscribe({ tab: 'mine' }, {
     validate: () => true,
     send: event => {
-      if (event === 'chat_messages_changed') broadcastFleet(fleetPoller.getFleet());
+      if (event === 'chat_ready' || event === 'chat_messages_changed') broadcastFleet(fleetPoller.getFleet());
+    },
+    onStop: reason => {
+      if (reason === 'chat_unavailable') broadcastFleet(fleetPoller.getFleet());
+      // Network subscribers reconnect on a database replacement. The local
+      // fleet subscriber has no connection lifecycle to resubscribe for it.
+      if (reason === 'chat_database_changed') queueMicrotask(watchFleetChat);
     },
   });
+  watchFleetChat();
   const namingTimer = setInterval(() => eventLoopMonitor.runTask('conversation.naming', reconcileNames), 30000);
   namingTimer.unref();
   let attachmentClose = null;

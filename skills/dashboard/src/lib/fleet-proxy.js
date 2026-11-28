@@ -1,4 +1,3 @@
-import { omitFleetChat } from './fleet-list.js';
 import { isCustomScope } from './api-key-scope.js';
 import { isConversationApiPath, isRetiredConversationApiPath } from './api-routes.js';
 import { isSameOriginRequest } from './request-origin.js';
@@ -12,6 +11,7 @@ import { Readable, Transform } from 'node:stream';
 import { once } from 'node:events';
 import { browserPath, browserBaseFromRequest } from './browser-base.js';
 import { sendHtml, sendJson, sendText, serveStatic } from './http.js';
+import { omitFleetChat } from './fleet-list.js';
 import { validateMemoryQueryPath } from './memory-browser.js';
 import {
   acceptObserverWebSocket,
@@ -549,13 +549,15 @@ export class FleetProxy {
       }
       // The upstream uses the machine's configured credential, which can have
       // more access than the caller of this relay.
-      if (normalizedSuffix === '/api/fleet' && req._authContext?.scope !== 'admin') {
+      const fleetAdmin = () => this.authGate
+        ? this.authGate.resolveAuthContext(req, { touch: false })?.scope === 'admin'
+        : req._authContext?.scope === 'admin';
+      if (normalizedSuffix === '/api/fleet' && !fleetAdmin()) {
         try {
           const body = JSON.parse(text);
           if (remoteResp.ok && !Array.isArray(body.items)) throw new Error('Expected fleet page');
           if (Array.isArray(body.items)) body.items = body.items.map(omitFleetChat);
           buffer = Buffer.from(JSON.stringify(body));
-          delete responseHeaders['content-length'];
         } catch {
           sendJson(res, 502, { error: 'upstream_body_error' });
           return;

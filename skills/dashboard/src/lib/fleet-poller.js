@@ -831,9 +831,16 @@ export class FleetPoller {
     this.onPoll?.(this.getFleet());
   }
 
-  async _fetchChat(agent, token) {
+  async _fetchChat(agent, token, signal) {
+    const deadline = new AbortController();
+    const timer = this.setTimeout(() => deadline.abort(), this.timeoutMs);
+    timer.unref?.();
     try {
-      const response = await this._fetchObject(agent, token, CHAT_LIST);
+      const response = await this.fetch(joinUrl(agent.base_url, CHAT_LIST), {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal,
+      });
       if (!response.ok) {
         await response.body?.cancel();
         return null;
@@ -841,6 +848,8 @@ export class FleetPoller {
       return sanitizeChat((await response.json())?.summary);
     } catch {
       return null;
+    } finally {
+      this.clearTimeout(timer);
     }
   }
 
@@ -854,7 +863,7 @@ export class FleetPoller {
     const previous = this.chatReads.get(agent.name);
     const read = Promise.resolve(previous).then(async () => {
       if (!current()) return false;
-      const chat = await this._fetchChat(agent, token);
+      const chat = await this._fetchChat(agent, token, signal);
       if (!current()) return false;
       const record = this.records.get(agent.name);
       if (!record || FAILURE_REASONS.has(record.health_reason) || JSON.stringify(record.chat) === JSON.stringify(chat)) return false;
@@ -1100,10 +1109,12 @@ export class FleetPoller {
     if (!this._isCurrentAgent(agent, generation, stream)) return;
     signal.throwIfAborted();
     const openStream = async () => {
+      stream.chatRetryAt = null;
       if (this.getAgentAccess(agent.name) === 'admin') {
         const response = await this._fetchStream(agent, token, signal, CHAT_STREAM);
         // Older peers and peers that decline chat still publish fleet state.
         if (![400, 403, 404, 429].includes(response.status)) return response;
+        if (response.status === 403 || response.status === 429) stream.chatRetryAt = this.now() + this.reconnectMaxMs;
         await response.body?.cancel().catch(() => {});
       }
       signal.throwIfAborted();
@@ -1339,9 +1350,17 @@ export class FleetPoller {
     const generation = this._agentGeneration(agent);
     if (!this._isCurrentAgent(agent, generation)) return;
     const stream = this._streamState(agent);
-    if (stream.reading) return;
-
     const nowMs = this.now();
+    if (stream.reading) {
+      // A live ordinary stream can outlast a temporary chat refusal.
+      if (stream.chatRetryAt != null && nowMs >= stream.chatRetryAt) {
+        stream.chatRetryAt = null;
+        stream.controller.abort();
+        this._scheduleReconnect(agent);
+      }
+      return;
+    }
+
     const connectingSince = Number(stream.connectingSince);
     const connectingAgeMs = stream.connecting && Number.isFinite(connectingSince) ? nowMs - connectingSince : 0;
     const connectingBoundMs = this.timeoutMs * 2 + this.reconnectMaxMs;
