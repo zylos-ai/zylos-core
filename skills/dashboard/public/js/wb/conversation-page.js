@@ -7,7 +7,7 @@ import { copyText, element, icon } from './plain-text.js';
 import { asDate } from './conversation-time.js';
 import { formatZoned } from './instance-zone.js';
 import { channelIcon, channelIcons } from './board.js';
-import { answersQuestion, createConversationState, isOriginConversation, isOwnChatMessage } from './conversation-state.js';
+import { answersQuestion, countsUnread, createConversationState, isOriginConversation, isOwnChatMessage } from './conversation-state.js';
 import { createListPresence } from './conversation-presence.js';
 import { messageState, receiptState } from './chat-delivery-state.js';
 import { renderQuestion } from './chat-questions.js';
@@ -964,7 +964,7 @@ export function mountConversationPage({
   function updateUnread(s = currentSnapshot) {
     const count = s?.tab === 'mine' ? s.unreadCount || 0 : 0;
     const displayCount = count >= 100 ? '99+' : String(count);
-    const loadedUnread = count ? s.messages.filter(row => row.id > s.readUpTo && !isOwnChatMessage(row)).length : 0;
+    const loadedUnread = count ? s.messages.filter(row => row.id > s.readUpTo && countsUnread(row)).length : 0;
     latest.hidden = !s?.historyLoaded || atBottom() && (!s.positionAtUnread || count <= loadedUnread);
     latest.label.hidden = !count;
     text(latest.label, displayCount);
@@ -1372,7 +1372,7 @@ export function mountConversationPage({
   function showNewMessages() {
     const s = state.snapshot();
     const first = s.tab === 'mine' && s.unreadCount > 0
-      ? s.messages.find(row => row.id > s.readUpTo && !isOwnChatMessage(row)) : null;
+      ? s.messages.find(row => row.id > s.readUpTo && countsUnread(row)) : null;
     const article = first && messages.get(String(first.id))?.node;
     if (!article?.isConnected) return void state.jumpToLatest();
     stream.scrollTop += article.getBoundingClientRect().top - stream.getBoundingClientRect().top - 12;
