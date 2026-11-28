@@ -76,12 +76,6 @@ Unknown options are ignored with an `Ignored unknown option: --name` notice on s
 
 Inbound content is stored in the conversations DB exactly as received. `c4-receive.js` does not append reply-routing text and does not replace large messages with attachment previews.
 
-## Dashboard delivery format
-
-On live delivery and startup replay, a Dashboard message's body is wrapped in
-`<current-message c4_id="42">` and `</current-message>`, using the stored C4
-row ID. A resolved quote appears in a preceding `<replying-to>` block.
-
 ## Health Routing
 
 Before committing a message, `c4-receive.js` sends a v2 route request. An explicit pending decision takes precedence over health labels, including rate limiting and recovery waits. Authentication rejection writes a failed row with the permanent category `auth_rejected`. Other unrecovered routes also write failed rows. Replies, when enabled, use a cooldown scoped by channel, normalized endpoint, committed group, runtime, health and reason. A CLI action of `delivered` describes the status reply, not delivery of the inbound work to the runtime.
@@ -116,8 +110,13 @@ Missing or unreadable target health evidence leaves work pending without inventi
 
 ## Reply Protocol
 
-When a queued message is delivered to the agent, c4-dispatcher adds a `reply via` suffix for inbound messages that have an endpoint. Session startup context uses the same agent-facing formatting. Stored DB content and `c4-fetch` output remain clean:
+When a queued message is delivered to the agent, c4-dispatcher adds a `reply via` suffix for inbound messages that have an endpoint. Session startup context uses the same agent-facing formatting. The suffix is generated from the stored row and kept outside the message body.
 
 ```
 [TG DM] user said: hello ---- reply via: node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "telegram" "8101553026"
 ```
+
+For Dashboard conversations other than Origin, live delivery, startup history,
+and text fetch output include the inbound row ID in the reply address, for
+example `dashboard "conversation_a|msg:42"`. The inbound row keeps the bare
+conversation ID as its stored endpoint.

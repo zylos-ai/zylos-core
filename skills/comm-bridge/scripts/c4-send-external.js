@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { resolveCoreConfigModule } from './core-config-loader.js';
 import { sendError } from './c4-send-args.js';
+import { replyEndpoint } from './dashboard-endpoint.js';
 import { safeEntryId } from './c4-entry-id.js';
 import { queryComponentSessionGroup, fixedAddressSessionGroup } from './c4-component-session-group.js';
 import { assertOutboundSession, isNativeSingle, originReplyAllowed, readConfiguredSessionMode } from './c4-outbound-session.js';
@@ -35,7 +36,7 @@ export function readAbsorbedReply(runId, id, api) {
     if (!run.absorbed_ids.includes(exactId)) throw sendError('ABSORBED_NOT_IN_RUN', 'Conversation is not absorbed in this run');
     const [record] = api.getConversationsByRange(exactId, exactId);
     if (!record || record.status !== 'switch_absorbed') throw sendError('ABSORBED_MISMATCH', 'Absorbed conversation is missing or has changed state');
-    return { kind: 'external', channel: record.channel, endpoint: record.endpoint_id,
+    return { kind: 'external', channel: record.channel, endpoint: replyEndpoint(record),
       id: exactId, runId };
   })();
 }

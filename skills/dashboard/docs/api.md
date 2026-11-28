@@ -731,6 +731,15 @@ Schedule `nextRunAt`, `lastRunAt`, `updatedAt`, history `executedAt`/`completedA
 | `GET /api/conversations/drafts/:id/deletion` | Local-owner-only draft deletion preview. Here `:id` is the bare `conversation.localId` returned by `POST /api/conversations/drafts`, also available as `items[].localId` on draft rows in the conversation list. Do not pass the `d:`-prefixed conversation ID. Example: with `localId:"550e8400-e29b-41d4-a716-446655440000"`, `GET /api/conversations/drafts/550e8400-e29b-41d4-a716-446655440000/deletion`. |
 | `DELETE /api/conversations/drafts/:id` | Local-owner-only; `:id` is the same bare `localId` used for the preview. JSON `{confirmed:true,operationId,cutoffId}` from the preview. Returns `{ok:true,...deletionResult}`. Example: `DELETE /api/conversations/drafts/550e8400-e29b-41d4-a716-446655440000` with the preview's confirmation values. Passing `d:<uuid>` returns 404 `chat_conversation_not_found`. |
 
+A Dashboard reply sent through the agent's `<conversation-id>|msg:<id>`
+route carries a `quote` object in message history when a newer owner message
+in that conversation arrived before the reply. The object has `id`,
+`direction`, `internal`, `timestamp`, `preview`, and `available`. Target
+visibility follows the existing quote rules. BeforeSend rejects a
+message-specific route before storing anything if it does not identify an
+earlier Dashboard inbound message in the same conversation. Bare routes remain
+available for proactive sends. Origin keeps its fixed routing.
+
 On the Mine tab, admin credentials also receive `summary: {latest,unread_conversations}` for the whole tab, independent of search, cursor and page size. `latest` is null when no visible non-internal message exists, otherwise `{at,title,preview}`. `at` is the ISO 8601 timestamp of the newest incoming or outgoing message across Mine, including Origin. `title` and `preview` use the conversation list's display values. Drafts without messages do not contribute. `unread_conversations` counts conversations whose list row is unread. Existing remote chat access rules apply.
 
 `GET /api/conversations`, `GET /api/conversations/:id/messages`, `GET /api/conversations/:id/status`, and `GET /api/conversations/:id/activity` read the optional `X-Zylos-Locale` request header. The exact value `en` selects English. An omitted header or any other value selects Chinese (`zh`). The locale controls server-generated preview text in list and message responses, including attachment labels and quoted-message previews. List searches also match unnamed conversations against the localized fallback title.
@@ -742,14 +751,6 @@ The unfiltered first `mine` page puts Origin first. Each tab inserts its own com
 `PUT /api/conversations/pins` uses chat admin and browser same-origin checks. Pass unique IDs of established conversations belonging to the selected tab. Origin, drafts, missing conversations, IDs from another tab, and duplicates are rejected as `invalid_chat_pin` (400). Malformed encoded IDs can return `invalid_chat_conversation` (400). Invalid write parameters return `invalid_chat_parameters` (400). Validation failures preserve the old order.
 
 `mine` list rows carry a boolean `unread`. It compares the last read position with the newest visible message other than a Dashboard inbound message written by the owner. After upgrading, existing messages start as read. An accepted send with a stored message ID advances the sender's read position to that ID. `PUT /api/conversations/:id/read` requires admin and browser same origin, including when proxied through Fleet. A valid lower position leaves the position unchanged. An invalid or unrelated message ID returns 400 `invalid_parameter` with `error.param: "upTo"`. An ID outside the `mine` conversation set returns 404 `not_found`.
-
-A Dashboard message item can include `quote` for either `direction: "in"`
-or `direction: "out"` when a plain-text first line references an earlier C4 ID
-with `[quote c4_id=N]`. The object has `id`, `direction`, `internal`,
-`timestamp`, `preview`, and `available`. If the target is outside the visible
-conversation history or missing, `available` is false, `direction` and
-`timestamp` are null, `internal` is false, and the quote's `preview` is empty.
-Message and conversation previews omit a recognized marker.
 
 The read anchor returns messages on both sides of the saved position, with up to half the page after it and earlier messages filling any remaining space. It uses the saved ID even if that message was removed. `unreadCount` counts only messages that can make the conversation unread and is capped at 100. `nextCursor` reads earlier messages and `afterCursor` reads later messages. A first page without an anchor uses normal timeline paging and leaves out `readUpTo` and `unreadCount`. `anchor=read` is only valid without a cursor and in `mine`.
 

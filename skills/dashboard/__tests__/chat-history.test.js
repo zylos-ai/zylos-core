@@ -116,6 +116,26 @@ test('mine requires the Dashboard namespace binding and exact local endpoint rou
 // Real Dashboard name/pin data and private C4. Run for list search, pin or
 // keyset scope changes. The same isolated fixture owns both databases.
 
+test('Dashboard history quotes replies to earlier owner messages', t => {
+  const { add, history } = fixture(t);
+  const dialog = { channel: 'dashboard', endpoint_id: 'a', session_group: 'dash-owned:a' };
+  add({ ...dialog, id: 1, content: 'First question' });
+  add({ ...dialog, id: 2, content: 'Latest question' });
+  add({ ...dialog, id: 3, direction: 'out', endpoint_id: 'a|msg:1', content: 'Earlier reply' });
+  add({ ...dialog, id: 4, direction: 'out', endpoint_id: 'a|msg:2', content: 'Latest reply' });
+  const id = groupId(dialog.session_group);
+  const { items, unreadCount } = history.messages(id, { anchor: 'read' });
+  const earlier = items.find(row => row.id === 3);
+  const latest = items.find(row => row.id === 4);
+  assert.deepEqual(earlier.quote, { id: 1, direction: 'in', internal: false,
+    timestamp: '2026-01-01 12:00:00', preview: 'First question', available: true });
+  assert.equal(latest.quote, undefined);
+  assert.equal(unreadCount, 2);
+  const summary = history.list().items.find(row => row.id === id);
+  assert.equal(summary.preview, 'Latest reply');
+  assert.equal(summary.endpoint_id, 'a');
+});
+
 test('message pages use C4 ids across gaps and later polling never crosses groups', t => {
   const f = fixture(t);
   for (const id of [1, 5, 12, 20, 41]) f.add({ id });
@@ -142,22 +162,6 @@ test('message pages use C4 ids across gaps and later polling never crosses group
   f.add({ id: 60 });
   const newMessage = f.history.messages(item.id, { tab: 'external', direction: 'after', cursor: emptyAgain.afterCursor });
   assert.deepEqual(newMessage.items.map(row => row.id), [60]);
-});
-
-// Real message-page projection and quote lookup in a private C4 database.
-// Run for quote eligibility or API item changes. Skip unrelated frontend work.
-test('Dashboard outbound replies expose the same quote object as owner replies', t => {
-  const { add, history } = fixture(t);
-  const conversation = { channel: 'dashboard', endpoint_id: 'a', session_group: 'dash-owned:a' };
-  add({ ...conversation, id: 1, content: 'Original question' });
-  add({ ...conversation, id: 2, direction: 'out', content: '[quote c4_id=1]\nAnswer' });
-
-  const { items } = history.messages(groupId(conversation.session_group), { tab: 'mine' });
-  assert.deepEqual(items.at(-1).quote, {
-    id: 1, direction: 'in', internal: false, timestamp: items[0].timestamp,
-    preview: 'Original question', available: true,
-  });
-  assert.equal(items.at(-1).preview, 'Answer');
 });
 
 // Integration: real auth, history routes, SQLite and private loopback only.

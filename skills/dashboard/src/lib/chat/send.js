@@ -1,3 +1,4 @@
+import { dashboardConversationIdSql } from '../../../../comm-bridge/scripts/dashboard-endpoint.js';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isDataError as localDataError, parseSessionGroup, validateGroupName, validNamespace } from '../../../../comm-bridge/scripts/c4-session-group.js';
@@ -213,7 +214,7 @@ export class ChatSender {
       if (!messageId(quote) || !row.namespace) throw fail('invalid_chat_quote');
       const target = this._db().prepare(`SELECT id FROM conversations
         WHERE id=? AND session_group=? AND direction IN ('in','out')
-        AND (channel='internal' OR (channel='dashboard' AND endpoint_id=?))`)
+        AND (channel='internal' OR (channel='dashboard' AND ${dashboardConversationIdSql('endpoint_id')}=?))`)
         .get(quote, conversationGroup(row.namespace, row.localId), row.localId);
       if (!target) throw fail('invalid_chat_quote');
     }

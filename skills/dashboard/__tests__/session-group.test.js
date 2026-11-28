@@ -14,13 +14,17 @@ function query(args) {
 }
 
 test('Dashboard session query rejects fixed origin invalid names and wrong argument counts', () => {
-  for (const args of [[], ['one', 'two'], ['origin'], [''], [' name'], ['name '],
+  for (const args of [[], ['one', 'two'], ['origin'], ['origin|msg:42'], [''], [' name'], ['name '],
     ['a\nb'], ['../group'], ['-group'], ['a'.repeat(96)]]) {
     const result = query(args);
     assert.equal(result.status, 1, JSON.stringify(args));
     assert.equal(result.stdout, '', JSON.stringify(args));
     assert.ok(result.stderr.length > 0);
   }
+});
+
+test('Dashboard reply addresses resolve to the same group as their conversation', () => {
+  assert.deepEqual(query(['conversation_a|msg:42']), query(['conversation_a']));
 });
 
 // Boundary: actual query executable only; no database, service, runtime or socket.

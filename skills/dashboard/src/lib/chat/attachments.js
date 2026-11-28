@@ -1,3 +1,4 @@
+import { dashboardConversationId, dashboardConversationIdSql } from '../../../../comm-bridge/scripts/dashboard-endpoint.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -292,7 +293,7 @@ export class ChatAttachments {
   // endpoint), whichever group recorded it: in single mode rows of every
   // conversation are recorded under `origin`.
   _matches(record, row, reference) {
-    return row.channel === 'dashboard' && row.endpoint_id === record.local_id
+    return row.channel === 'dashboard' && dashboardConversationId(row.endpoint_id) === record.local_id
       && row.id > record.c4_watermark && reference.kind === record.kind
       && (row.direction === 'in' ? reference.storageName === record.storage_name && (record.source === 'user' || record.linked)
         : row.direction === 'out' && reference.id === record.id && (record.source === 'agent' || record.linked));
@@ -387,7 +388,7 @@ export class ChatAttachments {
     }
     for (let page = 0; page < 2; page++) {
       const rows = core.prepare(`SELECT id,direction,channel,endpoint_id,session_group,content FROM conversations
-        WHERE id>? AND id<=? AND channel='dashboard' AND endpoint_id=? AND direction=?
+        WHERE id>? AND id<=? AND channel='dashboard' AND ${dashboardConversationIdSql('endpoint_id')}=? AND direction=?
         ORDER BY id LIMIT ?`).all(record.scanned_c4_id, record.scan_upper_id, record.local_id,
         record.source === 'user' ? 'in' : 'out', BATCH);
       for (const row of rows) {

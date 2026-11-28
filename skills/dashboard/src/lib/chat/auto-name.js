@@ -1,3 +1,4 @@
+import { dashboardConversationId, dashboardConversationIdSql } from '../../../../comm-bridge/scripts/dashboard-endpoint.js';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -55,18 +56,19 @@ export function requestConversationName(row, { env = process.env, enqueue = enqu
   const file = path.join(root(env), 'components/dashboard/dashboard.db');
   if (!fs.existsSync(file)) return null;
   return withNamingStore(env, (store, zylosDir) => {
+    const localId = dashboardConversationId(row.endpoint_id);
     const core = new Database(path.join(zylosDir, 'comm-bridge/c4.db'), { readonly: true, fileMustExist: true });
     try {
       return store.db.transaction(() => {
         const conversations = new ChatConversations({ store });
         const conversation = conversations.findByGroup(row.session_group);
-        if (!conversation || conversation.localId !== row.endpoint_id) return null;
+        if (!conversation || conversation.localId !== localId) return null;
         // The first committed reply itself is the trigger. Controls are not replies;
         // subsequent replies never retry the decision, including after a cleared name.
         const previous = core.prepare(`SELECT content FROM conversations WHERE session_group=?
-          AND channel='dashboard' AND endpoint_id=? AND direction='out'
+          AND channel='dashboard' AND ${dashboardConversationIdSql('endpoint_id')}=? AND direction='out'
           AND COALESCE(delivery_action,'')<>'system_notice' AND id<? ORDER BY id`).iterate(
-          row.session_group, row.endpoint_id, row.id);
+          row.session_group, localId, row.id);
         for (const earlier of previous) if (isReply(earlier.content)) return null;
         if (conversation.displayName || store.getGroupDisplayName(row.session_group)?.display_name) return null;
         // A repeated channel delivery of the same committed first reply reuses the

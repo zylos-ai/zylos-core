@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { validName } from '../workbench/display-names.js';
 import { validateGroupName, validNamespace } from '../../../../comm-bridge/scripts/c4-session-group.js';
+import { dashboardConversationIdSql } from '../../../../comm-bridge/scripts/dashboard-endpoint.js';
 import { ORIGIN, ORIGIN_DISPLAY_NAME, conversationGroup, isOriginRecord } from './origin.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
@@ -14,7 +15,7 @@ export function isChatLocalIdUsed(c4Reader, localId) {
     if (fs.existsSync(c4Reader._dbPath)) throw fail('chat_history_unavailable', 502);
     return false;
   }
-  return !!db.prepare(`SELECT 1 FROM conversations WHERE channel='dashboard' AND endpoint_id=@localId
+  return !!db.prepare(`SELECT 1 FROM conversations WHERE channel='dashboard' AND ${dashboardConversationIdSql('endpoint_id')}=@localId
     UNION ALL SELECT 1 FROM group_heads h JOIN channel_namespaces n
       ON h.session_group=n.namespace || ':' || @localId
       WHERE n.component_name='dashboard' LIMIT 1`).get({ localId });
@@ -36,7 +37,7 @@ function existingChatGroup(sessionGroup, c4Reader) {
     throw fail('chat_conversation_deleting', 409);
   }
   const exists = core.prepare(`SELECT 1 FROM group_heads WHERE session_group=?
-    UNION ALL SELECT 1 FROM conversations WHERE session_group=? AND channel='dashboard' AND endpoint_id=? LIMIT 1`)
+    UNION ALL SELECT 1 FROM conversations WHERE session_group=? AND channel='dashboard' AND ${dashboardConversationIdSql('endpoint_id')}=? LIMIT 1`)
     .get(sessionGroup, sessionGroup, localId);
   if (!exists) throw fail('chat_conversation_not_found', 404);
   return { namespace, localId };

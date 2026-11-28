@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import { parseC4Content } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 import { splitContentAndAttachments, sanitizeDisplayName } from '../../../../comm-bridge/scripts/attachment-annotations.js';
 import { answerDisplay } from '../../../public/js/wb/chat-answer.js';
+import { dashboardConversationId, dashboardConversationIdSql } from '../../../../comm-bridge/scripts/dashboard-endpoint.js';
+import { dashboardReplyQuotes } from '../../../../comm-bridge/scripts/dashboard-reply-quotes.js';
 import { parseChatQuote, stripChatQuote } from '../../../../comm-bridge/scripts/chat-quote.js';
 import { ORIGIN, ORIGIN_CONVERSATION_ID, ORIGIN_DISPLAY_NAME } from './origin.js';
 import { groupId } from './conversations.js';
@@ -39,7 +41,7 @@ function tabGroupScope(tab, group = 'c.session_group') {
 const listScope = tab => tab === 'mine'
   ? `c.channel='dashboard' AND EXISTS (
     SELECT 1 FROM channel_namespaces n WHERE n.component_name='dashboard'
-    AND c.session_group=n.namespace || ':' || c.endpoint_id)`
+    AND c.session_group=n.namespace || ':' || ${dashboardConversationIdSql('c.endpoint_id')})`
   : "c.channel<>'dashboard'";
 
 const grouped = "c.session_group NOT IN ('', 'origin', '*')";
@@ -105,13 +107,14 @@ export function conversationPreview(content, options = {}) {
 
 /** One quote projection for the history API and Core's text history reader. */
 export function quotePreview(row, { singleLine = false, ...options } = {}) {
-  const content = stripChatQuote(row.channel === 'internal' ? internalContent(row) : row.content);
+  const body = row.channel === 'internal' ? internalContent(row) : row.content;
+  const content = row.direction === 'out' ? body : stripChatQuote(body);
   const preview = conversationPreview(content, { ...options, quote: singleLine });
   return singleLine ? preview.replace(/\s+/g, ' ') : preview;
 }
 
 function rowQuote(row) {
-  if (row?.channel !== 'dashboard' || !['in', 'out'].includes(row.direction)) return null;
+  if (row?.channel !== 'dashboard' || row.direction !== 'in') return null;
   const quote = parseChatQuote(row.content);
   return quote && quote.id < row.id ? quote : null;
 }
@@ -266,7 +269,8 @@ export class ChatHistory {
           if (!route) continue;
           const registered = tab === 'mine' ? this.conversations?.findByGroup(group) : null;
           const name = this.conversations?.store.getGroupDisplayName(group)?.display_name;
-          append({ id: groupId(group), session_group: group, channel: route.channel, endpoint_id: route.endpoint_id,
+          append({ id: groupId(group), session_group: group, channel: route.channel,
+            endpoint_id: route.channel === 'dashboard' ? dashboardConversationId(route.endpoint_id) : route.endpoint_id,
             stamp: !summaryOnly && stamp.get((latestReceived.get(group) ?? first.get(group))?.timestamp ?? null),
             display_name: registered ? name ?? registered.displayName : name ?? (tab === 'mine' ? group.slice(group.indexOf(':') + 1) : group),
             ...(registered ? { localId: registered.localId } : {}), draft: false }, route);
@@ -483,7 +487,9 @@ export class ChatHistory {
     const rechecked = recheck.length ? this._rowsByIds(range, recheck,
       'c.id,c.direction,c.channel,c.endpoint_id,c.session_group,c.content', visibleIn(range, true)) : [];
     const batch = [...new Map([...page, ...rechecked].map(row => [row.id, row])).values()];
-    const quoteIds = [...new Set(page.map(row => rowQuote(row)?.id).filter(Boolean))];
+    const outboundQuotes = dashboardReplyQuotes(page, () => this._db());
+    const quoteId = row => rowQuote(row)?.id ?? outboundQuotes.get(row.id);
+    const quoteIds = [...new Set(page.map(quoteId).filter(Boolean))];
     const quoted = new Map((quoteIds.length ? this._rowsByIds(range, quoteIds,
       'c.id,c.direction,c.timestamp,c.channel,c.endpoint_id,c.content', visibleIn(range, true), false) : [])
       .map(row => [row.id, row]));
@@ -510,10 +516,12 @@ export class ChatHistory {
       return named.get(localId);
     };
     const items = page.map(row => {
-      const marker = rowQuote(row);
-      if (marker) {
-        const target = quoted.get(marker.id);
-        row = { ...row, quote: { id: marker.id, direction: target?.direction ?? null,
+      const id = quoteId(row);
+      if (id) {
+        let target = quoted.get(id);
+        if (row.direction === 'out' && target && (target.direction !== 'in' || target.channel !== 'dashboard'
+          || target.endpoint_id !== dashboardConversationId(row.endpoint_id))) target = undefined;
+        row = { ...row, quote: { id, direction: target?.direction ?? null,
           internal: target?.channel === 'internal',
           timestamp: target?.timestamp ?? null, preview: target ? quotePreview(target, { external: externalRow(target), locale }) : '', available: !!target } };
       }
@@ -523,7 +531,7 @@ export class ChatHistory {
       }
       return { ...row, deliveryState: deliveryState(row),
         preview: conversationPreview(previewContent(row), { external: externalRow(row), locale }), attachments: rowAttachments(row),
-        ...(range.origin && row.channel === 'dashboard' ? { conversationName: names(row.endpoint_id) } : {}) };
+        ...(range.origin && row.channel === 'dashboard' ? { conversationName: names(dashboardConversationId(row.endpoint_id)) } : {}) };
     });
     const newest = items.at(-1)?.id ?? position ?? readUpTo ?? 0;
     return { items, nextCursor: more ? query.nextCursor(next) : null, afterCursor: query.nextCursor(newest),

@@ -6,6 +6,7 @@
  * reach this module through static imports.
  */
 
+import { replyEndpoint } from './dashboard-endpoint.js';
 import { isMainModule } from './is-main-module.js';
 import Database from './sqlite-driver.js';
 import * as schema from './c4-schema.js';
@@ -408,7 +409,7 @@ export function formatConversationsForAgent(conversations, { spill = true, owner
       conv.direction === 'in' &&
       conv.endpoint_id &&
       (conv.channel === 'dashboard' || !hasLegacyReplyViaSuffix(content))
-    ) ? buildReplyViaSuffix(conv.channel, conv.endpoint_id) : '';
+    ) ? buildReplyViaSuffix(conv.channel, replyEndpoint(conv)) : '';
     lines.push(`[${conv.timestamp}] ${dir} (${conv.channel}${endpoint}):`);
     lines.push(spill
       ? truncateForDelivery(content, replyViaSuffix, conv.id)

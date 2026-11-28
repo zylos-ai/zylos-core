@@ -46,7 +46,7 @@ const row = Object.freeze({ id: 910001, timestamp: '2026-01-01 12:00:00', direct
 test('plain attachment annotations survive projection and general agent history formatters byte for byte', () => {
   assert.equal(projectC4Content(content, { c4Id: row.id }), content);
   for (const [output, expected] of [[formatters.formatConversations([row]), content],
-    [formatters.formatConversationsForAgent([row], { spill: false, ownerName: () => 'the owner' }), dashboardSource(content, 'the owner', { row })]]) {
+    [formatters.formatConversationsForAgent([row], { spill: false, ownerName: () => 'the owner' }), dashboardSource(content, 'the owner')]]) {
     assert.ok(output.includes(expected));
     assert.ok(output.includes(buildAttachmentAnnotation(file)));
     assert.ok(output.includes(buildAttachmentAnnotation(image)));

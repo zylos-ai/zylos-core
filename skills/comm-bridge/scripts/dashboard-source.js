@@ -3,6 +3,8 @@ import path from 'node:path';
 import { DATA_DIR } from './c4-config.js';
 import { parseAttachmentAnnotation, splitContentAndAttachments } from './attachment-annotations.js';
 import { parseC4Content } from './c4-content-schema.js';
+import { dashboardConversationId } from './dashboard-endpoint.js';
+import { dashboardReplyQuotes } from './dashboard-reply-quotes.js';
 import { parseChatQuote, stripChatQuote } from './chat-quote.js';
 
 // Owner identity already lives in Core memory; do not introduce a second record.
@@ -32,22 +34,21 @@ export function resolveDashboardQuote(row, database) {
 
 /** Resolve only this output's references in one read, then apply the delivery scope rule. */
 export function resolveDashboardQuotes(rows, getDatabase) {
-  const references = rows.filter(row => row.channel === 'dashboard' && ['in', 'out'].includes(row.direction))
-    .map(row => ({ row, quote: quoteReference(row) })).filter(item => item.quote);
+  const outbound = dashboardReplyQuotes(rows, getDatabase);
+  const references = rows.filter(row => row.channel === 'dashboard')
+    .map(row => ({ row, id: row.direction === 'in' ? quoteReference(row)?.id : outbound.get(row.id) }))
+    .filter(item => item.id);
   if (!references.length) return new Map();
-  const ids = new Set(references.map(item => item.quote.id));
-  // Fetch rows are already projected. Verify the outbound marker in storage so
-  // a structured message's fallback cannot be mistaken for a plain-text quote.
-  for (const { row } of references) {
-    if (row.direction === 'out') ids.add(row.id);
-  }
-  const stored = new Map(getDatabase().prepare(`SELECT * FROM conversations
+  const ids = [...new Set(references.map(item => item.id))];
+  const targets = new Map(getDatabase().prepare(`SELECT * FROM conversations
     WHERE id IN (SELECT value FROM json_each(?)) AND direction IN ('in','out')`)
-    .all(JSON.stringify([...ids])).map(row => [row.id, row]));
-  return new Map(references.flatMap(({ row, quote }) => {
-    if (row.direction === 'out' && parseChatQuote(stored.get(row.id)?.content ?? '')?.id !== quote.id) return [];
-    const target = stored.get(quote.id);
-    return target?.session_group === row.session_group ? [[row.id, target]] : [];
+    .all(JSON.stringify(ids)).map(row => [row.id, row]));
+  return new Map(references.flatMap(({ row, id }) => {
+    const target = targets.get(id);
+    if (!target || target.session_group !== row.session_group) return [];
+    if (row.direction === 'out' && (target.direction !== 'in' || target.channel !== 'dashboard'
+      || target.endpoint_id !== dashboardConversationId(row.endpoint_id))) return [];
+    return [[row.id, target]];
   }));
 }
 
@@ -56,7 +57,8 @@ export function dashboardQuoteSender(row, ownerName = readOwnerName()) {
 }
 
 function quotedText(row) {
-  let content = stripChatQuote(row.content || '');
+  let content = row.content || '';
+  if (row.direction !== 'out') content = stripChatQuote(content);
   const parsed = parseC4Content(content);
   const files = parsed.kind === 'envelope' ? (parsed.envelope.blocks ?? [])
     .filter(block => ['x-zylos.image', 'x-zylos.file'].includes(block.type))
@@ -91,7 +93,6 @@ export function dashboardSource(content, ownerName = readOwnerName(), { row, loo
   const escape = value => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   const sender = valid && dashboardQuoteSender(original, ownerName);
   const replying = valid ? `\n<replying-to>\n[${escape(sender)}]: ${escape(quotedText(original))}\n</replying-to>\n` : '';
-  const id = Number.isSafeInteger(row?.id) && row.id > 0 ? ` c4_id="${row.id}"` : '';
-  const message = `[Dashboard]${replying}\n<current-message${id}>\n${escape(ownerName)} said: ${escape(body.join('\n'))}\n</current-message>`;
+  const message = `[Dashboard]${replying}\n<current-message>\n${escape(ownerName)} said: ${escape(body.join('\n'))}\n</current-message>`;
   return message + (annotations.length ? '\n' + annotations.join('\n') : '');
 }

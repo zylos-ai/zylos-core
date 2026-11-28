@@ -1,3 +1,4 @@
+import { dashboardConversationId } from '../../../../comm-bridge/scripts/dashboard-endpoint.js';
 import Database from '../../../../comm-bridge/scripts/sqlite-driver.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,9 +28,10 @@ export function recordQuestionControl(row, { env = process.env } = {}) {
       }
       // Questions are registered under the conversation the row is sent to;
       // the recording group is `origin` for every conversation in single mode.
-      const sessionGroup = endpointConversationGroup(db, row.endpoint_id, dashboardNamespaceReader(zylosDir));
+      const endpointId = dashboardConversationId(row.endpoint_id);
+      const sessionGroup = endpointConversationGroup(db, endpointId, dashboardNamespaceReader(zylosDir));
       if (!sessionGroup) throw Object.assign(new Error('chat_question_not_found'), { code: 'chat_question_not_found' });
-      return new ChatAnswers({ store: { db } }).control({ sessionGroup, endpointId: row.endpoint_id, envelope: parsed.envelope });
+      return new ChatAnswers({ store: { db } }).control({ sessionGroup, endpointId, envelope: parsed.envelope });
     } finally { db?.close(); }
   } catch (error) {
     // The channel verified this outbound C4 row before applying its overlay.

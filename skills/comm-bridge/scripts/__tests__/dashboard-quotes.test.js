@@ -42,17 +42,11 @@ test('Existing channel rows retain exact live and replay formatting without refe
     session_group: 'dashboard:dialog', timestamp: '2026-11-11 11:00:00',
   }));
   const scripts = fileURLToPath(new URL('../', import.meta.url)).replace(/\/$/, '');
-  const normalize = (text, row) => {
-    const paths = text.replaceAll(SKILLS_DIR, '$SKILLS').replaceAll(scripts, '$CORE_SCRIPTS');
-    if (row.channel !== 'dashboard' || row.direction !== 'in') return paths;
-    const openingTag = `<current-message c4_id="${row.id}">`;
-    assert.ok(paths.includes(openingTag));
-    return paths.replace(openingTag, '<current-message>');
-  };
+  const normalize = text => text.replaceAll(SKILLS_DIR, '$SKILLS').replaceAll(scripts, '$CORE_SCRIPTS');
   const now = Date.parse('2026-11-11T11:00:00Z');
   const outputs = rows.map(row => ({
-    live: normalize(formatConversation(row, { ownerName: () => 'Owner', lookupQuote, now }), row),
-    replay: normalize(formatConversationsForAgent([row], { spill: false, ownerName: () => 'Owner', lookupQuote }), row),
+    live: normalize(formatConversation(row, { ownerName: () => 'Owner', lookupQuote, now })),
+    replay: normalize(formatConversationsForAgent([row], { spill: false, ownerName: () => 'Owner', lookupQuote })),
   }));
   assert.equal(reads, 0);
   for (const row of rows.filter(row => row.channel === 'dashboard' && row.direction === 'in')) {
@@ -60,7 +54,7 @@ test('Existing channel rows retain exact live and replay formatting without refe
   }
   assert.equal(reads, 0);
   const digest = createHash('sha256').update(JSON.stringify(outputs)).digest('hex');
-  // Captured from the base before Dashboard message IDs with the same rows and path normalization.
+  // Captured from the untouched base with the same rows and path normalization.
   assert.equal(digest, '56c70f67f7c50d7ca9b1f1a80c948ba1a8e27eb54fd2b63d979d473bcb301b09');
   console.log('Channel formatting comparison:', JSON.stringify({ rows: rows.length, outputs: outputs.length * 2,
     referenceReads: reads, sha256: digest }));
