@@ -2264,3 +2264,12 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   /* The close button already clears the search; the browser's own clear mark would be a second ✕ beside it. */
   .conversation-page .conversation-search-row .conversation-search::-webkit-search-cancel-button { -webkit-appearance:none; appearance:none; display:none; }
 }
+/* The owner's annotation message: own words or a small count, then per item a quote block (excerpt folded to three
+   lines) and the comment. */
+.conversation-page .conversation-sent-annotation-view{display:flex;flex-direction:column;gap:10px;min-width:0}
+.conversation-page .conversation-sent-annotation-count{margin:0;font-size:var(--fs-small);color:var(--text-muted)}
+.conversation-page .conversation-sent-annotation-item{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
+.conversation-page .conversation-sent-annotation-quote{margin:0}
+.conversation-sent-annotation-fold{display:block;max-height:calc(3 * var(--lh-label));max-height:3lh;font-size:var(--fs-body-sm);line-height:var(--lh-label);color:var(--text-dim);white-space:pre-wrap;overflow-wrap:anywhere}
+.conversation-page .conversation-sent-annotation-item>.wb-fold-toggle{display:flex;font-size:var(--fs-small)}
+.conversation-sent-annotation-excerpt{display:block}

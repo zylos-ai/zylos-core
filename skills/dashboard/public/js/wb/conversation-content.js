@@ -1,4 +1,7 @@
 import { element } from './plain-text.js';
+import { createFold } from './fold.js';
+import { countLabel } from '../count-label.js';
+import { parseSentAnnotations } from './chat-compose-text.js';
 import { renderChatContent, parseC4Content } from './chat-blocks.js';
 import { createChatAttachment } from './chat-attachments.js';
 import { applyChatView } from './chat-view.js';
@@ -39,7 +42,8 @@ export function renderConversationContent({
   supportsBlock,
   attachmentContext = {},
   showTechnicalDetails = false,
-  chartTimeZone = () => null
+  chartTimeZone = () => null,
+  onLocate = null
 }) {
   const resources = [];
   const attachmentResources = [];
@@ -74,6 +78,10 @@ export function renderConversationContent({
       return resource.node;
     }
   });
+  // The owner's annotation message reads as quotes with comments (`onLocate` is passed for those rows only).
+  const plain = onLocate && plainAttachments && content.querySelector(':scope > .chat-message-text');
+  const sent = plain && parseSentAnnotations(plain.textContent);
+  if (sent) plain.replaceWith(renderSentAnnotations({ document, sent, t, onLocate, resources }));
   const createMarkdown = document.defaultView?.markdownit;
   if (typeof createMarkdown === 'function') {
     const markdown = createMarkdown({
@@ -129,4 +137,41 @@ export function renderConversationContent({
   content.mount = () => { if (destroyed) return; mounted = true; for (const resource of resources) resource.mount(); };
   content.destroy = () => { if (destroyed) return; destroyed = true; for (const resource of resources) resource.destroy(); };
   return content;
+}
+
+/**
+ * An annotation message the owner sent from the web or the App: their own words (or a small "N annotations" label
+ * for the default request), then per item the excerpt as a quote block with who wrote the original and when (folded
+ * to three lines when longer; a click opens the original) and the comment. The heading and c4_id lines written for
+ * the AI are not shown (Howard, Dashboard 2026-11-28). Own words and comments stay `.chat-message-text`, so they get
+ * the Markdown pass like any message text.
+ */
+function renderSentAnnotations({ document, sent, t, onLocate, resources }) {
+  const root = element(document, 'div', undefined, 'conversation-sent-annotation-view');
+  if (sent.text !== null) root.append(element(document, 'p', sent.text, 'chat-message-text'));
+  else root.append(element(document, 'p', countLabel(t, 'chat.annotation.count', sent.items.length), 'conversation-sent-annotation-count'));
+  for (const item of sent.items) {
+    const quote = element(document, 'button', undefined, 'conversation-quote-block conversation-sent-annotation-quote');
+    quote.type = 'button';
+    quote.title = t('chat.quote.jump');
+    const author = item.author === 'AI' ? t('chat.page.ai') : t('chat.annotation.sendMe');
+    const box = element(document, 'span', undefined, 'conversation-sent-annotation-fold');
+    box.append(element(document, 'span', item.excerpt, 'conversation-sent-annotation-excerpt'));
+    quote.append(element(document, 'span', [author, item.stamp].filter(Boolean).join(' · '), 'conversation-quote-block-who'), box);
+    const fold = createFold({ document, box, t, expandKey: 'chat.annotation.more', collapseKey: 'chat.annotation.less' });
+    // A click on a folded excerpt only unfolds it (the fold's own handler); once whole, a click opens the original.
+    let unfolding = false;
+    quote.addEventListener('click', event => { unfolding = box.classList.contains('is-cut') && box.contains(event.target); }, true);
+    quote.addEventListener('click', event => {
+      event.stopPropagation();
+      if (!unfolding) onLocate(item.messageId);
+    });
+    const entry = element(document, 'div', undefined, 'conversation-sent-annotation-item');
+    entry.append(quote, fold.toggle);
+    if (item.comment) entry.append(element(document, 'p', item.comment, 'chat-message-text'));
+    root.append(entry);
+    fold.update();
+    resources.push({ mount: () => fold.update(), destroy: () => fold.destroy() });
+  }
+  return root;
 }
