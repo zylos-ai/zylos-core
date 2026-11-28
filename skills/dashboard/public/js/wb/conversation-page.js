@@ -7,7 +7,7 @@ import { copyText, element, icon } from './plain-text.js';
 import { asDate } from './conversation-time.js';
 import { formatZoned } from './instance-zone.js';
 import { channelIcon, channelIcons } from './board.js';
-import { createConversationState, isOriginConversation, isOwnChatMessage } from './conversation-state.js';
+import { answersQuestion, createConversationState, isOriginConversation, isOwnChatMessage } from './conversation-state.js';
 import { createListPresence } from './conversation-presence.js';
 import { messageState, receiptState } from './chat-delivery-state.js';
 import { renderQuestion } from './chat-questions.js';
@@ -1667,6 +1667,7 @@ export function mountConversationPage({
     const ordered = [],
       ids = new Set();
     for (const row of s.messages) {
+      if (answersQuestion(row)) continue;
       const id = String(row.id);
       ids.add(id);
       const day = dateLabel(row);
@@ -1741,8 +1742,14 @@ export function mountConversationPage({
       .map(row => ({ id: row.id, direction: row.direction, at: asDate(row.timestamp ?? row.created_at ?? row.createdAt)?.getTime() ?? null }));
     const presentation = s.tab === 'mine' && s.activity && !s.activity.unsupported
       ? livePresentation(shown, s.activity.data, { presence: s.activity.data?.presence ?? null }) : null;
-    const anchor = presentation ? messages.get(String(presentation.anchor))?.node : null;
-    const at = anchor ? ordered.indexOf(anchor) : -1;
+    // An answer shows only on its question card: the activity then sits under the next earlier message shown.
+    let at = -1;
+    if (presentation) {
+      for (let index = shown.findIndex(row => String(row.id) === String(presentation.anchor)); index >= 0 && at < 0; index--) {
+        const node = messages.get(String(shown[index].id))?.node;
+        if (node) at = ordered.indexOf(node);
+      }
+    }
     if (!presentation || at < 0) {
       liveItem?.remove();
       liveItem = null;

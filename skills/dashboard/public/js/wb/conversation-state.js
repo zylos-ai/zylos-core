@@ -16,6 +16,12 @@ const sortTime = row => conversationStampMs(row.stamp) || 0;
 const activityOrder = (a, b) => sortTime(b) - sortTime(a) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const received = row => row.direction === 'in' && row.channel && !['void', 'control'].includes(row.channel);
 export const isOwnChatMessage = row => row.direction === 'in' && row.channel === 'dashboard';
+/** An answer given on a question card: the card shows it, so the message list does not (Howard, Dashboard 2026-11-28). */
+export const answersQuestion = row => {
+  if (!isOwnChatMessage(row) || typeof row.content !== 'string') return false;
+  const parsed = parseC4Content(row.content);
+  return parsed.kind === 'envelope' && parsed.envelope.kind === 'answer';
+};
 const errorCode = error => error?.code || error?.payload?.error?.code;
 const query = values => new URLSearchParams(Object.entries(values).filter(([, v]) => v !== null && v !== undefined)).toString();
 export function createConversationState({

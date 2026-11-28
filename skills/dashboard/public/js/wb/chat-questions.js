@@ -22,6 +22,13 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
     ? question.status : 'unavailable';
   root.dataset.interruptId = envelope?.interruptId || '';
   root.dataset.lifecycle = lifecycle;
+  const actionUnavailable = lifecycle === 'answered' && (question.actionError ||
+    (question.action && (question.action.id !== question.answerId || !validateAnswer(question.action, envelope, { historical: true }))) ||
+    (formState.action && (formState.action.id !== question.answerId || !validateAnswer(formState.action, envelope, { historical: true }))));
+  // An answered choice or confirmation stays a card with the pick checked, so it needs no "answered" or
+  // "delivered" words (Howard, Dashboard 2026-11-28).
+  const settled = lifecycle === 'answered' && !actionUnavailable && ['choice', 'confirmation'].includes(block.type)
+    ? question.action?.payload ?? null : null;
   if (readOnlyExternal) root.append(node('p', t('chat.question.externalReadOnly'), 'chat-question-status'));
   // Another conversation's question shown in the Origin conversation: not answered from the card; the user replies
   // in the Origin conversation, or answers it in its own conversation after switching back to multi. Its state
@@ -29,14 +36,16 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
   else if (readOnlyOther) root.append(node('p', t('chat.question.otherConversationReadOnly'), 'chat-notice'));
   else {
     if (statePendingPage && !question) root.append(node('p', t('chat.question.stateNotLoaded'), 'chat-question-status'));
-    else if (valid || stateAvailable) root.append(node('p', t('chat.question.' + lifecycle), 'chat-question-status'));
+    else if ((valid || stateAvailable) && !settled) root.append(node('p', t('chat.question.' + lifecycle), 'chat-question-status'));
     if (!stateAvailable) root.append(node('p', t(valid ? 'chat.question.stateUnavailable' : 'chat.questions.unavailable'), 'chat-notice'));
   }
   const receipt = formState.receipt ?? (valid ? question.delivery : null);
   if (receipt) {
     const deliveryState = receipt.stored === false ? 'not_stored' : receiptState(receipt);
-    const label = node('p', t('chat.state.' + deliveryState), 'chat-message-status');
-    label.setAttribute('role', 'status'); root.append(label);
+    if (!(settled && ['delivered', 'stored'].includes(deliveryState))) {
+      const label = node('p', t('chat.state.' + deliveryState), 'chat-message-status');
+      label.setAttribute('role', 'status'); root.append(label);
+    }
   }
   const ended = ['chat_question_not_paused', 'chat_answer_conflict'].includes(formState.error);
   if (formState.error && (ended || receipt?.stored !== true)
@@ -46,9 +55,6 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
     const error = node('p', t(errorKey), 'chat-error');
     error.setAttribute('role', 'alert'); root.append(error);
   }
-  const actionUnavailable = lifecycle === 'answered' && (question.actionError ||
-    (question.action && (question.action.id !== question.answerId || !validateAnswer(question.action, envelope, { historical: true }))) ||
-    (formState.action && (formState.action.id !== question.answerId || !validateAnswer(formState.action, envelope, { historical: true }))));
   if (actionUnavailable) root.append(node('p', t('chat.question.actionUnavailable'), 'chat-error'));
   const writable = canWrite && !readOnlyExternal && !readOnlyOther && valid && !actionUnavailable && typeof onSubmit === 'function';
   const controls = [];
@@ -80,17 +86,29 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
         context: { messageId: envelope.messageId, blockId: block.id }, payload };
     void submit(action);
   };
-  if (lifecycle === 'answered' && !actionUnavailable && question.action?.payload) {
-    const payload = question.action.payload, data = block.data;
-    const shown = payload.freeText !== undefined ? payload.freeText
-      : payload.selected ? payload.selected.map(id => data.options?.find(option => option.id === id)?.label ?? id).join('、')
-      : payload.outcome ? (payload.outcome === 'confirm' ? data.confirmLabel || t('chat.question.confirm') : data.cancelLabel || t('chat.question.cancel'))
-      : null;
-    if (shown) {
-      const line = node('p', undefined, 'chat-question-answer');
-      line.append(node('span', t('chat.question.yourAnswer'), 'chat-question-answer-label'), node('span', shown));
-      root.append(line);
+  if (settled) {
+    const data = block.data, multiple = block.type === 'choice' && data.selection === 'multiple';
+    const items = block.type === 'choice'
+      ? data.options.map(option => ({ label: option.label, description: option.description, picked: !!settled.selected?.includes(option.id) }))
+      : [{ label: data.confirmLabel || t('chat.question.confirm'), picked: settled.outcome === 'confirm' },
+        { label: data.cancelLabel || t('chat.question.cancel'), picked: settled.outcome === 'cancel' }];
+    if (settled.freeText !== undefined) items.push({ label: t('chat.question.otherAnswer'), description: settled.freeText, picked: true });
+    const group = node('div', undefined, 'chat-question-options');
+    group.dataset.settled = 'true';
+    for (const item of items) {
+      const label = node('label', undefined, 'chat-question-option'), input = node('input');
+      input.type = multiple ? 'checkbox' : 'radio'; input.checked = item.picked; input.disabled = true;
+      label.append(input, node('span', item.label));
+      if (item.description) label.append(node('span', item.description, 'chat-notice'));
+      group.append(label);
     }
+    // The static option list would repeat these rows.
+    if (block.type === 'choice') root.dataset.choiceControls = 'true';
+    root.append(group);
+  } else if (lifecycle === 'answered' && !actionUnavailable && question.action?.payload?.freeText !== undefined) {
+    const line = node('p', undefined, 'chat-question-answer');
+    line.append(node('span', t('chat.question.yourAnswer'), 'chat-question-answer-label'), node('span', question.action.payload.freeText));
+    root.append(line);
   }
   const retryAccepted = lifecycle === 'answered' && question.answerId === formState.action?.id && receipt?.retryAllowed === true;
   if (writable && formState.action && validateAnswer(formState.action, envelope) && retryAccepted) {
