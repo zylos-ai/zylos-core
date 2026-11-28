@@ -11,6 +11,19 @@ function fixture(t) {
   const cps = () => db.prepare('SELECT * FROM checkpoints ORDER BY id').all();
   return { db, store, seed, cps };
 }
+
+test('a Dashboard reply address clears the pending startup reply for its conversation', t => {
+  const { db, store } = fixture(t);
+  const insert = db.prepare(`INSERT INTO conversations
+    (id, timestamp, direction, channel, endpoint_id, content, status, session_group)
+    VALUES (?, '2026-01-01 12:00:00', ?, 'dashboard', ?, ?, 'delivered', 'dash:dialog')`);
+  const since = '2026-01-01T11:45:00Z';
+  insert.run(1, 'in', 'dialog', 'Question');
+  assert.equal(store.hasPendingStartupReply('dash:dialog', { since }), true);
+  insert.run(2, 'out', 'dialog|msg:1', 'Answer');
+  assert.equal(store.hasPendingStartupReply('dash:dialog', { since }), false);
+});
+
 test('checkpoint rejects gap, regression, per-group head overflow and invalid summaries without writes', t => {
   const { store, seed, cps } = fixture(t);
   seed(9); seed(10, 'foo', 'pending'); seed(20); seed(100, 'bar');
