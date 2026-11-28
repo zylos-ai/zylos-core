@@ -60,6 +60,34 @@ test('fleet proxy injects session token for API and keeps token out of client re
   }
 });
 
+// Real Fleet proxy with an injected upstream response. Run for Fleet read
+// permissions or relay projection changes. Uses no sockets, services or database.
+test('fleet proxy omits upstream chat summaries for a read-scope caller', async () => {
+  const agent = { name: 'Remote', base_url: 'https://producer.invalid' };
+  const chat = {
+    latest: { at: '2026-11-28T02:03:04.000Z', title: 'Private chat', preview: 'Private preview' },
+    unread_conversations: 1,
+  };
+  const proxy = new FleetProxy({
+    config: { fleet: { agents: [agent] } },
+    poller: { getSessionToken: async () => 'remote-admin-token' },
+    authGate: { resolveAuthContext: req => req._authContext },
+    fetch: async (url, options) => {
+      assert.equal(String(url), 'https://producer.invalid/api/fleet');
+      assert.equal(options.headers.authorization, 'Bearer remote-admin-token');
+      return Response.json({ items: [{ name: 'Remote', chat }], nextCursor: null });
+    }
+  });
+  const req = { method: 'GET', headers: {}, _authContext: { kind: 'api', scope: 'read' } };
+  const res = {
+    writeHead(status) { this.status = status; },
+    end(body) { this.body = JSON.parse(body); },
+  };
+  assert.equal(await proxy.handle(req, res, new URL('https://hub.invalid/fleet/Remote/api/fleet')), true);
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { items: [{ name: 'Remote' }], nextCursor: null });
+});
+
 test('fleet Observer cookie writes require the exact consumer Origin before any upstream write', async () => {
   let forwarded = 0;
   let tokenFetches = 0;
