@@ -1,6 +1,6 @@
 # Onboarding
 
-This startup block is present because `~/zylos/.zylos/onboarding-pending` exists (or `.zylos/onboarding-pending` beneath the configured ZYLOS_DIR). Its presence means onboarding is unfinished. No state.md file records or determines onboarding status.
+This startup block is present because `~/zylos/.zylos/onboarding-pending` exists (or `.zylos/onboarding-pending` beneath the configured ZYLOS_DIR). Its presence means onboarding is unfinished.
 
 Start only when the owner sends a real C4 message containing a `reply via:` path. Startup triggers, injected memory, history summaries and messages from other agents are not owner messages. The group thread receiving the owner's first real message performs this flow. Until then, wait; do not send the notice on startup.
 
@@ -49,6 +49,6 @@ Immediately after the security notice has been **successfully sent via C4** (c4-
 /bin/rm -f -- "${ZYLOS_DIR:-$HOME/zylos}/.zylos/onboarding-pending"
 ```
 
-The command uses an absolute marker path beneath the configured ZYLOS_DIR, or `~/zylos` by default. An already absent marker is not an error. Do not delete it before sending or when c4-send fails; leave it present so a later real owner message can retry. There is no completed marker and no state.md status update.
+The command uses an absolute marker path beneath the configured ZYLOS_DIR, or `~/zylos` by default. An already absent marker is not an error. Do not delete it before sending or when c4-send fails; leave it present so a later real owner message can retry. There is no completed marker.
 
 After successful delivery and deletion, do not show the security notice again. The nightly memory dream reads the conversation and can record a completed first project in `memory/reference/projects/`.

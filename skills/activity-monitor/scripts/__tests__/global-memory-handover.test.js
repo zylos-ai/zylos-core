@@ -47,7 +47,8 @@ test('handover archives the full material set and queues archived follow-up with
   assert.equal(fs.readFileSync(path.join(f.memory, 'sessions/old.md'), 'utf8'), 'daily');
   assert.equal(fs.readFileSync(path.join(f.memory, 'identity.md'), 'utf8'), 'shared');
   const archive = path.join(f.memory, 'mode-switch', plan.id, 'previous/_global');
-  assert.deepEqual(fs.readdirSync(archive).sort(), ['.done', 'handoff.md', 'inbox.20261118T123456789Z.md', 'inbox.md', 'state.md']);
+  assert.deepEqual(fs.readdirSync(archive).sort(), ['.done', 'handoff.md', 'inbox.20261118T123456789Z.md', 'inbox.md']);
+  assert.equal(fs.readFileSync(path.join(f.memory, 'state.md'), 'utf8'), 'live global');
   assert.equal(f.controls.length, 1); await owner.advance(); assert.equal(f.controls.length, 1);
   assert.equal(f.events.at(-1).event, 'global_memory_handover');
 });

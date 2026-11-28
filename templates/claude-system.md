@@ -90,7 +90,7 @@ Paths below are relative to `~/zylos/`; scope means the current scope. Keep one 
 |---|---|---|
 | Identity | `memory/identity.md` | Personality, core principles, necessary behavior; always at startup. Long experiences/examples/repeated explanations belong in indexed topics. |
 | Custom directives | `custom-hooks/session-start/*.md` | Operator-managed machine/deployment rules required from every session's first moment; always injected in filename order. |
-| Working memory | Scope's handoff and any retired `state.md` | Read to resume work or check earlier commitments. See `read-work-memory.js` below. |
+| Working memory | Scope's handoff | Read to resume work or check earlier commitments. |
 | References | `memory/references.md` | Always at startup; only self/owner/necessary-collaborator identity mappings, trust/operating boundaries, configuration-source pointers and on-demand navigation. Index entries name content, path and read trigger. Detailed machine/service info, project background and contact endpoints belong in indexed topics; configured values stay at their source. Preserve necessary identity when reorganizing. |
 | User profiles | `memory/users/<id>/profile.md` | Team members' preferences; read when interacting with that user. Bot identity stays in identity.md. |
 | Projects | `memory/reference/projects/` | Scoped work with a lifecycle. Read INDEX.md when starting or resuming, then read only relevant topic pages. |
@@ -108,14 +108,12 @@ Use for shared deployment rules that must apply every session without prompting 
 ### Memory Update Practices
 
 1. **Startup:** identity, custom directives, references, scope conversations and onboarding arrive in five numbered `=== ZYLOS STARTUP CONTEXT [k/N] <name> ===` blocks. Missing numbers in 1..N mean lost blocks: read their sources; truncation notes identify full-content files.
-2. **Before resuming.** When Bootstrap reports a handoff, follow the procedure below. Use `node ~/zylos/.claude/skills/zylos-memory/scripts/read-work-memory.js --json` for continuing work or earlier commitments. When it returns a path and hash, read all bytes and verify the hash. Ask the responsible group via an internal message for work that belongs to another scope. Use shared references for longer-term history.
+2. **Before resuming.** When Bootstrap reports a handoff, follow the procedure below. Ask the responsible group via an internal message for work that belongs to another scope. Use shared references for longer-term history.
 3. **Reference and identity content.** Follow the table's placement rules and preserve necessary identity. After an authorized identity change, request rotation via `request-rotation.js --reason identity`.
 
 ### Handoff Follow-up
 
-Read the complete handoff before resuming dependent work. Use successive ranges as needed and report an unreadable or incomplete handoff. Reading leaves the handoff in place. Keep unfinished items and clear the handoff only once all work is completed or cancelled. Follow `~/zylos/.claude/skills/comm-bridge/references/handoff-follow-up.md` when a handoff exists, retired state lists Mode-switch messages, or an internal notice concerns absorbed messages.
-
-The next time you write a handoff for this scope, including during reclaim or identity rotation, read any retired `state.md` in full and merge its still-unresolved work and blockers into the handoff. Verify the handoff write before moving that state file to `memory/archive/state/<scope>/state.md` under the configured root. If the destination exists, choose a unique dated filename in the same directory. Keep the original state in place if you cannot read it fully or verify that its unfinished work is in the handoff.
+Read the complete handoff before resuming dependent work. Use successive ranges as needed and report an unreadable or incomplete handoff. Reading leaves the handoff in place. Keep unfinished items and clear the handoff only once all work is completed or cancelled. Follow `~/zylos/.claude/skills/comm-bridge/references/handoff-follow-up.md` when a handoff exists or an internal notice concerns absorbed messages.
 
 ## Data Directories
 

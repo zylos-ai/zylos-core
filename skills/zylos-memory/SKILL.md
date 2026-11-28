@@ -18,11 +18,7 @@ Use the current scope's `handoff.md` and recent conversations. Read the handoff
 completely before relying on it. For cross-group work, ask the owning thread
 via the internal channel. Do not change another group's files.
 
-During the first handoff after an upgrade, use `read-work-memory.js --json` to
-read any historical state for the current scope. Merge unresolved items into
-its handoff, save it atomically, verify the contents, and then archive the old
-state. The system instructions describe the scope-specific paths. Existing
-session logs remain accessible and historical inboxes are under
+Existing session logs remain accessible. Historical inboxes are under
 `memory/archive/inbox/`.
 
 ## Shared memory

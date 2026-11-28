@@ -86,7 +86,7 @@ describe('c4-session-init', () => {
 
       const { stdout, status } = cli([], { ...env, ZYLOS_SESSION_GROUP: group });
       assert.equal(status, 0);
-      assert.ok(stdout.includes(`Scope: ${group}. Working memory is not injected.`));
+      assert.ok(stdout.includes(`Scope: ${group}.`));
       if (present) {
         assert.ok(stdout.includes(`Before resuming work, read ${groupFile} in full, using successive file ranges when needed. Reading does not consume it; retain unfinished items.`));
         assert.ok(stdout.includes(path.join(tmpDir, '.claude/skills/comm-bridge/references/handoff-follow-up.md')));

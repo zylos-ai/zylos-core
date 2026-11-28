@@ -38,7 +38,7 @@ function deps(calls, extras={}) {
     ...extras,
   };
 }
-test('tail archives both inbox layouts before starting services and preserves user-owned state',async t=>{
+test('tail archives both inbox layouts before starting services',async t=>{
   const ctx=fixture(t),calls=[];
   const memory=path.join(ctx.zylosDir,'memory');
   const write=(relative,bytes)=>{
@@ -47,8 +47,6 @@ test('tail archives both inbox layouts before starting services and preserves us
     fs.writeFileSync(file,bytes);
     return file;
   };
-  const state='# Old user-owned state\n';
-  write('state.md',state);
   write('sessions/current.md','legacy bytes');
   const current=write('inbox.md','single inbox');
   const groupOrigin=write('session-groups/origin/inbox.md','multi Origin inbox');
@@ -56,7 +54,6 @@ test('tail archives both inbox layouts before starting services and preserves us
   const segmentName='inbox.20261019T053000000Z-1.md';
   const segmentBytes=Buffer.from([0xef,0xbb,0xbf,0x61,0x0d,0x0a,0xff]);
   const segment=write(`session-groups/telegram:team/${segmentName}`,segmentBytes);
-  const groupState=write('session-groups/telegram:team/state.md',state);
   const groupLog=write('session-groups/telegram:team/sessions/2026-10-19.md','old group log');
   const unrelated=write('session-groups/telegram:team/inbox.md.bak','unrelated backup');
   const existing=write('archive/inbox/origin/inbox.md','preexisting archive');
@@ -95,8 +92,6 @@ test('tail archives both inbox layouts before starting services and preserves us
   assert.deepEqual(calls,['thresholds','ensure','rotate','start','verify','dashboard','restart']);
   assert.equal(result.steps.find(step=>step.name==='archive_legacy_inbox')?.status,'done');
   assert.equal(result.steps.find(step=>step.name==='archive_retired_runtime_files')?.status,'done');
-  assert.equal(fs.readFileSync(path.join(memory,'state.md'),'utf8'),state);
-  assert.equal(fs.readFileSync(groupState,'utf8'),state);
   assert.equal(fs.readFileSync(groupLog,'utf8'),'old group log');
   assert.equal(fs.readFileSync(unrelated,'utf8'),'unrelated backup');
 
@@ -164,6 +159,67 @@ test('archive failures leave files for the next upgrade while other files and se
   assert.equal(fs.readFileSync(path.join(agentsArchive,'zylos-global-sync.md'),'utf8'),'blocked agent');
   assert.equal(fs.readFileSync(path.join(archive,'saved-user-file'),'utf8'),'existing user file in archive');
 });
+test('edited state reaches the handoff before archival and remains available when handoff verification fails', async t => {
+  const ctx = fixture(t);
+  const group = 'telegram:team';
+  const sourceDir = path.join(ctx.zylosDir, 'memory/session-groups', group);
+  const source = path.join(sourceDir, 'state.md');
+  const handoff = path.join(sourceDir, 'handoff.md');
+  const archived = path.join(ctx.zylosDir, 'memory/archive/state', group, 'state.md');
+  const state = Buffer.from('\ufeff# Old working state\r\n\r\n- An unfinished item');
+  const original = Buffer.from('# Existing handoff\r\n');
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.writeFileSync(source, state);
+  fs.writeFileSync(handoff, original);
+  const cutoff = new Date('2026-11-19T00:00:00Z');
+  fs.utimesSync(handoff, cutoff, cutoff);
+
+  let replaced = false;
+  const rename = fs.renameSync;
+  const open = fs.openSync;
+  const renameFault = t.mock.method(fs, 'renameSync', (from, to) => {
+    rename(from, to);
+    if (to === handoff) replaced = true;
+  });
+  const readbackFault = t.mock.method(fs, 'openSync', (file, ...options) => {
+    if (file === handoff && replaced) throw Object.assign(Error('handoff readback denied'), { code: 'EACCES' });
+    return open(file, ...options);
+  });
+  let starts = 0;
+  const startServices = () => { starts++; };
+  const failed = await completeUpgradeFinalization(ctx, deps([], { startServices }));
+  assert.equal(failed.success, true);
+  assert.equal(starts, 1);
+  assert.match(failed.warnings.join('\n'), /legacy state for telegram:team .*handoff readback denied/);
+  assert.deepEqual(fs.readFileSync(source), state);
+  assert.equal(fs.existsSync(archived), false);
+
+  renameFault.mock.restore();
+  readbackFault.mock.restore();
+  const carried = fs.readFileSync(handoff);
+  const link = fs.linkSync;
+  let archiveChecked = false;
+  t.mock.method(fs, 'linkSync', (from, to) => {
+    if (from === source) {
+      archiveChecked = true;
+      assert.deepEqual(fs.readFileSync(handoff), carried);
+    }
+    return link(from, to);
+  });
+  const retried = await completeUpgradeFinalization({ ...ctx, steps: [], runtimeWarnings: [] }, deps([], { startServices }));
+  assert.equal(retried.success, true);
+  assert.equal(starts, 2);
+  assert.deepEqual(retried.warnings, []);
+  assert.equal(archiveChecked, true);
+  assert.deepEqual(fs.readFileSync(handoff), carried);
+  assert.deepEqual(carried.subarray(0, original.length), original);
+  assert.match(carried.subarray(original.length).toString('utf8'), /## Carried over from retired state\.md \(\d{4}-\d{2}-\d{2}\)/);
+  assert.deepEqual(carried.subarray(-state.length), state);
+  assert.equal(fs.statSync(handoff).mtimeMs, cutoff.getTime());
+  assert.deepEqual(fs.readFileSync(archived), state);
+  assert.equal(fs.existsSync(source), false);
+});
+
 test('completed finalization starts the original service set',async t=>{
   const ctx=fixture(t),calls=[];
   const d=deps(calls);
