@@ -223,10 +223,11 @@ function pageText(title, status, date, key = 'Shared Key', body = 'Body') {
 }
 
 test('candidate search ranks shared identifiers by rarity and ignores ordinary numbers', () => {
-  const pages = Array.from({ length: 5 }, (_, index) => ({
+  const pages = Array.from({ length: 6 }, (_, index) => ({
     relative: `page-${index}.md`,
-    text: index === 4 ? '# Page\n\n#1638 ZYLO-397 beta.17 2442 8ed23d0 v0.8.2' : '# Page\n\n#1638',
+    text: '# Page\n\nZYLO-397 beta.17 2442 8ed23d0 v0.8.2',
   }));
+  pages.push({ relative: 'rare.md', text: '# Page\n\n#1638' });
   pages.push({ relative: 'numbers.md', text: '# Page\n\n2026-11-28 11:30 2 24 v2 5m 24h' });
   const search = candidatePages(pages);
   assert.deepEqual(search({
@@ -234,10 +235,10 @@ test('candidate search ranks shared identifiers by rarity and ignores ordinary n
     text: 'beta.17 2442 8ed23d0 2026-11-28 11:30 2 24 v2 5m 24h',
     source: 'v0.8.2',
   }), [
-    'page-4.md (#1638, zylo 397, beta.17, 2442, 8ed23d0, v0.8.2)',
-    'page-0.md (#1638)',
-    'page-1.md (#1638)',
-    'page-2.md (#1638)',
+    'rare.md (#1638)',
+    'page-0.md (zylo 397, beta.17, 2442, 8ed23d0, v0.8.2)',
+    'page-1.md (zylo 397, beta.17, 2442, 8ed23d0, v0.8.2)',
+    'page-2.md (zylo 397, beta.17, 2442, 8ed23d0, v0.8.2)',
   ]);
 });
 
