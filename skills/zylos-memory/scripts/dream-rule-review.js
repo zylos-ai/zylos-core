@@ -50,7 +50,7 @@ export function ruleReviewMaterial(root, candidates, extracted, conversations) {
       const truncated = chars.length > MAX_MESSAGE_CHARS;
       return { id, group, direction: row.direction, text: chars.slice(0, MAX_MESSAGE_CHARS).join(''), truncated };
     });
-    const matches = matchRuleLines({ ...candidate, source: [candidate.source, ...c4_ids.map(id => `#${id}`)].join(' ') }, ruleLines);
+    const matches = matchRuleLines({ ...candidate, source: [candidate.source, ...c4_ids].join(' ') }, ruleLines);
     return {
       ...candidate,
       destination: DESTINATIONS[candidate.destination],

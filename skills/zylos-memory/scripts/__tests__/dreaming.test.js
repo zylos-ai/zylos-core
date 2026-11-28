@@ -197,19 +197,19 @@ test('merge process failure keeps all coverage and alerts once during consecutiv
 test('a completed dream queues the rule review for Origin and publishes the diary and repaired pages', async t => {
   const { root, read, write } = fixture(t);
   const db = fakeDatabase([raw('origin', [
-    message(1, '<smart-mode>omit this</smart-mode>Owner message for #1673'),
-    message(2, 'Another source ' + '😀'.repeat(4000)),
+    message(96383, '<smart-mode>omit this</smart-mode>Owner message about fixtures'),
+    message(96384, 'Another source ' + '😀'.repeat(4000)),
   ])]);
-  write('ZYLOS.md', 'Existing rules\n- Rule from #1673\n');
-  write('memory/session-groups/origin/rules.md', '- Group rule from #1673\n');
-  write('memory/reference/preferences.md', '- Preference from #1673\n');
-  write('.claude/skills/example/SKILL.md', '- Skill rule from #1673\n');
+  write('ZYLOS.md', 'Existing rules\n- Rule from c4 96383\n');
+  write('memory/session-groups/origin/rules.md', '- Group rule from c4 96383\n');
+  write('memory/reference/preferences.md', '- Preference from C4 #96383\n');
+  write('.claude/skills/example/SKILL.md', '- Skill rule from c4 96383\n');
   const relative = 'reference/projects/malformed.md';
   const legacyLog = '# Work log\n\nLate entry after the previous snapshot.';
   const diary = '# Day\n' + 'd'.repeat(25 * 1024);
   const rules = [
-    ruleCandidate('Care for fixtures #1673', 'C4 #1', [1]),
-    ruleCandidate('Keep fixtures small', 'C4 #2', [2]),
+    ruleCandidate('Care for fixtures', 'Owner conversation', [96383]),
+    ruleCandidate('Keep fixtures small', 'Owner conversation', [96384]),
   ];
   const notices = [], controls = [];
   let repaired = 0;
@@ -224,8 +224,8 @@ test('a completed dream queues the rule review for Origin and publishes the diar
       }
       if (stage === 'stage2') {
         assert.match(input, /^Date: 2026-11-30\n/);
-        assert.match(input, /c4_ids: \[1\]/);
-        assert.match(input, /c4_ids: \[2\]/);
+        assert.match(input, /c4_ids: \[96383\]/);
+        assert.match(input, /c4_ids: \[96384\]/);
         write('memory/' + relative, pageText('Broken', 'done', '2026-11-21'));
         write('memory/sessions/2026-11-30.md', legacyLog);
         return JSON.stringify({ ...empty, diary, rule_candidates: rules });
@@ -242,7 +242,7 @@ test('a completed dream queues the rule review for Origin and publishes the diar
   });
   assert.equal(result.failed, false);
   assert.equal(repaired, 1);
-  assert.equal(db.getCoverageEnd('origin'), 1);
+  assert.equal(db.getCoverageEnd('origin'), 96384);
   assert.equal(read('memory/sessions/2026-11-30.md'), `${legacyLog}\n\n${diary}`);
   assert.equal(notices.length, 0);
   assert.equal(controls.length, 1);
@@ -257,18 +257,18 @@ test('a completed dream queues the rule review for Origin and publishes the diar
   assert.equal(first.source, rules[0].source);
   assert.equal(first.owner_stated, true);
   assert.match(first.destination, /ZYLOS\.md/);
-  assert.deepEqual(first.c4_ids, [1]);
+  assert.deepEqual(first.c4_ids, [96383]);
   assert.deepEqual(first.originalMessages, [
-    { id: 1, group: 'origin', direction: 'out', text: 'Owner message for #1673', truncated: false },
+    { id: 96383, group: 'origin', direction: 'out', text: 'Owner message about fixtures', truncated: false },
   ]);
   assert.deepEqual(first.matchingRuleLines, [
-    { file: 'ZYLOS.md', line: 2, text: '- Rule from #1673' },
-    { file: 'memory/session-groups/origin/rules.md', line: 1, text: '- Group rule from #1673' },
-    { file: 'memory/reference/preferences.md', line: 1, text: '- Preference from #1673' },
-    { file: '.claude/skills/example/SKILL.md', line: 1, text: '- Skill rule from #1673' },
+    { file: 'ZYLOS.md', line: 2, text: '- Rule from c4 96383' },
+    { file: 'memory/session-groups/origin/rules.md', line: 1, text: '- Group rule from c4 96383' },
+    { file: 'memory/reference/preferences.md', line: 1, text: '- Preference from C4 #96383' },
+    { file: '.claude/skills/example/SKILL.md', line: 1, text: '- Skill rule from c4 96383' },
   ]);
   assert.equal(second.text, rules[1].text);
-  assert.equal(second.originalMessages[0].id, 2);
+  assert.equal(second.originalMessages[0].id, 96384);
   assert.equal(second.originalMessages[0].truncated, true);
   assert.equal([...second.originalMessages[0].text].length, 4000);
   assert.equal(second.matchingRuleLines, 'none');
