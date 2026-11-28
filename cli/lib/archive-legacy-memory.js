@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
+import { templateHashes } from '../../skills/activity-monitor/scripts/global-memory-handover.js';
 import { parseSessionGroup } from '../../skills/comm-bridge/scripts/c4-session-group.js';
 import { withMemoryLock } from '../../skills/zylos-memory/scripts/memory-lock.js';
 import { groupRunDir } from './session-group-paths.js';
@@ -48,54 +50,120 @@ function moveFileToArchive(sourceDir, archiveDir, name) {
     }
     maintenance.fsyncDir(archiveDir);
     fs.unlinkSync(source);
-    maintenance.fsyncDir(sourceDir);
+    try { maintenance.fsyncDir(sourceDir); }
+    catch (error) {
+      // Keep the source available for retry if the final directory sync fails.
+      fs.linkSync(target, source);
+      throw error;
+    }
     return;
   }
 }
 
-const inboxEntries = directory => readDirectory(directory).filter(entry => entry.isFile() && inboxName.test(entry.name));
-
-/** Called after the compensation cutoff and before services start. */
-export async function archiveLegacyInbox(zylosDir) {
+async function archiveLegacyScopedFiles(zylosDir, kind, fileNames, beforeArchive = () => {}) {
+  const noFiles = { status: 'skipped', message: `No legacy ${kind} files`, failures: [] };
   let memory;
   try { memory = fs.realpathSync(path.join(zylosDir, 'memory')); }
   catch (error) {
-    if (error.code === 'ENOENT') return { status: 'skipped', message: 'No legacy inbox files', failures: [] };
-    return { status: 'skipped', failures: [`legacy inbox directory (${error.message})`] };
+    if (error.code === 'ENOENT') return noFiles;
+    return { status: 'skipped', failures: [`legacy ${kind} directory (${error.message})`] };
   }
   const groupsDir = path.join(memory, 'session-groups');
   const failures = [];
   let moved = 0;
   const archiveScope = async (group, sourceDir) => {
     try {
-      if (!inboxEntries(sourceDir).length) return;
+      if (!fileNames(sourceDir).length) return;
       await withMemoryLock(groupRunDir(group, { ZYLOS_DIR: zylosDir }), () => {
-        const entries = inboxEntries(sourceDir);
-        if (!entries.length) return;
+        const names = fileNames(sourceDir);
+        if (!names.length) return;
         const archive = ensureArchiveDirectory(memory, 'archive');
-        const inbox = ensureArchiveDirectory(archive, 'inbox');
-        const destination = ensureArchiveDirectory(inbox, group);
-        for (const { name } of entries) {
+        const destination = ensureArchiveDirectory(ensureArchiveDirectory(archive, kind), group);
+        for (const name of names) {
+          beforeArchive(sourceDir, name);
           moveFileToArchive(sourceDir, destination, name);
           moved++;
         }
       });
     } catch (error) {
-      failures.push(`legacy inbox for ${group} (${error.message})`);
+      failures.push(`legacy ${kind} for ${group} (${error.message})`);
     }
   };
   await archiveScope('origin', memory);
   let groups = [];
   try { groups = readDirectory(groupsDir); }
-  catch (error) { failures.push(`legacy inbox group directory (${error.message})`); }
+  catch (error) { failures.push(`legacy ${kind} group directory (${error.message})`); }
   for (const entry of groups) {
     if (entry.isDirectory() && parseSessionGroup(entry.name)) {
       await archiveScope(entry.name, path.join(groupsDir, entry.name));
     }
   }
-  if (moved) return { message: `Archived ${moved} legacy inbox file(s)`, failures };
+  if (moved) return { message: `Archived ${moved} legacy ${kind} file(s)`, failures };
   if (failures.length) return { status: 'skipped', failures };
-  return { status: 'skipped', message: 'No legacy inbox files', failures };
+  return noFiles;
+}
+
+/** Called after the compensation cutoff and before services start. */
+export function archiveLegacyInbox(zylosDir) {
+  return archiveLegacyScopedFiles(zylosDir, 'inbox', directory => readDirectory(directory)
+    .filter(entry => entry.isFile() && inboxName.test(entry.name)).map(entry => entry.name));
+}
+
+function readRegularFile(file) {
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw Error(`Expected a regular file at ${file}`);
+    return { bytes: fs.readFileSync(fd), stat };
+  } finally { fs.closeSync(fd); }
+}
+
+function carryStateIntoHandoff(sourceDir, name) {
+  const state = readRegularFile(path.join(sourceDir, name));
+  const hash = createHash('sha256').update(state.bytes.toString('utf8').replace(/\s/gu, '')).digest('hex');
+  if (templateHashes.has(hash)) return;
+
+  const file = path.join(sourceDir, 'handoff.md');
+  let handoff;
+  try { handoff = readRegularFile(file); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+
+  // Use the source date so an interrupted upgrade recognizes its existing section on retry.
+  const date = state.stat.mtime.toISOString().slice(0, 10);
+  const section = Buffer.concat([
+    Buffer.from(`## Carried over from retired state.md (${date})\n\n` +
+      'Check each item against its current record; keep unfinished items in the next handoff.\n\n'),
+    state.bytes,
+  ]);
+  const existing = handoff?.bytes ?? Buffer.alloc(0);
+  let expected = existing;
+  if (!existing.includes(section)) {
+    expected = Buffer.concat([existing, Buffer.from(existing.length ? '\n\n' : ''), section]);
+    const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`;
+    const fd = fs.openSync(temporary, 'wx', 0o600);
+    try {
+      try {
+        fs.writeFileSync(fd, expected);
+        // Startup uses the handoff mtime as its conversation history cutoff.
+        const timestamp = handoff?.stat ?? state.stat;
+        fs.futimesSync(fd, timestamp.atimeMs / 1000, timestamp.mtimeMs / 1000);
+        maintenance.fsyncFd(fd);
+      } finally { fs.closeSync(fd); }
+      fs.renameSync(temporary, file);
+    } finally {
+      try { fs.unlinkSync(temporary); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+  }
+  if (!readRegularFile(file).bytes.equals(expected)) throw Error(`Could not verify migrated handoff at ${file}`);
+  maintenance.fsyncDir(sourceDir);
+}
+
+/** Preserve edited state in its scope handoff before retiring the old file. */
+export function archiveLegacyState(zylosDir) {
+  const name = 'state.md';
+  return archiveLegacyScopedFiles(zylosDir, 'state', directory =>
+    statIfPresent(path.join(directory, name)) ? [name] : [], carryStateIntoHandoff);
 }
 
 /** Archive adapter-owned assets without touching other project files. */

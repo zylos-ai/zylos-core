@@ -25,7 +25,7 @@ import { recovery, protectedDataReady, protectedSuccess, maintenance, maintenanc
 import { loadSnapshotManifest } from './upgrade-snapshot-manifest.js';
 import { updateZylosConfigLocked } from './config.js';
 import { createMigration } from './memory-migration.js';
-import { archiveRetiredRuntimeFiles, archiveLegacyInbox } from './archive-legacy-memory.js';
+import { archiveRetiredRuntimeFiles, archiveLegacyInbox, archiveLegacyState } from './archive-legacy-memory.js';
 import { requestRuntimeRestart } from './request-runtime-restart.js';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -1017,8 +1017,9 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
       zylosDir:root,updateConfig:deps.updateConfig || updateZylosConfigLocked}));
     await run(5,'memory_migration_ensure',()=> (deps.ensureMemoryMigration || (()=>createMigration({env:{...process.env,ZYLOS_DIR:root}}).ensure({createdBy:'upgrade'})))());
     const inboxArchive=await run(5,'archive_legacy_inbox',()=>archiveLegacyInbox(root));
+    const stateArchive=await run(5,'archive_legacy_state',()=>archiveLegacyState(root));
     const runtimeArchive=await run(5,'archive_retired_runtime_files',()=>archiveRetiredRuntimeFiles(root));
-    const archiveFailures=[...inboxArchive.failures,...runtimeArchive.failures];
+    const archiveFailures=[...inboxArchive.failures,...stateArchive.failures,...runtimeArchive.failures];
     if (archiveFailures.length) {
       (ctx.runtimeWarnings ||= []).push(`Upgrade archival is incomplete. Remaining files will be retried on the next upgrade (${archiveFailures.join(', ')}).`);
     }
@@ -1027,11 +1028,6 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
       if(!fs.existsSync(current))return {status:'skipped',message:'legacy session already absent'};
       const script=path.join(root,'.claude/skills/zylos-memory/scripts/rotate-session.js');
       return (deps.rotateSession || (()=>execFileSync(process.execPath,[script],{encoding:'utf8',stdio:'pipe',env:{...process.env,ZYLOS_DIR:root}})))();
-    });
-    await run(6,'preserve_working_state',()=>{
-      try {fs.readFileSync(path.join(root,'memory/state.md'),'utf8');}
-      catch(error){if(error.code!=='ENOENT')throw error;}
-      return {status:'skipped',message:'existing working state preserved for mode conversion'};
     });
     await run(7,'verify_publication_for_services',()=> (deps.verifyPublicationForServices || verifyPublicationForServices)(ctx));
     // Dashboard availability is independent of Core publication.

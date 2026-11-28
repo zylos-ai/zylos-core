@@ -13,7 +13,6 @@ function fixture(t) {
   t.after(() => fs.rmSync(root, { force: true, recursive: true }));
   const { db, store, filename } = databaseFixture(t, {}, true);
   const memory = path.join(root, 'memory'); fs.mkdirSync(memory);
-  fs.writeFileSync(path.join(memory, 'state.md'), 'old single working state');
   fs.writeFileSync(path.join(memory, 'inbox.md'), 'global inbox');
   db.prepare("INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,cutoff,created_at,updated_at) VALUES('old-migration','single','multi','complete',0,100,101)").run();
   db.prepare("INSERT INTO conversations(id,direction,channel,endpoint_id,content,status,session_group) VALUES(8,'in','test','a','old message','delivered','group-a')").run();
@@ -31,9 +30,7 @@ function fixture(t) {
 for (const point of ['before-plan', 'plan', 'rename', 'enqueue']) test(`actual SIGKILL after ${point} recovers through the archive and real C4 queue`, async t => {
   const f = fixture(t), before = f.snapshot();
   const completedAt = f.db.prepare("SELECT updated_at FROM mode_transitions WHERE run_id='old-migration'").pluck().get();
-  for (const name of ['state.md', 'inbox.md']) {
-    fs.utimesSync(path.join(f.memory, name), completedAt - 1, completedAt - 1);
-  }
+  fs.utimesSync(path.join(f.memory, 'inbox.md'), completedAt - 1, completedAt - 1);
   const crashed = spawnSync(process.execPath, [worker, f.root, f.filename, point], { encoding: 'utf8', timeout: 10000 });
   assert.equal(crashed.signal, 'SIGKILL', crashed.stderr);
   const dirs = fs.readdirSync(path.join(f.memory, 'mode-switch')); assert.equal(dirs.length, 1);
@@ -45,7 +42,6 @@ for (const point of ['before-plan', 'plan', 'rename', 'enqueue']) test(`actual S
   assert.equal(plan.id, id); assert.equal(owner.pending(), false); if (saved) assert.equal(fs.readFileSync(planPath, 'utf8'), saved);
   assert.equal(plan.interval, undefined);
   assert.equal(fs.existsSync(path.join(archive, '.done')), true);
-  assert.equal(fs.readFileSync(path.join(archive, 'state.md'), 'utf8'), 'old single working state');
   assert.equal(fs.readFileSync(path.join(archive, 'inbox.md'), 'utf8'), 'global inbox');
   assert.equal(fs.existsSync(path.join(f.memory, 'session-groups/origin/inbox.md')), false);
   const controls = f.db.prepare("SELECT * FROM control_queue WHERE status='pending'").all();

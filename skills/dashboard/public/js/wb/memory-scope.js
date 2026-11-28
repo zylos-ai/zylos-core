@@ -29,14 +29,14 @@ export function memoryFileScope(known, path) {
 const CHANNEL_ICON = { telegram: 'send', lark: 'msg', feishu: 'msg', wechat: 'msg', openmax: 'hex', 'web-console': 'monitor' };
 export const memoryGroupIcon = group => group.sessionGroup === 'origin' ? 'origin' : CHANNEL_ICON[platformOf(group)] ?? 'msg';
 
-/** The startup budget rows for the root files identity.md, references.md and state.md, from the root listing. */
+/** The startup budget rows for the root files identity.md and references.md, from the root listing. */
 export function memoryBudgetRows(rootFiles, budgets) {
   const files = rootFiles ?? [];
-  return ['identity.md', 'references.md', 'state.md'].flatMap(path => {
+  return ['identity.md', 'references.md'].flatMap(path => {
     const file = files.find(node => node.path === path && node.type === 'file');
     if (!file) return [];
-    const limit = path === 'state.md' ? null : budgets?.limits?.[path] ?? null;
-    const warning = path === 'state.md' ? null : budgets?.warnings?.[path] ?? null;
+    const limit = budgets?.limits?.[path] ?? null;
+    const warning = budgets?.warnings?.[path] ?? null;
     if (limit && typeof limit === 'object') {
       const check = budgets?.checks?.[path];
       if (!check) return [{ path, size: file.size_bytes, limit: null, warning: null, over: null, warned: null }];

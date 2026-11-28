@@ -25,7 +25,7 @@ export function createMarkdownRenderer(markdownit) {
   if (typeof markdownit !== 'function') return null;
   const md = markdownit({ html: false, linkify: true }).use(cjkFriendly);
   // Only links with a scheme (https://, ftp:// …) become links. Bare file names such as identity.md or
-  // state.md would otherwise turn into links to a .md domain; www. addresses without a scheme stay text too.
+  // notes.md would otherwise turn into links to a .md domain; www. addresses without a scheme stay text too.
   md.linkify.set({ fuzzyLink: false });
   endLinksAtCjkPunctuation(md);
   const renderToken = (tokens, idx, options, env, self) => self.renderToken(tokens, idx, options);

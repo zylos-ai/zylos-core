@@ -3,11 +3,13 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 // Only historical plans and installations can still reference these names.
 const inbox = name => name === 'inbox.md' || /^inbox\.\d{8}T\d{9}Z(?:-[1-9]\d*)?\.md$/.test(name);
-const material = name => name === 'state.md' || name === 'handoff.md' || inbox(name);
+const legacyState = 'state.md';
+const material = name => name === 'handoff.md' || inbox(name);
+const historicalMaterial = name => name === legacyState || material(name);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 // Published templates: Memory v5 (#53), onboarding (#291), scoped bootstrap,
 // and the scoped state template with onboarding managed separately.
-const templateHashes = new Set([
+export const templateHashes = new Set([
   'ffe8dd581b5f119e30645cfd4468973d425aed1b43a42c6c9ad69eb69972642b',
   '404226132c72d05e9a41c9230314ff89ec63110526af646177224c4c0f3eac1a',
   '3c960faf449077fade3e4e1642c8738b21f19206cd0959e4c14283b2f21d2a28',
@@ -114,12 +116,12 @@ export class GlobalMemoryHandoverCoordinator {
         const source = path.join(this.memory, name), destination = path.join(archive, name);
         if (this.stat(source)) {
           this.archiveFile(id, name, source, destination);
-        } else if (!this.stat(destination)?.isFile() && !this.hasMigratedInbox(name)) {
+        } else if (!this.stat(destination)?.isFile() && !this.hasMigratedMaterial(name)) {
           throw error('ENOENT', 'Planned material is missing');
         }
       }
       step = 'enqueue';
-      if (plan.deliver) await this.db.insertControl(this.body(plan), {
+      if (plan.deliver) await this.db.insertControl(this.body(plan, archive), {
         sessionGroup: 'origin', priority: 2, appendAckSuffix: false,
       });
       step = 'done';
@@ -137,15 +139,14 @@ export class GlobalMemoryHandoverCoordinator {
   }
 
   plan(id, files) {
-    const installationTemplate = files.length === 1 && files[0].name === 'state.md' &&
-      templateHashes.has(hash(this.io.readFileSync(path.join(this.memory, 'state.md'), 'utf8').replace(/\s/gu, '')));
     return { version: 1, id, files: files.map(({ name }) => ({ name })),
-      rule: installationTemplate ? 'template' : 'other', deliver: !installationTemplate };
+      rule: 'other', deliver: true };
   }
 
-  hasMigratedInbox(name) {
-    if (!inbox(name)) return false;
-    const directory = path.join(this.memory, 'archive', 'inbox', 'origin');
+  hasMigratedMaterial(name) {
+    const kind = name === legacyState ? 'state' : inbox(name) ? 'inbox' : null;
+    if (!kind) return false;
+    const directory = path.join(this.memory, 'archive', kind, 'origin');
     const prefix = name.slice(0, -3) + '.archive-';
     return this.entries(directory).some(file =>
       (file === name || file.startsWith(prefix) && /^[1-9]\d*\.md$/.test(file.slice(prefix.length))) &&
@@ -153,7 +154,7 @@ export class GlobalMemoryHandoverCoordinator {
   }
 
   archivedFiles(archive) {
-    return this.entries(archive).filter(name => material(name) || material(name.split('.conflict-')[0])).sort();
+    return this.entries(archive).filter(name => historicalMaterial(name.split('.conflict-')[0])).sort();
   }
 
   archiveFile(id, name, source, destination) {
@@ -183,7 +184,7 @@ export class GlobalMemoryHandoverCoordinator {
 
   validate(plan, id) {
     if (plan?.version !== 1 || plan.id !== id || !['template', 'other'].includes(plan.rule) || plan.deliver !== (plan.rule === 'other') ||
-      !Array.isArray(plan.files) || !plan.files.length || plan.files.some(file => typeof file.name !== 'string' || !material(file.name)) ||
+      !Array.isArray(plan.files) || !plan.files.length || plan.files.some(file => typeof file.name !== 'string' || !historicalMaterial(file.name)) ||
       new Set(plan.files.map(file => file.name)).size !== plan.files.length) throw error('INVALID_DATA', 'Invalid handover plan');
   }
 
@@ -193,11 +194,13 @@ export class GlobalMemoryHandoverCoordinator {
     finally { try { this.io.unlinkSync(temporary); } catch (cause) { if (cause.code !== 'ENOENT') throw cause; } }
   }
 
-  body(plan) {
+  body(plan, archive) {
     const movedInbox = plan.files.some(({ name }) => inbox(name)) ?
       ' If a planned inbox file was moved by the upgrade, read it in memory/archive/inbox/origin.' : '';
+    const movedState = plan.files.some(({ name }) => name === legacyState) && !this.stat(path.join(archive, legacyState)) ?
+      ' The upgrade moved one planned file to memory/archive/state/origin.' : '';
     return `Follow up on the legacy global handover at memory/mode-switch/${plan.id}/previous/_global. ` +
-      'Read the archived material in full and check which work is still open.' + movedInbox +
+      'Read the archived material in full and check which work is still open.' + movedInbox + movedState +
       " Add open work for Origin to its handoff. In multi, relay other groups' open work to their own threads using internal messages. Daily records are in memory/sessions.";
   }
 }

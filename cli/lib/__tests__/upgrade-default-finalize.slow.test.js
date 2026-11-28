@@ -174,12 +174,19 @@ function pendingThresholdMigration(f) {
   return JSON.stringify({ ...config, model_rotation_thresholds: { claude: { 'opus[1m]': 70 } } }, null, 2) + '\n';
 }
 
-function assertDataPreserved(f) {
+function assertDataPreserved(f, stateMigrated = true) {
   const db = new Database(path.join(f.root, 'comm-bridge/c4.db'), { readonly: true });
   try { assert.equal(db.prepare('SELECT summary FROM checkpoints WHERE id=17').get().summary, 'keep current data'); }
   finally { db.close(); }
   assert.equal(f.read('ZYLOS.md'), 'private user instructions\r\n');
-  assert.equal(f.read('memory/state.md'), 'preserve working state\n');
+  const state = 'preserve working state\n';
+  if (stateMigrated) {
+    assert.equal(f.read('memory/archive/state/origin/state.md'), state);
+    assert.ok(f.read('memory/handoff.md').endsWith(state));
+    assert.equal(fs.existsSync(path.join(f.root, 'memory/state.md')), false);
+  } else {
+    assert.equal(f.read('memory/state.md'), state);
+  }
 }
 
 test('default finalizer fixture PM2 shim cannot launch a daemon', t => {
@@ -352,25 +359,16 @@ test('same-version finalizer restarts Core services that exited on the older dat
 for (const [fault, step, code] of [
   ['threshold-lock',4,'LOCK_TIMEOUT'],
   ['threshold-write',4,'EACCES'], ['ensure',5,'ENSURE_FAILED'],
-  ['rename',5,'EACCES'], ['state-read',6,'EACCES'],
+  ['rename',5,'EACCES'],
 ]) test(`protected finalization ${fault} blocks services and permits forward repair`,async t=>{
   const f=fixture(t);
   await f.run({ensureMemoryMigration(){throw Error('prepare closed transaction');}});
   const config=pendingThresholdMigration(f);
-  const state=f.read('memory/state.md'), settings=f.read('.claude/settings.json');
+  const settings=f.read('.claude/settings.json');
   const current=path.join(f.root,'memory/sessions/current.md');
   const archived=path.join(f.root,'memory/sessions/repaired.md');
   f.write('memory/sessions/current.md','legacy session bytes');
   f.calls.length=0;
-  let readingFault=fault==='state-read';
-  const read=fs.readFileSync;
-  fs.readFileSync=function(file,...args){
-    if(readingFault && String(file)===path.join(f.root,'memory/state.md')) {
-      throw Object.assign(Error('injected state read failure'),{code:'EACCES'});
-    }
-    return read.call(this,file,...args);
-  };
-  t.after(()=>{fs.readFileSync=read;});
   const fail=()=>{throw Object.assign(Error(`injected ${fault}`),{code});};
   const rotate=()=>{if(fs.existsSync(current))fs.renameSync(current,archived);};
   const result=await f.resume({
@@ -384,7 +382,6 @@ for (const [fault, step, code] of [
       rotate();
     },
   });
-  readingFault=false;
   assert.equal(result.success,false,JSON.stringify(result));
   assert.equal(result.failedStep,step);
   assert.equal(result.code,code);
@@ -393,14 +390,13 @@ for (const [fault, step, code] of [
   assert.equal(f.load().phase,'recovery_required');
   assert.equal(f.load().resumePhase,'compensation_closed');
   assert.equal(Object.hasOwn(f.load(),'finalizeError'),false);
-  assertDataPreserved(f);
+  assertDataPreserved(f, fault === 'rename');
   const repaired=await resumeFinalize(f.root,{}, {maintenance:f.m,quiesce:()=>{},
     finalize:ctx=>resumeUpgradeFinalization(ctx,{...f.deps,
       rotateSession:rotate})});
   assert.equal(repaired.ok,true,JSON.stringify(repaired));
   assert.equal(f.load().phase,'upgrade_complete');
   assert.equal(f.calls.includes('start'),true);
-  assert.equal(f.read('memory/state.md'),state);
   assert.equal(f.read('.claude/settings.json'),settings);
   assert.equal(f.read('.zylos/config.json'),config);
   assert.equal(fs.readFileSync(archived,'utf8'),'legacy session bytes');
@@ -421,7 +417,7 @@ test('runtime CLI preparation failure stops before migration, cutoff and live pu
   assert.equal(f.load().phase, 'installing');
   assert.equal(f.read('CLAUDE.md'), 'old Claude output');
   assert.equal(f.calls.includes('start'), false);
-  assertDataPreserved(f);
+  assertDataPreserved(f, false);
 });
 
 test('SIGKILL during the default initial finalizer resumes from durable publication inputs', async t => {
