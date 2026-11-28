@@ -530,6 +530,11 @@ export class FleetPoller {
     this.onPoll?.(this.getFleet());
   }
 
+  reorderAgents(names) {
+    const position = new Map(names.map((name, index) => [name, index]));
+    this.agents = [...this.agents].sort((a, b) => (position.get(a.name) ?? names.length) - (position.get(b.name) ?? names.length));
+  }
+
   getFleet() {
     const agents = this.agents.map(agent => this._recordWithLink(agent)).filter(Boolean);
     return {
