@@ -27,10 +27,12 @@ export function readModelWindows({ home = os.homedir(), env = process.env, conte
     .map(id => [id, contexts[id].readModelWindows({ home, env })]));
 }
 
-function isLargeWindow({ runtime, context, model, contextWindow, modelWindows }) {
-  return cleanModel(model).toLowerCase().includes('[1m]')
-    || Number(contextWindow) >= 1_000_000
-    || Number(context.contextWindowFor(model, modelWindows?.[runtime])) >= 1_000_000;
+const knownLargeWindow = ({ runtime, context, modelWindows }, model) => Number(context.contextWindowFor(model, modelWindows?.[runtime])) >= 1_000_000;
+
+function isLargeWindow(options) {
+  return cleanModel(options.model).toLowerCase().includes('[1m]')
+    || Number(options.contextWindow) >= 1_000_000
+    || knownLargeWindow(options, options.model);
 }
 
 function requireContext({ context, runtime }) {
@@ -56,7 +58,10 @@ function candidates(options) {
   // is the model this session runs.
   const sameModel = startedModel && [key, alias].includes(options.context.thresholdKeys.key(startedModel, isLargeWindow(options)));
   const launchKey = sameModel ? modelThresholdKey({ ...options, model: startedModel, contextWindow: undefined }) : '';
-  return launchKey && launchKey !== key ? [launchKey, key] : [key];
+  // Entries stored before the runtime's window table knew a model keep its plain name (e.g. `opus` before `opus[1m]`);
+  // each plain name follows its own key.
+  const withPlain = (candidate, name) => candidate ? [candidate, ...(knownLargeWindow(options, name) ? [name] : [])] : [];
+  return [...new Set([...withPlain(launchKey, startedModel), ...withPlain(key, cleanModel(options.model))])];
 }
 function defaultMatches(options) {
   const { defaultModel } = options;
