@@ -76,6 +76,12 @@ Unknown options are ignored with an `Ignored unknown option: --name` notice on s
 
 Inbound content is stored in the conversations DB exactly as received. `c4-receive.js` does not append reply-routing text and does not replace large messages with attachment previews.
 
+## Dashboard delivery format
+
+On live delivery and startup replay, a Dashboard message's body is wrapped in
+`<current-message c4_id="42">` and `</current-message>`, using the stored C4
+row ID. A resolved quote appears in a preceding `<replying-to>` block.
+
 ## Health Routing
 
 Before committing a message, `c4-receive.js` sends a v2 route request. An explicit pending decision takes precedence over health labels, including rate limiting and recovery waits. Authentication rejection writes a failed row with the permanent category `auth_rejected`. Other unrecovered routes also write failed rows. Replies, when enabled, use a cooldown scoped by channel, normalized endpoint, committed group, runtime, health and reason. A CLI action of `delivered` describes the status reply, not delivery of the inbound work to the runtime.

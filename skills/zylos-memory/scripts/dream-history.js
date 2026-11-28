@@ -2,7 +2,7 @@ import { projectConversation } from '../../comm-bridge/scripts/c4-query-format.j
 
 export const DREAM_BATCH_BYTES = 150 * 1024;
 const OMIT_BLOCKS = ['openmax-instruction', 'smart-mode'];
-const OMIT_TAGS = /<(?:org-context|message-context|sender-context)\b[^>]*\/\s*>|<\/?current-message>/g;
+const OMIT_TAGS = /<(?:org-context|message-context|sender-context)\b[^>]*\/\s*>|<current-message(?: c4_id="[1-9][0-9]*")?>|<\/current-message>/g;
 
 export function cleanDreamMessage(text) {
   for (const tag of OMIT_BLOCKS) text = text.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\/${tag}>`, 'g'), '');

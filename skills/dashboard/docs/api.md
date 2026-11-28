@@ -743,6 +743,14 @@ The unfiltered first `mine` page puts Origin first. Each tab inserts its own com
 
 `mine` list rows carry a boolean `unread`. It compares the last read position with the newest visible message other than a Dashboard inbound message written by the owner. After upgrading, existing messages start as read. An accepted send with a stored message ID advances the sender's read position to that ID. `PUT /api/conversations/:id/read` requires admin and browser same origin, including when proxied through Fleet. A valid lower position leaves the position unchanged. An invalid or unrelated message ID returns 400 `invalid_parameter` with `error.param: "upTo"`. An ID outside the `mine` conversation set returns 404 `not_found`.
 
+A Dashboard message item can include `quote` for either `direction: "in"`
+or `direction: "out"` when a plain-text first line references an earlier C4 ID
+with `[quote c4_id=N]`. The object has `id`, `direction`, `internal`,
+`timestamp`, `preview`, and `available`. If the target is outside the visible
+conversation history or missing, `available` is false, `direction` and
+`timestamp` are null, `internal` is false, and the quote's `preview` is empty.
+Message and conversation previews omit a recognized marker.
+
 The read anchor returns messages on both sides of the saved position, with up to half the page after it and earlier messages filling any remaining space. It uses the saved ID even if that message was removed. `unreadCount` counts only messages that can make the conversation unread and is capped at 100. `nextCursor` reads earlier messages and `afterCursor` reads later messages. A first page without an anchor uses normal timeline paging and leaves out `readUpTo` and `unreadCount`. `anchor=read` is only valid without a cursor and in `mine`.
 
 The list, messages, status and activity use the common error envelope with 400 `invalid_parameter` (includes `error.param`), 400 `invalid_cursor`, 404 `not_found`, or 503 `unavailable` as applicable. Existing access and other write error codes still apply. Authenticated requests to the retired `/api/chat/*` path family return 404. Chat settings stay at `/api/settings/chat`. Attachment downloads are binary. The existing `chat_messages_changed` hint also reports changes to the relevant tab's ordering, pins and read positions so clients can fetch current data.

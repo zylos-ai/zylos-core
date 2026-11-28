@@ -111,7 +111,7 @@ export function quotePreview(row, { singleLine = false, ...options } = {}) {
 }
 
 function rowQuote(row) {
-  if (row?.channel !== 'dashboard' || row.direction !== 'in') return null;
+  if (row?.channel !== 'dashboard' || !['in', 'out'].includes(row.direction)) return null;
   const quote = parseChatQuote(row.content);
   return quote && quote.id < row.id ? quote : null;
 }

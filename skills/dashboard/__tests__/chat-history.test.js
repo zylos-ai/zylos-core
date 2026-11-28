@@ -144,6 +144,22 @@ test('message pages use C4 ids across gaps and later polling never crosses group
   assert.deepEqual(newMessage.items.map(row => row.id), [60]);
 });
 
+// Real message-page projection and quote lookup in a private C4 database.
+// Run for quote eligibility or API item changes. Skip unrelated frontend work.
+test('Dashboard outbound replies expose the same quote object as owner replies', t => {
+  const { add, history } = fixture(t);
+  const conversation = { channel: 'dashboard', endpoint_id: 'a', session_group: 'dash-owned:a' };
+  add({ ...conversation, id: 1, content: 'Original question' });
+  add({ ...conversation, id: 2, direction: 'out', content: '[quote c4_id=1]\nAnswer' });
+
+  const { items } = history.messages(groupId(conversation.session_group), { tab: 'mine' });
+  assert.deepEqual(items.at(-1).quote, {
+    id: 1, direction: 'in', internal: false, timestamp: items[0].timestamp,
+    preview: 'Original question', available: true,
+  });
+  assert.equal(items.at(-1).preview, 'Answer');
+});
+
 // Integration: real auth, history routes, SQLite and private loopback only.
 // Run for history scope/routes/auth changes; skip for styles or text changes.
 // Uses runner-isolated HOME/ZYLOS_DIR/PM2_HOME/TMPDIR, no process or tmux launch.

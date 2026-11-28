@@ -149,6 +149,14 @@ Naming-path exceptions are logged without failing the already stored reply; the
 name stays empty and can be set manually. Failed/expired controls are checked
 about every 30 seconds, with a read-only name check before any write transaction.
 
+### Quoting an earlier message
+
+When a plain-text reply addresses an earlier message, put `[quote c4_id=N]`
+alone on the first line and write the reply below it. Use the earlier message's
+`c4_id` from this conversation. Use the marker when answering several messages
+separately or returning to an earlier question. Reply to the latest message
+without a marker.
+
 ### Available structured components
 
 Choose a supported component when it makes the reply clearer or lets the user

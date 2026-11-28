@@ -24,7 +24,7 @@ export function projectC4Content(content, { c4Id } = {}) {
 // A channel wraps the person's words in a <current-message> block, after its own routing header and context
 // tags, and starts them with "<sender> said: ". Older channels put "<sender> said: " before the opening tag on
 // the same line. The block must open a line (optionally after that prefix): a tag quoted mid-sentence is text.
-const CURRENT_MESSAGE = /(?:^|\n)(?:[^\n<]{1,200} said: )?<current-message>\n?([\s\S]*?)\n?<\/current-message>(?=\s|$)/;
+const CURRENT_MESSAGE = /(?:^|\n)(?:[^\n<]{1,200} said: )?<current-message(?: c4_id="[1-9][0-9]*")?>\n?([\s\S]*?)\n?<\/current-message>(?=\s|$)/;
 const SENDER = /^[^\n:]{1,80} said: /;
 // A first line made only of bracketed routing tags (with an optional "(org: …)") is a channel header.
 const CHANNEL_HEADER = /^(?:\[[^\]\n]{1,80}\]\s*)+(?:\([^)\n]{0,80}\)\s*)?$/;
