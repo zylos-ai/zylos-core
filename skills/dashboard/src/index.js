@@ -58,7 +58,7 @@ import { EventLoopMonitor } from './lib/event-loop-monitor.js';
 import { SseHub } from './lib/sse.js';
 import { FleetPoller, stateToFleetRecord, fleetStateFromObjects } from './lib/fleet-poller.js';
 import { buildSafeFleetPayload } from './lib/fleet-payload.js';
-import { compareFleetNames, fleetPage, fleetSummary, pageFleetRows } from './lib/fleet-list.js';
+import { fleetPage, fleetSummary, pageFleetRows, reorderFleetAgents } from './lib/fleet-list.js';
 import { remoteStatus } from '../public/js/fleet-status.js';
 import { listErrorBody, listFailure, parseListQuery } from './lib/list-query.js';
 import { FleetProxy } from './lib/fleet-proxy.js';
@@ -554,12 +554,13 @@ function currentFleetAgents() {
 
 function fleetAgentsPage(query) {
   const term = query.q?.toLowerCase();
-  const agents = currentFleetAgents().filter(agent => !term || agent.name.toLowerCase().includes(term));
-  const page = pageFleetRows(agents, query, agent => agent.name, compareFleetNames);
+  const rows = currentFleetAgents().map((agent, position) => ({ agent, position }))
+    .filter(({ agent }) => !term || agent.name.toLowerCase().includes(term));
+  const page = pageFleetRows(rows, query, row => row.position);
   return {
     ...page,
     self: { name: config.agent?.name || '' },
-    items: page.items.map(agent => {
+    items: page.items.map(({ agent }) => {
       const record = fleetPoller.getAgentRecord(agent.name);
       return {
         name: agent.name,
@@ -659,6 +660,10 @@ async function handleFleetAgents(req, res, url) {
     } catch (error) { fleetListFailure(res, error); }
     return;
   }
+  if (req.method === 'PUT') {
+    await handleFleetAgentOrder(req, res);
+    return;
+  }
   if (req.method !== 'POST') {
     sendJson(res, 404, { error: 'not_found' });
     return;
@@ -722,6 +727,40 @@ async function handleFleetAgents(req, res, url) {
     process.stderr.write(`[fleet-config] Failed to save fleet agent: ${err.message}\n`);
     sendJson(res, 500, { error: 'failed_to_save_config' });
   }
+}
+
+// The registry array order is the machine order; a reorder must name every registered machine exactly once.
+async function handleFleetAgentOrder(req, res) {
+  let body;
+  try {
+    body = await readJsonBody(req, 16 * 1024);
+  } catch (err) {
+    sendJson(res, err.status || 400, { error: err.message });
+    return;
+  }
+  let order;
+  try {
+    order = await persistFleetConfig(({ fleet }) => {
+      const agents = reorderFleetAgents(fleet.agents, body?.order);
+      if (!agents) {
+        const error = new Error('order_mismatch');
+        error.code = 'order_mismatch';
+        throw error;
+      }
+      fleet.agents = agents;
+      return agents.map(agent => agent.name);
+    });
+  } catch (err) {
+    if (err?.code === 'order_mismatch') {
+      sendJson(res, 409, { error: 'order_mismatch' });
+      return;
+    }
+    process.stderr.write(`[fleet-config] Failed to reorder fleet agents: ${err.message}\n`);
+    sendJson(res, 500, { error: 'failed_to_save_config' });
+    return;
+  }
+  fleetPoller.reorderAgents(order);
+  sendJson(res, 200, { ok: true, order });
 }
 
 async function handleFleetAgentTest(req, res) {

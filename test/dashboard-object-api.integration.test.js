@@ -33,7 +33,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   for (const dir of [data, path.join(root, '.zylos'), path.join(root, 'activity-monitor'), path.join(root, 'comm-bridge')]) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(root, '.env'), 'TZ=Asia/Singapore\n');
   fs.writeFileSync(path.join(root, 'activity-monitor/restart-requests.json'), '[]');
-  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ auth: { enabled: true, password: hashPassword('fixture-password') }, fleet: { agents: [{ name: 'remote-fixture', base_url: 'http://127.0.0.1:1', read_api_key: 'fixture' }] }, chat: { allowRemote: true } }));
+  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ auth: { enabled: true, password: hashPassword('fixture-password') }, fleet: { agents: ['remote-fixture', 'remote-alpha', 'remote-beta'].map(name => ({ name, base_url: 'http://127.0.0.1:1', read_api_key: 'fixture' })) }, chat: { allowRemote: true } }));
   const configFile = path.join(root, '.zylos/config.json');
   let usageVersion = '1.0.0', usageModel = 'fixture-model', usageEffort = 'high', modeStatusReadable = true, originRun = 'fixture-run';
   let mode = 'single', clock = Date.now(), server, seedStore, catalogReadable = true, groupListReadable = true;
@@ -418,6 +418,38 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       await request(route, { method, body, identity: 'cookie', originHeader: false, expected: 403 });
     }
     assert.equal(actionCalls.length, initial, 'denied writes never reach action adapters');
+  });
+  // Same isolated HTTP fixture and its Dashboard config file. Run when the Fleet
+  // list order, list paging or the registry reorder write changes; presentation
+  // work on Fleet pages can skip it. Remote machines are unreachable loopback
+  // registrations: only the registry and list order are read.
+  const dashboardConfig = path.join(data, 'config.json');
+  const registryNames = () => JSON.parse(fs.readFileSync(dashboardConfig, 'utf8')).fleet.agents.map(agent => agent.name);
+  const fleetListNames = async () => {
+    const wall = await request('/api/fleet');
+    assert.equal(wall.items[0].self, true, 'this machine leads the Fleet wall');
+    const settings = await request('/api/fleet/agents', { identity: 'admin' });
+    return [wall.items.slice(1).map(agent => agent.name), settings.items.map(agent => agent.name)];
+  };
+  await t.test('both Fleet lists follow the registry order, across pages and after a reorder', async () => {
+    assert.deepEqual(registryNames(), ['remote-fixture', 'remote-alpha', 'remote-beta']);
+    assert.deepEqual(await fleetListNames(), [registryNames(), registryNames()]);
+    const first = await request('/api/fleet/agents?limit=2', { identity: 'admin' });
+    const second = await request(`/api/fleet/agents?limit=2&cursor=${encodeURIComponent(first.nextCursor)}`, { identity: 'admin' });
+    assert.deepEqual([...first.items, ...second.items].map(agent => agent.name), registryNames());
+    const order = ['remote-beta', 'remote-fixture', 'remote-alpha'];
+    assert.deepEqual(await request('/api/fleet/agents', { method: 'PUT', body: { order }, identity: 'admin' }), { ok: true, order });
+    assert.deepEqual(registryNames(), order);
+    assert.deepEqual(await fleetListNames(), [order, order]);
+  });
+  await t.test('a reorder that is not a permutation of the registry changes nothing', async () => {
+    const saved = fs.readFileSync(dashboardConfig, 'utf8');
+    const names = registryNames();
+    for (const order of [names.slice(1), [...names, 'remote-unknown'], [names[0], ...names.slice(0, -1)], names.join(',')]) {
+      const result = await request('/api/fleet/agents', { method: 'PUT', body: { order }, identity: 'admin', expected: 409 });
+      assert.equal(result.error.code, 'order_mismatch');
+      assert.equal(fs.readFileSync(dashboardConfig, 'utf8'), saved);
+    }
   });
   for (const next of ['single', 'multi']) await t.test(`${next} mode calls each object endpoint over HTTP`, async () => {
     writeMode(next);
