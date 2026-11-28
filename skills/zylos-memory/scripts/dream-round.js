@@ -122,7 +122,8 @@ export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday
   };
   let next = 0;
   async function worker() {
-    while (!signal?.aborted && next < batches.length) {
+    while (next < batches.length) {
+      signal?.throwIfAborted();
       const index = next++;
       const batch = batches[index];
       try {
