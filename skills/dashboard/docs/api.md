@@ -326,7 +326,7 @@ Lists contain presentation observations only. Running rows have exactly these fi
 | `displayName` | string | Effective human-readable name or fallback |
 | `channel` | string / null | Channel namespace; Origin has no channel |
 | `runtime`, `model` | string / null | Current runtime and model observations |
-| `state` | `{kind:string,since:string\|null,stale?:boolean,sampledAt?:string,lastState?:"busy"\|"idle"}` | Mutually exclusive primary state and its known start; stale observations retain the last busy/idle classification for less than 60 seconds. Older samples become unknown while retaining sampledAt/lastState for an explicitly historical hint |
+| `state` | `{kind:string,since:string\|null,stale?:boolean,sampledAt?:string,lastState?:"busy"\|"idle"}` | Mutually exclusive primary state and its known start. A stale busy/idle sample remains usable for less than 60 seconds. Older samples yield `unknown` with `sampledAt` and `lastState` as historical context |
 | `duration` | number / null | State duration in seconds; a tolerated stale idle sample retains its last recorded idle duration |
 | `flags` | object | Independent conditions, below |
 | `mainAgent` | `busy` / `idle` / `unknown` | Activity monitor observation for instruction callers; UI does not display it |
