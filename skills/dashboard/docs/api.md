@@ -709,7 +709,7 @@ Schedule `nextRunAt`, `lastRunAt`, `updatedAt`, history `executedAt`/`completedA
 
 | Method/path | Contract and minimal example |
 |---|---|
-| `GET /api/conversations` | Optional `tab` (`mine` by default or `external`), `q`, `limit` (1–100, default 50), and `cursor`. Returns `{items,nextCursor,tz,deletionAllowed}`. Example `GET /api/conversations?tab=mine&q=work&limit=20`. |
+| `GET /api/conversations` | Optional `tab` (`mine` by default or `external`), `q`, `limit` (1–100, default 50), and `cursor`. Returns `{items,nextCursor,tz,deletionAllowed,summary?}`. Example `GET /api/conversations?tab=mine&q=work&limit=20`. |
 | `PUT /api/conversations/pins` | Optional `tab` (`mine` by default or `external`). JSON `{ids:string[]}` replaces the complete order for that tab and returns `{ok:true,ids}`. Use `[]` to clear the order. An identical replacement is idempotent. Example `PUT /api/conversations/pins?tab=mine` with `{"ids":["g:64617368626F6172643A776F726B"]}`. |
 | `GET /api/conversations/:id` | Returns reconciliation receipt plus conversation metadata. Example: `GET /api/conversations/g%3A6F726967696E`. |
 | `POST /api/conversations/drafts` | JSON `{displayName?}` → `{ok:true,conversation}` (201). Example body: `{}`. |
@@ -726,6 +726,8 @@ Schedule `nextRunAt`, `lastRunAt`, `updatedAt`, history `executedAt`/`completedA
 | `GET /api/conversations/:id/attachments/:attachmentId` | Streams authorized file bytes with safe content type/disposition. Example: `GET /api/conversations/g%3A6F726967696E/attachments/<id>`. |
 | `GET /api/conversations/drafts/:id/deletion` | Local-owner-only draft deletion preview. Here `:id` is the bare `conversation.localId` returned by `POST /api/conversations/drafts`, also available as `items[].localId` on draft rows in the conversation list. Do not pass the `d:`-prefixed conversation ID. Example: with `localId:"550e8400-e29b-41d4-a716-446655440000"`, `GET /api/conversations/drafts/550e8400-e29b-41d4-a716-446655440000/deletion`. |
 | `DELETE /api/conversations/drafts/:id` | Local-owner-only; `:id` is the same bare `localId` used for the preview. JSON `{confirmed:true,operationId,cutoffId}` from the preview. Returns `{ok:true,...deletionResult}`. Example: `DELETE /api/conversations/drafts/550e8400-e29b-41d4-a716-446655440000` with the preview's confirmation values. Passing `d:<uuid>` returns 404 `chat_conversation_not_found`. |
+
+On the Mine tab, admin credentials also receive `summary: {latest,unread_conversations}` for the whole tab, independent of search, cursor and page size. `latest` is null when no visible non-internal message exists, otherwise `{at,title,preview}`. `at` is the ISO 8601 timestamp of the newest incoming or outgoing message across Mine, including Origin. `title` and `preview` use the conversation list's display values. Drafts without messages do not contribute. `unread_conversations` counts conversations whose list row is unread. Existing remote chat access rules apply.
 
 `GET /api/conversations`, `GET /api/conversations/:id/messages`, `GET /api/conversations/:id/status`, and `GET /api/conversations/:id/activity` read the optional `X-Zylos-Locale` request header. The exact value `en` selects English. An omitted header or any other value selects Chinese (`zh`). The locale controls server-generated preview text in list and message responses, including attachment labels and quoted-message previews. List searches also match unnamed conversations against the localized fallback title.
 
@@ -788,6 +790,8 @@ Missing/disabled observer history returns 404. Rejected `/observer/stream` upgra
 Both Fleet lists accept `limit` (1–100, default 50), `cursor`, `q` (trimmed, case-insensitive name substring, up to 64 characters), and `include=total` (matching row count). A bad parameter returns 400 `invalid_parameter` with `error.param`. An invalid cursor returns 400 `invalid_cursor`. An unavailable source returns 503 `unavailable`. The client starts from page one if a cursor expires after a restart.
 
 `summary` covers the whole fleet even when filters are active. It contains `count`, `counts:{busy,idle,stuck,offline}`, and `daily_cost` and `weekly_cost` (numbers, or null when no machine reports that tier). The Fleet wall reloads its current page after a `fleet` event and plays start/finish cues for machines on that page. Wall rows carry the current `link` observation and an `avatar_version` (string or null). A remote row uses the last version reported by the peer's instance API. Unset avatars and older peers without the field report null. Probe sample history is returned on the configured-machine list.
+
+Self and remote records in `GET /api/fleet` include `chat` for admin password sessions and admin API keys. The value is the Mine conversation summary described above, or null when unavailable. Remote summaries use the registered Fleet token and the peer's remote conversation access setting. They use the peer's default locale. Read-scope and custom API keys receive records with the field omitted, including through the Fleet proxy. The `fleet` SSE event carries only the fleet status summary and timestamp.
 
 Fleet rejects unknown agents with 404, invalid memory path queries with 400 `invalid_memory_path`, and upstream failures with 502/504. Suffix handling depends on the path:
 

@@ -11,6 +11,7 @@ import { Readable, Transform } from 'node:stream';
 import { once } from 'node:events';
 import { browserPath, browserBaseFromRequest } from './browser-base.js';
 import { sendHtml, sendJson, sendText, serveStatic } from './http.js';
+import { omitFleetChat } from './fleet-list.js';
 import { validateMemoryQueryPath } from './memory-browser.js';
 import {
   acceptObserverWebSocket,
@@ -545,6 +546,22 @@ export class FleetProxy {
         process.stderr.write(`[fleet-proxy] blocked secret-bearing response headers from ${agent.name} ${suffix}\n`);
         sendJson(res, 502, { error: 'secret_leak_blocked' });
         return;
+      }
+      // The upstream uses the machine's configured credential, which can have
+      // more access than the caller of this relay.
+      const fleetAdmin = () => this.authGate
+        ? this.authGate.resolveAuthContext(req, { touch: false })?.scope === 'admin'
+        : req._authContext?.scope === 'admin';
+      if (normalizedSuffix === '/api/fleet' && !fleetAdmin()) {
+        try {
+          const body = JSON.parse(text);
+          if (remoteResp.ok && !Array.isArray(body.items)) throw new Error('Expected fleet page');
+          if (Array.isArray(body.items)) body.items = body.items.map(omitFleetChat);
+          buffer = Buffer.from(JSON.stringify(body));
+        } catch {
+          sendJson(res, 502, { error: 'upstream_body_error' });
+          return;
+        }
       }
       if (remoteResp.ok && req.method === 'POST' &&
           (suffix === '/api/observer/leases' || suffix.endsWith('/renew'))) {

@@ -153,8 +153,12 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
   const hash = value => crypto.createHash('sha256').update(value).digest('hex');
   const cookie = 'history-browser-session';
   f.store.insertSession(hash(cookie), Date.now());
-  const tokens = { read: `zylos_st_${'a'.repeat(64)}`, admin: `zylos_st_${'b'.repeat(64)}` };
-  for (const scope of ['read', 'admin']) {
+  const tokens = {
+    read: `zylos_st_${'a'.repeat(64)}`,
+    admin: `zylos_st_${'b'.repeat(64)}`,
+    'conversations.read': `zylos_st_${'c'.repeat(64)}`,
+  };
+  for (const scope of Object.keys(tokens)) {
     const key = f.store.insertApiKey({ name: scope, keyHash: 'unused', scope });
     f.store.insertApiSession({ tokenHash: hash(tokens[scope]), apiKeyId: key.lastInsertRowid, scope,
       createdAt: Date.now(), expiresAt: Date.now() + 60_000 });
@@ -197,6 +201,19 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
       else assert.ok(reads > before);
     }
   }
+  f.add({ id: 4, channel: 'dashboard', endpoint_id: 'project', session_group: 'dash-owned:project',
+    direction: 'out', timestamp: '2026-01-01 12:00:01', content: '**Agent reply**' });
+  const mine = '/api/conversations?tab=mine';
+  const adminList = await request(mine, 'admin');
+  assert.equal(adminList.status, 200);
+  assert.deepEqual(adminList.body.summary, {
+    latest: { at: '2026-01-01T12:00:01.000Z', title: 'project', preview: 'Agent reply' },
+    unread_conversations: 1,
+  });
+  const customList = await request(mine, 'conversations.read');
+  assert.equal(customList.status, 200);
+  assert.equal(Object.hasOwn(customList.body, 'summary'), false);
+
   f.db.prepare('UPDATE conversations SET content=? WHERE id=3').run('**Result**\n\n```js\nsecret()\n```');
   for (const locale of ['zh', 'en']) {
     const expected = 'Result\n' + (locale === 'en' ? '[Code]' : '[代码]');

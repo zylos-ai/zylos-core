@@ -462,20 +462,20 @@ function cachedSelfFleetState() {
   return selfFleetState(buildInstancePayload(), groupCounts(snapshot, { allowUnreadable: true }), snapshot);
 }
 
-function buildSelfFleetRecord(buildState = cachedSelfFleetState) {
+function buildSelfFleetRecord(buildState = cachedSelfFleetState, chat = null) {
   return stateToFleetRecord({
     name: config.agent?.name,
     color: agentColor(config.agent?.name)
-  }, buildState(), {
+  }, { ...buildState(), chat }, {
     self: true,
     base_url: null
   });
 }
 
-function buildFullFleetPayload(remoteFleet = fleetPoller.getFleet(), buildState) {
+function buildFullFleetPayload(chat) {
   return buildSafeFleetPayload({
-    remoteFleet,
-    selfRecord: buildSelfFleetRecord(buildState),
+    remoteFleet: fleetPoller.getFleet(),
+    selfRecord: buildSelfFleetRecord(undefined, chat),
     nowIso: new Date().toISOString()
   });
 }
@@ -1006,7 +1006,7 @@ function loadZylosConfig(zylosDir, fallback = {}) {
 
 const checkReadiness = createReadinessCheck();
 
-async function handleApi(req, res, pathname, url) {
+async function handleApi(req, res, pathname, url, history) {
   if (pathname === '/api/health' || pathname === '/api/health/ready') {
     if (pathname === '/api/health' && url.searchParams.has('probe')) { sendJson(res, 404, { error: 'not_found' }); return true; }
     if (pathname === '/api/health/ready') {
@@ -1083,7 +1083,13 @@ async function handleApi(req, res, pathname, url) {
       // Remote records come from the poller cache. Connected streams keep the
       // local observation warm, so only unobserved Dashboards force a sample.
       await refreshDashboardState({ fresh: sse.clients.size === 0 });
-      sendJson(res, 200, fleetPage(buildFullFleetPayload().payload, query));
+      const showChat = auth.resolveAuthContext(req, { touch: false })?.scope === 'admin';
+      let chat = null;
+      if (showChat) {
+        try { chat = history.mineSummary(req.headers['x-zylos-locale'] === 'en' ? 'en' : 'zh'); }
+        catch { /* A history failure does not make fleet state unavailable. */ }
+      }
+      sendJson(res, 200, fleetPage(buildFullFleetPayload(chat).payload, query, { showChat }));
     } catch (error) { fleetListFailure(res, error); }
     return true;
   }
@@ -1519,7 +1525,7 @@ export function createServer() {
 
     if (pathname === '/api/stream') {
       if (handleChatStream(req, res, url, { auth, config, hub: sse, observer: chatObserver })) return;
-      try { await handleApi(req, res, pathname, url); }
+      try { await handleApi(req, res, pathname, url, history); }
       catch (error) { workbenchFailure(res, error); }
       return;
     }
@@ -1709,7 +1715,7 @@ export function createServer() {
 
     if (pathname.startsWith('/api/')) {
       try {
-        const handled = await handleApi(req, res, pathname, url);
+        const handled = await handleApi(req, res, pathname, url, history);
         if (!handled && !res.headersSent) sendJson(res, 404, { error: 'not_found' });
       } catch (error) { workbenchFailure(res, error); }
       return;
@@ -1741,6 +1747,19 @@ export function createServer() {
     catch { console.error('[chat] Conversation naming reconciliation remains pending.'); }
   };
   reconcileNames();
+  const watchFleetChat = () => chatObserver.subscribe({ tab: 'mine' }, {
+    validate: () => true,
+    send: event => {
+      if (event === 'chat_ready' || event === 'chat_messages_changed') broadcastFleet(fleetPoller.getFleet());
+    },
+    onStop: reason => {
+      if (reason === 'chat_unavailable') broadcastFleet(fleetPoller.getFleet());
+      // Network subscribers reconnect on a database replacement. The local
+      // fleet subscriber has no connection lifecycle to resubscribe for it.
+      if (reason === 'chat_database_changed') queueMicrotask(watchFleetChat);
+    },
+  });
+  watchFleetChat();
   const namingTimer = setInterval(() => eventLoopMonitor.runTask('conversation.naming', reconcileNames), 30000);
   namingTimer.unref();
   let attachmentClose = null;
