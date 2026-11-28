@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import path from 'node:path';
+import fs from 'node:fs';
 import { isMainModule } from './is-main-module.js';
 import { createInterface } from 'node:readline';
 import { memoryError } from './sync-cli.js';
@@ -82,7 +82,7 @@ export async function serveMemoryTools({ input = process.stdin, output = process
     ...DREAM_READ_TOOLS.filter(tool => !env.ZYLOS_MEMORY_DREAM_PAGE || tool.name === 'read_memory'),
   ] : [];
   const rpcError = (id, code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
-  async function dispatch(request) {
+  async function dispatchRpc(request) {
     if (!request || typeof request !== 'object' || request.jsonrpc !== '2.0' || typeof request.method !== 'string') {
       return rpcError(request?.id ?? null, -32600, 'Invalid request');
     }
@@ -114,6 +114,17 @@ export async function serveMemoryTools({ input = process.stdin, output = process
       }
     }
     return rpcError(request.id, -32601, 'Method not found');
+  }
+  async function dispatch(request) {
+    const response = await dispatchRpc(request);
+    const statsFile = env.ZYLOS_MEMORY_DREAM_TOOL_STATS;
+    if (statsFile && response && request?.jsonrpc === '2.0' && request.method === 'tools/call') {
+      // Count the tool result or RPC error, excluding IDs and transport framing.
+      const bytes = Buffer.byteLength(JSON.stringify(response.result ?? response.error));
+      try { fs.appendFileSync(statsFile, `${bytes}\n`, { mode: 0o600 }); }
+      catch (error) { console.error(`Unable to record dream tool stats: ${error.code ?? error.message}`); }
+    }
+    return response;
   }
   for await (const line of lines) {
     let message;

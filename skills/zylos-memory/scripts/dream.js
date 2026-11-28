@@ -76,20 +76,57 @@ export async function runDream({ root, config, date: runDate, timezone, signal: 
       durableJson(record, { status: 'started', date });
     });
     const tidyWeekday = Number(config.memory_tidy_weekday ?? 0);
+    const stats = {
+      calls: [],
+      stage1: { batches: 0, failedBatches: 0, extracted: 0 },
+      stage2: { pages_changed: 0, pages_created: 0, skipped: 0 },
+      tidy: { merged: 0, archived: 0, condensed: 0, condenseFailed: 0 },
+    };
     let result;
     try {
       let model;
       const call = async options => {
-        model ??= newModel(root, config);
-        return (await model)(options);
+        const started = performance.now();
+        const attempt = { stage: options.stage, durationMs: 0, ok: false, outputBytes: 0,
+          toolCalls: 0, toolResultBytes: 0, maxToolResultBytes: 0 };
+        stats.calls.push(attempt);
+        const fail = error => {
+          attempt.ok = false;
+          attempt.error = String(error?.message ?? error).replace(/\s+/g, ' ').slice(0, 240);
+        };
+        try {
+          model ??= newModel(root, config);
+          const answer = await (await model)({ ...options, reportToolStats: metrics => Object.assign(attempt, metrics) });
+          attempt.outputBytes = Buffer.byteLength(answer);
+          attempt.ok = true;
+          return { answer, fail };
+        } catch (error) {
+          fail(error);
+          throw error;
+        } finally {
+          attempt.durationMs = Math.round(performance.now() - started);
+        }
       };
       result = await runDreamRound({ root, date, timezone, weekday, tidyWeekday, db: await database(),
-        model: call, directory, token, mutate, notify: send, signal });
+        model: call, directory, token, mutate, notify: send, signal, stats });
     } catch (error) {
       result = { failed: true, warnings: [], error: error.message };
       if (controller.signal.aborted) throw error;
     }
-    await lock.guard(token, () => durableJson(record, { status: result.failed ? 'failed' : 'ok', date, ...result }));
+    const status = result.failed ? 'failed' : 'ok';
+    await lock.guard(token, () => durableJson(record, { status, date, ...result, stats }));
+    const calls = {};
+    for (const attempt of stats.calls) {
+      const totals = calls[attempt.stage] ??= { total: 0, failed: 0, peakOutputBytes: 0,
+        toolCalls: 0, toolResultBytes: 0, maxToolResultBytes: 0 };
+      totals.total++;
+      if (!attempt.ok) totals.failed++;
+      totals.peakOutputBytes = Math.max(totals.peakOutputBytes, attempt.outputBytes);
+      totals.toolCalls += attempt.toolCalls;
+      totals.toolResultBytes += attempt.toolResultBytes;
+      totals.maxToolResultBytes = Math.max(totals.maxToolResultBytes, attempt.maxToolResultBytes);
+    }
+    console.log(`Dream stats ${date} ${status} ${JSON.stringify({ ...stats, calls })}`);
     day.setUTCDate(day.getUTCDate() - 1);
     const previous = readRecord(path.join(dreamRunDirectory(root), day.toISOString().slice(0, 10), 'run.json'));
     const consecutiveFailure = result.failed && previous && previous.status !== 'ok';

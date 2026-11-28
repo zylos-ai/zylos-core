@@ -35,6 +35,49 @@ function fakeDatabase(conversations) {
   createCheckpoint: (group, end, summary, options) => { coverage.set(group, end); checkpoints.push({ group, end, summary, ...options }); } };
 }
 
+test('run records keep the stats contract on success and failure', async t => {
+  const extraction = JSON.stringify({ groups: [{ group: 'origin', summary: 'Summary',
+    items: [{ type: 'diary', topic: '记录', text: 'Today', owner: false, source: 'C4 #1' }] }] });
+  const merge = JSON.stringify({ ...empty, pages_changed: ['existing.md'], pages_created: ['new.md'],
+    skipped: [{ item: 'diary', why: 'duplicate' }] });
+  const tools = { toolCalls: 2, toolResultBytes: 17, maxToolResultBytes: 11 };
+
+  for (const failed of [false, true]) {
+    const { root, read } = fixture(t);
+    await runDream({ root, config: {}, date: '2026-11-23', timezone: 'Asia/Singapore',
+      database: () => fakeDatabase([raw('origin', [message(1, 'message')])]), send: () => {},
+      newModel: () => ({ stage, reportToolStats }) => {
+        if (stage === 'stage1') return extraction;
+        assert.equal(stage, 'stage2');
+        reportToolStats(tools);
+        if (failed) throw new Error('fixture model exited');
+        return merge;
+      },
+    });
+    const { status, stats } = JSON.parse(read('activity-monitor/memory-dreaming/2026-11-22/run.json'));
+    assert.equal(status, failed ? 'failed' : 'ok');
+    const { calls, ...stages } = stats;
+    assert.equal(calls.length, failed ? 4 : 2);
+    assert.deepEqual(stages, {
+      stage1: { batches: 1, failedBatches: 0, extracted: 1 },
+      stage2: { pages_changed: failed ? 0 : 1, pages_created: failed ? 0 : 1, skipped: failed ? 0 : 1 },
+      tidy: { merged: 0, archived: 0, condensed: 0, condenseFailed: 0 },
+    });
+    for (const { durationMs, ...call } of calls) {
+      assert.ok(Number.isInteger(durationMs) && durationMs >= 0);
+      if (call.stage === 'stage1') {
+        assert.deepEqual(call, { stage: 'stage1', ok: true, outputBytes: Buffer.byteLength(extraction),
+          toolCalls: 0, toolResultBytes: 0, maxToolResultBytes: 0 });
+      } else {
+        assert.deepEqual(call, { stage: 'stage2', ok: !failed,
+          outputBytes: failed ? 0 : Buffer.byteLength(merge), ...tools,
+          ...(failed ? { error: 'fixture model exited' } : {}) });
+      }
+    }
+    assert.equal(calls.filter(call => call.stage === 'stage1').length, 1);
+  }
+});
+
 test('cleaned batches preserve message order, split only oversized groups and pack small groups together', () => {
   const signal = '<smart-mode>omit this</smart-mode><group-context>keep this</group-context>';
   const { batches } = makeDreamBatches([
