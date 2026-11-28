@@ -222,15 +222,23 @@ function pageText(title, status, date, key = 'Shared Key', body = 'Body') {
   return `# ${title}\n<!-- zylos:entry kind=projects -->\n- **Status:** ${status}\n- **Updated:** ${date}\n- **Keys:** ${key}\n\n## Current\n${body}\n`;
 }
 
-test('candidate search discounts common terms and ranks rare Keys and body identifiers', () => {
-  const pages = Array.from({ length: 4 }, (_, index) => ({
+test('candidate search ranks shared identifiers by rarity and ignores ordinary numbers', () => {
+  const pages = Array.from({ length: 5 }, (_, index) => ({
     relative: `page-${index}.md`,
-    keys: index === 0 ? ['common', 'topic 9916'] : ['common'],
-    text: index === 1 ? '# Page\n\ncommon and PR #525' : '# Page\n\ncommon content',
+    text: index === 4 ? '# Page\n\n#1638 ZYLO-397 beta.17 2442 8ed23d0 v0.8.2' : '# Page\n\n#1638',
   }));
+  pages.push({ relative: 'numbers.md', text: '# Page\n\n2026-11-28 11:30 2 24 v2 5m 24h' });
   const search = candidatePages(pages);
-  assert.deepEqual(search({ topic: 'common', text: 'Follow up TOPIC_9916 and #525', source: '' }),
-    ['page-0.md (topic 9916)', 'page-1.md (#525)']);
+  assert.deepEqual(search({
+    topic: '#1638 ZYLO-397',
+    text: 'beta.17 2442 8ed23d0 2026-11-28 11:30 2 24 v2 5m 24h',
+    source: 'v0.8.2',
+  }), [
+    'page-4.md (#1638, zylo 397, beta.17, 2442, 8ed23d0, v0.8.2)',
+    'page-0.md (#1638)',
+    'page-1.md (#1638)',
+    'page-2.md (#1638)',
+  ]);
 });
 
 test('weekly tidy reviews once, archives by refreshed status, then condenses each large page in its own call', async t => {
