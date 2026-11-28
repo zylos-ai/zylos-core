@@ -11,6 +11,7 @@ import { C4Reader } from '../src/lib/c4-reader.js';
 import { AuthGate } from '../src/lib/auth.js';
 
 import { ChatHistory } from '../src/lib/chat/history.js';
+import { ChatConversations } from '../src/lib/chat/conversations.js';
 import { handleChatHistory } from '../src/lib/chat/history-routes.js';
 import { sendJson } from '../src/lib/http.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
@@ -135,6 +136,23 @@ test('Dashboard history quotes replies to earlier owner messages', t => {
   const summary = history.list().items.find(row => row.id === id);
   assert.equal(summary.preview, 'Latest reply');
   assert.equal(summary.endpoint_id, 'a');
+});
+
+test('Mine list and read anchor report the same unread count', t => {
+  const { add, history, store } = fixture(t, true);
+  history.conversations = new ChatConversations({ store });
+  const dialog = { channel: 'dashboard', endpoint_id: 'a', session_group: 'dash-owned:a' };
+  const id = groupId(dialog.session_group);
+  add({ ...dialog, id: 1, direction: 'out' });
+  history.markRead(id, 1);
+  for (const msg of [2, 3, 4]) add({ ...dialog, id: msg, direction: 'out' });
+  add({ ...dialog, id: 5 });
+
+  const row = history.list().items.find(item => item.id === id);
+  const anchor = history.messages(id, { anchor: 'read' });
+  assert.equal(row.unreadCount, 3);
+  assert.equal(row.unreadCount, anchor.unreadCount);
+  assert.equal(row.unread, true);
 });
 
 test('message pages use C4 ids across gaps and later polling never crosses groups', t => {
