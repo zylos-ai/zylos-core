@@ -9,6 +9,15 @@ defers the launch. The schedule, dates and weekly day use the workspace's
 `.env` timezone. The memory snapshot remains scheduled at 03:00. Results from
 a late dream enter the following snapshot.
 
+Dream calls use the instance's configured runtime. Each runtime has its own
+dream model and effort: `zylos config set memory_dream_model <model>` and
+`zylos config set memory_dream_effort <effort>` save them for the currently
+configured runtime, `get` shows the value in effect and `unset` restores the
+runtime's default. The effort must be one the runtime accepts; Antigravity has no
+separate effort (its model name carries it). Values saved for another runtime are
+kept but not used until the instance runs on that runtime again. Dashboard
+settings edit the same values.
+
 Dreaming reads full delivered conversations and outgoing replies from C4, between
 each group's checkpoint and delivered frontier. The first stage uses up to three
 parallel calls without tools. Each receives up to 150 KiB of cleaned conversation

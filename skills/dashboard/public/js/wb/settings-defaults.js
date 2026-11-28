@@ -6,6 +6,7 @@ import { element, fallbackName, icon, runtimeName } from './plain-text.js';
 import { annotateStatus } from './board.js';
 import { knownGroupTotal, modelFollowerFilter, readSettingsGroups, runtimeFollowerFilter, runtimeOverrideFilter, settingsCard } from './settings.js';
 import { mountPagedList } from './paged-list.js';
+import { renderDream } from './settings-dream.js';
 
 export function runtimeNotFound(snapshot, runtime) {
   return runtimeInstallPolicy(runtime) === 'whenUsed' && snapshot?.instance?.versions?.[runtime]?.installed === null;
@@ -88,7 +89,7 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
   t = key => key, read, recheck, execute, confirm = async () => false, writable = () => true, onGroup = () => {}, version = () => {},
   operation = () => instance?.operation_in_progress ?? null, onInstance = () => {} } = {}) {
   root.replaceChildren();
-  let baselineRuntime = instance?.default_runtime ?? null, destroyed = false;
+  let baselineRuntime = instance?.default_runtime ?? null, destroyed = false, dream = null;
   const loadedNames = new Map();
   function remember(row) {
     if (row.displayName != null) loadedNames.set(row.id, row.displayName);
@@ -227,6 +228,7 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
         return;
       }
       baselineRuntime = result?.data?.baseline ?? runtime;
+      dream?.apply(null, baselineRuntime);
       const saved = t(result?.messageKey ?? 'result.runtime_saved', {
         ...result?.messageParams, value: runtimeName(baselineRuntime),
       });
@@ -521,14 +523,19 @@ export function renderDefaults(root, { instance, groupCounts = {}, metadata = {}
     operationNote.hidden = !current;
     operationNote.textContent = runtimeOperationText(current, t);
     for (const { node, lock: fn } of controls) node.disabled = fn();
+    dream?.refresh();
   }
   // The server's newest instance data. With nothing in progress, its default runtime is the current one.
   function applyInstance(next) {
     if (!next || destroyed) return;
     instance = next;
     if (!operation() && typeof next.default_runtime === 'string') baselineRuntime = next.default_runtime;
+    dream?.apply(next, baselineRuntime);
     redrawEngine();
   }
+  // ─── Nightly dreaming model and effort of the current engine ───
+  dream = renderDream(root, { instance, metadata, document, t, execute, confirm, technical,
+    writable: () => !destroyed && writable() });
   redrawEngine(); redrawModels();
   return {
     destroy() { destroyed = true; engineFeedback.reset(); modelFeedback.reset(); },

@@ -7,9 +7,12 @@ import { LEGACY_KEYS, loadRuntimeContexts, modelThreshold, readDefaultModels, re
  *   zylos config get <key>        Get a config value
  *   zylos config set <key> <val>  Set a config value
  *   zylos config unset alert_target  Remove the alert target (alerts go to the Origin conversation)
+ *   zylos config unset memory_dream_model|memory_dream_effort  Restore the current runtime's dream default
  */
 
 import { readZylosConfigOrThrow, updateZylosConfigLocked } from '../lib/config.js';
+import { DREAM_SETTING_KEYS, dreamSettingUpdate, dreamSettings } from '../lib/dream-settings.js';
+import { DEFAULT_RUNTIME, getRuntime, runtimeDisplayName } from '../lib/runtime/index.js';
 import { switchProtocol, isCaddyAvailable } from '../lib/caddy.js';
 import { parseServerAlertTarget } from '../../skills/activity-monitor/scripts/supervisor-server-observation.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
@@ -56,22 +59,33 @@ export async function configCommand(args) {
   if (sub === 'unset') {
     const key = args[1];
     if (!key || args.length > 2) {
-      console.error('Usage: zylos config unset alert_target');
+      console.error(`Usage: zylos config unset ${[...UNSETTABLE].join('|')}`);
       process.exit(1);
     }
     return unsetConfig(key);
   }
 
   console.error(`Unknown config subcommand: ${sub}`);
-  console.error('Usage: zylos config [get <key> | set <key> <value> | unset alert_target]');
+  console.error(`Usage: zylos config [get <key> | set <key> <value> | unset ${[...UNSETTABLE].join('|')}]`);
   process.exit(1);
 }
 
 /** Legacy threshold keys: `set` writes the engine default model's entry, so show that effective value. */
 const THRESHOLD_RUNTIME = Object.fromEntries(Object.entries(LEGACY_KEYS).map(([runtime, key]) => [key, runtime]));
 
+/** Dream settings are stored per runtime; the configured runtime's effective value is the one shown and changed. */
+const DREAM_KIND = Object.fromEntries(Object.entries(DREAM_SETTING_KEYS).map(([kind, key]) => [key, kind]));
+const configuredRuntime = config => getRuntime(config.runtime ?? DEFAULT_RUNTIME);
+
 async function displayValues(config, keys = Object.keys(config)) {
   const effective = {};
+  if (keys.some(key => Object.hasOwn(DREAM_KIND, key))) {
+    const settings = dreamSettings(config, await configuredRuntime(config));
+    for (const key of keys.filter(key => Object.hasOwn(DREAM_KIND, key))) {
+      const value = settings[DREAM_KIND[key]];
+      if (value !== null) effective[key] = value;
+    }
+  }
   const thresholdKeys = keys.filter(key => Object.hasOwn(THRESHOLD_RUNTIME, key));
   if (thresholdKeys.length) {
     const contexts = await loadRuntimeContexts();
@@ -86,6 +100,7 @@ async function displayValues(config, keys = Object.keys(config)) {
   const values = {};
   for (const key of keys) {
     if (Object.hasOwn(effective, key)) values[key] = effective[key];
+    else if (Object.hasOwn(DREAM_KIND, key)) continue;
     else if (key in config) values[key] = config[key] !== null && typeof config[key] === 'object' ? JSON.stringify(config[key]) : config[key];
   }
   return values;
@@ -97,7 +112,8 @@ async function showConfig() {
     console.log(dim('No configuration found. Run "zylos init" first.'));
     return;
   }
-  for (const [key, value] of Object.entries(await displayValues(config))) {
+  const keys = [...new Set([...Object.keys(config), ...Object.values(DREAM_SETTING_KEYS)])];
+  for (const [key, value] of Object.entries(await displayValues(config, keys))) {
     console.log(`${bold(key)} = ${cyan(value)}`);
   }
 }
@@ -107,6 +123,9 @@ async function getConfig(key) {
   const values = await displayValues(config, [key]);
   if (Object.hasOwn(values, key)) {
     console.log(values[key]);
+  } else if (Object.hasOwn(DREAM_KIND, key)) {
+    console.error(red(`${runtimeDisplayName(config.runtime ?? DEFAULT_RUNTIME)} has no separate dream ${DREAM_KIND[key]}`));
+    process.exit(1);
   } else {
     console.error(red(`Key not found: ${bold(key)}`));
     process.exit(1);
@@ -114,6 +133,7 @@ async function getConfig(key) {
 }
 
 async function setConfig(key, value) {
+  if (Object.hasOwn(DREAM_KIND, key)) return writeDreamSetting(key, value);
   if (Object.hasOwn(THRESHOLD_RUNTIME, key)) {
     const runtime = THRESHOLD_RUNTIME[key];
     const model = readDefaultModels({ contexts: await loadRuntimeContexts() })[runtime];
@@ -156,12 +176,26 @@ async function setConfig(key, value) {
   }
 }
 
-/** Keys `zylos config unset` may remove; removing others would change how the instance runs. */
-const UNSETTABLE = new Set(['alert_target']);
+async function writeDreamSetting(key, value) {
+  const config = readZylosConfigOrThrow();
+  const runtime = await configuredRuntime(config);
+  let update;
+  try { update = dreamSettingUpdate(runtime, DREAM_KIND[key], value); }
+  catch (failure) { throw Object.assign(new Error(failure.message), { code: 'CONFIG_VALUE_INVALID' }); }
+  updateZylosConfigLocked(update);
+  const settings = dreamSettings(readZylosConfigOrThrow(), runtime);
+  const kind = DREAM_KIND[key], previous = dreamSettings(config, runtime);
+  const label = value === null ? `${settings[kind]} ${dim('(default)')}` : cyan(settings[kind]);
+  console.log(`${bold(key)} = ${label} ${dim(`(${runtimeDisplayName(runtime.id)}; was: ${previous[kind]})`)}`);
+}
 
-function unsetConfig(key) {
+/** Keys `zylos config unset` may remove; removing others would change how the instance runs. */
+const UNSETTABLE = new Set(['alert_target', ...Object.values(DREAM_SETTING_KEYS)]);
+
+async function unsetConfig(key) {
+  if (Object.hasOwn(DREAM_KIND, key)) return writeDreamSetting(key, null);
   if (!UNSETTABLE.has(key)) {
-    const refused = new Error(`zylos config unset only accepts alert_target, not ${key}`);
+    const refused = new Error(`zylos config unset only accepts ${[...UNSETTABLE].join(', ')}, not ${key}`);
     refused.code = 'CONFIG_KEY_RESERVED';
     throw refused;
   }

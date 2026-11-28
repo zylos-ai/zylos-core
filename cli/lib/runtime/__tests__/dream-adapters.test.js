@@ -7,8 +7,9 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { getRuntime } from '../index.js';
 import { agyConfigurationPaths } from '../agy/hooks.js';
+import { dreamSettings } from '../../dream-settings.js';
 
-test('dream runtime adapters select their fixed model and medium effort with an isolated tool configuration', async t => {
+test('dream runtime adapters select their default model and medium effort with an isolated tool configuration', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dream-adapters-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const model = {
@@ -24,6 +25,8 @@ test('dream runtime adapters select their fixed model and medium effort with an 
     const options = { cwd, root, env: {}, server: '/private/memory-mcp-server.js',
       serverEnv: { ZYLOS_MEMORY_DREAM_ROOT: root }, instructions: 'System prompt', input, tools: true,
       schema: { type: 'object' } };
+    const { model: dreamModel, effort } = dreamSettings({}, runtime);
+    options.model = dreamModel; options.effort = effort;
     const prepared = runtime.dream.prepare(options);
     if (id !== 'agy') assert.equal(prepared.stdin, input);
     for (const arg of expected) assert.ok(prepared.args.includes(arg), id);

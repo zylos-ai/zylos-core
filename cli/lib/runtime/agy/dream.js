@@ -2,11 +2,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { agyConfigurationPaths } from './hooks.js';
+import { UNSUPPORTED } from '../contract.js';
 
 const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 const toolGuard = fileURLToPath(new URL('./dream-tool-guard.js', import.meta.url));
 
 export const dream = Object.freeze({
+  // The effort level is part of the Antigravity model name.
+  defaultModel: 'Gemini 4 Hydrogen (Medium)',
+  defaultEffort: UNSUPPORTED,
   decodeOutput(stdout) {
     // A single input turn produces one terminal result after the step updates.
     const output = stdout.trimEnd();
@@ -17,7 +21,7 @@ export const dream = Object.freeze({
     const answer = terminal.result.structured_output ?? terminal.result.response;
     return typeof answer === 'string' ? answer : JSON.stringify(answer ?? null);
   },
-  prepare({ instructions, input, tools, cwd, env, server, serverEnv, schema }) {
+  prepare({ instructions, input, tools, cwd, env, server, serverEnv, schema, model }) {
     const home = path.join(fs.realpathSync(cwd), 'home');
     const config = agyConfigurationPaths(home);
     function write(file, value) {
@@ -36,7 +40,7 @@ export const dream = Object.freeze({
       type: 'command', command: [process.execPath, toolGuard, ...(tools ? ['memory', descriptions, brain] : [])].map(quote).join(' '), timeout: 5,
     }] }] } });
     write(config.mcp, { mcpServers: tools ? { dream: { command: process.execPath, args: [server], env: serverEnv } } : {} });
-    const args = ['--settings', JSON.stringify(settings), '--model', 'Gemini 4 Hydrogen (Medium)',
+    const args = ['--settings', JSON.stringify(settings), '--model', model,
       '--disable-slash-commands', '--sandbox', '--output-format', 'stream-json'];
     if (schema) {
       const file = path.join(cwd, 'output-schema.json');

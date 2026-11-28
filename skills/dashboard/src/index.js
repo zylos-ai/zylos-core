@@ -1547,8 +1547,9 @@ export function createServer() {
       try {
         const body = await readJsonBody(req, 4096, { allowEmpty: Boolean(instanceAction) });
         const action = instanceAction ? (instanceAction[1] === 'upgrade-runtime' ? 'upgrade-cc' : instanceAction[1])
-          : ({ model: 'switch-model', effort: 'switch-effort', threshold: 'set-threshold', 'session-hot-ttl': 'set-session-hot-ttl' }[body?.kind]);
-        if (!action) { sendJson(res, 400, { ok: false, error: { code: 'INVALID_DEFAULT', message: 'Choose model, effort, threshold or session-hot-ttl' } }); return; }
+          : ({ model: 'switch-model', effort: 'switch-effort', threshold: 'set-threshold', 'session-hot-ttl': 'set-session-hot-ttl',
+            'dream-model': 'set-dream-model', 'dream-effort': 'set-dream-effort' }[body?.kind]);
+        if (!action) { sendJson(res, 400, { ok: false, error: { code: 'INVALID_DEFAULT', message: 'Choose model, effort, threshold, session-hot-ttl, dream-model or dream-effort' } }); return; }
         const operation = ['switch-runtime', 'upgrade-runtime'].includes(instanceAction?.[1]) ? instanceAction[1] : null;
         if (operation && runtimeOperation) {
           sendCommandJson(res, 409, { ok: false, error: 'operation_in_progress', messageKey: 'result.operation_in_progress', operation: runtimeOperation });

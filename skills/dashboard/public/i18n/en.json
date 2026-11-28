@@ -233,6 +233,7 @@
   "result.hot_ttl_multi_only": "Idle reclaim time is read-only until this instance has migrated session modes",
   "result.hot_ttl_set": "Idle reclaim time set to {minutes} minutes. It applies at the next reclaim check.",
   "result.threshold_set": "Rotation threshold set to {value}%",
+  "result.dream_saved": "Memory dreaming setting saved",
   "result.unknown_action": "Unknown action",
   "result.internal_error": "Internal error: {error}",
   "result.interrupt_failed": "Interrupt failed: {error}",

@@ -12,7 +12,9 @@ const OUTPUT_LIMIT = 64 * 1024 * 1024;
 export async function createDreamModel(root, config) {
   const { DEFAULT_RUNTIME, getRuntime } = await loadCoreModule('runtime/index.js');
   const { launchEnvironment } = await loadCoreModule('runtime/session-command.js');
+  const { dreamSettings } = await loadCoreModule('dream-settings.js');
   const runtime = await getRuntime(config.runtime ?? DEFAULT_RUNTIME);
+  const { model, effort } = dreamSettings(config, runtime);
   const env = launchEnvironment(root, process.env, { runtimeEnv: runtime.launch.env });
   const command = runtime.identity.findExecutable(env);
   if (!command) throw new Error('Configured runtime executable is unavailable');
@@ -24,7 +26,7 @@ export async function createDreamModel(root, config) {
     const toolStats = tools && path.join(cwd, 'tool-result-bytes');
     try {
       const prepared = runtime.dream.prepare({
-        instructions, input, tools, cwd, schema, root, env,
+        instructions, input, tools, cwd, schema, root, env, model, effort,
         server: fileURLToPath(new URL('./memory-mcp-server.js', import.meta.url)),
         serverEnv: {
           ZYLOS_MEMORY_DREAM_ROOT: root,
