@@ -1,17 +1,16 @@
 function models() {
   return [
-    { id: 'fable[1m]', display_name: 'Fable [1M] (latest)' },
+    { id: 'fable', display_name: 'Fable (latest)' },
     { id: 'opus', display_name: 'Opus (latest)' },
-    { id: 'opus[1m]', display_name: 'Opus [1M] (latest)' },
     { id: 'sonnet', display_name: 'Sonnet (latest)' },
-    { id: 'sonnet[1m]', display_name: 'Sonnet [1M] (latest)' },
     { id: 'haiku', display_name: 'Haiku (latest)' },
+    { id: 'claude-fable-5-2' },
     { id: 'claude-fable-5-1[1m]' },
     { id: 'claude-fable-5[1m]' },
     { id: 'claude-opus-5-5' },
-    { id: 'claude-opus-5-5[1m]' },
     { id: 'claude-opus-5' },
     { id: 'claude-opus-5[1m]' },
+    { id: 'claude-sonnet-5-5' },
     { id: 'claude-sonnet-5' },
     { id: 'claude-opus-4-8' },
     { id: 'claude-opus-4-8[1m]' },
@@ -20,7 +19,7 @@ function models() {
     { id: 'claude-opus-4-6' },
     { id: 'claude-opus-4-6[1m]' },
     { id: 'claude-sonnet-4-6' },
-    { id: 'claude-haiku-4-5-20251001' },
+    { id: 'claude-haiku-5-5' },
   ];
 }
 
