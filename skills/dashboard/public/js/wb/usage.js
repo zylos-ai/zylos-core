@@ -7,7 +7,6 @@ import { instantFromInput } from './instance-zone.js';
 const colors = ['#0d9488', '#6366f1', '#d97706'];
 export const usageRanges = ['24h', '7d', '30d', 'custom'];
 const numeric = value => Number.isFinite(Number(value)) ? Number(value) : 0;
-export const formatCost = value => value == null ? '—' : '$' + Number(value).toFixed(4);
 export const formatUsageCount = (value, t = key => key) => value == null ? t('wb.unknown') : Number(value).toLocaleString();
 /** Large counts as 215M / 8.4K, the way the summary card shows them; small counts stay exact. */
 export function compactCount(value, t = key => key) {

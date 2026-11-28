@@ -35,7 +35,6 @@ function money(value) {
   if (value == null || value === '') return '--';
   const n = Number(value);
   if (!Number.isFinite(n)) return '--';
-  if (n < 1) return `$${n.toFixed(4)}`;
   return `$${n.toFixed(2)}`;
 }
 

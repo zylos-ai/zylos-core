@@ -41,7 +41,7 @@ export function quotaReset(usage, t, now = Date.now()) {
   const duration = parts.join('\u00a0');
   return { at, time, duration, text: t('wb.quotaReset', { time, duration }) };
 }
-export const money = value => value == null ? '—' : '$' + Number(value).toFixed(Math.abs(value) >= 1 ? 2 : 4);
+export const money = value => value == null ? '—' : '$' + Number(value).toFixed(2);
 function meter(document, pct) {
   const bar = element(document, 'span', undefined, 'wb-meter');
   const fill = element(document, 'i'); fill.style.width = pct + '%'; fill.style.backgroundColor = quotaFillColor(pct);
