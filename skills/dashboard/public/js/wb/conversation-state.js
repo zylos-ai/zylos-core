@@ -16,6 +16,8 @@ const sortTime = row => conversationStampMs(row.stamp) || 0;
 const activityOrder = (a, b) => sortTime(b) - sortTime(a) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const received = row => row.direction === 'in' && row.channel && !['void', 'control'].includes(row.channel);
 export const isOwnChatMessage = row => row.direction === 'in' && row.channel === 'dashboard';
+/** Can make the conversation unread, as the server counts it: not the owner's own messages and not internal relays (Howard, Dashboard 2026-11-28). */
+export const countsUnread = row => !isOwnChatMessage(row) && row.channel !== 'internal';
 /** An answer given on a question card: the card shows it, so the message list does not (Howard, Dashboard 2026-11-28). */
 export const answersQuestion = row => {
   if (!isOwnChatMessage(row) || typeof row.content !== 'string') return false;
@@ -961,7 +963,7 @@ export function createConversationState({
       const previous = current.readUpTo;
       current.readUpTo = data.readUpTo;
       if (current.unreadCount < 100) {
-        const read = current.messages.filter(row => row.id > previous && row.id <= data.readUpTo && !isOwnChatMessage(row)).length;
+        const read = current.messages.filter(row => row.id > previous && row.id <= data.readUpTo && countsUnread(row)).length;
         current.unreadCount = Math.max(0, current.unreadCount - read);
       }
       await readUnread(current, id, e);
@@ -1013,7 +1015,7 @@ export function createConversationState({
         current.gap = null;
         current.recoveryOlder = false;
         current.unreadDividerId = current.unreadCount > 0
-          ? data.items.find(row => row.id > data.readUpTo && !isOwnChatMessage(row))?.id ?? null : null;
+          ? data.items.find(row => row.id > data.readUpTo && countsUnread(row))?.id ?? null : null;
         current.positionAtUnread = true;
         current.timelineRevision++;
       }
