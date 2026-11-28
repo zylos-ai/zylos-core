@@ -71,5 +71,5 @@ export function ruleReviewMaterial({ root, candidates, extracted, conversations,
     };
   });
   const target = parseServerAlertTarget(alertTarget);
-  return { askOwnerVia: target?.channel ? target : DEFAULT_ALERT_DESTINATION, candidates: reviews };
+  return { askOwnerVia: target?.default ? DEFAULT_ALERT_DESTINATION : target, candidates: reviews };
 }

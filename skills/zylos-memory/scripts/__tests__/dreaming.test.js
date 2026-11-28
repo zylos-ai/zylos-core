@@ -256,6 +256,10 @@ test('a completed dream queues the rule review for Origin and publishes the diar
   assert.deepEqual(controls[0].slice(3), ['--no-ack-suffix']);
   const { askOwnerVia, candidates } = JSON.parse(read(materialPath));
   assert.deepEqual(askOwnerVia, { channel: 'telegram', endpoint: 'fixture:owner' });
+  const route = { root, candidates: rules, extracted: [], conversations: [] };
+  assert.equal(ruleReviewMaterial(route).askOwnerVia, null);
+  assert.deepEqual(ruleReviewMaterial({ ...route, alertTarget: 'default' }).askOwnerVia,
+    { channel: 'dashboard', endpoint: 'origin' });
   const [first, second] = candidates;
   assert.equal(first.text, rules[0].text);
   assert.equal(first.source, rules[0].source);
