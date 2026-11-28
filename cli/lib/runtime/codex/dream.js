@@ -26,9 +26,8 @@ function listMcpServerNames(env, cwd) {
   const names = new Set();
   for (const server of servers) {
     const name = server?.name;
-    // Codex accepts periods in server names, but splits CLI override keys on periods.
-    if (typeof name !== 'string' || !name || /[^a-zA-Z0-9_:@/\-]/.test(name)) {
-      throw new Error('Codex MCP list query failed: invalid or unsupported server name');
+    if (typeof name !== 'string' || !name) {
+      throw new Error('Codex MCP list query failed: invalid server name');
     }
     names.add(name);
   }
@@ -53,7 +52,14 @@ export const dream = Object.freeze({
       fs.writeFileSync(file, JSON.stringify(schema), { mode: 0o600 });
       args.push('--output-schema', file);
     }
-    for (const name of serverNames) args.push('-c', `mcp_servers.${name}.enabled=false`);
+    if (serverNames.size > 0) {
+      // Quoted TOML keys preserve names that Codex would split in a dotted CLI key.
+      const disabled = [...serverNames].map(name => {
+        const key = JSON.stringify(name).replaceAll('\x7f', '\\u007F');
+        return `${key}={enabled=false}`;
+      });
+      args.push('-c', `mcp_servers={${disabled.join(',')}}`);
+    }
     if (tools) {
       let name = 'dream';
       for (let suffix = 1; serverNames.has(name); suffix++) name = `dream-${suffix}`;

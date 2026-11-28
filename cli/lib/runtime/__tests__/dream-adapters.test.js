@@ -30,7 +30,11 @@ test('dream runtime adapters select their default model and medium effort with a
         HOME: process.env.HOME,
         ZYLOS_DIR: process.env.ZYLOS_DIR,
         CODEX_BIN: fileURLToPath(new URL('./fixtures/dream-codex-mcp-list.sh', import.meta.url)),
-        TEST_CODEX_MCP_LIST: JSON.stringify([{ name: 'user-mcp', enabled: true }, { name: 'dream', enabled: false }]),
+        TEST_CODEX_MCP_LIST: JSON.stringify([
+          { name: 'user.mcp', enabled: true },
+          { name: 'user mcp', enabled: true },
+          { name: 'dream', enabled: false },
+        ]),
       };
     }
     const { model: dreamModel, effort } = dreamSettings({}, runtime);
@@ -61,8 +65,7 @@ test('dream runtime adapters select their default model and medium effort with a
           ['-c', 'web_search="disabled"'],
           ['-c', 'notify=[]'],
           ['-c', 'developer_instructions="System prompt"'],
-          ['-c', 'mcp_servers.user-mcp.enabled=false'],
-          ['-c', 'mcp_servers.dream.enabled=false'],
+          ['-c', 'mcp_servers={"user.mcp"={enabled=false},"user mcp"={enabled=false},"dream"={enabled=false}}'],
           ['-c', 'mcp_servers.dream-1.default_tools_approval_mode="approve"'],
           ['--output-last-message', prepared.answer],
           ['--output-schema', path.join(cwd, 'output-schema.json')],
@@ -72,9 +75,6 @@ test('dream runtime adapters select their default model and medium effort with a
         }
         assert.deepEqual(prepared.args.slice(-3), ['-c', 'mcp_servers.dream-1.enabled=true', '-']);
         assert.ok(!prepared.args.some(arg => arg.startsWith('mcp_servers.dream.command=')));
-        assert.throws(() => runtime.dream.prepare({ ...options,
-          env: { ...options.env, TEST_CODEX_MCP_LIST: '[{"name":"unsafe.name"}]' } }),
-        /Codex MCP list query failed: invalid or unsupported server name/);
         break;
       case 'agy': {
         const config = agyConfigurationPaths(prepared.env.HOME);
