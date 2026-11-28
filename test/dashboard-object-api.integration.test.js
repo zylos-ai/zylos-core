@@ -247,6 +247,8 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   seedStore = new Store(path.join(data, 'dashboard.db'));
+  seedStore.insertEvent({ id: 'fixture-main-prompt', ingest_id: 'fixture-main-prompt', timestamp: new Date(clock - 1000).toISOString(),
+    session_group: 'telegram:working', run_id: 'fixture-run', event_type: 'user_prompt_submit', category: 'agent' });
   seedStore.insertEvent({ id: 'fixture-child', ingest_id: 'fixture-child', timestamp: new Date(clock - 1000).toISOString(), session_group: 'telegram:child', run_id: 'fixture-run',
     event_type: 'subagent_start', category: 'agent', metadata: { agent_id: 'fixture-child' } });
   for (const [group, child] of [['origin', 'hook-child'], [null, 'legacy-child']]) seedStore.insertEvent({

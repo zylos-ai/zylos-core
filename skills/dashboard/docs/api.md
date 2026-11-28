@@ -326,10 +326,10 @@ Lists contain presentation observations only. Running rows have exactly these fi
 | `displayName` | string | Effective human-readable name or fallback |
 | `channel` | string / null | Channel namespace; Origin has no channel |
 | `runtime`, `model` | string / null | Current runtime and model observations |
-| `state` | `{kind:string,since:string\|null,stale?:boolean,sampledAt?:string,lastState?:"busy"\|"idle"}` | Mutually exclusive primary state and its known start; stale observations retain the last busy/idle classification for less than 60 seconds. Older samples become unknown while retaining sampledAt/lastState for an explicitly historical hint |
+| `state` | `{kind:string,since:string\|null,stale?:boolean,sampledAt?:string,lastState?:"busy"\|"idle"}` | Mutually exclusive primary state and its known start. A stale busy/idle sample remains usable for less than 60 seconds. Older samples yield `unknown` with `sampledAt` and `lastState` as historical context |
 | `duration` | number / null | State duration in seconds; a tolerated stale idle sample retains its last recorded idle duration |
 | `flags` | object | Independent conditions, below |
-| `mainAgent` | `busy` / `idle` / `unknown` | Main Agent observation for instruction callers; UI does not display it |
+| `mainAgent` | `busy` / `idle` / `unknown` | Activity monitor observation for instruction callers; UI does not display it |
 | `contextPct` | number / null | Current session context percentage |
 | `lastActivityAt` | string / null | Time of the latest received C4 message, or the first visible message if the group has never received one. Null when neither exists |
 | `runtimeOverridden`, `modelOverridden` | boolean / null | Explicit runtime and model override observations; null when the evidence cannot establish the answer |
@@ -341,14 +341,14 @@ In single-session mode, Origin receives messages from every channel group. Its p
 
 | Primary state | Meaning |
 |---|---|
-| `working` | Process is present and the main Agent, a child Agent or a command is working |
-| `idle` | Process is present with none of those activities |
+| `working` | Running group whose conversation activity header reads `working.on` as true because the main Agent, a child Agent or a command is working |
+| `idle` | Running group with no work reported by the conversation activity header's `working.on` reading |
 | `starting` | Process launch is in progress |
 | `stopping` | Present process has a stop/restart/reclaim fence |
 | `offline` | Confirmed no process; represented by offline-list membership |
 | `unknown` | Process/activity state cannot be established; belongs to the running side |
 
-`mainAgent` and primary state answer different questions: a child-only workload is `working` with `mainAgent:"idle"`.
+A running group needs a readable or tolerated stale activity-monitor sample to qualify as `working` or `idle`. The conversation activity header's event-based reading selects the primary state. The sample's activity-monitor reading remains available as `mainAgent` for instruction callers. A child-only workload can be `working` with `mainAgent:"idle"`.
 
 | Flag key | Value fields and types | Meaning |
 |---|---|---|
