@@ -203,6 +203,21 @@
   border-radius:50%;
   background:var(--accent);
 }
+.conversation-unread-dot.conversation-unread-count {
+  width:auto;
+  min-width:18px;
+  height:18px;
+  padding:0 5px;
+  box-sizing:border-box;
+  border-radius:9px;
+  color:var(--wb-on-fill);
+  font-size:var(--fs-caption);
+  font-weight:var(--fw-strong);
+  line-height:18px;
+  text-align:center;
+  font-variant-numeric:tabular-nums;
+}
+.conversation-list-time.conversation-list-time-unread { color:var(--accent); }
 .conversation-list-notice {
   padding:8px;
   text-align:center

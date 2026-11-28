@@ -2046,6 +2046,13 @@ export function mountConversationPage({
       if (row.canPin && pinned && !s.search) row.wrapper.dataset.pinId = item.id;
       else delete row.wrapper.dataset.pinId;
       row.unreadDot.hidden = s.tab !== 'mine' || item.unread !== true;
+      // As in the App and on machine rows: the unread message count in a badge, or the dot when the server does not
+      // report it; the time takes the accent colour while unread (Howard, Dashboard 2026-11-28).
+      const unreadCount = !row.unreadDot.hidden && Number.isSafeInteger(item.unreadCount) && item.unreadCount > 0
+        ? item.unreadCount : 0;
+      row.unreadDot.classList.toggle('conversation-unread-count', unreadCount > 0);
+      text(row.unreadDot, unreadCount > 99 ? '99+' : unreadCount || '');
+      row.time.classList.toggle('conversation-list-time-unread', !row.unreadDot.hidden);
       // A blank draft has no group yet; in single-session mode only Origin is a group.
       const group = isOriginConversation(item.id) ? 'origin' : item.sessionGroup ?? item.session_group;
       const groupState = item.draft || item.state === 'draft' ? null : presence.of(group);
