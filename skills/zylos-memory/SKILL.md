@@ -9,8 +9,9 @@ description: >-
 
 The supervisor runs [memory dreaming](references/dreaming.md) independently of
 live sessions. It reads delivered C4 conversations, updates shared project and
-decision pages, and writes the dated diary. Rule proposals go to the owner for
-approval. Live sessions keep working while this process runs.
+decision pages, and writes the dated diary. When Origin receives a rule review task, follow the
+[rule review instructions](references/dream-rule-review.md) before consulting
+the owner. Live sessions keep working while this process runs.
 
 ## Continue unfinished work
 

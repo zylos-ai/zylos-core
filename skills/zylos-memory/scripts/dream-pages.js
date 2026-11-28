@@ -24,6 +24,24 @@ function pageCatalog(root, indexes) {
   }));
 }
 
+function candidateIdentifiers({ topic = '', text, source }) {
+  const words = `${topic} ${text} ${source}`
+    .replace(/\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b/g, ' ')
+    .match(/[#\p{L}\p{N}][\p{L}\p{N}_.-]*/gu) ?? [];
+  return new Set(words.map(word => normalize(word.replace(/[.-]+$/, '')))
+    .filter(word => /\d/.test(word) && (/[#\p{L}]/u.test(word) || /\d{3}/.test(word))
+      && !/^(?:v\d|\d{1,2}[hms])$/.test(word)));
+}
+
+export function matchRuleLines(item, lines) {
+  const patterns = [...candidateIdentifiers(item)].map(termPattern);
+  if (!patterns.length) return [];
+  return lines.filter(({ text }) => {
+    const normalized = normalize(text);
+    return patterns.some(pattern => pattern.test(normalized));
+  });
+}
+
 export function candidatePages(pages) {
   const body = pages.map(page => normalize(page.text.replace(/^[\s\S]*?\r?\n\s*\r?\n/, '')));
   const hits = new Map();
@@ -39,12 +57,7 @@ export function candidatePages(pages) {
     return hits.get(term);
   }
   return item => {
-    const words = `${item.topic} ${item.text} ${item.source}`
-      .replace(/\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b/g, ' ')
-      .match(/[#\p{L}\p{N}][\p{L}\p{N}_.-]*/gu) ?? [];
-    const identifiers = new Set(words.map(word => normalize(word.replace(/[.-]+$/, '')))
-      .filter(word => /\d/.test(word) && (/[#\p{L}]/u.test(word) || /\d{3}/.test(word))
-        && !/^(?:v\d|\d{1,2}[hms])$/.test(word)));
+    const identifiers = candidateIdentifiers(item);
     const scores = new Map();
     function score(index, term, weight) {
       const row = scores.get(index) ?? { index, page: pages[index].relative, score: 0, terms: new Set() };
@@ -75,7 +88,8 @@ export function stageTwoInput(root, date, extracted) {
     for (const { summary, items } of entries) {
       lines.push(summary);
       for (const item of items) lines.push(
-        `- [${item.type}, owner=${item.owner}] ${item.topic}: ${item.text.replace(/\s*\n\s*/g, ' ')} (${item.source})`,
+        `- [${item.type}, owner=${item.owner}] ${item.topic}: ${item.text.replace(/\s*\n\s*/g, ' ')} (${item.source})` +
+          (item.type === 'rule' ? ` c4_ids: ${JSON.stringify(item.c4_ids)}` : ''),
         `  Candidate pages: ${findCandidates(item).join('; ') || 'none'}`,
       );
     }

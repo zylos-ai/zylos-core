@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { enqueueMachineControl } from '../../activity-monitor/scripts/machine-control.js';
 import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
 import { durableJson } from '../../activity-monitor/scripts/runtime-generation.js';
 import { notifyOwner } from '../../comm-bridge/scripts/c4-owner-alert.js';
@@ -40,6 +41,7 @@ export async function runDream({ root, config, date: runDate, timezone, signal: 
   newModel = createDreamModel, database = () => import('../../comm-bridge/scripts/c4-db.js'),
   send = message => notifyOwner(message, { readConfig: () => config,
     log: error => console.error(`Dream notification failed: ${error.code ?? 'delivery failure'}`) }),
+  enqueue = enqueueMachineControl,
   lock = dreamLock(root),
 }) {
   const day = new Date(`${runDate}T00:00:00Z`);
@@ -108,7 +110,7 @@ export async function runDream({ root, config, date: runDate, timezone, signal: 
         }
       };
       result = await runDreamRound({ root, date, timezone, weekday, tidyWeekday, db: await database(),
-        model: call, directory, token, mutate, notify: send, signal, stats });
+        model: call, directory, token, mutate, enqueue, signal, stats });
     } catch (error) {
       result = { failed: true, warnings: [], error: error.message };
       if (controller.signal.aborted) throw error;

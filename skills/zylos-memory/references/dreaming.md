@@ -45,9 +45,14 @@ Writes already published by the models are retained.
 The date supplied to the models and used for the diary is the calendar day
 before the run. Daily records live in `activity-monitor/memory-dreaming/<date>/`. The script
 writes accepted diary text to `memory/sessions/<date>.md`, appending it to any
-existing session log. It sends proposals and alerts to `alert_target` and uses
-Dashboard Origin once when the configured target is unavailable or unset. Diary size
-has a 24 KiB soft limit.
+existing session log. Diary size has a 24 KiB soft limit.
+
+When the round finds rule candidates, it saves `rule-review.json` in the daily
+record directory and enqueues one control for Origin to
+[review the candidates](dream-rule-review.md). If enqueue fails, the usual
+owner alert includes the path to the saved material. Alerts still use
+`alert_target` and fall back to Dashboard Origin once when the configured target
+is unavailable or unset.
 
 Weekly tidy runs after a successful dream. Set the weekday with
 `zylos config set memory_tidy_weekday <0–6>` (default 0, Sunday). It checks for
