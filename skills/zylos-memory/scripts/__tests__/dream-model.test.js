@@ -17,7 +17,7 @@ test('a saved dream model and effort reach only their own runtime launch, and un
   const log = path.join(root, 'argv.jsonl'), program = path.join(root, 'runtime-cli');
   fs.writeFileSync(program, `#!${process.execPath}
 const fs = require('node:fs'), args = process.argv.slice(2);
-if (JSON.stringify(args) === '["mcp","list","--json"]') {
+if (JSON.stringify(args.slice(-3)) === '["mcp","list","--json"]') {
   process.stdout.write('[]');
   return;
 }

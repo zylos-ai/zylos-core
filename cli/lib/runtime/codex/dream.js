@@ -4,10 +4,15 @@ import path from 'node:path';
 import { UNSUPPORTED } from '../contract.js';
 import { runtimeExecutable } from '../session-command.js';
 
+const DREAM_DISABLED_FEATURE_ARGS = [
+  '--disable', 'shell_tool', '--disable', 'unified_exec', '--disable', 'hooks',
+  '--disable', 'apps', '--disable', 'multi_agent', '--disable', 'plugins',
+];
+
 function listMcpServerNames(env, cwd) {
   let output;
   try {
-    output = execFileSync(runtimeExecutable('codex', env), ['mcp', 'list', '--json'], {
+    output = execFileSync(runtimeExecutable('codex', env), [...DREAM_DISABLED_FEATURE_ARGS, 'mcp', 'list', '--json'], {
       cwd, env, encoding: 'utf8', timeout: 20_000, maxBuffer: 1024 * 1024,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
@@ -43,8 +48,7 @@ export const dream = Object.freeze({
     const answer = path.join(cwd, 'answer.json');
     const args = ['-a', 'never', 'exec', '-m', model, '-c', `model_reasoning_effort=${JSON.stringify(effort)}`,
       '--sandbox', 'read-only', '--ignore-rules', '--skip-git-repo-check',
-      '--ephemeral', '--disable', 'shell_tool', '--disable', 'unified_exec', '--disable', 'hooks',
-      '--disable', 'apps', '--disable', 'multi_agent', '--disable', 'plugins', '-c', 'web_search="disabled"',
+      '--ephemeral', ...DREAM_DISABLED_FEATURE_ARGS, '-c', 'web_search="disabled"',
       '-c', 'notify=[]', '-c', `developer_instructions=${JSON.stringify(instructions)}`,
       '--output-last-message', answer];
     if (schema) {
