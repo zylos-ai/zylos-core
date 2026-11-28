@@ -70,6 +70,8 @@ export function mountConversationPage({
   onStreamSubscription = () => {},
   // The viewed instance refused remote access (its switch is off); the host hides this page's tab.
   onRemoteDisabled = () => {},
+  // The avatar of the agent the conversations are with, for the header (null while unknown).
+  agentAvatar = () => null,
   storage = globalThis.localStorage
 } = {}) {
   let autoSelectPending = false, opened = false, selectionIdentity;
@@ -331,8 +333,8 @@ export function mountConversationPage({
   detail.setAttribute('aria-label', t('chat.history'));
   const header = node('header', undefined, 'conversation-header');
   const back = action('chat.page.back', () => backToList(), 'back', 'wb-icon-btn conversation-back');
-  const headerIcon = node('span', undefined, 'conversation-channel-icon');
-  headerIcon.append(icon(document, 'monitor'));
+  const headerAvatar = node('span', undefined, 'conversation-agent-avatar');
+  headerAvatar.hidden = true;
   const heading = node('div', undefined, 'conversation-heading'),
     titleLine = node('div', undefined, 'conversation-title-line');
   const title = node('h2'),
@@ -373,7 +375,7 @@ export function mountConversationPage({
   const listEntry = actions.at(-1);
   let listCollapsed = false;
   try { listCollapsed = storage?.getItem(LIST_KEY) === 'collapsed'; } catch {}
-  header.append(listToggle, back, headerIcon, heading);
+  header.append(listToggle, back, headerAvatar, heading);
   const renameForm = node('form', undefined, 'conversation-rename');
   renameForm.hidden = true;
   const renameInput = node('input', undefined, 'wb-input');
@@ -782,6 +784,12 @@ export function mountConversationPage({
     listToggle.setAttribute('aria-label', label(listEntry.key));
     listToggle.title = label(listEntry.key);
     listToggle.setAttribute('aria-expanded', String(!listCollapsed));
+  }
+  // Redrawn only when the avatar changes (another machine, a new picture), so a stream update does not reload it.
+  function renderAvatar() {
+    const next = agentAvatar();
+    if (headerAvatar.firstElementChild?.outerHTML !== next?.outerHTML) headerAvatar.replaceChildren(...(next ? [next] : []));
+    headerAvatar.hidden = !next;
   }
   function toggleList() {
     listCollapsed = !listCollapsed;
@@ -2138,16 +2146,7 @@ export function mountConversationPage({
     text(title, nameOf(current, s.tab === 'external'));
     updateWorkingIndicator(s);
     const channel = channelOf(current);
-    const symbol = s.tab === 'mine' ? 'monitor' : channelIcon({
-      sessionGroup: current?.sessionGroup ?? current?.session_group,
-      c4: {
-        componentName: channel
-      }
-    });
-    if (headerIcon.dataset.icon !== symbol) {
-      headerIcon.replaceChildren(icon(document, symbol));
-      headerIcon.dataset.icon = symbol;
-    }
+    renderAvatar();
     text(subtitle, channelLabel(channel) + ' · ' + t(origin ? 'chat.page.originPinned' : s.tab === 'mine' ? 'chat.page.selfCreated' : 'chat.page.readOnly'));
     text(menuSource, subtitle.textContent);
     renameToggle.hidden = !s.canRename;
@@ -2336,6 +2335,8 @@ export function mountConversationPage({
       await selectFirstDesktop();
     },
     openGroup,
+    /** The viewed machine or its avatar picture changed. */
+    renderAvatar,
     /** A group or the instance changed state (stream `groups` / `instance`). */
     groupsChanged() { if (opened) presence.refresh(); },
     popstate() {
