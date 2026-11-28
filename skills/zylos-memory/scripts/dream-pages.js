@@ -26,43 +26,37 @@ function pageCatalog(root, indexes) {
 
 export function candidatePages(pages) {
   const body = pages.map(page => normalize(page.text.replace(/^[\s\S]*?\r?\n\s*\r?\n/, '')));
-  const keyed = new Map(), hits = new Map();
-  for (const [index, page] of pages.entries()) for (const key of page.keys) {
-    if (!keyed.has(key)) keyed.set(key, []);
-    keyed.get(key).push(index);
-  }
+  const hits = new Map();
   function counts(term) {
     if (!hits.has(term)) {
       const pattern = termPattern(term);
       const found = [];
       for (const [index, text] of body.entries()) {
         if (pattern.test(text)) found.push(index);
-        if (found.length > 3) break;
       }
       hits.set(term, found);
     }
     return hits.get(term);
   }
   return item => {
-    const text = normalize(`${item.topic} ${item.text} ${item.source}`);
-    const identifiers = (`${item.topic} ${item.text} ${item.source}`).replace(/\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b/g, '')
-      .match(/[#\p{L}\p{N}][\p{L}\p{N}_-]*/gu) ?? [];
+    const words = `${item.topic} ${item.text} ${item.source}`
+      .replace(/\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b/g, ' ')
+      .match(/[#\p{L}\p{N}][\p{L}\p{N}_.-]*/gu) ?? [];
+    const identifiers = new Set(words.map(word => normalize(word.replace(/[.-]+$/, '')))
+      .filter(word => /\d/.test(word) && (/[#\p{L}]/u.test(word) || /\d{3}/.test(word))
+        && !/^(?:v\d|\d{1,2}[hms])$/.test(word)));
     const scores = new Map();
     function score(index, term, weight) {
-      const row = scores.get(index) ?? { page: pages[index].relative, score: 0, terms: new Set() };
+      const row = scores.get(index) ?? { index, page: pages[index].relative, score: 0, terms: new Set() };
       row.score += weight;
       row.terms.add(term);
       scores.set(index, row);
     }
-    for (const [key, matching] of keyed) {
-      if (!termPattern(key).test(text) || matching.length > 3 || counts(key).length > 3) continue;
-      for (const index of matching) score(index, key, 1 / matching.length);
-    }
-    for (const id of new Set(identifiers.filter(word => /\d/.test(word)).map(normalize))) {
+    for (const id of identifiers) {
       const matching = counts(id);
-      if (matching.length <= 3) for (const index of matching) score(index, id, 0.5 / matching.length);
+      for (const index of matching) score(index, id, 1 / matching.length);
     }
-    return [...scores.values()].sort((a, b) => b.score - a.score || a.page.localeCompare(b.page)).slice(0, 4)
+    return [...scores.values()].sort((a, b) => b.score - a.score || a.index - b.index).slice(0, 4)
       .map(row => `${row.page} (${[...row.terms].join(', ')})`);
   };
 }
