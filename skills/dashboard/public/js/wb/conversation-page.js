@@ -1750,6 +1750,17 @@ export function mountConversationPage({
         if (node) at = ordered.indexOf(node);
       }
     }
+    // Relays that came in after that message stay above the card, so the card is always the newest row while the AI
+    // works.
+    let above = null;
+    if (at >= 0) {
+      const relays = new Map([...messages.values()].filter(record => record.internal).map(record => [record.node, record]));
+      for (let index = at + 1; index < ordered.length; index++) {
+        const relay = relays.get(ordered[index]);
+        if (relay) { at = index; above = relay.date ?? above; }
+        else if (ordered[index].dataset?.messageId) break;
+      }
+    }
     if (!presentation || at < 0) {
       liveItem?.remove();
       liveItem = null;
@@ -1771,12 +1782,13 @@ export function mountConversationPage({
         liveItem.append(avatar, body);
       }
       const data = s.activity.data;
-      // Keep the recorded start, but never place an earlier time below the anchor message.
+      // Keep the recorded start, but never place an earlier time below the anchor message or a relay above the card.
       const started = data.working?.main?.since ?? data.working?.since ?? presentation.since
         ?? presentation.subtasks[0]?.start ?? data.awaiting?.since;
       let date = asDate(started);
       const anchorTime = shown.find(row => String(row.id) === String(presentation.anchor))?.at ?? null;
       if (anchorTime !== null && (!date || date.getTime() < anchorTime)) date = new Date(anchorTime);
+      if (above && (!date || date < above)) date = above;
       const time = liveItem.querySelector('.conversation-message-meta time');
       time.hidden = !date;
       if (date) { text(time, clockText(date)); time.dateTime = date.toISOString(); }
