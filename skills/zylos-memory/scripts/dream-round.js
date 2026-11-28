@@ -95,7 +95,7 @@ function publishDiary(root, date, text) {
 }
 
 /** One independent run. Opening a model call and publishing effects are separate operations. */
-export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday, db, model, directory, token, mutate, enqueue, signal, stats }) {
+export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday, db, model, directory, token, mutate, enqueue, alertTarget, signal, stats }) {
   const variables = promptVariables(root, timezone);
   const conversations = db.getDreamConversations();
   const { batches, noticeOnly } = makeDreamBatches(conversations, date, timezone);
@@ -158,7 +158,7 @@ export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday
     if (result?.rule_candidates.length) {
       const file = path.resolve(directory, 'rule-review.json');
       await mutate(() => {
-        const material = ruleReviewMaterial(root, result.rule_candidates, extracted, conversations);
+        const material = ruleReviewMaterial({ root, candidates: result.rule_candidates, extracted, conversations, alertTarget });
         publishReferenceFile(file, JSON.stringify(material, null, 2) + '\n');
       });
       signal?.throwIfAborted();

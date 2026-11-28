@@ -22,12 +22,15 @@ conversation.
 
 ## Ask the owner
 
-Read the current `alert_target` with `zylos config get alert_target`. Use
-Dashboard Origin when the target is unset or `default`. For Dashboard targets,
-use the Dashboard skill's choice card instructions. For other targets, send text
-through C4. If another session owns the address, use the comm-bridge skill to ask
-that thread to deliver the question and relay the owner's answer. Share only what
-the owner needs to decide.
+Use the `askOwnerVia` channel and endpoint in the material. For the `dashboard`
+channel, use the Dashboard skill's choice card instructions. For other channels,
+send text through C4. If another session owns the address, use the comm-bridge
+skill to ask that thread to deliver the question and relay the owner's answer.
+Share only what the owner needs to decide.
+
+For standing rules, use the listed destinations to decide whether the wording
+belongs in global `ZYLOS.md` or a group rules file. A candidate without original
+messages lists only `ZYLOS.md` and marks its source group as unknown.
 
 - Ask once about all candidates you recommend skipping. List each candidate and
   its reason, then ask whether the owner agrees to skip them.

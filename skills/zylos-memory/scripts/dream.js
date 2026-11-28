@@ -110,7 +110,7 @@ export async function runDream({ root, config, date: runDate, timezone, signal: 
         }
       };
       result = await runDreamRound({ root, date, timezone, weekday, tidyWeekday, db: await database(),
-        model: call, directory, token, mutate, enqueue, signal, stats });
+        model: call, directory, token, mutate, enqueue, alertTarget: config.alert_target, signal, stats });
     } catch (error) {
       result = { failed: true, warnings: [], error: error.message };
       if (controller.signal.aborted) throw error;

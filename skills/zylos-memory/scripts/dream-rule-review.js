@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { DEFAULT_ALERT_DESTINATION } from '../../activity-monitor/scripts/supervisor-server-health.js';
+import { parseServerAlertTarget } from '../../activity-monitor/scripts/supervisor-server-observation.js';
 import { dreamMessageText } from './dream-history.js';
 import { matchRuleLines } from './dream-pages.js';
 
 const MAX_MESSAGE_CHARS = 4000;
+const SESSION_GROUPS = 'memory/session-groups';
 const DESTINATIONS = {
-  rules: 'ZYLOS.md or memory/session-groups/<group>/rules.md',
   preferences: 'memory/reference/preferences.md',
   skill: 'Create or update a skill',
 };
@@ -18,13 +20,14 @@ function readIfPresent(file, read) {
   }
 }
 
+const groupRules = group => path.join(SESSION_GROUPS, group, 'rules.md');
+
 function existingRuleLines(root) {
-  const groups = 'memory/session-groups';
   const skills = '.claude/skills';
   const entries = directory => readIfPresent(path.join(root, directory), fs.readdirSync)?.sort() ?? [];
   const files = [
     'ZYLOS.md',
-    ...entries(groups).map(group => path.join(groups, group, 'rules.md')),
+    ...entries(SESSION_GROUPS).map(groupRules),
     'memory/reference/preferences.md',
     ...entries(skills).map(skill => path.join(skills, skill, 'SKILL.md')),
   ];
@@ -34,14 +37,21 @@ function existingRuleLines(root) {
   });
 }
 
-export function ruleReviewMaterial(root, candidates, extracted, conversations) {
+function suggestedDestination(destination, originalMessages) {
+  if (destination !== 'rules') return DESTINATIONS[destination];
+  const groups = new Set(originalMessages.map(({ group }) => group));
+  if (!groups.size) return 'ZYLOS.md (source group unknown)';
+  return ['ZYLOS.md', ...Array.from(groups, groupRules)].join(' or ');
+}
+
+export function ruleReviewMaterial({ root, candidates, extracted, conversations, alertTarget }) {
   // The merge may cite only rule evidence from completed, group-validated extractions.
   const allowed = new Set(extracted.flatMap(({ items }) =>
     items.filter(item => item.type === 'rule').flatMap(item => item.c4_ids)));
   const rows = new Map(conversations.flatMap(({ group, rows }) =>
     rows.filter(row => allowed.has(row.id)).map(row => [row.id, { group, row }])));
   const ruleLines = existingRuleLines(root);
-  return candidates.map(candidate => {
+  const reviews = candidates.map(candidate => {
     const requested = [...new Set(candidate.c4_ids)];
     const c4_ids = requested.filter(id => rows.has(id));
     const originalMessages = c4_ids.map(id => {
@@ -53,11 +63,13 @@ export function ruleReviewMaterial(root, candidates, extracted, conversations) {
     const matches = matchRuleLines({ ...candidate, source: [candidate.source, ...c4_ids].join(' ') }, ruleLines);
     return {
       ...candidate,
-      destination: DESTINATIONS[candidate.destination],
+      destination: suggestedDestination(candidate.destination, originalMessages),
       c4_ids,
       originalMessages,
       ...(!c4_ids.length || c4_ids.length < requested.length ? { sourceNote: 'Original message unavailable' } : {}),
       matchingRuleLines: matches.length ? matches : 'none',
     };
   });
+  const target = parseServerAlertTarget(alertTarget);
+  return { askOwnerVia: target?.channel ? target : DEFAULT_ALERT_DESTINATION, candidates: reviews };
 }

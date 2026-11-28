@@ -48,9 +48,9 @@ writes accepted diary text to `memory/sessions/<date>.md`, appending it to any
 existing session log. Diary size has a 24 KiB soft limit.
 
 When the round finds rule candidates, it saves `rule-review.json` in the daily
-record directory and enqueues one control for Origin to
-[review the candidates](dream-rule-review.md). If enqueue fails, the usual
-owner alert includes the path to the saved material. Alerts still use
+record directory with the resolved owner contact and candidate destinations.
+It enqueues one control for Origin to [review the candidates](dream-rule-review.md).
+If enqueue fails, the usual owner alert includes the path to the saved material. Alerts still use
 `alert_target` and fall back to Dashboard Origin once when the configured target
 is unavailable or unset.
 

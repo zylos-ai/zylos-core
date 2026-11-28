@@ -215,7 +215,7 @@ test('a completed dream queues the rule review for Origin and publishes the diar
   ];
   const notices = [], controls = [];
   let repaired = 0;
-  const result = await runDream({ root, config: {}, date: '2026-12-01', timezone: 'Asia/Singapore',
+  const result = await runDream({ root, config: { alert_target: ' telegram : fixture:owner ' }, date: '2026-12-01', timezone: 'Asia/Singapore',
     database: () => db, send: message => notices.push(message),
     enqueue: args => { controls.push(args); return { ok: true }; },
     newModel: () => async ({ stage, page, input, token }) => {
@@ -254,11 +254,13 @@ test('a completed dream queues the rule review for Origin and publishes the diar
   assert.ok(controls[0][2].includes(path.join(root, materialPath)));
   assert.match(controls[0][2], /zylos-memory/);
   assert.deepEqual(controls[0].slice(3), ['--no-ack-suffix']);
-  const [first, second] = JSON.parse(read(materialPath));
+  const { askOwnerVia, candidates } = JSON.parse(read(materialPath));
+  assert.deepEqual(askOwnerVia, { channel: 'telegram', endpoint: 'fixture:owner' });
+  const [first, second] = candidates;
   assert.equal(first.text, rules[0].text);
   assert.equal(first.source, rules[0].source);
   assert.equal(first.owner_stated, true);
-  assert.match(first.destination, /ZYLOS\.md/);
+  assert.equal(first.destination, 'ZYLOS.md or memory/session-groups/origin/rules.md');
   assert.deepEqual(first.c4_ids, [96383]);
   assert.deepEqual(first.originalMessages, [
     { id: 96383, group: 'origin', direction: 'out', text: 'Owner message about fixtures', truncated: false },
@@ -293,9 +295,9 @@ test('rule citations require integer arrays and are restricted to the extracted 
   assert.deepEqual(extracted[0].items[0].c4_ids, [1]);
   const { rule_candidates } = parseDreamResult('stage2', merge(candidate));
   const other = { id: 2, get content() { assert.fail('read a message from another group'); } };
-  const [review] = ruleReviewMaterial(root, rule_candidates, extracted, [
-    raw('origin', [message(1, 'Allowed evidence')]), raw('chat:peer', [other]),
-  ]);
+  const { candidates: [review] } = ruleReviewMaterial({ root, candidates: rule_candidates, extracted,
+    conversations: [raw('origin', [message(1, 'Allowed evidence')]), raw('chat:peer', [other])],
+  });
   assert.deepEqual(review.c4_ids, [1]);
   assert.equal(review.originalMessages[0].text, 'Allowed evidence');
   assert.equal(review.sourceNote, 'Original message unavailable');
