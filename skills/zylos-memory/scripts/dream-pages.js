@@ -186,8 +186,8 @@ function bodyCheck(limit) {
 async function condensePage({ root, date, relative, condense, mutate }) {
   // Read again: a live session may have edited, moved or shortened the page while earlier pages were condensed.
   let text;
-  try { text = read(root, relative); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-  if (Buffer.byteLength(text) <= PAGE_SOFT_LIMIT) return null;
+  try { text = read(root, relative); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  if (Buffer.byteLength(text) <= PAGE_SOFT_LIMIT) return false;
   const page = { relative, text };
   const { header, body } = splitHeader(text);
   const budget = PAGE_SOFT_LIMIT - Buffer.byteLength(header) - 3;
@@ -234,7 +234,7 @@ async function condensePage({ root, date, relative, condense, mutate }) {
   return changed ? `Unable to condense ${page.relative}: the page changed while it was being condensed` : null;
 }
 
-export async function tidyReference({ root, date, call, condense, repair, mutate }) {
+export async function tidyReference({ root, date, call, condense, repair, mutate, stats = { merged: 0, archived: 0, condensed: 0, condenseFailed: 0 } }) {
   const starting = pageCatalog(root, indexes(root));
   const stale = starting.filter(page => page.Status === 'active' && old(page, date));
   const errors = [];
@@ -262,6 +262,8 @@ export async function tidyReference({ root, date, call, condense, repair, mutate
         const text = fs.readFileSync(file, 'utf8');
         if (!text.split('\n').includes(pointer)) publishReferenceFile(file, `${text.trimEnd()}\n\n${pointer}\n`);
         movePage(root, archive, false, { rebuildIndex: false });
+        stats.merged++;
+        stats.archived++;
       } catch (error) {
         errors.push(`Unable to archive ${archive}: ${error.code ?? error.message}`);
       }
@@ -270,15 +272,23 @@ export async function tidyReference({ root, date, call, condense, repair, mutate
       if (!['completed', 'abandoned'].includes(page.Status) || !old(page, date)) continue;
       const relative = `reference/${kind}/${page.file}`;
       if (!pagePath(relative)) continue;
-      try { movePage(root, relative, false, { rebuildIndex: false }); }
-      catch (error) { errors.push(`Unable to archive ${relative}: ${error.code ?? error.message}`); }
+      try {
+        movePage(root, relative, false, { rebuildIndex: false });
+        stats.archived++;
+      } catch (error) { errors.push(`Unable to archive ${relative}: ${error.code ?? error.message}`); }
     }
     rebuild(root);
   });
   // Pages are measured after merging and archiving, largest first, one call each.
   for (const { relative } of largePages(root)) {
-    const error = await condensePage({ root, date, relative, condense, mutate });
-    if (error) errors.push(error);
+    // A page that vanished or shrank before processing is skipped.
+    let outcome;
+    try { outcome = await condensePage({ root, date, relative, condense, mutate }); }
+    finally {
+      if (outcome === null) stats.condensed++;
+      else if (outcome !== false) stats.condenseFailed++;
+    }
+    if (outcome) errors.push(outcome);
   }
   return errors;
 }

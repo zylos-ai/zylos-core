@@ -17,24 +17,55 @@ export async function createDreamModel(root, config) {
   const command = runtime.identity.findExecutable(env);
   if (!command) throw new Error('Configured runtime executable is unavailable');
 
-  return async ({ stage, instructions, input, tools = false, page, schema, signal }) => {
+  return async ({ stage, instructions, input, tools = false, page, schema, signal, reportToolStats }) => {
     signal?.throwIfAborted();
     const temporaryRoot = fs.realpathSync(os.tmpdir());
     const cwd = fs.mkdtempSync(path.join(temporaryRoot, 'zylos-dream-'));
+    const toolStats = tools && path.join(cwd, 'tool-result-bytes');
     try {
       const prepared = runtime.dream.prepare({
         instructions, input, tools, cwd, schema, root, env,
         server: fileURLToPath(new URL('./memory-mcp-server.js', import.meta.url)),
-        serverEnv: { ZYLOS_MEMORY_DREAM_ROOT: root, ...(page ? { ZYLOS_MEMORY_DREAM_PAGE: page } : {}) },
+        serverEnv: {
+          ZYLOS_MEMORY_DREAM_ROOT: root,
+          ...(page ? { ZYLOS_MEMORY_DREAM_PAGE: page } : {}),
+          ...(toolStats ? { ZYLOS_MEMORY_DREAM_TOOL_STATS: toolStats } : {}),
+        },
       });
       const stdout = await runModel(command, prepared, cwd, TIMEOUTS[stage], signal);
       if (prepared.answer) return fs.readFileSync(prepared.answer, 'utf8');
       const decode = runtime.dream.decodeOutput;
       return typeof decode === 'function' ? decode(stdout) : stdout;
     } finally {
+      if (toolStats && reportToolStats) {
+        try { reportToolStats(await readToolStats(toolStats)); }
+        catch (error) { console.error(`Dream tool stats unavailable: ${error.code ?? error.message}`); }
+      }
       removeOwnedTree(temporaryRoot, cwd);
     }
   };
+}
+
+async function readToolStats(file) {
+  const metrics = { toolCalls: 0, toolResultBytes: 0, maxToolResultBytes: 0 };
+  let handle;
+  try {
+    handle = await fs.promises.open(file, 'r');
+  } catch (error) {
+    if (error.code === 'ENOENT') return metrics;
+    throw error;
+  }
+  try {
+    for await (const line of handle.readLines({ autoClose: false })) {
+      const bytes = Number(line);
+      metrics.toolCalls++;
+      metrics.toolResultBytes += bytes;
+      metrics.maxToolResultBytes = Math.max(metrics.maxToolResultBytes, bytes);
+    }
+  } finally {
+    await handle.close();
+  }
+  return metrics;
 }
 
 function runModel(command, { args, env, stdin }, cwd, timeout, signal) {

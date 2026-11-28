@@ -34,14 +34,19 @@ function prompt(stage, variables) {
     .replace(/\{\{(AGENT_NAME|OWNER_NAME|TZ)\}\}/g, (_, key) => variables[key]);
 }
 
-async function retry(call, input, parse = answer => answer) {
+async function retry(call, input, parse) {
   let lastError, correction = '';
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    let answer;
-    try { answer = await call(input + correction); }
+    let invocation;
+    try { invocation = await call(input + correction); }
     catch (error) { lastError = error; continue; }
-    try { return parse(answer); }
-    catch (error) { lastError = error; correction = `\n\nValidation error: ${error.message}.\n`; }
+    if (!parse) return invocation;
+    try { return parse(invocation.answer); }
+    catch (error) {
+      invocation.fail(error);
+      lastError = error;
+      correction = `\n\nValidation error: ${error.message}.\n`;
+    }
   }
   throw lastError;
 }
@@ -100,9 +105,10 @@ function publishDiary(root, date, text) {
 }
 
 /** One independent run. Opening a model call and publishing effects are separate operations. */
-export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday, db, model, directory, token, mutate, notify, signal }) {
+export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday, db, model, directory, token, mutate, notify, signal, stats }) {
   const variables = promptVariables(root, timezone);
   const { batches, noticeOnly } = makeDreamBatches(db.getDreamConversations(), date, timezone);
+  stats.stage1.batches = batches.length;
   const results = new Array(batches.length);
   const failedBatches = [];
   const warnings = [];
@@ -125,7 +131,9 @@ export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday
           answer => parseDreamResult('stage1', answer, batch.groups.map(({ group }) => group)));
         durableJson(path.join(directory, `batch-${index + 1}.json`), result);
         results[index] = result;
+        stats.stage1.extracted += result.groups.reduce((count, group) => count + group.items.length, 0);
       } catch (error) {
+        stats.stage1.failedBatches++;
         failedBatches.push({ batch: index + 1, groups: batch.groups.map(({ group }) => group), error: error.message });
       }
     }
@@ -141,12 +149,16 @@ export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday
   const repair = () => repairPageHeaders(root, options => invoke('repair', options), mutate, failedRepairs);
   if (extracted.length) {
     const input = stageTwoInput(root, date, extracted);
-    let answer;
-    try { answer = await retry(input => invoke('stage2', { input }), input); }
+    let invocation;
+    try { invocation = await retry(input => invoke('stage2', { input }), input); }
     catch (error) { return { failedBatches, failed: true, stageTwoError: error.message, warnings }; }
     signal?.throwIfAborted();
-    try { result = parseDreamResult('stage2', answer); }
-    catch (error) {
+    const { answer, fail } = invocation;
+    try {
+      result = parseDreamResult('stage2', answer);
+      for (const key of Object.keys(stats.stage2)) stats.stage2[key] = result[key].length;
+    } catch (error) {
+      fail(error);
       fs.writeFileSync(path.join(directory, 'invalid-stage2-response.txt'), answer, { mode: 0o600 });
       warnings.push(`Memory dreaming returned an invalid second-stage result. Diary and rule candidates were skipped. ${error.message}.`);
     }
@@ -161,7 +173,7 @@ export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday
   signal?.throwIfAborted();
   if (weekday === tidyWeekday) {
     try {
-      warnings.push(...await tidyReference({ root, date, repair, mutate,
+      warnings.push(...await tidyReference({ root, date, repair, mutate, stats: stats.tidy,
         call: input => retry(input => invoke('tidy', { input }), input, answer => parseDreamResult('tidy', answer)),
         condense: (input, check) => retry(input => invoke('condense', { input }), input,
           answer => check(parseDreamResult('condense', answer).body)),
