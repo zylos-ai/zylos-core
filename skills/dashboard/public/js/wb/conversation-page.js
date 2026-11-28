@@ -1233,6 +1233,8 @@ export function mountConversationPage({
       showTechnicalDetails: technicalDetails() === true,
       chartTimeZone: () => instanceTimeZone,
       attachmentContext: { conversationId: s.selectedId, endpoint, fetch: fetcher, external: externalRow(row, s), onLayout: preserveAttachmentLayout },
+      // The owner's annotation messages of this conversation show their quotes, which open the originals.
+      onLocate: isOwnChatMessage(row) && !externalRow(row, s) && !foreignRow(row, s) ? id => void locate(id) : null,
       renderQuestion: ({
         envelope,
         block

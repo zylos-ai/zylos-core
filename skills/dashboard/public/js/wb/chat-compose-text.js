@@ -121,6 +121,81 @@ export function composeContent({ text = '', annotations = [], timeZone = null, n
   return lines.join('\n');
 }
 
+// The fixed wording of both packs (wb.en.json, wb.zh.json chat.annotation.send*): a message is read back in whichever
+// language it was sent, not the one the page shows now.
+const SENT_INTROS = [count => `请看下面我标注的 ${count} 处内容，有批注的请逐条回应。`,
+  count => `Please review the marked text below (${count} total) and respond to each comment.`];
+const SENT_HEADINGS = [/^【标注 ([1-9][0-9]*) 条】原消息都在本对话里，c4_id 是消息编号。$/,
+  /^\[Annotations: ([1-9][0-9]*)\] The original messages are in this conversation\. Use c4_id to identify each message\.$/];
+const SENT_ITEM = /^([1-9][0-9]*)\. (AI|我|Me) · (.*) · c4_id=([1-9][0-9]{0,18})$/;
+const SENT_ORIGINALS = [[/^原文(?:（前 [0-9]+ 字，全文 [0-9]+ 字，可按 c4_id 查）)?：「/, '」'],
+  [/^Original(?: \(first [0-9]+ of [0-9]+ characters, full text available by c4_id\))?: “/, '”']];
+const SENT_COMMENTS = ['批注：', 'Comment: '];
+
+function sentItem(header, body) {
+  if (!body.length) return null;
+  for (const [pattern, close] of SENT_ORIGINALS) {
+    const open = pattern.exec(body[0]);
+    if (!open) continue;
+    let end = body.length, comment = '';
+    for (let i = 1; i < body.length; i++) {
+      const prefix = SENT_COMMENTS.find(value => body[i].startsWith(value));
+      if (prefix && body[i - 1].endsWith(close)) {
+        end = i;
+        comment = [body[i].slice(prefix.length), ...body.slice(i + 1)].join('\n').trimEnd();
+        break;
+      }
+    }
+    const quoted = [body[0].slice(open[0].length), ...body.slice(1, end)].join('\n').trimEnd();
+    if (!quoted.endsWith(close)) return null;
+    const excerpt = quoted.slice(0, -close.length);
+    if (!excerpt) return null;
+    return { author: header[2], stamp: header[3], messageId: header[4], excerpt, comment };
+  }
+  return null;
+}
+
+function sentItems(lines, count) {
+  const items = [];
+  let index = 0;
+  while (index < lines.length) {
+    const header = SENT_ITEM.exec(lines[index]);
+    if (!header || Number(header[1]) !== items.length + 1) return null;
+    // Everything an item holds is indented by three spaces (or blank), so the next unindented line starts the next item.
+    const body = [];
+    for (index++; index < lines.length; index++) {
+      const line = lines[index];
+      if (line === '') body.push('');
+      else if (line.startsWith('   ')) body.push(line.slice(3));
+      else break;
+    }
+    const item = sentItem(header, body);
+    if (!item) return null;
+    items.push(item);
+  }
+  return items.length === count ? items : null;
+}
+
+/**
+ * A message composed by `composeContent` (or the App's identical composer), read back for display: `text` is the
+ * owner's own words (null for the default request sentence), `items` hold `{ author, stamp, messageId, excerpt,
+ * comment }`. Null unless the text is exactly that format; the caller then shows the text as it is.
+ */
+export function parseSentAnnotations(content) {
+  const lines = String(content ?? '').split('\n');
+  for (let h = 2; h < lines.length; h++) {
+    if (lines[h - 1] !== '') continue;
+    const heading = SENT_HEADINGS.map(pattern => pattern.exec(lines[h])).find(Boolean);
+    if (!heading) continue;
+    const items = sentItems(lines.slice(h + 1), Number(heading[1]));
+    if (!items) continue;
+    const own = lines.slice(0, h - 1).join('\n');
+    if (!own.trim()) return null;
+    return { text: SENT_INTROS.some(intro => intro(items.length) === own) ? null : own, items };
+  }
+  return null;
+}
+
 /** What the server stores: the quote's first line, then the browser's content (attachment annotations come after). */
 export function storedContent(content, quoteId) {
   return (quoteId ? `[quote c4_id=${quoteId}]\n` : '') + String(content ?? '');
