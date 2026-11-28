@@ -59,7 +59,7 @@ export function formatConversation(row, {
     ? `\nAttachments: ${path.join(SKILLS_DIR, 'dashboard', 'SKILL.md')}\n`
     : '';
   const componentHint = row.channel === 'dashboard' && row.direction === 'in'
-    ? `\nCharts/choices/forms when useful: node ${shellQuote(path.join(SKILLS_DIR, 'dashboard', 'scripts', 'components.js'))} list --json\n`
+    ? `\nPrefer a Dashboard component over plain text whenever one fits: node ${shellQuote(path.join(SKILLS_DIR, 'dashboard', 'scripts', 'components.js'))} list --json\n`
     : '';
   const suffix = componentHint + (row.endpoint_id ? `${attachmentHint} ${replyVia(row, scriptPath)}` : '');
   return truncateForDelivery(content, suffix, row.id, pasteCharThreshold, notice);
