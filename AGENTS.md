@@ -110,6 +110,15 @@ tmux socket and a dedicated test database. Before running, verify the resolved
 paths and actual targets. During cleanup, stop the test services and verify
 that their processes have exited before deleting the runtime directories.
 
+Before starting an isolated tmux server, PM2, or Zylos instance, remove every
+`ZYLOS_*` variable from the environment it would inherit. After the isolated
+tmux server starts, read back its environment with `tmux show-environment -g`
+and confirm no `ZYLOS_*` variables remain. A server started from an agent
+session can inherit that session's identity variables. Run every command
+from a PR checkout inside the isolated environment, including seemingly
+read-only commands such as `--help` or `list`. Some CLIs open and migrate their
+database at startup.
+
 Use `TZ=Asia/Singapore` for test runs. Dedicated timezone unit tests may select
 the timezone required by the case.
 
