@@ -86,11 +86,13 @@ test('cleaned batches preserve message order, split only oversized groups and pa
   const signal = '<smart-mode>omit this</smart-mode><group-context>keep this</group-context>';
   const { batches } = makeDreamBatches([
     raw('origin', [message(1, 'a'.repeat(100 * 1024) + signal), message(2, 'b'.repeat(100 * 1024))]),
+    raw('chat:overflow', [message(5, 'e'.repeat(2 * DREAM_BATCH_BYTES))]),
     raw('chat:small', [message(3, 'c'.repeat(20 * 1024))]),
     raw('chat:short', [message(4, 'd'.repeat(30 * 1024))]),
-    raw('chat:overflow', [message(5, 'e'.repeat(110 * 1024))]),
   ], '2026-11-23', 'Asia/Singapore');
-  assert.deepEqual(batches.map(batch => batch.groups.map(group => group.end)), [[1], [2], [3, 4], [5]]);
+  assert.deepEqual(batches.map(batch => batch.groups.map(group => group.end)), [[1], [2], [null], [null], [5], [3, 4]]);
+  assert.deepEqual(batches.map(batch => batch.groups.map(group => group.ids)),
+    [[[1]], [[2]], [[5]], [[5]], [[5]], [[3], [4]]]);
   assert.ok(batches.every(batch => Buffer.byteLength(batch.input) <= DREAM_BATCH_BYTES));
   assert.match(batches[0].input, /2026-11-23 08:00 OUT/);
   assert.match(batches[0].input, /<group-context>keep this<\/group-context>/);
