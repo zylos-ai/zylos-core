@@ -71,9 +71,14 @@ A PR adding or changing a Dashboard collection (list) endpoint must follow [the 
 
 ## Testing
 
-Run `npm test` for the default suite or `node scripts/run-node-tests.js --list`
-to see the collected paths. The runner discovers `*.test.js` under the root
-`test/` and the existing module test directories.
+Core currently has no test CI. Authors run quick, non-compiling checks before
+opening their PRs. Luna runs the tests affected by each change during review.
+Get Howard's approval before running the full test suite. Follow any applicable
+targeted checks documented below.
+
+Use `node scripts/run-node-tests.js --list` to see the collected paths. The runner
+discovers `*.test.js` under the root `test/` and the existing module test
+directories. With approval, use `npm test` to run the default suite.
 
 Tests never touch a live instance. The Node test runner sets `HOME` and
 `ZYLOS_DIR` to fresh temporary directories before any test module loads; do not
