@@ -1,11 +1,12 @@
 #!/usr/bin/env node
+import { dashboardConversationId } from '../../comm-bridge/scripts/dashboard-endpoint.js';
 import { validateGroupName } from '../../comm-bridge/scripts/c4-session-group.js';
 import { isMainModule } from '../../comm-bridge/scripts/is-main-module.js';
 
 export function runSessionGroup(args = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
   try {
     if (args.length !== 1) throw new Error('Expected one Dashboard conversation address.');
-    const [endpoint] = args;
+    const endpoint = dashboardConversationId(args[0]);
     if (endpoint === 'origin') throw new Error('Dashboard origin is a fixed Core address.');
     validateGroupName(endpoint);
     stdout.write(`${endpoint}\n`);

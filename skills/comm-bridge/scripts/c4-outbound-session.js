@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { dataError } from './c4-session-group.js';
+import { dashboardConversationId, dashboardReplyMessageId } from './dashboard-endpoint.js';
 import { shellQuote } from './c4-query-format.js';
 import { loadCoreConfig } from './core-config-loader.js';
 
@@ -34,6 +35,11 @@ export function originReplyAllowed(api, channel, endpoint) {
   if (transition?.target_mode !== 'multi') return false;
   const [ending] = api.listRunEndings(['origin']);
   if (ending && !(ending.endedAt < transition.updated_at)) return false;
+  const replyId = channel === 'dashboard' ? dashboardReplyMessageId(endpoint) : undefined;
+  if (replyId) {
+    return Boolean(api.getDb().prepare("SELECT 1 FROM conversations WHERE id=? AND channel='dashboard' AND endpoint_id=? AND direction='in' AND session_group='origin'")
+      .get(replyId, dashboardConversationId(endpoint)));
+  }
   return Boolean(api.getDb().prepare("SELECT 1 FROM conversations WHERE channel=? AND endpoint_id=? AND direction='in' AND session_group='origin' LIMIT 1")
     .get(channel, endpoint));
 }

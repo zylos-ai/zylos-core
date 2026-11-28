@@ -116,6 +116,27 @@ test('mine requires the Dashboard namespace binding and exact local endpoint rou
 // Real Dashboard name/pin data and private C4. Run for list search, pin or
 // keyset scope changes. The same isolated fixture owns both databases.
 
+test('Dashboard history quotes replies to earlier owner messages', t => {
+  const { add, history } = fixture(t);
+  const dialog = { channel: 'dashboard', endpoint_id: 'a', session_group: 'dash-owned:a' };
+  add({ ...dialog, id: 1, content: 'First question' });
+  add({ ...dialog, id: 2, content: 'Latest question' });
+  add({ ...dialog, id: 3, direction: 'out', endpoint_id: 'a|msg:1', content: 'Earlier reply' });
+  add({ ...dialog, id: 4, endpoint_id: 'b', session_group: 'dash-owned:b', content: 'Unrelated question' });
+  add({ ...dialog, id: 5, direction: 'out', endpoint_id: 'a|msg:2', content: 'Latest reply' });
+  const id = groupId(dialog.session_group);
+  const { items, unreadCount } = history.messages(id, { anchor: 'read' });
+  const earlier = items.find(row => row.id === 3);
+  const latest = items.find(row => row.id === 5);
+  assert.deepEqual(earlier.quote, { id: 1, direction: 'in', internal: false,
+    timestamp: '2026-01-01 12:00:00', preview: 'First question', available: true });
+  assert.equal(latest.quote, undefined);
+  assert.equal(unreadCount, 2);
+  const summary = history.list().items.find(row => row.id === id);
+  assert.equal(summary.preview, 'Latest reply');
+  assert.equal(summary.endpoint_id, 'a');
+});
+
 test('message pages use C4 ids across gaps and later polling never crosses groups', t => {
   const f = fixture(t);
   for (const id of [1, 5, 12, 20, 41]) f.add({ id });

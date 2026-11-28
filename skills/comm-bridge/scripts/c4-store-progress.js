@@ -1,4 +1,5 @@
 import { dataError, requireGroup } from './c4-session-group.js';
+import { dashboardConversationIdSql } from './dashboard-endpoint.js';
 export function progressFunctions({ read, write, snapshot, get, all, run, dependencies }) {
   const loadable = "((direction='in' AND status='delivered') OR direction='out')";
   const scope = group => group === '*' ? { sql: '', args: [] } : { sql: ' AND session_group=?', args: [requireGroup(group)] };
@@ -90,7 +91,7 @@ export function progressFunctions({ read, write, snapshot, get, all, run, depend
       SELECT MAX(id) FROM conversations
       WHERE julianday(timestamp)>=julianday(?)${f.sql}
         AND NOT (direction='out' AND COALESCE(delivery_action,'')='system_notice')
-      GROUP BY channel,endpoint_id
+      GROUP BY channel, CASE WHEN channel='dashboard' THEN ${dashboardConversationIdSql('endpoint_id')} ELSE endpoint_id END
     ) LIMIT 1`, since, ...f.args);
   }
   function unsummarized(c, group, { upToConversationId, limit, afterConversationId } = {}) {

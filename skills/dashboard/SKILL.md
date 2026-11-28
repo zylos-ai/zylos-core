@@ -49,16 +49,19 @@ Dashboard ships inside Core, so the Core it runs on always provides the
 synchronous BeforeSend hook and post-storage stdin delivery this channel needs.
 The channel declaration adds no separate service or registration step.
 
-Send plain text through the C4 send entry, using the original conversation ID as
-the endpoint. Core queries Dashboard for its local group name:
+Send through the C4 send entry. Each Dashboard conversation message's reply
+route ends with `|msg:<id>` (except Origin). Use the route of the message you are
+answering, normally the latest one. To answer messages separately or return to
+an earlier question, use that message's route. For proactive sends, use the
+bare conversation ID.
 
 ```bash
-cat <<'EOF_MESSAGE' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js dashboard conversation_a
+cat <<'EOF_MESSAGE' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js dashboard 'conversation_a|msg:42'
 Your plain-text reply.
 EOF_MESSAGE
 ```
 
-Use the exact endpoint/group from the originating conversation; display names do
+Use the reply route from the originating conversation; display names do
 not select a destination. Do not call the low-level `c4-db.js insert` command for
 Dashboard sends: it bypasses BeforeSend. Core stores the original text, then
 passes the six-field delivery packet to `scripts/send.js` on stdin; the script's
@@ -230,7 +233,7 @@ node <skills-dir>/dashboard/scripts/attachments.js register --conversation <loca
 node <skills-dir>/dashboard/scripts/attachments.js resolve --conversation <local-id> --id <attachment-id>
 ```
 
-Take the local conversation ID from the current Dashboard reply route. `register`
+Use the conversation ID before `|msg:` in the Dashboard reply route. `register`
 accepts only ordinary readable files under the resolved instance's
 `components/dashboard/media`, `workspace`, or `/tmp`. `--kind image` requires
 PNG, JPEG, GIF or WebP magic bytes. The private copy survives moving or deleting

@@ -3,6 +3,8 @@ import path from 'node:path';
 import { DATA_DIR } from './c4-config.js';
 import { parseAttachmentAnnotation, splitContentAndAttachments } from './attachment-annotations.js';
 import { parseC4Content } from './c4-content-schema.js';
+import { dashboardConversationId } from './dashboard-endpoint.js';
+import { dashboardReplyQuotes } from './dashboard-reply-quotes.js';
 import { parseChatQuote, stripChatQuote } from './chat-quote.js';
 
 // Owner identity already lives in Core memory; do not introduce a second record.
@@ -32,16 +34,21 @@ export function resolveDashboardQuote(row, database) {
 
 /** Resolve only this output's references in one read, then apply the delivery scope rule. */
 export function resolveDashboardQuotes(rows, getDatabase) {
-  const references = rows.filter(row => row.channel === 'dashboard' && row.direction === 'in')
-    .map(row => ({ row, quote: quoteReference(row) })).filter(item => item.quote);
+  const outbound = dashboardReplyQuotes(rows, getDatabase);
+  const references = rows.filter(row => row.channel === 'dashboard')
+    .map(row => ({ row, id: row.direction === 'in' ? quoteReference(row)?.id : outbound.get(row.id) }))
+    .filter(item => item.id);
   if (!references.length) return new Map();
-  const ids = [...new Set(references.map(item => item.quote.id))];
+  const ids = [...new Set(references.map(item => item.id))];
   const targets = new Map(getDatabase().prepare(`SELECT * FROM conversations
     WHERE id IN (SELECT value FROM json_each(?)) AND direction IN ('in','out')`)
     .all(JSON.stringify(ids)).map(row => [row.id, row]));
-  return new Map(references.flatMap(({ row, quote }) => {
-    const target = targets.get(quote.id);
-    return target?.session_group === row.session_group ? [[row.id, target]] : [];
+  return new Map(references.flatMap(({ row, id }) => {
+    const target = targets.get(id);
+    if (!target || target.session_group !== row.session_group) return [];
+    if (row.direction === 'out' && (target.direction !== 'in' || target.channel !== 'dashboard'
+      || target.endpoint_id !== dashboardConversationId(row.endpoint_id))) return [];
+    return [[row.id, target]];
   }));
 }
 

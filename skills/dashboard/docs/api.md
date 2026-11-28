@@ -731,6 +731,15 @@ Schedule `nextRunAt`, `lastRunAt`, `updatedAt`, history `executedAt`/`completedA
 | `GET /api/conversations/drafts/:id/deletion` | Local-owner-only draft deletion preview. Here `:id` is the bare `conversation.localId` returned by `POST /api/conversations/drafts`, also available as `items[].localId` on draft rows in the conversation list. Do not pass the `d:`-prefixed conversation ID. Example: with `localId:"550e8400-e29b-41d4-a716-446655440000"`, `GET /api/conversations/drafts/550e8400-e29b-41d4-a716-446655440000/deletion`. |
 | `DELETE /api/conversations/drafts/:id` | Local-owner-only; `:id` is the same bare `localId` used for the preview. JSON `{confirmed:true,operationId,cutoffId}` from the preview. Returns `{ok:true,...deletionResult}`. Example: `DELETE /api/conversations/drafts/550e8400-e29b-41d4-a716-446655440000` with the preview's confirmation values. Passing `d:<uuid>` returns 404 `chat_conversation_not_found`. |
 
+A Dashboard reply sent through the agent's `<conversation-id>|msg:<id>`
+route carries a `quote` object in message history when a newer owner message
+in that conversation arrived before the reply. The object has `id`,
+`direction`, `internal`, `timestamp`, `preview`, and `available`. Target
+visibility follows the existing quote rules. BeforeSend rejects a
+message-specific route before storing anything if it does not identify an
+earlier Dashboard inbound message in the same conversation. Bare routes remain
+available for proactive sends. Origin keeps its fixed routing.
+
 On the Mine tab, admin credentials also receive `summary: {latest,unread_conversations}` for the whole tab, independent of search, cursor and page size. `latest` is null when no visible non-internal message exists, otherwise `{at,title,preview}`. `at` is the ISO 8601 timestamp of the newest incoming or outgoing message across Mine, including Origin. `title` and `preview` use the conversation list's display values. Drafts without messages do not contribute. `unread_conversations` counts conversations whose list row is unread. Existing remote chat access rules apply.
 
 `GET /api/conversations`, `GET /api/conversations/:id/messages`, `GET /api/conversations/:id/status`, and `GET /api/conversations/:id/activity` read the optional `X-Zylos-Locale` request header. The exact value `en` selects English. An omitted header or any other value selects Chinese (`zh`). The locale controls server-generated preview text in list and message responses, including attachment labels and quoted-message previews. List searches also match unnamed conversations against the localized fallback title.

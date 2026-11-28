@@ -220,6 +220,30 @@ test('forged delivery packets never create attachment associations', async t => 
   acceptDelivery(original, { env: f.env }); assert.equal(f.count(), 1);
 });
 
+// Real BeforeSend, post-storage delivery and GC with the fixture's private
+// databases. Run when the attachment conversation address or recovery changes.
+test('Dashboard reply addresses preserve attachment association and recovery', async t => {
+  const f = fixture(t);
+  const inbound = f.add('Owner question', { direction: 'in' });
+  const endpoint = `${f.a.localId}|msg:${inbound.id}`;
+  const storedReply = async name => {
+    const registered = await f.register('file', name);
+    const value = content(block(registered));
+    assert.equal(f.hook(value, { endpoint }).decision, 'continue');
+    return { registered, row: f.add(value, { endpoint_id: endpoint, session_group: inbound.session_group }) };
+  };
+  const delivered = await storedReply('delivered.txt');
+  acceptDelivery(packet(delivered.row), { env: f.env });
+  const linkedId = id => f.store.db.prepare('SELECT c4_id FROM chat_attachment_messages WHERE attachment_id=?').pluck().get(id);
+  assert.equal(linkedId(delivered.registered.id), delivered.row.id);
+
+  const undelivered = await storedReply('recovered.txt');
+  assert.equal(linkedId(undelivered.registered.id), undefined);
+  f.store.db.prepare('UPDATE chat_attachments SET next_check_at=0 WHERE id=?').run(undelivered.registered.id);
+  await f.attachments.gc();
+  assert.equal(linkedId(undelivered.registered.id), undelivered.row.id);
+});
+
 // Boundary: actual missing/unopenable Core storage reaches the read-only hook.
 // Run for attachment service diagnostics; unrelated UI changes may skip.
 // Only fixture DB paths are changed; no process or runtime is started.

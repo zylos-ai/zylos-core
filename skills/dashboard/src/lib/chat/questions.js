@@ -1,3 +1,4 @@
+import { dashboardConversationId } from '../../../../comm-bridge/scripts/dashboard-endpoint.js';
 import Database from '../../../../comm-bridge/scripts/sqlite-driver.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -37,12 +38,13 @@ export function registerQuestion(row, { env = process.env } = {}) {
     }
     // Keyed by the conversation the row is sent to, not the group that
     // recorded it, so one interruptId in two conversations never collides.
-    const sessionGroup = endpointConversationGroup(db, row.endpoint_id, dashboardNamespaceReader(zylosDir));
+    const endpointId = dashboardConversationId(row.endpoint_id);
+    const sessionGroup = endpointConversationGroup(db, endpointId, dashboardNamespaceReader(zylosDir));
     if (!sessionGroup) throw new Error('Dashboard conversation of the question is unknown.');
     db.prepare(`INSERT INTO chat_questions
       (c4_id, session_group, endpoint_id, message_id, interrupt_id, question_summary, constraints, status)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'paused') ON CONFLICT(c4_id) DO NOTHING`).run(
-      String(row.id), sessionGroup, row.endpoint_id, envelope.messageId, envelope.interruptId,
+      String(row.id), sessionGroup, endpointId, envelope.messageId, envelope.interruptId,
       envelope.questionSummary, JSON.stringify({ block, interrupt: envelope.interrupt }));
     return db.prepare('SELECT * FROM chat_questions WHERE c4_id = ?').get(String(row.id));
   } catch (error) {

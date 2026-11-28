@@ -110,8 +110,13 @@ Missing or unreadable target health evidence leaves work pending without inventi
 
 ## Reply Protocol
 
-When a queued message is delivered to the agent, c4-dispatcher adds a `reply via` suffix for inbound messages that have an endpoint. Session startup context uses the same agent-facing formatting. Stored DB content and `c4-fetch` output remain clean:
+When a queued message is delivered to the agent, c4-dispatcher adds a `reply via` suffix for inbound messages that have an endpoint. Session startup context uses the same agent-facing formatting. The suffix is generated from the stored row and kept outside the message body.
 
 ```
 [TG DM] user said: hello ---- reply via: node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "telegram" "8101553026"
 ```
+
+For Dashboard conversations other than Origin, live delivery, startup history,
+and text fetch output include the inbound row ID in the reply address, for
+example `dashboard "conversation_a|msg:42"`. The inbound row keeps the bare
+conversation ID as its stored endpoint.

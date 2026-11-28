@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import path from 'node:path';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
+import { dashboardConversationId, dashboardReplyMessageId } from '../../comm-bridge/scripts/dashboard-endpoint.js';
 import { CONTENT_PREFIX, MAX_CONTENT_BYTES, parseC4Content, readC4Envelope, describeC4ContentRejection, validateAttachmentData, validateHookInput } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { isMainModule } from '../../comm-bridge/scripts/is-main-module.js';
 import { resolveUploadRoot } from './attachment-utils.js';
@@ -15,7 +18,24 @@ export function evaluateBeforeSend(input, { env = process.env } = {}) {
   if (!validateHookInput(input) || input.hook_id !== 'dashboard.content' || input.request.channel !== 'dashboard') {
     return abort('Invalid Dashboard BeforeSend input.');
   }
-  const content = input.request.content;
+  const { endpoint, options, content } = input.request;
+  const conversationId = dashboardConversationId(endpoint);
+  const replyId = dashboardReplyMessageId(endpoint);
+  if (replyId === null) return abort('Invalid Dashboard reply address. Use the original reply-via command.');
+  if (replyId !== undefined) {
+    let db;
+    try {
+      db = new Database(path.join(resolveUploadRoot(env), 'comm-bridge', 'c4.db'), { readonly: true, fileMustExist: true });
+      if (!db.prepare(`SELECT 1 FROM conversations
+        WHERE id=? AND direction='in' AND channel='dashboard' AND endpoint_id=?`).get(replyId, conversationId)) {
+        return abort('Dashboard reply target must be an earlier incoming message in this conversation.');
+      }
+    } catch {
+      return abort('Could not verify the Dashboard reply target.');
+    } finally {
+      db?.close();
+    }
+  }
   if (Buffer.byteLength(content, 'utf8') > MAX_CONTENT_BYTES) {
     return abort('Dashboard content exceeds 65536 UTF-8 bytes.');
   }
@@ -37,11 +57,10 @@ export function evaluateBeforeSend(input, { env = process.env } = {}) {
     if (parsed.viewError) return abort('Invalid Dashboard view: ' + parsed.viewError);
     const blocks = parsed.envelope.kind === 'message' ? parsed.envelope.blocks.filter(attachment) : [];
     if (blocks.length) {
-      const { endpoint, options } = input.request;
-      if (options.wholeGroup || endpoint !== options.groupName) return replyVia();
+      if (options.wholeGroup || conversationId !== options.groupName) return replyVia();
       try {
         withChatAttachments(resolveUploadRoot(env), { readonly: true }, service => {
-          service.validateAgentReferences(endpoint, blocks);
+          service.validateAgentReferences(conversationId, blocks);
         });
       } catch (error) {
         if (error.code === 'invalid_chat_attachment_destination') return replyVia();
