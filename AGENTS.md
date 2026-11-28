@@ -101,8 +101,17 @@ release, select against the previous release ref and run only triggered tests.
 An empty selection requires no slow run. Keep covers paths aligned with the real
 imports, CLI entry points and direct test dependencies; directory coverage
 includes all descendants. Indirect dependencies are not automatically followed.
-Run selected integration tests only with isolated HOME, ZYLOS_DIR, PM2_HOME,
-short TMPDIR, private tmux sockets and fixture databases, and clean up afterward.
+
+### Integration test isolation
+
+Run integration tests and their services under a dedicated system user. Set
+isolated `HOME`, `ZYLOS_DIR`, `PM2_HOME`, and a short `TMPDIR`. Use a private
+tmux socket and a dedicated test database. Before running, verify the resolved
+paths and actual targets. During cleanup, stop the test services and verify
+that their processes have exited before deleting the runtime directories.
+
+Use `TZ=Asia/Singapore` for test runs. Dedicated timezone unit tests may select
+the timezone required by the case.
 
 ## tmux Compatibility
 
