@@ -8,15 +8,11 @@ import { repairPageHeaders, stageTwoInput, tidyReference, PAGE_SOFT_LIMIT } from
 import { DREAM_RESULT_SCHEMAS, parseDreamResult } from './dream-results.js';
 import { publishReferenceFile } from './reference-index.js';
 import { resolveAllowedMemoryPath } from './self-write.js';
+import { ruleReviewMaterial } from './dream-rule-review.js';
 
 const TEMPLATE = new URL('../templates/dreaming/', import.meta.url);
 const PARALLEL_BATCHES = 3;
 const MAX_ATTEMPTS = 3;
-const RULE_DESTINATIONS = {
-  rules: 'ZYLOS.md or the group rules.md',
-  preferences: 'preferences.md',
-  skill: 'Create or update a skill',
-};
 
 function promptVariables(root, timezone) {
   const memory = path.join(root, 'memory');
@@ -49,12 +45,6 @@ async function retry(call, input, parse) {
     }
   }
   throw lastError;
-}
-
-function ruleMessage(candidates) {
-  const lines = candidates.map(({ text, source, owner_stated, destination }, index) =>
-    `${index + 1}. ${text}\nSource: ${source}\nOwner stated: ${owner_stated ? 'yes' : 'no'}\nSuggested destination: ${RULE_DESTINATIONS[destination]}`);
-  return `Memory dreaming found rules for your review. Reply with the items you approve or want to revise.\n\n${lines.join('\n\n')}`;
 }
 
 function completedExtractions(batches, results) {
@@ -105,9 +95,10 @@ function publishDiary(root, date, text) {
 }
 
 /** One independent run. Opening a model call and publishing effects are separate operations. */
-export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday, db, model, directory, token, mutate, notify, signal, stats }) {
+export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday, db, model, directory, token, mutate, enqueue, alertTarget, signal, stats }) {
   const variables = promptVariables(root, timezone);
-  const { batches, noticeOnly } = makeDreamBatches(db.getDreamConversations(), date, timezone);
+  const conversations = db.getDreamConversations();
+  const { batches, noticeOnly } = makeDreamBatches(conversations, date, timezone);
   stats.stage1.batches = batches.length;
   const results = new Array(batches.length);
   const failedBatches = [];
@@ -128,7 +119,7 @@ export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday
       const batch = batches[index];
       try {
         const result = await retry(input => invoke('stage1', { input }), batch.input,
-          answer => parseDreamResult('stage1', answer, batch.groups.map(({ group }) => group)));
+          answer => parseDreamResult('stage1', answer, batch.groups));
         durableJson(path.join(directory, `batch-${index + 1}.json`), result);
         results[index] = result;
         stats.stage1.extracted += result.groups.reduce((count, group) => count + group.items.length, 0);
@@ -165,8 +156,20 @@ export async function runDreamRound({ root, date, timezone, weekday, tidyWeekday
     warnings.push(...(await repair()).map(file => `Unparsable reference header: ${file}`));
     if (result?.diary) await mutate(() => publishDiary(root, date, result.diary));
     if (result?.rule_candidates.length) {
+      const file = path.resolve(directory, 'rule-review.json');
+      await mutate(() => {
+        const material = ruleReviewMaterial({ root, candidates: result.rule_candidates, extracted, conversations, alertTarget });
+        publishReferenceFile(file, JSON.stringify(material, null, 2) + '\n');
+      });
       signal?.throwIfAborted();
-      await notify(ruleMessage(result.rule_candidates));
+      const count = result.rule_candidates.length;
+      const content = `Memory dreaming found ${count} rule candidate${count === 1 ? '' : 's'}. Read the review material at ${file} and follow the rule review instructions in the zylos-memory skill.`;
+      try {
+        const queued = await enqueue(['enqueue', '--content', content, '--no-ack-suffix']);
+        if (!queued.ok) throw new Error(queued.output);
+      } catch {
+        warnings.push(`Memory dreaming could not queue the rule review. Review material: ${file}`);
+      }
     }
     await mutate(() => advanceDreamCheckpoints(db, completed));
   }

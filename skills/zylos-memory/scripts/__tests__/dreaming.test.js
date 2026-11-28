@@ -8,6 +8,8 @@ import { dreamLock } from '../dream-lock.js';
 import { createMemoryEditor } from '../memory-mcp-server.js';
 import { candidatePages, tidyReference, PAGE_SOFT_LIMIT } from '../dream-pages.js';
 import { createPage, rebuild } from '../reference-index.js';
+import { parseDreamResult } from '../dream-results.js';
+import { ruleReviewMaterial } from '../dream-rule-review.js';
 import { DREAM_BATCH_BYTES, makeDreamBatches } from '../dream-history.js';
 
 function fixture(t) {
@@ -25,6 +27,8 @@ const message = (id, content) => ({ id, content, direction: 'out', timestamp: '2
 const raw = (group, rows) => ({ group, rows });
 const responses = groups => JSON.stringify({ groups: groups.map(group => ({ group, summary: `Summary of ${group}`, items: [] })) });
 const empty = { diary: '', rule_candidates: [], pages_changed: [], pages_created: [], skipped: [] };
+const ruleItem = (text, source, c4_ids) => ({ type: 'rule', topic: 'Fixtures', text, source, owner: true, c4_ids });
+const ruleCandidate = (text, source, c4_ids) => ({ text, source, c4_ids, owner_stated: true, destination: 'rules' });
 const tidy = { merged: [], uncertain: [], read_not_merged: [], status_changes: [] };
 
 function fakeDatabase(conversations) {
@@ -82,11 +86,13 @@ test('cleaned batches preserve message order, split only oversized groups and pa
   const signal = '<smart-mode>omit this</smart-mode><group-context>keep this</group-context>';
   const { batches } = makeDreamBatches([
     raw('origin', [message(1, 'a'.repeat(100 * 1024) + signal), message(2, 'b'.repeat(100 * 1024))]),
+    raw('chat:overflow', [message(5, 'e'.repeat(2 * DREAM_BATCH_BYTES))]),
     raw('chat:small', [message(3, 'c'.repeat(20 * 1024))]),
     raw('chat:short', [message(4, 'd'.repeat(30 * 1024))]),
-    raw('chat:overflow', [message(5, 'e'.repeat(110 * 1024))]),
   ], '2026-11-23', 'Asia/Singapore');
-  assert.deepEqual(batches.map(batch => batch.groups.map(group => group.end)), [[1], [2], [3, 4], [5]]);
+  assert.deepEqual(batches.map(batch => batch.groups.map(group => group.end)), [[1], [2], [null], [null], [5], [3, 4]]);
+  assert.deepEqual(batches.map(batch => batch.groups.map(group => group.ids)),
+    [[[1]], [[2]], [[5]], [[5]], [[5]], [[3], [4]]]);
   assert.ok(batches.every(batch => Buffer.byteLength(batch.input) <= DREAM_BATCH_BYTES));
   assert.match(batches[0].input, /2026-11-23 08:00 OUT/);
   assert.match(batches[0].input, /<group-context>keep this<\/group-context>/);
@@ -190,27 +196,41 @@ test('merge process failure keeps all coverage and alerts once during consecutiv
   assert.match(notices[0], /two consecutive days/);
 });
 
-test('a completed dream publishes the diary, proposes rules, and repairs invalid headers independently', async t => {
+test('a completed dream queues the rule review for Origin and publishes the diary and repaired pages', async t => {
   const { root, read, write } = fixture(t);
-  const db = fakeDatabase([raw('origin', [message(1, 'message')])]);
+  const db = fakeDatabase([raw('origin', [
+    message(96383, '<smart-mode>omit this</smart-mode>Owner message about fixtures'),
+    message(96384, 'Another source ' + '😀'.repeat(4000)),
+  ])]);
+  write('ZYLOS.md', 'Existing rules\n- Rule from c4 96383\n');
+  write('memory/session-groups/origin/rules.md', '- Group rule from c4 96383\n');
+  write('memory/reference/preferences.md', '- Preference from C4 #96383\n');
+  write('.claude/skills/example/SKILL.md', '- Skill rule from c4 96383\n');
   const relative = 'reference/projects/malformed.md';
   const legacyLog = '# Work log\n\nLate entry after the previous snapshot.';
   const diary = '# Day\n' + 'd'.repeat(25 * 1024);
-  const rule = { text: 'Care for fixtures', source: 'C4 #1', owner_stated: true, destination: 'rules' };
-  const notices = [];
+  const rules = [
+    ruleCandidate('Care for fixtures', 'Owner conversation', [96383]),
+    ruleCandidate('Keep fixtures small', 'Owner conversation', [96384]),
+  ];
+  const notices = [], controls = [];
   let repaired = 0;
-  const result = await runDream({ root, config: {}, date: '2026-12-01', timezone: 'Asia/Singapore',
+  const result = await runDream({ root, config: { alert_target: ' telegram : fixture:owner ' }, date: '2026-12-01', timezone: 'Asia/Singapore',
     database: () => db, send: message => notices.push(message),
+    enqueue: args => { controls.push(args); return { ok: true }; },
     newModel: () => async ({ stage, page, input, token }) => {
       if (stage === 'stage1') {
         assert.match(input, /^Day: 2026-11-30 \(Asia\/Singapore\)/);
-        return responses(['origin']);
+        return JSON.stringify({ groups: [{ group: 'origin', summary: 'Owner rules', items:
+          rules.map(({ text, source, c4_ids }) => ruleItem(text, source, c4_ids)) }] });
       }
       if (stage === 'stage2') {
         assert.match(input, /^Date: 2026-11-30\n/);
+        assert.match(input, /c4_ids: \[96383\]/);
+        assert.match(input, /c4_ids: \[96384\]/);
         write('memory/' + relative, pageText('Broken', 'done', '2026-11-21'));
         write('memory/sessions/2026-11-30.md', legacyLog);
-        return JSON.stringify({ ...empty, diary, rule_candidates: [rule] });
+        return JSON.stringify({ ...empty, diary, rule_candidates: rules });
       }
       assert.equal(stage, 'repair');
       assert.equal(page, relative);
@@ -224,11 +244,67 @@ test('a completed dream publishes the diary, proposes rules, and repairs invalid
   });
   assert.equal(result.failed, false);
   assert.equal(repaired, 1);
-  assert.equal(db.getCoverageEnd('origin'), 1);
+  assert.equal(db.getCoverageEnd('origin'), 96384);
   assert.equal(read('memory/sessions/2026-11-30.md'), `${legacyLog}\n\n${diary}`);
-  assert.equal(notices.length, 1);
-  assert.match(notices[0], /Care for fixtures/);
-  assert.match(notices[0], /C4 #1/);
+  assert.equal(notices.length, 0);
+  assert.equal(controls.length, 1);
+  const materialPath = 'activity-monitor/memory-dreaming/2026-11-30/rule-review.json';
+  assert.deepEqual(controls[0].slice(0, 2), ['enqueue', '--content']);
+  assert.match(controls[0][2], /^Memory dreaming found 2 rule candidates\./);
+  assert.ok(controls[0][2].includes(path.join(root, materialPath)));
+  assert.match(controls[0][2], /zylos-memory/);
+  assert.deepEqual(controls[0].slice(3), ['--no-ack-suffix']);
+  const { askOwnerVia, candidates } = JSON.parse(read(materialPath));
+  assert.deepEqual(askOwnerVia, { channel: 'telegram', endpoint: 'fixture:owner' });
+  const route = { root, candidates: rules, extracted: [], conversations: [] };
+  assert.equal(ruleReviewMaterial(route).askOwnerVia, null);
+  assert.deepEqual(ruleReviewMaterial({ ...route, alertTarget: 'default' }).askOwnerVia,
+    { channel: 'dashboard', endpoint: 'origin' });
+  const [first, second] = candidates;
+  assert.equal(first.text, rules[0].text);
+  assert.equal(first.source, rules[0].source);
+  assert.equal(first.owner_stated, true);
+  assert.equal(first.destination, 'ZYLOS.md or memory/session-groups/origin/rules.md');
+  assert.deepEqual(first.c4_ids, [96383]);
+  assert.deepEqual(first.originalMessages, [
+    { id: 96383, group: 'origin', direction: 'out', text: 'Owner message about fixtures', truncated: false },
+  ]);
+  assert.deepEqual(first.matchingRuleLines, [
+    { file: 'ZYLOS.md', line: 2, text: '- Rule from c4 96383' },
+    { file: 'memory/session-groups/origin/rules.md', line: 1, text: '- Group rule from c4 96383' },
+    { file: 'memory/reference/preferences.md', line: 1, text: '- Preference from C4 #96383' },
+    { file: '.claude/skills/example/SKILL.md', line: 1, text: '- Skill rule from c4 96383' },
+  ]);
+  assert.equal(second.text, rules[1].text);
+  assert.equal(second.originalMessages[0].id, 96384);
+  assert.equal(second.originalMessages[0].truncated, true);
+  assert.equal([...second.originalMessages[0].text].length, 4000);
+  assert.equal(second.matchingRuleLines, 'none');
+});
+
+test('rule citations require integer arrays and are restricted to the extracted group input', t => {
+  const { root } = fixture(t);
+  const entry = ruleItem('Care for fixtures', 'Owner conversation', [1, 2, 999]);
+  const groups = [{ group: 'origin', summary: 'Rule', items: [entry] },
+    { group: 'chat:peer', summary: 'Other conversation', items: [] }];
+  const batch = [{ group: 'origin', ids: [1] }, { group: 'chat:peer', ids: [2] }];
+  const candidate = ruleCandidate(entry.text, entry.source, [1, 2, 999]);
+  const merge = value => JSON.stringify({ ...empty, rule_candidates: [value] });
+  assert.throws(() => parseDreamResult('stage1', JSON.stringify({ groups: [
+    { ...groups[0], items: [{ ...entry, c4_ids: undefined }] }, groups[1],
+  ] }), batch), /c4_ids/);
+  assert.throws(() => parseDreamResult('stage2', merge({ ...candidate, c4_ids: undefined })), /c4_ids/);
+  assert.throws(() => parseDreamResult('stage2', merge({ ...candidate, c4_ids: [1.5] })), /integer/);
+  const extracted = parseDreamResult('stage1', JSON.stringify({ groups }), batch).groups;
+  assert.deepEqual(extracted[0].items[0].c4_ids, [1]);
+  const { rule_candidates } = parseDreamResult('stage2', merge(candidate));
+  const other = { id: 2, get content() { assert.fail('read a message from another group'); } };
+  const { candidates: [review] } = ruleReviewMaterial({ root, candidates: rule_candidates, extracted,
+    conversations: [raw('origin', [message(1, 'Allowed evidence')]), raw('chat:peer', [other])],
+  });
+  assert.deepEqual(review.c4_ids, [1]);
+  assert.equal(review.originalMessages[0].text, 'Allowed evidence');
+  assert.equal(review.sourceNote, 'Original message unavailable');
 });
 
 test('system notices advance coverage without reaching models or prompting a same-date rerun', async t => {
@@ -246,16 +322,14 @@ test('system notices advance coverage without reaching models or prompting a sam
         assert.match(input, /\(C4 #1\)/);
         assert.doesNotMatch(input, /system-only text|\(C4 #[23]\)|chat:notice-only/);
       }
-      return stage === 'stage1' ? responses(['origin']) : JSON.stringify({ ...empty,
-        rule_candidates: [{ text: 'Care for fixtures', source: 'C4 #1', owner_stated: true, destination: 'rules' }],
-      });
+      return stage === 'stage1' ? responses(['origin']) : JSON.stringify(empty);
     },
   });
   assert.equal((await launch()).failed, false);
   rows.push(message(4, 'later delivery'));
   assert.equal((await launch()).skipped, 'already attempted');
   assert.equal(calls, 2);
-  assert.equal(notices.length, 1);
+  assert.equal(notices.length, 0);
   assert.equal(db.getCoverageEnd('origin'), 2);
   assert.deepEqual(db.checkpoints.find(({ group }) => group === 'chat:notice-only'),
     { group: 'chat:notice-only', end: 3, summary: null, noContent: true });

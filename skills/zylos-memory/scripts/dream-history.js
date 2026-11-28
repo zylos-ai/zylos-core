@@ -10,6 +10,10 @@ export function cleanDreamMessage(text) {
     (_, open, body, close) => open + [...body].slice(0, 200).join('') + close).trim();
 }
 
+export function dreamMessageText(row) {
+  return cleanDreamMessage(projectConversation(row).content);
+}
+
 function formatTimestamp(timestamp, formatter) {
   const date = new Date(typeof timestamp === 'number' ? timestamp * 1000 :
     timestamp.includes('T') ? timestamp : timestamp.replace(' ', 'T') + 'Z');
@@ -44,9 +48,8 @@ export function makeDreamBatches(conversations, date, timezone, limit = DREAM_BA
         if (messages.length) messages.at(-1).end = row.id;
         continue;
       }
-      const { content } = projectConversation(row);
-      messages.push({ end: row.id, text: `\n[${formatTimestamp(row.timestamp, formatter)} ${row.direction.toUpperCase()}]\n` +
-        `(C4 #${row.id})\n${cleanDreamMessage(content)}\n` });
+      messages.push({ id: row.id, end: row.id, text: `\n[${formatTimestamp(row.timestamp, formatter)} ${row.direction.toUpperCase()}]\n` +
+        `(C4 #${row.id})\n${dreamMessageText(row)}\n` });
     }
     if (!messages.length) {
       noticeOnly.push({ group, end: rows.at(-1).id });
@@ -56,14 +59,15 @@ export function makeDreamBatches(conversations, date, timezone, limit = DREAM_BA
     if (total <= capacity) {
       const bytes = size(heading) + total;
       if (shortSize + bytes > limit) flushShort();
-      shortGroups.push({ group, heading, text: messages.map(message => message.text).join(''), end: messages.at(-1).end });
+      shortGroups.push({ group, heading, text: messages.map(message => message.text).join(''),
+        end: messages.at(-1).end, ids: messages.map(message => message.id) });
       shortSize += bytes;
       continue;
     }
-    let text = '', end = null, bytes = 0;
+    let text = '', end = null, bytes = 0, ids = [];
     const flushGroup = () => {
-      if (text) batches.push([{ group, heading, text, end }]);
-      text = ''; end = null; bytes = 0;
+      if (text) batches.push([{ group, heading, text, end, ids }]);
+      text = ''; end = null; bytes = 0; ids = [];
     };
     for (const message of messages) {
       const data = Buffer.from(message.text);
@@ -75,18 +79,20 @@ export function makeDreamBatches(conversations, date, timezone, limit = DREAM_BA
         let boundary = offset + capacity;
         while ((data[boundary] & 0xc0) === 0x80) boundary--;
         text = data.toString('utf8', offset, boundary);
+        ids.push(message.id);
         flushGroup();
         offset = boundary;
       }
       text += data.toString('utf8', offset);
       bytes += data.length - offset;
       end = message.end;
+      ids.push(message.id);
     }
     flushGroup();
   }
   flushShort();
   const modelBatches = batches.map(groups => ({
-    groups: groups.map(({ group, end }) => ({ group, end })),
+    groups: groups.map(({ group, end, ids }) => ({ group, end, ids })),
     input: prefix + groups.map(({ heading, text }) => heading + text).join(''),
   }));
   return { batches: modelBatches, noticeOnly };
