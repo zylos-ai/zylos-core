@@ -151,8 +151,8 @@ about every 30 seconds, with a read-only name check before any write transaction
 
 ### Available structured components
 
-Choose a supported component when it makes the reply clearer or lets the user
-answer directly. Keep ordinary replies concise. Selection guidance lives in the
+Prefer a supported component whenever one fits the content; use plain Markdown
+only when none does. Keep ordinary replies concise. Selection guidance lives in the
 component catalog and is returned by `list` and `describe`; consult it before composing.
 
 Read the component list from the same installed Core before composing a C4 message:
