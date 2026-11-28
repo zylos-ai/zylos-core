@@ -50,12 +50,7 @@ function moveFileToArchive(sourceDir, archiveDir, name) {
     }
     maintenance.fsyncDir(archiveDir);
     fs.unlinkSync(source);
-    try { maintenance.fsyncDir(sourceDir); }
-    catch (error) {
-      // Keep the source available for retry if the final directory sync fails.
-      fs.linkSync(target, source);
-      throw error;
-    }
+    maintenance.fsyncDir(sourceDir);
     return;
   }
 }
