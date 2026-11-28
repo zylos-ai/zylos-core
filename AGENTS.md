@@ -71,8 +71,9 @@ A PR adding or changing a Dashboard collection (list) endpoint must follow [the 
 
 ## Testing
 
-Core currently has no test CI. Authors run quick, non-compiling checks before
-opening their PRs. Luna runs the tests affected by each change during review.
+Core currently has no test CI. Before opening a PR, authors run checks that
+finish in seconds and need no compilation, such as formatting and version
+consistency checks. Luna runs the tests affected by each change during review.
 Get Howard's approval before running the full test suite. Follow any applicable
 targeted checks documented below.
 
@@ -95,9 +96,8 @@ test helpers or fixtures. The default runner skips them. Set `ZYLOS_SLOW_TESTS=1
 to include them, or pass an explicit slow path to `node scripts/run-node-tests.js`.
 Run `node scripts/select-slow-tests.js --since <git-ref>` to list slow tests whose
 own file or covered paths changed, including staged and unstaged changes.
-Developers and reviewers must run the selected tests when those boundaries change;
-before a
-release, select against the previous release ref and run only triggered tests.
+Reviewers run the selected tests when those boundaries change. Before a release,
+select against the previous release ref and run only the triggered tests.
 An empty selection requires no slow run. Keep covers paths aligned with the real
 imports, CLI entry points and direct test dependencies; directory coverage
 includes all descendants. Indirect dependencies are not automatically followed.
