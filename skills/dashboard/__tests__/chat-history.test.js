@@ -122,11 +122,12 @@ test('Dashboard history quotes replies to earlier owner messages', t => {
   add({ ...dialog, id: 1, content: 'First question' });
   add({ ...dialog, id: 2, content: 'Latest question' });
   add({ ...dialog, id: 3, direction: 'out', endpoint_id: 'a|msg:1', content: 'Earlier reply' });
-  add({ ...dialog, id: 4, direction: 'out', endpoint_id: 'a|msg:2', content: 'Latest reply' });
+  add({ ...dialog, id: 4, endpoint_id: 'b', session_group: 'dash-owned:b', content: 'Unrelated question' });
+  add({ ...dialog, id: 5, direction: 'out', endpoint_id: 'a|msg:2', content: 'Latest reply' });
   const id = groupId(dialog.session_group);
   const { items, unreadCount } = history.messages(id, { anchor: 'read' });
   const earlier = items.find(row => row.id === 3);
-  const latest = items.find(row => row.id === 4);
+  const latest = items.find(row => row.id === 5);
   assert.deepEqual(earlier.quote, { id: 1, direction: 'in', internal: false,
     timestamp: '2026-01-01 12:00:00', preview: 'First question', available: true });
   assert.equal(latest.quote, undefined);

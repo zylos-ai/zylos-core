@@ -53,6 +53,13 @@ test('Existing channel rows retain exact live and replay formatting without refe
     source.resolveDashboardQuote?.(row, { prepare() { reads++; throw new Error('Unexpected database read'); } });
   }
   assert.equal(reads, 0);
+  // Suffixes are checked by the live and startup route tests. Everything
+  // outside the appended Dashboard address still has the original digest.
+  for (const [index, row] of rows.entries()) {
+    if (row.channel !== 'dashboard' || row.direction !== 'in') continue;
+    outputs[index].live = outputs[index].live.replace(`'dialog|msg:${row.id}'`, "'dialog'");
+    outputs[index].replay = outputs[index].replay.replace(`"dialog|msg:${row.id}"`, '"dialog"');
+  }
   const digest = createHash('sha256').update(JSON.stringify(outputs)).digest('hex');
   // Captured from the untouched base with the same rows and path normalization.
   assert.equal(digest, '56c70f67f7c50d7ca9b1f1a80c948ba1a8e27eb54fd2b63d979d473bcb301b09');

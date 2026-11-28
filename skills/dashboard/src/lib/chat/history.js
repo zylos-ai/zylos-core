@@ -107,8 +107,7 @@ export function conversationPreview(content, options = {}) {
 
 /** One quote projection for the history API and Core's text history reader. */
 export function quotePreview(row, { singleLine = false, ...options } = {}) {
-  const body = row.channel === 'internal' ? internalContent(row) : row.content;
-  const content = row.direction === 'out' ? body : stripChatQuote(body);
+  const content = stripChatQuote(row.channel === 'internal' ? internalContent(row) : row.content);
   const preview = conversationPreview(content, { ...options, quote: singleLine });
   return singleLine ? preview.replace(/\s+/g, ' ') : preview;
 }

@@ -57,8 +57,7 @@ export function dashboardQuoteSender(row, ownerName = readOwnerName()) {
 }
 
 function quotedText(row) {
-  let content = row.content || '';
-  if (row.direction !== 'out') content = stripChatQuote(content);
+  let content = stripChatQuote(row.content || '');
   const parsed = parseC4Content(content);
   const files = parsed.kind === 'envelope' ? (parsed.envelope.blocks ?? [])
     .filter(block => ['x-zylos.image', 'x-zylos.file'].includes(block.type))
