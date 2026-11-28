@@ -57,7 +57,7 @@ export function projectGroup(row, snapshot) {
   else if (row.presence === 'starting') kind = 'starting';
   else if (row.presence === 'running' && row.fence) kind = 'stopping';
   else if (row.presence === 'running' && ['busy', 'idle'].includes(activity)) {
-    kind = row.working?.on || activity === 'busy' ? 'working' : 'idle';
+    kind = row.working?.on ? 'working' : 'idle';
   } else {
     kind = 'unknown'; errors.push(status?.reason ?? 'activity_unreadable');
   }

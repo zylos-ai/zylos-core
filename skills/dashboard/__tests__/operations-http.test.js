@@ -114,6 +114,7 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
     rows: [{ sessionGroup: mode === 'multi' ? 'origin' : null,
       presence: scenario === 'starting' || scenario === 'unknown' ? scenario : running ? 'running' : 'not_running',
       live: running ? { runtime: 'claude', runId: 'current-run', sessionId: 'current-session', status: { valid: true, state: 'busy' } } : null,
+      working: running ? { on: true } : null,
       createdAt: Math.floor(Date.now() / 1000),
       queue: { pending: { count: 2, oldestAt: Date.now() - 1000 } },
       noResponse: { since: Date.now() - 1000 }, tools: [],
