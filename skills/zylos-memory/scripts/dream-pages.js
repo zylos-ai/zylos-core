@@ -47,7 +47,7 @@ export function candidatePages(pages) {
         && !/^(?:v\d|\d{1,2}[hms])$/.test(word)));
     const scores = new Map();
     function score(index, term, weight) {
-      const row = scores.get(index) ?? { page: pages[index].relative, score: 0, terms: new Set() };
+      const row = scores.get(index) ?? { index, page: pages[index].relative, score: 0, terms: new Set() };
       row.score += weight;
       row.terms.add(term);
       scores.set(index, row);
@@ -56,7 +56,7 @@ export function candidatePages(pages) {
       const matching = counts(id);
       for (const index of matching) score(index, id, 1 / matching.length);
     }
-    return [...scores.values()].sort((a, b) => b.score - a.score || a.page.localeCompare(b.page)).slice(0, 4)
+    return [...scores.values()].sort((a, b) => b.score - a.score || a.index - b.index).slice(0, 4)
       .map(row => `${row.page} (${[...row.terms].join(', ')})`);
   };
 }
