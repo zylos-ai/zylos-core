@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as childProcess from 'node:child_process';
 import { promisify } from 'node:util';
+import { ChatHistory } from '../src/lib/chat/history.js';
 import { CoreState } from '../src/lib/core-state.js';
 import { Store } from '../src/lib/store.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
@@ -181,6 +182,8 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
     iso(exchange.body.expires_at);
     tokens[scope] = exchange.body.token;
   }
+  const chat = { latest: { at: '2026-11-28T02:03:04.000Z', title: 'Private chat', preview: 'Private preview' }, unread_conversations: 1 };
+  t.mock.method(ChatHistory.prototype, 'mineSummary', () => chat);
   for (mode of ['single', 'multi']) {
     fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ session_mode: mode }));
     scenario = 'source';
@@ -194,6 +197,15 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
       assert.equal(origin.body.run.runId, 'current-run');
     }
     scenario = 'normal';
+    if (mode === 'single') {
+      for (const scope of ['admin', 'read']) {
+        const fleet = await request('/api/fleet', tokens[scope]);
+        assert.equal(fleet.status, 200, JSON.stringify(fleet.body));
+        const row = fleet.body.items.find(item => item.self);
+        if (scope === 'admin') assert.deepEqual(row.chat, chat);
+        else assert.equal(Object.hasOwn(row, 'chat'), false);
+      }
+    }
     for (const token of [undefined, tokens.read, tokens.admin]) {
       const live = await request('/api/health', token);
       assert.equal(live.status, 200); assert.equal(live.body.ok, true);

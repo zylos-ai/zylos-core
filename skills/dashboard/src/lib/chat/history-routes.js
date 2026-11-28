@@ -54,7 +54,7 @@ export async function handleChatHistory(req, res, url, { auth, config, history, 
       locale: req.headers['x-zylos-locale'] === 'en' ? 'en' : 'zh' };
     if (options.anchor && options.tab !== 'mine') throw invalid('anchor');
     const result = kind === 'activity' ? await activity.activity(id, options)
-      : kind ? history[kind](id, options) : history.list(options);
+      : kind ? history[kind](id, options) : history.list({ ...options, includeSummary: auth.resolveAuthContext(req)?.scope === 'admin' });
     if (!kind || kind === 'messages') result.tz = await readInstanceTz(instanceTz);
     if (!kind) result.deletionAllowed = canDeleteConversations(req, auth, config);
     sendJson(res, 200, result);

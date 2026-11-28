@@ -8,6 +8,7 @@ import { ORIGIN, ORIGIN_CONVERSATION_ID, ORIGIN_DISPLAY_NAME } from './origin.js
 import { groupId } from './conversations.js';
 import { listFailure, parseListQuery } from '../list-query.js';
 import { prepareLatestReceived, receivedMessage } from '../c4-reader.js';
+import { isoTimestamp } from '../wire-time.js';
 import { messageVisible, originMessageVisible, originVisible, visible } from './visibility.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
@@ -185,7 +186,11 @@ export class ChatHistory {
     }).immediate();
   }
 
-  list({ tab = 'mine', limit, cursor, q, locale = 'zh', page } = {}) {
+  mineSummary(locale = 'zh') {
+    return this.list({ locale, summaryOnly: true }).summary;
+  }
+
+  list({ tab = 'mine', limit, cursor, q, locale = 'zh', page, includeSummary = false, summaryOnly = false } = {}) {
     if (!page) {
       const parameters = new URLSearchParams({ tab });
       for (const [key, value] of Object.entries({ limit, cursor, q })) {
@@ -197,17 +202,17 @@ export class ChatHistory {
     const search = page.q?.toLowerCase();
     const unnamed = locale === 'en' ? 'Untitled conversation' : '未命名对话';
     const after = page.after && { stamp: page.after[0], id: page.after[1] };
-    const pins = this.pinIds(tab);
+    const pins = summaryOnly ? [] : this.pinIds(tab);
     const pinOrders = new Map(pins.map((id, index) => [id, index]));
     try {
       const db = this._db();
       return db.transaction(() => {
-        const latestReceived = prepareLatestReceived(db);
+        const latestReceived = !summaryOnly && prepareLatestReceived(db);
         const stamp = db.prepare('SELECT COALESCE(julianday(?), 0)').pluck();
         const nextGroup = db.prepare(`SELECT c.session_group FROM ${groupIndex}
           WHERE c.session_group>? ORDER BY c.session_group LIMIT 1`).pluck();
         const memberOfTab = `c.session_group=? AND ${visible} AND ${listScope(tab)}`;
-        const member = db.prepare(`SELECT c.channel, c.endpoint_id FROM ${groupIndex}
+        const member = db.prepare(`SELECT c.channel, c.endpoint_id, c.id, c.timestamp FROM ${groupIndex}
           WHERE ${memberOfTab} ORDER BY c.id DESC LIMIT 1`);
         const first = db.prepare(`SELECT c.timestamp FROM ${groupIndex} WHERE ${memberOfTab} ORDER BY c.id LIMIT 1`);
         const belongsToTab = db.prepare(`SELECT ${tabGroupScope(tab, '@group')}`).pluck();
@@ -215,10 +220,31 @@ export class ChatHistory {
           WHERE ${memberOfTab} ORDER BY c.id DESC LIMIT 1`);
         const originLatest = tab === 'mine' && db.prepare(`SELECT c.id,c.content,c.direction,c.channel FROM ${groupIndex}
           WHERE c.session_group=? AND ${originVisible} ORDER BY c.id DESC LIMIT 1`);
+        const originHead = tab === 'mine' && (includeSummary || summaryOnly) && db.prepare(`SELECT c.id,c.timestamp FROM ${groupIndex}
+          WHERE c.session_group=? AND ${originVisible} ORDER BY c.id DESC LIMIT 1`);
         const originFirst = tab === 'mine' && db.prepare(`SELECT c.timestamp FROM ${groupIndex}
           WHERE c.session_group=? AND ${originVisible} ORDER BY c.id LIMIT 1`);
         const rows = [], pinned = [];
-        const append = row => {
+        const summary = tab === 'mine' && (includeSummary || summaryOnly)
+          ? { latest: null, unread_conversations: 0 } : null;
+        let newest = null;
+        const readMessage = row => (row.origin ? originLatest : latest).get(row.session_group);
+        const readUnread = row => this.hasUnread(row.id, this._messageRange(tab, row.id, this._range(tab, row.id)));
+        const preview = (row, message) => conversationPreview(previewContent(message), {
+          external: tab === 'external' || row.origin && message?.channel !== 'dashboard', locale,
+        });
+
+        const append = (row, head) => {
+          if (summary) {
+            const unread = readUnread(row);
+            summary.unread_conversations += Number(unread);
+            const at = isoTimestamp(head?.timestamp);
+            if (at && (!newest || at > newest.at || at === newest.at && head.id > newest.id)) {
+              newest = { row, id: head.id, at };
+            }
+            if (summaryOnly) return;
+            row.unread = unread;
+          }
           if (search && !matchesSearch({ ...row, display_name: row.display_name ?? unnamed }, search)) return;
           const isPinned = pinOrders.has(row.id);
           if (isPinned) row.pinOrder = pinOrders.get(row.id);
@@ -230,9 +256,9 @@ export class ChatHistory {
         };
         if (tab === 'mine') append({
           id: ORIGIN_CONVERSATION_ID, session_group: ORIGIN, channel: 'dashboard', endpoint_id: ORIGIN,
-          stamp: stamp.get((latestReceived.get(ORIGIN) ?? originFirst.get(ORIGIN))?.timestamp ?? null),
+          stamp: !summaryOnly && stamp.get((latestReceived.get(ORIGIN) ?? originFirst.get(ORIGIN))?.timestamp ?? null),
           display_name: ORIGIN_DISPLAY_NAME, localId: ORIGIN, origin: true, draft: false,
-        });
+        }, originHead && originHead.get(ORIGIN));
         // Jump from one index prefix to the next, including groups without a head.
         for (let group = nextGroup.get(''); group !== undefined; group = nextGroup.get(group)) {
           if (group === ORIGIN || group === '*' || !belongsToTab.get({ group })) continue;
@@ -241,10 +267,14 @@ export class ChatHistory {
           const registered = tab === 'mine' ? this.conversations?.findByGroup(group) : null;
           const name = this.conversations?.store.getGroupDisplayName(group)?.display_name;
           append({ id: groupId(group), session_group: group, channel: route.channel, endpoint_id: route.endpoint_id,
-            stamp: stamp.get((latestReceived.get(group) ?? first.get(group))?.timestamp ?? null),
+            stamp: !summaryOnly && stamp.get((latestReceived.get(group) ?? first.get(group))?.timestamp ?? null),
             display_name: registered ? name ?? registered.displayName : name ?? (tab === 'mine' ? group.slice(group.indexOf(':') + 1) : group),
-            ...(registered ? { localId: registered.localId } : {}), draft: false });
+            ...(registered ? { localId: registered.localId } : {}), draft: false }, route);
         }
+        if (newest) {
+          summary.latest = { at: newest.at, title: newest.row.display_name ?? unnamed, preview: preview(newest.row, readMessage(newest.row)) };
+        }
+        if (summaryOnly) return { summary };
         // The existing draft source pages its own timestamp index.
         const slots = page.limit;
         if (tab === 'mine' && this.conversations) rows.push(...this._drafts(slots + 1, after, search, unnamed));
@@ -252,14 +282,13 @@ export class ChatHistory {
         rows.sort(compareRows);
         const items = [...pinned, ...rows.slice(0, slots)].map(row => {
           if (row.draft) return row;
-          const message = (row.origin ? originLatest : latest).get(row.session_group);
-          return { ...row, previewDirection: message?.direction ?? null,
-            preview: conversationPreview(previewContent(message), { external: tab === 'external' || row.origin
-              && message?.channel !== 'dashboard', locale }),
-            ...(tab === 'mine' ? { unread: this.hasUnread(row.id, this._messageRange(tab, row.id, this._range(tab, row.id))) } : {}) };
+          const message = readMessage(row);
+          return { ...row, previewDirection: message?.direction ?? null, preview: preview(row, message),
+            ...(tab === 'mine' ? { unread: row.unread ?? readUnread(row) } : {}) };
         });
         const last = rows[slots - 1];
-        return { items, nextCursor: rows.length > slots ? page.nextCursor([last.stamp, last.id]) : null };
+        return { items, nextCursor: rows.length > slots ? page.nextCursor([last.stamp, last.id]) : null,
+          ...(summary ? { summary } : {}) };
       })();
     } catch (error) {
       if (error.code === 'chat_history_unavailable') throw error;

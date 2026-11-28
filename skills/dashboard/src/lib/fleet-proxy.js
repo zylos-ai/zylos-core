@@ -1,3 +1,4 @@
+import { omitFleetChat } from './fleet-list.js';
 import { isCustomScope } from './api-key-scope.js';
 import { isConversationApiPath, isRetiredConversationApiPath } from './api-routes.js';
 import { isSameOriginRequest } from './request-origin.js';
@@ -545,6 +546,20 @@ export class FleetProxy {
         process.stderr.write(`[fleet-proxy] blocked secret-bearing response headers from ${agent.name} ${suffix}\n`);
         sendJson(res, 502, { error: 'secret_leak_blocked' });
         return;
+      }
+      // The upstream uses the machine's configured credential, which can have
+      // more access than the caller of this relay.
+      if (normalizedSuffix === '/api/fleet' && req._authContext?.scope !== 'admin') {
+        try {
+          const body = JSON.parse(text);
+          if (remoteResp.ok && !Array.isArray(body.items)) throw new Error('Expected fleet page');
+          if (Array.isArray(body.items)) body.items = body.items.map(omitFleetChat);
+          buffer = Buffer.from(JSON.stringify(body));
+          delete responseHeaders['content-length'];
+        } catch {
+          sendJson(res, 502, { error: 'upstream_body_error' });
+          return;
+        }
       }
       if (remoteResp.ok && req.method === 'POST' &&
           (suffix === '/api/observer/leases' || suffix.endsWith('/renew'))) {

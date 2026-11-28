@@ -35,6 +35,27 @@ test('buildSafeFleetPayload redacts string-leaf leaks for shared HTTP and SSE pa
   assert.doesNotThrow(() => assertFleetPayloadSafe(result.payload));
 });
 
+test('Fleet records carry the conversation summary from the peer API', async () => {
+  const summary = {
+    latest: { at: '2026-11-28T02:03:04.000Z', title: 'Project', preview: 'Agent reply' },
+    unread_conversations: 2,
+  };
+  const poller = new FleetPoller({
+    fleet: { agents: [{ name: 'peer', base_url: 'https://peer.example.test', read_api_key: 'fixture-key' }] }
+  }, {
+    fetch: async (url, { headers }) => {
+      if (url.endsWith('/api/auth/token')) return Response.json({ token: 'fixture-token', scope: 'admin' });
+      if (url.endsWith('/api/conversations?tab=mine')) {
+        assert.equal(headers.Authorization, 'Bearer fixture-token');
+        return Response.json({ items: [{ preview: 'Other content' }], summary });
+      }
+      return objectResponse(url);
+    },
+  });
+  await poller.pollOnce();
+  assert.deepEqual(poller.getAgentRecord('peer').chat, summary);
+});
+
 // --- Fleet identity color and rate limits ---
 
 // Injected transport and clock: no listener, real fetch, probe loop or subprocess.

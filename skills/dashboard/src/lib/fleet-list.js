@@ -34,7 +34,11 @@ export function fleetSummary(agents) {
   return summary;
 }
 
-export function fleetPage(payload, query) {
+export function omitFleetChat({ chat, ...record }) {
+  return record;
+}
+
+export function fleetPage(payload, query, { showChat = false } = {}) {
   const term = query.q?.toLowerCase();
   const name = query.filters.name;
   const rows = payload.agents.filter(agent => (name === undefined || agent.name === name) &&
@@ -43,7 +47,7 @@ export function fleetPage(payload, query) {
     (a, b) => a[0] - b[0] || compareFleetNames(a[1], b[1]));
   return {
     ...page,
-    items: page.items.map(({ latency, ...agent }) => agent),
+    items: page.items.map(({ latency, ...agent }) => showChat ? agent : omitFleetChat(agent)),
     summary: fleetSummary(payload.agents),
     updated_at: payload.updated_at,
   };

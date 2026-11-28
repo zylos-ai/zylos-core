@@ -5,6 +5,9 @@ import { compareVersions } from './version-utils.js';
 // Hub pages use the peer's list APIs through the Fleet proxy.
 const MINIMUM_LIST_API_VERSION = '1.0.0-beta.16';
 
+const CHAT_LIST = '/api/conversations?tab=mine';
+const CHAT_STREAM = '/api/stream?chat=1&chat_tab=mine';
+
 const DEFAULT_POLL_INTERVAL_MS = 3000;
 const DEFAULT_TIMEOUT_MS = 2500;
 // Liveness is connection-based (#180): an agent is OFFLINE only when its SSE
@@ -241,6 +244,15 @@ function sanitizeLink(link) {
   };
 }
 
+function sanitizeChat(chat) {
+  if (!Number.isSafeInteger(chat?.unread_conversations) || chat.unread_conversations < 0) return null;
+  if (chat.latest === null) return { latest: null, unread_conversations: chat.unread_conversations };
+  const { at, title, preview } = chat.latest ?? {};
+  if (typeof at !== 'string' || !Number.isFinite(Date.parse(at)) ||
+      typeof title !== 'string' || typeof preview !== 'string') return null;
+  return { latest: { at: new Date(at).toISOString(), title, preview }, unread_conversations: chat.unread_conversations };
+}
+
 function sanitizeRecord(record) {
   return {
     name: record.name,
@@ -271,7 +283,8 @@ function sanitizeRecord(record) {
     updated_at: record.updated_at,
     base_url: record.base_url,
     self: record.self === true,
-    access: record.access === 'admin' ? 'admin' : 'read'
+    access: record.access === 'admin' ? 'admin' : 'read',
+    chat: record.self || record.access === 'admin' ? sanitizeChat(record.chat) : null
   };
 }
 
@@ -304,6 +317,7 @@ export function stateToFleetRecord(agentConfig = {}, statePayload = {}, opts = {
     supervisor_paused: statePayload?.supervisor_paused,
     session_mode: statePayload?.session_mode,
     group_summary: statePayload?.group_summary,
+    chat: statePayload?.chat,
     rate_limit_pct: statePayload?.rate_limit_pct ?? null,
     rate_limit_7d_pct: statePayload?.rate_limit_7d_pct ?? null,
     rate_limit_7d_recorded_at: statePayload?.rate_limit_7d_recorded_at ?? null,
@@ -389,6 +403,7 @@ export class FleetPoller {
     this.failingSince = new Map();
     this.records = new Map();
     this.tokens = new Map();
+    this.chatReads = new Map();
     this.streams = new Map();
     this.latency = new Map();
     this.agentGenerations = new Map();
@@ -451,6 +466,7 @@ export class FleetPoller {
       stream.controller?.abort();
     }
     this.streams.clear();
+    this.chatReads.clear();
     for (const name of this.connectionLogs.keys()) this._flushConnectionLog(name, true);
   }
 
@@ -508,6 +524,7 @@ export class FleetPoller {
     if (latency?.timer) this.clearTimeout(latency.timer);
     this.latency.delete(name);
     this.tokens.delete(name);
+    this.chatReads.delete(name);
     this.failingSince.delete(name);
     this.records.delete(name);
     this.onPoll?.(this.getFleet());
@@ -802,6 +819,7 @@ export class FleetPoller {
       const state = await readJsonOrBadPayload(resp, validateStatePayload);
       if (!this._isCurrentAgent(agent, generation)) return;
       this._setSuccess(agent, state);
+      await this._refreshChat(agent, token);
     } catch (err) {
       if (!this._isCurrentAgent(agent, generation)) return;
       this._setFailure(agent, classifyError(err));
@@ -811,6 +829,61 @@ export class FleetPoller {
   async _pollAgentAndNotify(agent) {
     await this._pollAgent(agent);
     this.onPoll?.(this.getFleet());
+  }
+
+  async _fetchChat(agent, token) {
+    try {
+      const response = await this._fetchObject(agent, token, CHAT_LIST);
+      if (!response.ok) {
+        await response.body?.cancel();
+        return null;
+      }
+      return sanitizeChat((await response.json())?.summary);
+    } catch {
+      return null;
+    }
+  }
+
+  async _refreshChat(agent, token, signal) {
+    const generation = this._agentGeneration(agent);
+    const current = () => !signal?.aborted && this._isCurrentAgent(agent, generation) &&
+      this.tokens.get(agent.name)?.token === token;
+    if (!current() || this.getAgentAccess(agent.name) !== 'admin') return false;
+
+    // Full reads and chat events update the same record in request order.
+    const previous = this.chatReads.get(agent.name);
+    const read = Promise.resolve(previous).then(async () => {
+      if (!current()) return false;
+      const chat = await this._fetchChat(agent, token);
+      if (!current()) return false;
+      const record = this.records.get(agent.name);
+      if (!record || FAILURE_REASONS.has(record.health_reason) || JSON.stringify(record.chat) === JSON.stringify(chat)) return false;
+      this.records.set(agent.name, { ...record, chat });
+      return true;
+    });
+    this.chatReads.set(agent.name, read);
+    try { return await read; }
+    finally {
+      if (this.chatReads.get(agent.name) === read) this.chatReads.delete(agent.name);
+    }
+  }
+
+  _queueChatRead(agent, stream) {
+    if (!stream) return;
+    stream.chatDirty = true;
+    if (stream.chatPending) return;
+    stream.chatPending = true;
+    const signal = stream.controller?.signal;
+    queueMicrotask(async () => {
+      try {
+        while (stream.chatDirty && !signal?.aborted && this._isCurrentAgent(agent, undefined, stream)) {
+          stream.chatDirty = false;
+          if (await this._refreshChat(agent, this.tokens.get(agent.name)?.token, signal)) this.onPoll?.(this.getFleet());
+        }
+      } finally {
+        stream.chatPending = false;
+      }
+    });
   }
 
   _fetchObject(agent, token, apiPath) {
@@ -963,7 +1036,7 @@ export class FleetPoller {
     this.onPoll?.(this.getFleet());
   }
 
-  _fetchStream(agent, token, signal) {
+  _fetchStream(agent, token, signal, path = '/api/stream') {
     const deadline = new AbortController();
     let deadlineHit = false;
     const timer = this.setTimeout(() => {
@@ -973,7 +1046,7 @@ export class FleetPoller {
     timer.unref?.();
     const signals = signal ? [signal, deadline.signal] : [deadline.signal];
     const combinedSignal = AbortSignal.any(signals);
-    return this.fetch(joinUrl(agent.base_url, '/api/stream'), {
+    return this.fetch(joinUrl(agent.base_url, path), {
       method: 'GET',
       headers: { Authorization: `Bearer ${token}` },
       signal: combinedSignal
@@ -987,7 +1060,7 @@ export class FleetPoller {
 
   _setSuccess(agent, state) {
     this.failingSince.delete(agent.name);
-    this.records.set(agent.name, stateToFleetRecord(agent, state, {
+    this.records.set(agent.name, stateToFleetRecord(agent, { ...state, chat: this.records.get(agent.name)?.chat }, {
       self: false,
       base_url: agent.base_url,
       nowMs: this.now(),
@@ -1026,14 +1099,24 @@ export class FleetPoller {
     let token = await this._getCompatibleToken(agent, { recheck: true });
     if (!this._isCurrentAgent(agent, generation, stream)) return;
     signal.throwIfAborted();
-    let resp = await this._fetchStream(agent, token, signal);
+    const openStream = async () => {
+      if (this.getAgentAccess(agent.name) === 'admin') {
+        const response = await this._fetchStream(agent, token, signal, CHAT_STREAM);
+        // Older peers and peers that decline chat still publish fleet state.
+        if (![400, 403, 404, 429].includes(response.status)) return response;
+        await response.body?.cancel().catch(() => {});
+      }
+      signal.throwIfAborted();
+      return this._fetchStream(agent, token, signal);
+    };
+    let resp = await openStream();
     if (!this._isCurrentAgent(agent, generation, stream)) return;
     if (resp.status === 401) {
       this.tokens.delete(agent.name);
       token = await this._getCompatibleToken(agent, { force: true });
       if (!this._isCurrentAgent(agent, generation, stream)) return;
       signal.throwIfAborted();
-      resp = await this._fetchStream(agent, token, signal);
+      resp = await openStream();
       if (!this._isCurrentAgent(agent, generation, stream)) return;
     }
     if (resp.status === 401 || resp.status === 403) {
@@ -1105,11 +1188,20 @@ export class FleetPoller {
       err.reason = 'auth_expired';
       throw err;
     }
-    if (!['instance', 'groups'].includes(event.event)) return;
     const stream = this.streams.get(agent.name);
+    if (['chat_messages_changed', 'chat_unavailable'].includes(event.event)) {
+      this._queueChatRead(agent, stream);
+      return;
+    }
+    if (!['instance', 'groups', 'chat_ready'].includes(event.event)) return;
     if (stream) {
       stream.seenFleetState = true;
       if (stream.compatibilityTimer) { this.clearTimeout(stream.compatibilityTimer); stream.compatibilityTimer = null; }
+      if (event.event === 'chat_ready') {
+        this._stopFallbackPolling(agent, 'sse-takeover');
+        // The connection's initial state read already fetched the summary.
+        return;
+      }
       if (stream.objectReadPending) { stream.objectReadDirty = true; return; }
       stream.objectReadPending = true;
     }
@@ -1181,7 +1273,7 @@ export class FleetPoller {
         nowMs - this.failingSince.get(agent.name) < FAILURE_GRACE_MS) {
       // Keep the last good row; refreshing updated_at shows the self-heal
       // watchdog that this agent is still being read, not frozen.
-      this.records.set(agent.name, { ...existing, updated_at: nowIso(nowMs) });
+      this.records.set(agent.name, { ...existing, chat: null, updated_at: nowIso(nowMs) });
       return;
     }
     const color = agentColor(agent.name);
