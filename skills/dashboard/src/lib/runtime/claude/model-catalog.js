@@ -23,7 +23,6 @@ function models() {
     { id: 'claude-opus-4-6[1m]' },
     { id: 'claude-sonnet-4-6' },
     { id: 'claude-haiku-5-5' },
-    { id: 'claude-haiku-4-5-20251001' },
   ];
 }
 
