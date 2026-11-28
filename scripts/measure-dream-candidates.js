@@ -7,6 +7,7 @@ import { performance } from 'node:perf_hooks';
 import { parseArgs } from 'node:util';
 import { candidatePages } from '../skills/zylos-memory/scripts/dream-pages.js';
 import { readReferenceIndex } from '../skills/zylos-memory/scripts/reference-index.js';
+import { removeOwnedTree } from '../skills/comm-bridge/scripts/remove-owned-tree.js';
 
 const KINDS = ['projects', 'decisions'];
 const REFERENCE_DIRS = KINDS.map(kind => `reference/${kind}`);
@@ -48,7 +49,8 @@ function measure(repo, since) {
     const additions = [...addedLines(diff)];
     if (additions.length === 0) continue;
 
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dream-candidates-'));
+    const temporaryRoot = fs.realpathSync(os.tmpdir());
+    const root = fs.mkdtempSync(path.join(temporaryRoot, 'dream-candidates-'));
     try {
       const archive = path.join(root, 'reference.tar');
       const memory = path.join(root, 'memory');
@@ -73,7 +75,7 @@ function measure(repo, since) {
         items++;
       }
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      removeOwnedTree(temporaryRoot, root);
     }
   }
 
