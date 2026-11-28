@@ -73,8 +73,8 @@ A PR adding or changing a Dashboard collection (list) endpoint must follow [the 
 
 Core currently has no test CI. Before opening a PR, authors run checks that
 finish in seconds and need no compilation, such as formatting and version
-consistency checks. Luna runs the tests affected by each change during review.
-Get Howard's approval before running the full test suite. Follow any applicable
+consistency checks. The reviewer runs the tests affected by each change during review.
+Running the full test suite requires the maintainer's approval. Follow any applicable
 targeted checks documented below.
 
 Use `node scripts/run-node-tests.js --list` to see the collected paths. The runner
