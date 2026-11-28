@@ -34,9 +34,6 @@ Otherwise write the session handoff: list open business items as they stand
 now, checking each against its current record and leaving out any that have
 finished. Replies, reviews or decisions you are waiting for from people or
 other sessions need nothing more: an incoming reply wakes this group again.
-When legacy working state is present, follow the startup instructions for
-reading it, carrying open items into this handoff and archiving the old file
-after verifying the handoff.
 
 ## 3. Wake-ups
 
